@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"go/constant"
 	"strings"
 
 	"mvdan.cc/sh/v3/expand"
@@ -103,6 +104,11 @@ func (r *Runner) goSourceValueCells(expr syntax.BashPPExpr, spread bool) ([]*bas
 	if cell, handled, err := r.goSourceCollectionBuiltinCell(expr); handled {
 		return one(cell, err)
 	}
+	if call, ok := expr.(*syntax.BashPPCall); ok {
+		if cell, handled, err := r.goSourceComplexBuiltinCell(call); handled {
+			return one(cell, err)
+		}
+	}
 	if cell, handled, err := r.goSourceCallableCell(expr); handled {
 		return one(cell, err)
 	}
@@ -165,6 +171,57 @@ func (r *Runner) goSourceValueCells(expr syntax.BashPPExpr, spread bool) ([]*bas
 		cell.declType, cell.typeName = bashPPScalarNamedType(v.typ)
 	}
 	return one(cell, nil)
+}
+
+// goSourceComplexBuiltinCell keeps the predeclared complex family on the Go
+// value path. Unlike an ordinary scalar call, complex(f()) expands f's two
+// results into the builtin's operands.
+func (r *Runner) goSourceComplexBuiltinCell(call *syntax.BashPPCall) (*bashPPCell, bool, error) {
+	if !r.bashPPGoSource || call == nil || len(call.Fun) != 1 {
+		return nil, false, nil
+	}
+	name := call.Fun[0].Value
+	if name != "complex" && name != "real" && name != "imag" {
+		return nil, false, nil
+	}
+	if _, ok := r.bashPPLookupFunc(call); ok {
+		return nil, false, nil
+	}
+	args := make([]bashPPScalar, 0, len(call.ArgExprs))
+	for _, expr := range call.ArgExprs {
+		values, err := r.goSourceValueCells(expr, len(call.ArgExprs) == 1)
+		if err != nil {
+			return nil, true, err
+		}
+		for _, value := range values {
+			args = append(args, r.bashPPScalarFromCell(value))
+		}
+	}
+	want := 1
+	if name == "complex" {
+		want = 2
+	}
+	if len(args) != want {
+		return nil, true, fmt.Errorf("%s requires %d arguments", name, want)
+	}
+	result, err := r.bashPPComplexBuiltinValues(name, args)
+	if err != nil {
+		return nil, true, err
+	}
+	if result.typ == "" {
+		if result.value.Kind() == constant.Complex {
+			result.typ = "complex128"
+		} else {
+			result.typ = "float64"
+		}
+	}
+	cell := &bashPPCell{
+		vr:         expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarString(result.value)},
+		scalarKind: result.value.Kind(),
+		typeName:   result.typ,
+		declType:   &syntax.BashPPNamedType{Name: &syntax.Lit{Value: result.typ}},
+	}
+	return cell, true, nil
 }
 func (r *Runner) goSourceValues(exprs []syntax.BashPPExpr) ([]*bashPPCell, bool) {
 	cells := make([]*bashPPCell, len(exprs))

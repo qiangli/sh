@@ -21,6 +21,18 @@ func (r *Runner) bashPPComplexShortDecl(d *syntax.BashPPShortDecl) bool {
 	if d.Call == nil || len(d.Lhs) != 1 {
 		return false
 	}
+	if cell, handled, err := r.goSourceComplexBuiltinCell(d.Call); handled {
+		if err != nil {
+			r.errf("%v\n", err)
+			r.exit = exitStatus{code: 2}
+			return true
+		}
+		r.bashPPDeclareName(d.Lhs[0].Value, cell.vr)
+		if target := r.bashPPScope.lookup(d.Lhs[0].Value); target != nil {
+			*target = *cell
+		}
+		return true
+	}
 	v, handled, err := r.bashPPComplexBuiltin(d.Call)
 	if !handled {
 		return false
@@ -146,10 +158,18 @@ func (r *Runner) bashPPComplexBuiltin(call *syntax.BashPPCall) (bashPPScalar, bo
 		}
 		args[i] = v
 	}
+	result, err := r.bashPPComplexBuiltinValues(name, args)
+	return result, true, err
+}
+
+// bashPPComplexBuiltinValues implements the typed rules shared by the scalar
+// spelling and Go source's value path. The latter may expand one multi-result
+// call into complex's two operands before it reaches here.
+func (r *Runner) bashPPComplexBuiltinValues(name string, args []bashPPScalar) (bashPPScalar, error) {
 	if name == "complex" {
 		for _, a := range args {
 			if a.value.Kind() != constant.Int && a.value.Kind() != constant.Float {
-				return bashPPScalar{}, true, fmt.Errorf("complex requires floating-point arguments")
+				return bashPPScalar{}, fmt.Errorf("complex requires floating-point arguments")
 			}
 		}
 		typ := ""
@@ -158,7 +178,7 @@ func (r *Runner) bashPPComplexBuiltin(call *syntax.BashPPCall) (bashPPScalar, bo
 			if a.typ != "" {
 				underlying, ok := r.bashPPUnderlyingType(&syntax.BashPPNamedType{Name: &syntax.Lit{Value: a.typ}}).(*syntax.BashPPNamedType)
 				if !ok || (underlying.Name.Value != "float32" && underlying.Name.Value != "float64") {
-					return bashPPScalar{}, true, fmt.Errorf("complex requires floating-point arguments")
+					return bashPPScalar{}, fmt.Errorf("complex requires floating-point arguments")
 				}
 				if underlying.Name.Value == "float32" {
 					typ = "complex64"
@@ -169,17 +189,17 @@ func (r *Runner) bashPPComplexBuiltin(call *syntax.BashPPCall) (bashPPScalar, bo
 		}
 		v := constant.BinaryOp(args[0].value, token.ADD, constant.MakeImag(args[1].value))
 		result, err := r.bashPPTypedScalarResult(v, typ, runtime)
-		return result, true, err
+		return result, err
 	}
 	a := args[0]
 	if a.value.Kind() != constant.Complex && a.value.Kind() != constant.Int && a.value.Kind() != constant.Float {
-		return bashPPScalar{}, true, fmt.Errorf("%s requires complex argument", name)
+		return bashPPScalar{}, fmt.Errorf("%s requires complex argument", name)
 	}
 	typ := ""
 	if a.typ != "" {
 		underlying, ok := r.bashPPUnderlyingType(&syntax.BashPPNamedType{Name: &syntax.Lit{Value: a.typ}}).(*syntax.BashPPNamedType)
 		if !ok {
-			return bashPPScalar{}, true, fmt.Errorf("%s requires complex argument", name)
+			return bashPPScalar{}, fmt.Errorf("%s requires complex argument", name)
 		}
 		switch underlying.Name.Value {
 		case "complex64":
@@ -187,12 +207,12 @@ func (r *Runner) bashPPComplexBuiltin(call *syntax.BashPPCall) (bashPPScalar, bo
 		case "complex128":
 			typ = "float64"
 		default:
-			return bashPPScalar{}, true, fmt.Errorf("%s requires complex argument", name)
+			return bashPPScalar{}, fmt.Errorf("%s requires complex argument", name)
 		}
 	}
 	v := constant.Real(a.value)
 	if name == "imag" {
 		v = constant.Imag(a.value)
 	}
-	return bashPPScalar{value: constant.ToFloat(v), typ: typ, runtime: a.runtime}, true, nil
+	return bashPPScalar{value: constant.ToFloat(v), typ: typ, runtime: a.runtime}, nil
 }

@@ -336,6 +336,9 @@ func (r *Runner) bashPPScalarPath(expr syntax.BashPPExpr) (bashPPScalar, error) 
 	}
 	switch value := value.(type) {
 	case string:
+		if r.bashPPGoSource && r.bashPPStringCarriesComplex(r.bashPPExprScalarType(expr), value) {
+			return bashPPScalar{value: bashPPParseComplex(value), typ: typ, runtime: true}, nil
+		}
 		// A large unsigned element is stored as its decimal spelling because
 		// it exceeds the interpreter's signed int carrier. Reconstruct it as
 		// the integer it is when the declared scalar type is integral, so
