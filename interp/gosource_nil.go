@@ -182,7 +182,7 @@ func (r *Runner) goSourceInterfaceEqual(left, right bashPPComparableValue) (bool
 	}
 	lv, lm := comparable(li)
 	rv, rm := comparable(ri)
-	equal, err := bashPPCompareValues(lv, lm, false, rv, rm, false)
+	equal, err := r.bashPPCompareValues(lv, lm, false, rv, rm, false)
 	return equal, true, err
 }
 
