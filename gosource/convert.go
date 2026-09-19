@@ -160,6 +160,15 @@ func (c *converter) ident(n *ast.Ident) *s.Lit {
 	return out
 }
 
+func (c *converter) qualifiedIdent(n *ast.Ident) (*s.Lit, *s.Lit, bool) {
+	rename := c.renames[c.info.ObjectOf(n)]
+	qualifier, member, ok := strings.Cut(rename, ".")
+	if !ok || qualifier == "" || member == "" {
+		return nil, nil, false
+	}
+	return c.lit(n.Pos(), qualifier), c.lit(n.Pos(), member), true
+}
+
 // mappedPkgName reports whether e is the import binding of a linked explicit
 // package. A selector through it collapses to the selected object's rename:
 // the package's declarations were lowered into the same flat file.
@@ -617,7 +626,11 @@ func (c *converter) importSpec(g *ast.GenDecl, i *ast.ImportSpec) *s.BashPPImpor
 	}
 	out := &s.BashPPImport{Site: s.StartImport, Class: s.ClassR, Kw: c.lit(g.TokPos, "import"), Path: &s.DblQuoted{Left: c.pos(i.Path.Pos()), Right: c.pos(i.Path.End() - 1), Parts: []s.WordPart{c.lit(i.Path.Pos()+1, path)}}}
 	if i.Name != nil {
-		out.Alias = c.ident(i.Name)
+		if rename := c.renames[c.info.Defs[i.Name]]; rename != "" {
+			out.Alias = c.lit(i.Name.Pos(), rename)
+		} else {
+			out.Alias = c.ident(i.Name)
+		}
 	} else if obj := c.info.Implicits[i]; c.renames[obj] != "" {
 		out.Alias = c.lit(i.Path.Pos(), c.renames[obj])
 	}
@@ -1141,6 +1154,9 @@ func (c *converter) exprValue(e ast.Expr) s.BashPPExpr {
 		if value := c.genericFuncValue(x); value != nil {
 			return value
 		}
+		if pkg, sel, ok := c.qualifiedIdent(x); ok {
+			return &s.BashPPSelectorExpr{X: &s.BashPPIdent{Name: pkg}, Dot: c.pos(x.Pos()), Sel: sel, FuncType: c.functionValueType(x)}
+		}
 		return &s.BashPPIdent{Name: c.ident(x)}
 	case *ast.ParenExpr:
 		return &s.BashPPParenExpr{Lparen: c.pos(x.Lparen), Rparen: c.pos(x.Rparen), X: c.expr(x.X)}
@@ -1319,6 +1335,10 @@ func (c *converter) call(x *ast.CallExpr) *s.BashPPCall {
 func (c *converter) callee(out *s.BashPPCall, e ast.Expr) {
 	switch v := e.(type) {
 	case *ast.Ident:
+		if pkg, sel, ok := c.qualifiedIdent(v); ok {
+			out.Fun = append(out.Fun, pkg, sel)
+			return
+		}
 		out.Fun = append(out.Fun, c.ident(v))
 	case *ast.SelectorExpr:
 		// A method expression the runtime cannot select from a declaration

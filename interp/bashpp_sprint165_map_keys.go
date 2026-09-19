@@ -96,18 +96,17 @@ func (r *Runner) bashPPSprint165MapKey(value any, meta *bashPPCollectionMeta, ty
 		return key, nonreflexive, err
 	}
 
-	if native, ok := value.(*bashPPBridgeValue); ok && native != nil {
-		decoded, _, err := bashPPBridgeScalarValue(*native)
-		if err != nil {
-			return bashPPMapKey{}, false, err
-		}
-		value = decoded
-	}
-
 	typeName := bashPPTypeText(typ)
 	shape := r.bashPPUnderlyingType(typ)
 	switch x := shape.(type) {
 	case *syntax.BashPPNamedType:
+		if native, ok := value.(*bashPPBridgeValue); ok && native != nil {
+			decoded, _, err := bashPPBridgeScalarValue(*native)
+			if err != nil {
+				return bashPPMapKey{}, false, err
+			}
+			value = decoded
+		}
 		switch x.Name.Value {
 		case "string":
 			text, ok := value.(string)

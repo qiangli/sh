@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"mvdan.cc/sh/v3/interp"
+	"mvdan.cc/sh/v3/lower"
 	"mvdan.cc/sh/v3/syntax"
 )
 
@@ -645,6 +646,62 @@ func TestMappedEmbedIsRefused(t *testing.T) {
 	want := `a.go:5:1: gosource: go:embed in mapped package "test/a" is not supported by the explicit package map`
 	if err == nil || err.Error() != want {
 		t.Fatalf("err = %v\nwant %s", err, want)
+	}
+}
+
+func TestDotImportsStayFileScopedInFlatCompile(t *testing.T) {
+	sources := []Source{
+		src("a.go", `package p
+
+import . "strings"
+
+var _ = Index
+
+type T struct{ Index int }
+
+var _ = T{Index: 0}
+`),
+		src("b.go", `package p
+
+import . "bytes"
+
+var _ = Index
+
+var _ = T{Index: 0}
+`),
+	}
+	program, err := Load(sources, Options{ImportPath: "p"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := lower.Compile(program.File, lower.Options{Package: program.Package, Importer: program.Importer, Origin: "generated.go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.test/dotimport\n\ngo 1.23\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(result.Source), "func Index(") {
+		t.Fatalf("lowered a dot-imported name as a declaration:\n%s", result.Source)
+	}
+	if err := os.WriteFile(filepath.Join(root, "generated.go"), result.Source, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("go", "test", "./...")
+	cmd.Dir = root
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("generated package failed: %v\n%s", err, out)
+	}
+}
+
+func TestDuplicateTopLevelNameStillRefused(t *testing.T) {
+	_, err := Load([]Source{
+		src("a.go", "package p\n\nvar x int\n"),
+		src("b.go", "package p\n\nvar x int\n"),
+	}, Options{PreserveNativeInit: true})
+	if err == nil || !strings.Contains(err.Error(), "x redeclared in this block") {
+		t.Fatalf("err = %v", err)
 	}
 }
 

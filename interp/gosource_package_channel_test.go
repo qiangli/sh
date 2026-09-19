@@ -60,6 +60,9 @@ func TestGoSourcePackageChannelInvalidDeclarations(t *testing.T) {
 		"wrong_element":     `package p;var c chan int=make(chan string)`,
 		"negative_constant": `package p;var c=make(chan int,-1)`,
 		"send_receive_only": `package p;var c <-chan int;func f(){c<-1}`,
+		"non_comparable_key": `package p
+type S []int
+func f(){m:=make(map[S]int);_=m}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			p, err := gosource.Parse(strings.NewReader(source), "original.go", gosource.Options{})
@@ -68,4 +71,19 @@ func TestGoSourcePackageChannelInvalidDeclarations(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestGoSourceDefinedChannelMapKey(t *testing.T) {
+	typedSendThreeModes(t, `package main
+import "fmt"
+type C chan int
+func main(){
+	c:=make(C,1)
+	m:=make(map[C]int)
+	m[nil]=1
+	m[c]=2
+	m[make(C)]=3
+	c<-9
+	fmt.Println(m[nil],m[c],<-c,len(m))
+}`)
 }
