@@ -1070,7 +1070,11 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 				return
 			}
 			name := d.Lhs[0].Value
-			r.bashPPDeclareName(name, expand.NewObject(value))
+			vr, ok := r.bashPPGoSourceCollectionCarrier(value, meta)
+			if !ok {
+				vr = expand.NewObject(value)
+			}
+			r.bashPPDeclareName(name, vr)
 			r.bashPPScope.lookup(name).object = &bashPPObjectIdentity{owner: name, collection: meta}
 			r.bashPPScope.lookup(name).valueMeta = meta
 			return

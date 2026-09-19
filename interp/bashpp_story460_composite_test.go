@@ -5,10 +5,33 @@ package interp_test
 // Sprint: #209; Story: #460; Story-ID: d8e7d58f362b
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/go-quicktest/qt"
 )
+
+func TestStory460DeepCollectionCarrier(t *testing.T) {
+	// This is deliberately outside the Go corpus. A generated nested slice lets
+	// one typed value exceed the shell object's JSON depth budget without
+	// copying any fixedbugs fixture.
+	const depth = 110
+	sliceType := strings.Repeat("[]", depth) + "int"
+	value := sliceType + strings.Repeat("{", depth) + "1" + strings.Repeat("}", depth)
+	arrayType := strings.Repeat("[1]", depth) + "int"
+	src := `package main
+import "fmt"
+type deepArray ` + arrayType + `
+func main() {
+	v := ` + value + `
+	p := new(deepArray)
+	fmt.Println(len(v), fmt.Sprint(v) == "` + strings.Repeat("[", depth) + `1` + strings.Repeat("]", depth) + `", fmt.Sprint(p) == "&` + strings.Repeat("[", depth) + `0` + strings.Repeat("]", depth) + `")
+}`
+	out, stderr, err := runGoSource(t, "story460deepcarrier", src)
+	qt.Assert(t, qt.IsNil(err), qt.Commentf("stderr: %s", stderr))
+	qt.Assert(t, qt.Equals(stderr, ""))
+	qt.Assert(t, qt.Equals(out, "1 true true\n"))
+}
 
 func TestStory460CompositeValueCarriers(t *testing.T) {
 	src := `package main

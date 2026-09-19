@@ -60,3 +60,24 @@ func TestStory460ElementCarrierGoSourceOnly(t *testing.T) {
 	err = (&Runner{bashPPGoSource: true}).bashPPCheckCollectionValue("nope", uint64Type)
 	qt.Assert(t, qt.IsNotNil(err))
 }
+
+func TestStory460CollectionCarrierRequiresMatchingShape(t *testing.T) {
+	r := &Runner{bashPPGoSource: true}
+	integer := namedType("int")
+	mapType := &syntax.BashPPCollectionType{Kind: "map", Key: integer, Element: integer}
+	meta := &bashPPCollectionMeta{kind: "map", typ: mapType}
+
+	// Collection metadata is not a license to carry an arbitrary object. The
+	// payload must have the exact storage shape authenticated by that metadata.
+	_, ok := r.bashPPGoSourceCollectionCarrier([]any{1}, meta)
+	qt.Assert(t, qt.IsFalse(ok))
+
+	meta.kind = "slice"
+	_, ok = r.bashPPGoSourceCollectionCarrier([]any{1}, meta)
+	qt.Assert(t, qt.IsFalse(ok))
+
+	// Classic Bash# continues through expand.NewObject's established policy.
+	meta = &bashPPCollectionMeta{kind: "slice", typ: &syntax.BashPPCollectionType{Kind: "slice", Element: integer}}
+	_, ok = (&Runner{}).bashPPGoSourceCollectionCarrier([]any{1}, meta)
+	qt.Assert(t, qt.IsFalse(ok))
+}
