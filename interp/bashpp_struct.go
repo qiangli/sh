@@ -546,13 +546,13 @@ func (r *Runner) bashPPCheckTypedValue(value any, meta *bashPPCollectionMeta, ex
 		return nil
 	}
 	if _, ok := expected.(*syntax.BashPPCollectionType); ok {
-		if meta == nil || !r.bashPPTypeAssignable(meta.typ, expected) {
+		if meta == nil || !(r.bashPPTypeAssignable(meta.typ, expected) || r.bashPPInferredArrayAssignable(meta, expected)) {
 			return fmt.Errorf("BASHPP-ECOLLECTION-ELEMENT: cannot use value as %s", bashPPTypeText(expected))
 		}
 		return nil
 	}
 	if _, ok := r.bashPPUnderlyingType(expected).(*syntax.BashPPCollectionType); ok {
-		if meta == nil || !r.bashPPTypeAssignable(meta.typ, expected) {
+		if meta == nil || !(r.bashPPTypeAssignable(meta.typ, expected) || r.bashPPInferredArrayAssignable(meta, expected)) {
 			return fmt.Errorf("BASHPP-ECOLLECTION-ELEMENT: cannot use value as %s", bashPPTypeText(expected))
 		}
 		return nil

@@ -461,6 +461,64 @@ func (p *bashPPPointer) read() (any, *bashPPCollectionMeta, syntax.BashPPTypeExp
 	return value, meta, p.elem, nil
 }
 
+// slot resolves the pointer to the storage slot it addresses: the []any
+// backing and index of its final step. Two spellings of one address — &a.T[0]
+// and &b[0].T[0] after b's element shared a's slice backing — walk different
+// paths to the same slot, which is the aliasing Go compares. Only an index
+// step has an addressable slot; struct fields live in map storage, whose
+// entries have no address, so any other final step reports false.
+func (p *bashPPPointer) slot() ([]any, int, bool) {
+	if p == nil || p.target == nil || len(p.path) == 0 {
+		return nil, 0, false
+	}
+	last := p.path[len(p.path)-1]
+	if last.deref || last.field != "" {
+		return nil, 0, false
+	}
+	var value any
+	if p.target.pointer {
+		value = p.target.pointerValue
+	} else if p.target.vr.Kind == expand.Object {
+		value = p.target.vr.Obj
+	} else {
+		return nil, 0, false
+	}
+	for _, step := range p.path[:len(p.path)-1] {
+		switch {
+		case step.deref:
+			pointer, ok := value.(*bashPPPointer)
+			if !ok || pointer == nil {
+				return nil, 0, false
+			}
+			var err error
+			value, _, _, err = pointer.read()
+			if err != nil {
+				return nil, 0, false
+			}
+		case step.field != "":
+			mapping, ok := value.(map[string]any)
+			if !ok {
+				return nil, 0, false
+			}
+			value, ok = bashPPStorageGet(mapping, step.field)
+			if !ok {
+				return nil, 0, false
+			}
+		default:
+			seq, ok := value.([]any)
+			if !ok || step.index < 0 || step.index >= len(seq) {
+				return nil, 0, false
+			}
+			value = seq[step.index]
+		}
+	}
+	seq, ok := value.([]any)
+	if !ok || last.index < 0 || last.index >= len(seq) {
+		return nil, 0, false
+	}
+	return seq, last.index, true
+}
+
 // bashPPSliceArrayPointerValue presents a slice-to-array pointer's backing
 // storage as the converted array on a Go-source dereference.
 func (r *Runner) bashPPSliceArrayPointerValue(ptr *bashPPPointer, value any, meta *bashPPCollectionMeta) (any, *bashPPCollectionMeta, error) {

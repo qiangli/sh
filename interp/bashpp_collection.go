@@ -234,12 +234,88 @@ func (r *Runner) bashPPTypeAssignable(actual, expected syntax.BashPPTypeExpr) bo
 	if bashPPTypeText(actual) == bashPPTypeText(expected) {
 		return true
 	}
+	actual, expected = r.bashPPResolvedArrayLengths(actual), r.bashPPResolvedArrayLengths(expected)
+	if bashPPTypeText(actual) == bashPPTypeText(expected) {
+		return true
+	}
 	_, actualNamed := actual.(*syntax.BashPPNamedType)
 	_, expectedNamed := expected.(*syntax.BashPPNamedType)
 	if actualNamed && expectedNamed {
 		return false
 	}
-	return bashPPTypeText(r.bashPPUnderlyingType(actual)) == bashPPTypeText(r.bashPPUnderlyingType(expected))
+	return bashPPTypeText(r.bashPPResolvedArrayLengths(r.bashPPUnderlyingType(actual))) ==
+		bashPPTypeText(r.bashPPResolvedArrayLengths(r.bashPPUnderlyingType(expected)))
+}
+
+// bashPPInferredArrayAssignable reports whether an inferred-length array
+// value — a [...]T literal — may serve a fixed-length array destination. The
+// spelling [...]T carries no length, so the type texts can never agree; the
+// value's own element count is the length Go inferred, and it must equal the
+// destination's resolved length with the element types spelling the same.
+func (r *Runner) bashPPInferredArrayAssignable(meta *bashPPCollectionMeta, expected syntax.BashPPTypeExpr) bool {
+	if meta == nil || meta.kind != "inferred-array" {
+		return false
+	}
+	actual, ok := r.bashPPUnderlyingType(meta.typ).(*syntax.BashPPCollectionType)
+	if !ok || actual.Kind != "inferred-array" {
+		return false
+	}
+	array, ok := r.bashPPUnderlyingType(expected).(*syntax.BashPPCollectionType)
+	if !ok || array.Kind != "array" || array.Length == nil {
+		return false
+	}
+	n, err := r.bashPPArrayLength(array.Length.Value)
+	if err != nil || n != len(meta.sequence) {
+		return false
+	}
+	return bashPPTypeText(r.bashPPResolvedArrayLengths(actual.Element)) ==
+		bashPPTypeText(r.bashPPResolvedArrayLengths(array.Element))
+}
+
+// bashPPResolvedArrayLengths spells every array length in typ as its resolved
+// integer constant, so a length written as a constant expression compares
+// equal to its value — `[len(at)]*T` is the type `[3]*T` when at is a
+// three-element array. A length that does not resolve to an integer constant
+// in the current scope is left as written.
+func (r *Runner) bashPPResolvedArrayLengths(typ syntax.BashPPTypeExpr) syntax.BashPPTypeExpr {
+	switch x := typ.(type) {
+	case *syntax.BashPPCollectionType:
+		key, element := x.Key, r.bashPPResolvedArrayLengths(x.Element)
+		if x.Kind == "map" && key != nil {
+			key = r.bashPPResolvedArrayLengths(key)
+		}
+		length := x.Length
+		if x.Kind == "array" && length != nil {
+			if _, err := strconv.Atoi(length.Value); err != nil {
+				if n, err := r.bashPPArrayLength(length.Value); err == nil {
+					length = &syntax.Lit{ValuePos: x.Length.ValuePos, ValueEnd: x.Length.ValueEnd, Value: strconv.Itoa(n)}
+				}
+			}
+		}
+		if key == x.Key && element == x.Element && length == x.Length {
+			return x
+		}
+		resolved := *x
+		resolved.Key, resolved.Element, resolved.Length = key, element, length
+		return &resolved
+	case *syntax.BashPPPointerType:
+		element := r.bashPPResolvedArrayLengths(x.Element)
+		if element == x.Element {
+			return x
+		}
+		resolved := *x
+		resolved.Element = element
+		return &resolved
+	case *syntax.BashPPChanType:
+		element := r.bashPPResolvedArrayLengths(x.Element)
+		if element == x.Element {
+			return x
+		}
+		resolved := *x
+		resolved.Element = element
+		return &resolved
+	}
+	return typ
 }
 
 // bashPPPredeclaredAliases spells the predeclared aliases by the types they
@@ -644,7 +720,15 @@ func (r *Runner) bashPPEvalElement(expr syntax.BashPPExpr, expected syntax.BashP
 		value, meta = bashPPCopyArrayValue(value, meta)
 		return value, meta, nil
 	}
-	if _, pointer := r.bashPPPointerType(expected); pointer {
+	if ptr, pointer := r.bashPPPointerType(expected); pointer {
+		// In an array, slice, or map literal, an element or key of pointer
+		// type elides the &T of &T{...}: []*R{{0}} is []*R{&R{0}}. Restore
+		// the address-of form so the pointee is allocated like any &-literal.
+		if lit, ok := expr.(*syntax.BashPPCompositeLit); ok && lit.LitType == nil && r.bashPPGoSource {
+			pointee := *lit
+			pointee.LitType = ptr.Element
+			return r.bashPPEvalTypedValue(&syntax.BashPPAddressExpr{Amp: lit.Pos(), X: &pointee}, expected)
+		}
 		return r.bashPPEvalTypedValue(expr, expected)
 	}
 	if _, deref := expr.(*syntax.BashPPDerefExpr); deref {
@@ -714,15 +798,30 @@ func (r *Runner) bashPPEvalElement(expr syntax.BashPPExpr, expected syntax.BashP
 		return value, meta, nil
 	}
 	if r.bashPPGoSource {
-		// A collection destination cannot be served by the scalar fallback, so
-		// a name or type assertion carrying a collection is read whole — this
-		// is what admits an array-typed variable or assertion as a map key.
+		// A composite destination cannot be served by the scalar fallback, so
+		// a name or type assertion carrying a collection or a struct is read
+		// whole — this is what admits an array- or struct-typed variable or
+		// assertion as a map key or as a collection element.
 		switch expr.(type) {
 		case *syntax.BashPPIdent, *syntax.BashPPTypeAssertExpr:
-			if _, collected := r.bashPPUnderlyingType(expected).(*syntax.BashPPCollectionType); collected {
+			composite := false
+			switch r.bashPPUnderlyingType(expected).(type) {
+			case *syntax.BashPPCollectionType, *syntax.BashPPStructType:
+				composite = true
+			}
+			if composite {
 				value, meta, err := r.bashPPReadExpr(expr)
 				if err != nil {
 					return nil, nil, err
+				}
+				if native, ok := value.(*bashPPBridgeValue); ok {
+					converted, convertedMeta, handled, err := r.goSourceNativeSequenceContents(native, expected)
+					if err != nil {
+						return nil, nil, err
+					}
+					if handled {
+						value, meta = converted, convertedMeta
+					}
 				}
 				if err := r.bashPPCheckTypedValue(value, meta, expected); err != nil {
 					return nil, nil, err
