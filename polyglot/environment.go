@@ -480,7 +480,11 @@ func discoverGoEnvironment(plan EnvironmentPlan, selected *environmentOverlay, e
 
 func goLaunchEnvironment(env map[string]string) []string {
 	var out []string
-	for _, key := range []string{"PATH", "HOME", "SystemRoot", "TMPDIR", "TEMP", "TMP", "GOTOOLCHAIN", "GOFLAGS", "GOWORK", "GOMODCACHE", "GOCACHE", "GOPATH"} {
+	// LOCALAPPDATA/USERPROFILE and friends: the go command's default build
+	// cache is %LocalAppData%\go-build, and without it `go build` refuses
+	// ("build cache is required, but could not be located").
+	for _, key := range []string{"PATH", "HOME", "SystemRoot", "TMPDIR", "TEMP", "TMP", "GOTOOLCHAIN", "GOFLAGS", "GOWORK", "GOMODCACHE", "GOCACHE", "GOPATH",
+		"LOCALAPPDATA", "APPDATA", "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "SystemDrive", "PATHEXT", "ComSpec", "XDG_CACHE_HOME"} {
 		if value := environmentValue(env, key); value != "" {
 			out = append(out, key+"="+value)
 		}

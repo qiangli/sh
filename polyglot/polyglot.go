@@ -354,7 +354,12 @@ func (m *Module) ensure(ctx context.Context) error {
 	var protocolRead io.ReadCloser
 	var protocolWrite *os.File
 	_, typeScript := m.runtime.(TypeScript)
-	if runtime.GOOS == "windows" && typeScript {
+	// Windows refuses ExtraFiles outright (syscall.StartProcess: more than
+	// three files → EWINDOWS, "not supported by windows"), so there the
+	// protocol rides the worker's stdout: every worker falls back to it when
+	// fd 3 is absent, and island output is captured per call, never on
+	// stdout between calls.
+	if runtime.GOOS == "windows" {
 		protocolRead, err = cmd.StdoutPipe()
 		if err != nil {
 			in.Close()
@@ -828,8 +833,12 @@ print(json.dumps(out,separators=(',',':')))
 `
 
 const pythonWorker = pythonPathBootstrap + `
-import ast, base64, importlib, json, os, sys, tempfile, traceback
-protocol=os.fdopen(3,'w',buffering=1)
+import ast, base64, importlib, io, json, os, sys, tempfile, traceback
+try:
+    protocol=os.fdopen(3,'w',buffering=1,newline='\n')
+except OSError:
+    # No fd 3 (Windows): the protocol rides stdout; island output is captured per call.
+    protocol=io.TextIOWrapper(io.FileIO(1,'w',closefd=False),line_buffering=True,newline='\n')
 ns={'__name__':'__bashpp__'}
 module=None
 handles={}

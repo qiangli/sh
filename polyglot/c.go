@@ -206,7 +206,9 @@ func nativeIncludeArgs(environment *EnvironmentPlan) []string {
 func zigDriverOnlyFailure(stderr string) bool {
 	sawZig := false
 	for _, line := range strings.Split(stderr, "\n") {
-		if !strings.Contains(line, "error:") {
+		// A diagnostic is "<loc>: error: <msg>"; a bare "error:" substring
+		// also matches an include path such as libcxx's system_error:152:.
+		if !strings.Contains(line, ": error: ") && !strings.HasPrefix(line, "error: ") {
 			continue
 		}
 		if strings.HasSuffix(strings.TrimSpace(line), ":1:1: error: FileNotFound") {

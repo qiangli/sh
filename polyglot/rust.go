@@ -408,10 +408,10 @@ func (m *Module) callRust(ctx context.Context, _ Rust, name string, args []any, 
 // rustLinkerArgs names rustc's linker when the embedder's tool resolver
 // provides one ("cc-linker": a single program that behaves as cc — bashy
 // answers with a wrapper over its provisioned zig cc). Without it rustc
-// looks for `cc` on PATH, which a host with no toolchain does not have.
-// Windows keeps rustc's own MSVC link.exe discovery.
+// looks for `cc` on PATH, which a host with no toolchain does not have;
+// on Windows the provisioned toolchain is the gnu one, linked the same way.
 func rustLinkerArgs() []string {
-	if ToolResolver == nil || runtime.GOOS == "windows" {
+	if ToolResolver == nil {
 		return nil
 	}
 	argv, _, err := ToolResolver("cc-linker")

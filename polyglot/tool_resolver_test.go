@@ -132,4 +132,7 @@ func TestZigDriverOnlyFailure(t *testing.T) {
 	if zigDriverOnlyFailure("") {
 		t.Fatal("no error line is not the zig quirk")
 	}
+	if !zigDriverOnlyFailure("In file included from C:\\zig\\lib\\libcxx\\include/system_error:152:\nC:\\zig\\lib\\libcxx\\include/string:1078:80: warning: pointer is missing a nullability type specifier\nC:\\t\\module.cpp:1:1: error: FileNotFound\n") {
+		t.Fatal("an include path containing 'error:' is not a diagnostic")
+	}
 }

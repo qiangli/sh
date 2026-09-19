@@ -248,11 +248,17 @@ try {
   // one project tsconfigs enable with allowImportingTsExtensions.
   if (modern) { options.noEmit = true; options.allowImportingTsExtensions = true; }
   const host = ts.createCompilerHost(options);
+  // The compiler hands the host NORMALIZED names (forward slashes; on
+  // Windows the drive letter's case is not guaranteed), while input is the
+  // OS spelling it was given: compare through the same normalization.
+  const norm = f => { f = String(f).replace(/\\/g, '/'); return process.platform === 'win32' ? f.toLowerCase() : f; };
+  const inputKey = norm(input);
+  const isInput = file => norm(file) === inputKey;
   const baseGet = host.getSourceFile.bind(host);
   host.getSourceFile = (file, version, onError, fresh) =>
-    file === input ? ts.createSourceFile(input, source, version, true, ts.ScriptKind.TS) : baseGet(file, version, onError, fresh);
-  host.fileExists = ((base) => file => file === input || base(file))(host.fileExists.bind(host));
-  host.readFile = ((base) => file => file === input ? source : base(file))(host.readFile.bind(host));
+    isInput(file) ? ts.createSourceFile(input, source, version, true, ts.ScriptKind.TS) : baseGet(file, version, onError, fresh);
+  host.fileExists = ((base) => file => isInput(file) || base(file))(host.fileExists.bind(host));
+  host.readFile = ((base) => file => isInput(file) ? source : base(file))(host.readFile.bind(host));
   let artifact = '';
   host.writeFile = (file, text) => {
 	    const output = path.basename(input).replace(/\.[cm]?tsx?$/, '.js');
@@ -261,7 +267,7 @@ try {
   const program = ts.createProgram([input], options, host);
   const sourceFile = program.getSourceFile(input);
   const checker = program.getTypeChecker();
-	  const diagnostics = ts.getPreEmitDiagnostics(program).filter(d => !d.file || d.file.fileName === input);
+	  const diagnostics = ts.getPreEmitDiagnostics(program).filter(d => !d.file || isInput(d.file.fileName));
   if (diagnostics.length) fail(diagnostics.map(d => diagnostic(ts, d)).join('\n'));
   const exports = [];
   const mapType = type => {
