@@ -356,7 +356,7 @@ func (r *Runner) bashPPAddress(expr syntax.BashPPExpr) (result *bashPPPointer, e
 			if collection.Kind == "map" {
 				return fmt.Errorf("BASHPP-ENONADDRESSABLE: map elements are not addressable")
 			}
-			i, err := r.bashPPCollectionIndex(x.Index)
+			index, err := r.bashPPCollectionIndex(x.Index)
 			if err != nil {
 				return err
 			}
@@ -372,12 +372,13 @@ func (r *Runner) bashPPAddress(expr syntax.BashPPExpr) (result *bashPPPointer, e
 				return err
 			}
 			seq := value.([]any)
-			if i < 0 || i >= len(seq) {
+			if index.outOfBounds(len(seq)) {
 				if r.bashPPGoSource {
-					return r.bashPPSprint162CollectionBoundsPanic(x, i, len(seq))
+					return r.bashPPSprint162CollectionBoundsPanic(x, index, len(seq))
 				}
-				return fmt.Errorf("BASHPP-ECOLLECTION-BOUNDS: index %d out of bounds for length %d", i, len(seq))
+				return fmt.Errorf("BASHPP-ECOLLECTION-BOUNDS: index %s out of bounds for length %d", index.text, len(seq))
 			}
+			i := index.value
 			ptr.path = append(ptr.path, bashPPPointerStep{index: i})
 			typ = collection.Element
 			if meta != nil {

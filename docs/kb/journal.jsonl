@@ -27,3 +27,4 @@
 {"op":"add","slug":"recover-instantiated-generic-type-at-mirrored-callback-receiver","tool":"claude-t","host":"dragon","episode":"weave-issue-176","at":"2026-09-13T03:55:48.897176Z"}
 {"op":"validate","slug":"recover-instantiated-generic-type-at-mirrored-callback-receiver","tool":"claude-t","host":"dragon","episode":"weave-issue-176","at":"2026-09-13T03:55:52.657319Z"}
 {"op":"add","slug":"gate-string-carrier-numeric-conversions-by-source-type","tool":"codex-gpt-5.5-r","host":"dragon","episode":"weave-issue-200","at":"2026-09-13T22:04:26.269371Z"}
+{"op":"add","slug":"preserve-wide-integer-indices-through-bounds-checks","id":"01a0bc39-da65-7c2d-81c7-d4f56cc3bfcc","tool":"codex-gpt5.6-sol-p","host":"dragon","episode":"weave-issue-276","at":"2026-09-20T00:31:43.206392Z"}

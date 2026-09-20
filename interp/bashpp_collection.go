@@ -456,7 +456,10 @@ func (r *Runner) bashPPEvalCollection(lit *syntax.BashPPCompositeLit, expected s
 			if err != nil {
 				return nil, nil, err
 			}
-			index = key
+			if !key.fitsInt {
+				return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-BOUNDS: index %s out of bounds for %s", key.text, bashPPTypeText(typ))
+			}
+			index = key.value
 		}
 		if index < 0 || fixed >= 0 && index >= fixed {
 			return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-BOUNDS: index %d out of bounds for %s", index, bashPPTypeText(typ))
@@ -1045,16 +1048,58 @@ func (r *Runner) bashPPMapKeyType(typ syntax.BashPPTypeExpr) bool {
 	return r.bashPPComparableType(typ, make(map[string]bool))
 }
 
-func (r *Runner) bashPPCollectionIndex(expr syntax.BashPPExpr) (int, error) {
+type bashPPCollectionIndexValue struct {
+	value   int
+	text    string
+	fitsInt bool
+	number  constant.Value
+}
+
+func (index bashPPCollectionIndexValue) outOfBounds(length int) bool {
+	return !index.fitsInt || index.value < 0 || index.value >= length
+}
+
+func bashPPCollectionIndexInt(value int) bashPPCollectionIndexValue {
+	number := constant.MakeInt64(int64(value))
+	return bashPPCollectionIndexValue{value: value, text: number.ExactString(), fitsInt: true, number: number}
+}
+
+func (index bashPPCollectionIndexValue) less(other bashPPCollectionIndexValue) bool {
+	return constant.Compare(index.number, gotoken.LSS, other.number)
+}
+
+func (index bashPPCollectionIndexValue) greaterThan(value int) bool {
+	return constant.Compare(index.number, gotoken.GTR, constant.MakeInt64(int64(value)))
+}
+
+func (r *Runner) bashPPResolveCollectionIndex(v bashPPScalar, diagnostic string) (bashPPCollectionIndexValue, error) {
+	n, ok := constant.Int64Val(v.value)
+	if ok && int64(int(n)) == n {
+		index := bashPPCollectionIndexInt(int(n))
+		return index, nil
+	}
+	// Go permits every integer type as an index. In particular, a uint64
+	// runtime value above MaxInt64 is a valid index expression even though it
+	// cannot address an interpreter-owned sequence. Preserve its exact spelling
+	// so the inevitable bounds panic names the actual index. Classic Bash# keeps
+	// its historical int-only diagnostic.
+	if r.bashPPGoSource && v.value.Kind() == constant.Int {
+		if ok {
+			return bashPPCollectionIndexValue{text: v.value.ExactString(), number: v.value}, nil
+		}
+		if _, ok := constant.Uint64Val(v.value); ok {
+			return bashPPCollectionIndexValue{text: v.value.ExactString(), number: v.value}, nil
+		}
+	}
+	return bashPPCollectionIndexValue{}, fmt.Errorf("%s", diagnostic)
+}
+
+func (r *Runner) bashPPCollectionIndex(expr syntax.BashPPExpr) (bashPPCollectionIndexValue, error) {
 	v, err := r.bashPPCollectionIndexScalar(expr)
 	if err != nil {
-		return 0, fmt.Errorf("BASHPP-ECOLLECTION-INDEX: %v", err)
+		return bashPPCollectionIndexValue{}, fmt.Errorf("BASHPP-ECOLLECTION-INDEX: %v", err)
 	}
-	n, ok := constant.Int64Val(v.value)
-	if !ok || int64(int(n)) != n {
-		return 0, fmt.Errorf("BASHPP-ECOLLECTION-INDEX: index must be an integer")
-	}
-	return int(n), nil
+	return r.bashPPResolveCollectionIndex(v, "BASHPP-ECOLLECTION-INDEX: index must be an integer")
 }
 
 func (r *Runner) bashPPCollectionIndexScalar(expr syntax.BashPPExpr) (bashPPScalar, error) {
@@ -1063,6 +1108,9 @@ func (r *Runner) bashPPCollectionIndexScalar(expr syntax.BashPPExpr) (bashPPScal
 		case *syntax.BashPPParenExpr:
 			return r.bashPPCollectionIndexScalar(x.X)
 		case *syntax.BashPPCall:
+			if value, handled, err := r.goSourceUnsafeConstant(x); handled {
+				return value, err
+			}
 			cell, err := r.goSourceValueCell(x)
 			if err != nil {
 				return bashPPScalar{}, err
@@ -1073,19 +1121,15 @@ func (r *Runner) bashPPCollectionIndexScalar(expr syntax.BashPPExpr) (bashPPScal
 	return r.bashPPEvalScalarExpr(expr)
 }
 
-func (r *Runner) bashPPSliceBound(expr syntax.BashPPExpr, fallback int) (int, error) {
+func (r *Runner) bashPPSliceBound(expr syntax.BashPPExpr, fallback int) (bashPPCollectionIndexValue, error) {
 	if expr == nil {
-		return fallback, nil
+		return bashPPCollectionIndexInt(fallback), nil
 	}
 	v, err := r.bashPPCollectionIndexScalar(expr)
 	if err != nil {
-		return 0, fmt.Errorf("BASHPP-ECOLLECTION-SLICE: %v", err)
+		return bashPPCollectionIndexValue{}, fmt.Errorf("BASHPP-ECOLLECTION-SLICE: %v", err)
 	}
-	n, ok := constant.Int64Val(v.value)
-	if !ok || int64(int(n)) != n {
-		return 0, fmt.Errorf("BASHPP-ECOLLECTION-SLICE: bound must be an integer")
-	}
-	return int(n), nil
+	return r.bashPPResolveCollectionIndex(v, "BASHPP-ECOLLECTION-SLICE: bound must be an integer")
 }
 
 // bashPPStringSliceBound evaluates a string slice bound exactly once, reporting
@@ -1093,19 +1137,19 @@ func (r *Runner) bashPPSliceBound(expr syntax.BashPPExpr, fallback int) (int, er
 // out-of-range string slice to Go's recoverable panic; a constant one keeps the
 // front-end diagnostic (the Go-source checker already rejects a wholly constant
 // invalid slice, so only the classic dialect reaches that branch here).
-func (r *Runner) bashPPStringSliceBound(expr syntax.BashPPExpr, fallback int) (int, bool, error) {
+func (r *Runner) bashPPStringSliceBound(expr syntax.BashPPExpr, fallback int) (bashPPCollectionIndexValue, bool, error) {
 	if expr == nil {
-		return fallback, false, nil
+		return bashPPCollectionIndexInt(fallback), false, nil
 	}
 	v, err := r.bashPPCollectionIndexScalar(expr)
 	if err != nil {
-		return 0, false, fmt.Errorf("BASHPP-ECOLLECTION-INDEX: %v", err)
+		return bashPPCollectionIndexValue{}, false, fmt.Errorf("BASHPP-ECOLLECTION-INDEX: %v", err)
 	}
-	n, ok := constant.Int64Val(v.value)
-	if !ok || int64(int(n)) != n {
-		return 0, false, fmt.Errorf("BASHPP-ECOLLECTION-INDEX: index must be an integer")
+	index, err := r.bashPPResolveCollectionIndex(v, "BASHPP-ECOLLECTION-INDEX: index must be an integer")
+	if err != nil {
+		return bashPPCollectionIndexValue{}, false, err
 	}
-	return int(n), v.runtime, nil
+	return index, v.runtime, nil
 }
 
 func (r *Runner) bashPPSliceBounds(expr *syntax.BashPPSliceExpr, length, capacity int, sliceOperand bool) (int, int, int, error) {
@@ -1117,7 +1161,7 @@ func (r *Runner) bashPPSliceBounds(expr *syntax.BashPPSliceExpr, length, capacit
 	if err != nil {
 		return 0, 0, 0, err
 	}
-	max := capacity
+	max := bashPPCollectionIndexInt(capacity)
 	if expr.SecondColon.IsValid() {
 		max, err = r.bashPPSliceBound(expr.Max, capacity)
 		if err != nil {
@@ -1128,19 +1172,20 @@ func (r *Runner) bashPPSliceBounds(expr *syntax.BashPPSliceExpr, length, capacit
 	if sliceOperand {
 		highLimit = capacity
 	}
-	if low < 0 || high < low || high > highLimit || max < high || max > capacity {
+	invalid := low.less(bashPPCollectionIndexInt(0)) || high.less(low) || high.greaterThan(highLimit) || max.less(high) || max.greaterThan(capacity)
+	if invalid {
 		if r.bashPPGoSource {
 			return 0, 0, 0, r.goSourceSliceBoundsPanic(expr, low, high, max, highLimit, capacity, sliceOperand)
 		}
 		if expr.SecondColon.IsValid() {
-			return 0, 0, 0, fmt.Errorf("BASHPP-ECOLLECTION-SLICE: slice bounds out of range [%d:%d:%d] with length %d and capacity %d", low, high, max, length, capacity)
+			return 0, 0, 0, fmt.Errorf("BASHPP-ECOLLECTION-SLICE: slice bounds out of range [%s:%s:%s] with length %d and capacity %d", low.text, high.text, max.text, length, capacity)
 		}
-		return 0, 0, 0, fmt.Errorf("BASHPP-ECOLLECTION-SLICE: slice bounds out of range [%d:%d] with length %d", low, high, length)
+		return 0, 0, 0, fmt.Errorf("BASHPP-ECOLLECTION-SLICE: slice bounds out of range [%s:%s] with length %d", low.text, high.text, length)
 	}
 	if !expr.SecondColon.IsValid() {
-		max = capacity
+		max = bashPPCollectionIndexInt(capacity)
 	}
-	return low, high, max, nil
+	return low.value, high.value, max.value, nil
 }
 
 func (r *Runner) bashPPCollectionRead(index *syntax.BashPPIndexExpr) (any, *bashPPCollectionMeta, error) {
@@ -1271,23 +1316,23 @@ func (r *Runner) bashPPCollectionAssign(target *syntax.BashPPIndexExpr, rhs synt
 		}
 		return
 	}
-	i, indexErr := r.bashPPCollectionIndex(target.Index)
+	index, indexErr := r.bashPPCollectionIndex(target.Index)
 	if indexErr != nil {
 		r.errf("%v\n", indexErr)
 		r.exit = exitStatus{code: 2}
 		return
 	}
 	sequence := parent.([]any)
-	if i < 0 || i >= len(sequence) {
+	if index.outOfBounds(len(sequence)) {
 		if r.bashPPGoSource {
 			// Go's indexed assignment faults at runtime, recoverably; the
 			// classic diagnostic stays the abort Bash# always reported.
-			r.bashPPSprint162CollectionBoundsPanic(target, i, len(sequence))
+			r.bashPPSprint162CollectionBoundsPanic(target, index, len(sequence))
 			return
 		}
-		r.errf("BASHPP-ECOLLECTION-BOUNDS: index %d out of bounds for length %d\n", i, len(sequence))
+		r.errf("BASHPP-ECOLLECTION-BOUNDS: index %s out of bounds for length %d\n", index.text, len(sequence))
 		r.exit = exitStatus{code: 2}
 		return
 	}
-	sequence[i], meta.sequence[i] = value, child
+	sequence[index.value], meta.sequence[index.value] = value, child
 }

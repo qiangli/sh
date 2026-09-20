@@ -132,15 +132,20 @@ func (r *Runner) bashPPApplySliceUpdate(target *syntax.BashPPIndexExpr, collecti
 		r.bashPPUpdateError(target.Pos(), "TYPE", "target is not slice storage")
 		return
 	}
-	i, err := r.bashPPCollectionIndex(target.Index)
+	index, err := r.bashPPCollectionIndex(target.Index)
 	if err != nil {
 		r.bashPPUpdateError(target.Index.Pos(), "TARGET", err.Error())
 		return
 	}
-	if i < 0 || i >= len(elements) {
-		r.bashPPUpdateError(target.Index.Pos(), "TARGET", fmt.Sprintf("BASHPP-ECOLLECTION-BOUNDS: index %d out of bounds for length %d", i, len(elements)))
+	if index.outOfBounds(len(elements)) {
+		if r.bashPPGoSource {
+			r.bashPPSprint162CollectionBoundsPanic(target, index, len(elements))
+			return
+		}
+		r.bashPPUpdateError(target.Index.Pos(), "TARGET", fmt.Sprintf("BASHPP-ECOLLECTION-BOUNDS: index %s out of bounds for length %d", index.text, len(elements)))
 		return
 	}
+	i := index.value
 	if i < len(meta.sequence) && meta.sequence[i] != nil {
 		r.bashPPUpdateError(target.Pos(), "TYPE", "target is not scalar")
 		return

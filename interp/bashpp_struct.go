@@ -754,7 +754,7 @@ func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (value any, meta *bashPP
 			}
 			return result, child, nil
 		}
-		i, indexErr := r.bashPPCollectionIndex(x.Index)
+		index, indexErr := r.bashPPCollectionIndex(x.Index)
 		if indexErr != nil {
 			return nil, nil, indexErr
 		}
@@ -762,12 +762,13 @@ func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (value any, meta *bashPP
 		if !valid && value != nil {
 			return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-STORAGE: sequence payload has type %T", value)
 		}
-		if i < 0 || i >= len(sequence) {
+		if index.outOfBounds(len(sequence)) {
 			if r.bashPPGoSource {
-				return nil, nil, r.bashPPSprint162CollectionBoundsPanic(x, i, len(sequence))
+				return nil, nil, r.bashPPSprint162CollectionBoundsPanic(x, index, len(sequence))
 			}
-			return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-BOUNDS: index %d out of bounds for length %d", i, len(sequence))
+			return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-BOUNDS: index %s out of bounds for length %d", index.text, len(sequence))
 		}
+		i := index.value
 		if i >= len(meta.sequence) {
 			return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-STORAGE: missing element metadata")
 		}
@@ -1106,7 +1107,7 @@ func (r *Runner) bashPPStructuredAssign(target, rhs syntax.BashPPExpr) {
 		expected = collection.Element
 		var savedKey any
 		var savedKeyMeta *bashPPCollectionMeta
-		var savedIndex int
+		var savedIndex bashPPCollectionIndexValue
 		if r.bashPPGoSource {
 			if parentMeta.kind == "map" {
 				savedKey, savedKeyMeta, err = r.bashPPEvalElement(x.Index, collection.Key)
@@ -1126,9 +1127,9 @@ func (r *Runner) bashPPStructuredAssign(target, rhs syntax.BashPPExpr) {
 			err = r.bashPPMapElementWrite(parent, parentMeta, collection, x.Index, savedKey, savedKeyMeta, value, child)
 			break
 		} else {
-			i, indexErr := savedIndex, error(nil)
+			index, indexErr := savedIndex, error(nil)
 			if !r.bashPPGoSource {
-				i, indexErr = r.bashPPCollectionIndex(x.Index)
+				index, indexErr = r.bashPPCollectionIndex(x.Index)
 			}
 			if indexErr != nil {
 				err = indexErr
@@ -1139,14 +1140,15 @@ func (r *Runner) bashPPStructuredAssign(target, rhs syntax.BashPPExpr) {
 				err = fmt.Errorf("BASHPP-ECOLLECTION-STORAGE: invalid sequence payload")
 				break
 			}
-			if i < 0 || i >= len(sequence) {
+			if index.outOfBounds(len(sequence)) {
 				if r.bashPPGoSource {
-					err = r.bashPPSprint162CollectionBoundsPanic(x, i, len(sequence))
+					err = r.bashPPSprint162CollectionBoundsPanic(x, index, len(sequence))
 				} else {
-					err = fmt.Errorf("BASHPP-ECOLLECTION-BOUNDS: index %d out of bounds for length %d", i, len(sequence))
+					err = fmt.Errorf("BASHPP-ECOLLECTION-BOUNDS: index %s out of bounds for length %d", index.text, len(sequence))
 				}
 				break
 			}
+			i := index.value
 			if i >= len(parentMeta.sequence) {
 				err = fmt.Errorf("BASHPP-ECOLLECTION-STORAGE: missing element metadata")
 				break
@@ -1232,7 +1234,7 @@ func (r *Runner) bashPPPointerElementAssign(target *syntax.BashPPIndexExpr, rhs 
 	}
 	var savedKey any
 	var savedKeyMeta *bashPPCollectionMeta
-	var savedIndex int
+	var savedIndex bashPPCollectionIndexValue
 	// Resolve all operands once, before the RHS, retaining the parent storage.
 	if parentMeta.kind == "map" {
 		savedKey, savedKeyMeta, err = r.bashPPEvalElement(target.Index, collection.Key)
@@ -1253,16 +1255,17 @@ func (r *Runner) bashPPPointerElementAssign(target *syntax.BashPPIndexExpr, rhs 
 	if !valid && parent != nil {
 		return fmt.Errorf("BASHPP-ECOLLECTION-STORAGE: invalid sequence payload")
 	}
-	if savedIndex < 0 || savedIndex >= len(sequence) {
+	if savedIndex.outOfBounds(len(sequence)) {
 		if r.bashPPGoSource {
 			return r.bashPPSprint162CollectionBoundsPanic(target, savedIndex, len(sequence))
 		}
-		return fmt.Errorf("BASHPP-ECOLLECTION-BOUNDS: index %d out of bounds for length %d", savedIndex, len(sequence))
+		return fmt.Errorf("BASHPP-ECOLLECTION-BOUNDS: index %s out of bounds for length %d", savedIndex.text, len(sequence))
 	}
-	if savedIndex >= len(parentMeta.sequence) {
+	i := savedIndex.value
+	if i >= len(parentMeta.sequence) {
 		return fmt.Errorf("BASHPP-ECOLLECTION-STORAGE: missing element metadata")
 	}
-	sequence[savedIndex], parentMeta.sequence[savedIndex] = value, child
+	sequence[i], parentMeta.sequence[i] = value, child
 	return nil
 }
 

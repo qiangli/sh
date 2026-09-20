@@ -7,7 +7,7 @@ import (
 
 // A checked Go slice expression faults at runtime, so its bounds failure
 // participates in panic/recover instead of becoming a shell diagnostic.
-func (r *Runner) goSourceSliceBoundsPanic(expr *syntax.BashPPSliceExpr, low, high, max, limit, capacity int, slice bool) error {
+func (r *Runner) goSourceSliceBoundsPanic(expr *syntax.BashPPSliceExpr, low, high, max bashPPCollectionIndexValue, limit, capacity int, slice bool) error {
 	unit := "length"
 	if slice {
 		unit = "capacity"
@@ -15,29 +15,29 @@ func (r *Runner) goSourceSliceBoundsPanic(expr *syntax.BashPPSliceExpr, low, hig
 	var message string
 	if expr.SecondColon.IsValid() {
 		switch {
-		case max < 0:
-			message = fmt.Sprintf("[::%d]", max)
-		case max > capacity:
-			message = fmt.Sprintf("[::%d] with %s %d", max, unit, capacity)
-		case high < 0:
-			message = fmt.Sprintf("[:%d:]", high)
-		case high > max:
-			message = fmt.Sprintf("[:%d:%d]", high, max)
-		case low < 0:
-			message = fmt.Sprintf("[%d::]", low)
+		case max.less(bashPPCollectionIndexInt(0)):
+			message = fmt.Sprintf("[::%s]", max.text)
+		case max.greaterThan(capacity):
+			message = fmt.Sprintf("[::%s] with %s %d", max.text, unit, capacity)
+		case high.less(bashPPCollectionIndexInt(0)):
+			message = fmt.Sprintf("[:%s:]", high.text)
+		case max.less(high):
+			message = fmt.Sprintf("[:%s:%s]", high.text, max.text)
+		case low.less(bashPPCollectionIndexInt(0)):
+			message = fmt.Sprintf("[%s::]", low.text)
 		default:
-			message = fmt.Sprintf("[%d:%d:]", low, high)
+			message = fmt.Sprintf("[%s:%s:]", low.text, high.text)
 		}
 	} else {
 		switch {
-		case high < 0:
-			message = fmt.Sprintf("[:%d]", high)
-		case high > limit:
-			message = fmt.Sprintf("[:%d] with %s %d", high, unit, limit)
-		case low < 0:
-			message = fmt.Sprintf("[%d:]", low)
+		case high.less(bashPPCollectionIndexInt(0)):
+			message = fmt.Sprintf("[:%s]", high.text)
+		case high.greaterThan(limit):
+			message = fmt.Sprintf("[:%s] with %s %d", high.text, unit, limit)
+		case low.less(bashPPCollectionIndexInt(0)):
+			message = fmt.Sprintf("[%s:]", low.text)
 		default:
-			message = fmt.Sprintf("[%d:%d]", low, high)
+			message = fmt.Sprintf("[%s:%s]", low.text, high.text)
 		}
 	}
 	r.goSourceRuntimePanic("runtime error: slice bounds out of range " + message)

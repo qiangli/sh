@@ -259,15 +259,15 @@ func (r *Runner) bashPPEvalScalarExpr(expr syntax.BashPPExpr) (result bashPPScal
 			if err != nil {
 				return bashPPScalar{}, err
 			}
-			if index < 0 || index >= len(text) {
+			if index.outOfBounds(len(text)) {
 				if r.bashPPGoSource {
 					// Indexing a string out of range is Go's recoverable runtime
 					// panic, not the classic hard diagnostic.
 					return bashPPScalar{}, r.bashPPSprint162CollectionBoundsPanic(x, index, len(text))
 				}
-				return bashPPScalar{}, fmt.Errorf("BASHPP-ECOLLECTION-BOUNDS: index %d out of bounds for length %d", index, len(text))
+				return bashPPScalar{}, fmt.Errorf("BASHPP-ECOLLECTION-BOUNDS: index %s out of bounds for length %d", index.text, len(text))
 			}
-			return bashPPScalar{value: constant.MakeUint64(uint64(text[index])), typ: "uint8", runtime: true}, nil
+			return bashPPScalar{value: constant.MakeUint64(uint64(text[index.value])), typ: "uint8", runtime: true}, nil
 		}
 		return r.bashPPScalarPath(expr)
 	case *syntax.BashPPSliceExpr:
@@ -290,17 +290,17 @@ func (r *Runner) bashPPEvalScalarExpr(expr syntax.BashPPExpr) (result bashPPScal
 		if err != nil {
 			return bashPPScalar{}, err
 		}
-		if low < 0 || high < low || high > len(text) {
+		if low.less(bashPPCollectionIndexInt(0)) || high.less(low) || high.greaterThan(len(text)) {
 			// A runtime-typed bound (or a runtime string operand) faults as
 			// Go's recoverable slice-bounds panic; a wholly constant invalid
 			// slice is the Go-source checker's compile-time error and stays a
 			// front-end diagnostic here.
 			if r.bashPPGoSource && (base.runtime || lowRuntime || highRuntime) {
-				return bashPPScalar{}, r.goSourceSliceBoundsPanic(x, low, high, 0, len(text), len(text), false)
+				return bashPPScalar{}, r.goSourceSliceBoundsPanic(x, low, high, bashPPCollectionIndexInt(0), len(text), len(text), false)
 			}
-			return bashPPScalar{}, fmt.Errorf("BASHPP-ECOLLECTION-BOUNDS: slice [%d:%d] out of bounds for length %d", low, high, len(text))
+			return bashPPScalar{}, fmt.Errorf("BASHPP-ECOLLECTION-BOUNDS: slice [%s:%s] out of bounds for length %d", low.text, high.text, len(text))
 		}
-		return bashPPScalar{value: constant.MakeString(text[low:high]), typ: "string", runtime: true}, nil
+		return bashPPScalar{value: constant.MakeString(text[low.value:high.value]), typ: "string", runtime: true}, nil
 	case *syntax.BashPPSelectorExpr, *syntax.BashPPDerefExpr:
 		return r.bashPPScalarPath(expr)
 	case *syntax.BashPPFuncLit:

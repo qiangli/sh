@@ -22,8 +22,8 @@ func bashPPSprint162ComplexCollectionText(value any) bool {
 // bashPPSprint162CollectionBoundsPanic turns a dynamic indexing fault into
 // Go's recoverable runtime panic. Static constant bounds remain the checker's
 // responsibility and never reach this evaluator path.
-func (r *Runner) bashPPSprint162CollectionBoundsPanic(expr syntax.BashPPExpr, index, length int) error {
-	message := fmt.Sprintf("runtime error: index out of range [%d] with length %d", index, length)
+func (r *Runner) bashPPSprint162CollectionBoundsPanic(expr syntax.BashPPExpr, index bashPPCollectionIndexValue, length int) error {
+	message := fmt.Sprintf("runtime error: index out of range [%s] with length %d", index.text, length)
 	if expr != nil {
 		r.bashPPPanic.traceSource = r.filename
 		r.bashPPPanic.traceLine = expr.Pos().Line()
