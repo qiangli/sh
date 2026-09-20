@@ -120,6 +120,8 @@ The codebase is a layered pipeline. Each layer is a standalone package usable on
 
 ## Workflow
 
+**`bashy sprint` is the source of requests, plans and details for every agent** — read the sprint card (spec-ref, acceptance, continuity) for what to do, never this file. Delivery commits carry `Sprint:` / `Story:` / `Story-ID:` trailers.
+
 This repo is the library/engine. When you change interpreter semantics, the canonical check is `TestRunnerRunConfirm` (see Build/test) — run it before committing. Bash 5.3 drop-in behaviour as a whole (the full CLI + bash's own test suite) is validated in the [`bashy`](https://github.com/qiangli/bashy) repo via `make test-bash`; if your change targets a specific bash fixture, flip it there.
 
 Commit style follows upstream: scoped prefixes (`interp:`, `syntax:`, `expand+interp:`) with an imperative summary; keep commits focused so they cherry-pick cleanly onto upstream topic branches.

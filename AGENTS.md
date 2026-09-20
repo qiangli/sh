@@ -2,6 +2,8 @@
 
 This file provides guidance to AI coding assistants working in this repository.
 
+**`bashy sprint` is the source of requests, plans and details for every agent** — read the sprint card (spec-ref, acceptance, continuity) for what to do, never this file. Delivery commits carry `Sprint:` / `Story:` / `Story-ID:` trailers.
+
 ## Project Structure & Module Organization
 - Go workspace for `mvdan.cc/sh/v3`, a shell parser, formatter, and interpreter.
 - Core packages: `syntax/` (lexer/parser/AST/printer), `interp/` (runner), `expand/` (expansions), `shell/` (convenience API), `pattern/` (globbing), `fileutil/` (script detection).
