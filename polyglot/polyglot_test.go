@@ -163,6 +163,11 @@ def hang():
 }
 
 func TestPythonStructuredAnnotationsAndObjectCodec(t *testing.T) {
+	// Source-derived boundary matrix: CPython v3.14.4
+	// (23116f998f6789d8c2fbe5ed5b8146854c8c2a4f),
+	// Doc/library/json.rst and Lib/test/test_json, PSF-2.0. The cases retain
+	// CPython's nested list/dict and empty-container shapes while making the
+	// Bash# boundary stricter: bytes are explicit non-JSON values.
 	plan := pythonPlan(t, `
 def records() -> list[dict[str, int]]:
     return [{"n": 1}, {"n": 2}]
