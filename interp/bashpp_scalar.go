@@ -1103,10 +1103,6 @@ func (r *Runner) bashPPComparableExpr(expr syntax.BashPPExpr) (bashPPComparableV
 					}
 					return bashPPComparableValue{value: value, meta: &bashPPCollectionMeta{kind: kind, typ: cell.declType, channel: cell.channel, channelOwner: cell.channelOwner}}, nil
 				}
-				scalar := r.bashPPScalarFromCell(cell)
-				if scalar.value != nil && scalar.value.Kind() != constant.Unknown {
-					return bashPPComparableValue{value: bashPPComparableScalarAny(scalar)}, nil
-				}
 			}
 		}
 		if value, ok := r.goSourceFuncComparable(x.Name.Value); ok {
