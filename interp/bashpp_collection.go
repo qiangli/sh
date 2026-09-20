@@ -920,6 +920,13 @@ func bashPPScalarAny(value constant.Value) any {
 	return bashPPScalarString(value)
 }
 
+func bashPPComparableScalarAny(value bashPPScalar) any {
+	if value.hasNonFinite {
+		return value.nonFinite
+	}
+	return bashPPScalarAny(value.value)
+}
+
 func (r *Runner) bashPPCheckCollectionValue(value any, expected syntax.BashPPTypeExpr) error {
 	name, ok := expected.(*syntax.BashPPNamedType)
 	if !ok {

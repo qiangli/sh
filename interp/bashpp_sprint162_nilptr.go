@@ -517,20 +517,8 @@ func (r *Runner) goSourceConvertedComposite(x *syntax.BashPPConvertExpr) (any, *
 	if !r.bashPPGoSource {
 		return nil, nil, false, nil
 	}
-	operand := x.X
-	for {
-		paren, ok := operand.(*syntax.BashPPParenExpr)
-		if !ok {
-			break
-		}
-		operand = paren.X
-	}
-	lit, ok := operand.(*syntax.BashPPCompositeLit)
-	if !ok || lit.LitType == nil {
-		return nil, nil, false, nil
-	}
 	target := r.bashPPConvertTarget(x)
-	if target == nil || r.bashPPNativeType(target) || r.bashPPNativeType(lit.LitType) {
+	if target == nil || r.bashPPNativeType(target) {
 		return nil, nil, false, nil
 	}
 	switch shape := r.bashPPUnderlyingType(target).(type) {
@@ -542,11 +530,29 @@ func (r *Runner) goSourceConvertedComposite(x *syntax.BashPPConvertExpr) (any, *
 	default:
 		return nil, nil, false, nil
 	}
-	value, meta, err := r.bashPPEvalComposite(lit, lit.LitType)
+	var value any
+	var meta *bashPPCollectionMeta
+	var err error
+	operand := x.X
+	for {
+		paren, ok := operand.(*syntax.BashPPParenExpr)
+		if !ok {
+			break
+		}
+		operand = paren.X
+	}
+	if lit, ok := operand.(*syntax.BashPPCompositeLit); ok {
+		if lit.LitType == nil || r.bashPPNativeType(lit.LitType) {
+			return nil, nil, false, nil
+		}
+		value, meta, err = r.bashPPEvalComposite(lit, lit.LitType)
+	} else {
+		value, meta, err = r.bashPPReadExpr(x.X)
+	}
 	if err != nil {
 		return nil, nil, true, err
 	}
-	if meta == nil {
+	if meta == nil || r.bashPPNativeType(meta.typ) {
 		return nil, nil, false, nil
 	}
 	retyped := *meta

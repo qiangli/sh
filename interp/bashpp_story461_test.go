@@ -79,3 +79,36 @@ func TestStory461ConstantZeroDivisionRejected(t *testing.T) {
 	qt.Assert(t, qt.IsNotNil(err))
 	qt.Assert(t, qt.StringContains(err.Error(), "division by zero"))
 }
+
+func TestStory461StructuredConversionCarriers(t *testing.T) {
+	src := `package main
+import (
+	"fmt"
+	"unsafe"
+)
+type pair[F1, F2 any] struct { f1 F1; f2 F2 }
+type mypair struct { f1 int32; f2 int64 }
+func main() {
+	s := []byte{0, 1, 2, 3}
+	fmt.Println([4]byte(s) == *(*[4]byte)(s))
+	p := pair[int32, int64]{1, 2}
+	mp := mypair(p)
+	fmt.Println(mp.f1, mp.f2, unsafe.Sizeof(p.f1), unsafe.Sizeof(p.f2))
+}`
+	out, stderr, err := runGoSource(t, "story461structuredconversions", src)
+	qt.Assert(t, qt.IsNil(err), qt.Commentf("stderr: %s", stderr))
+	qt.Assert(t, qt.Equals(stderr, ""))
+	qt.Assert(t, qt.Equals(out, "true\n1 2 4 8\n"))
+}
+
+func TestStory461BadStructuredConversionRejected(t *testing.T) {
+	src := `package main
+type A struct { x int }
+type B struct { x string }
+func main() {
+	_ = B(A{x: 1})
+}`
+	_, err := gosource.Parse(strings.NewReader(src), "story461badconversion.go", gosource.Options{RunMain: true})
+	qt.Assert(t, qt.IsNotNil(err))
+	qt.Assert(t, qt.StringContains(err.Error(), "cannot convert"))
+}

@@ -1095,6 +1095,10 @@ func (r *Runner) bashPPComparableExpr(expr syntax.BashPPExpr) (bashPPComparableV
 					}
 					return bashPPComparableValue{value: value, meta: &bashPPCollectionMeta{kind: kind, typ: cell.declType, channel: cell.channel, channelOwner: cell.channelOwner}}, nil
 				}
+				scalar := r.bashPPScalarFromCell(cell)
+				if scalar.value != nil && scalar.value.Kind() != constant.Unknown {
+					return bashPPComparableValue{value: bashPPComparableScalarAny(scalar)}, nil
+				}
 			}
 		}
 		if value, ok := r.goSourceFuncComparable(x.Name.Value); ok {
@@ -1123,6 +1127,18 @@ func (r *Runner) bashPPComparableExpr(expr syntax.BashPPExpr) (bashPPComparableV
 				return bashPPComparableValue{}, err
 			}
 			return bashPPComparableValue{value: cell.interfaceValue, meta: &bashPPCollectionMeta{kind: "interface", typ: cell.declType}}, nil
+		}
+		if value, meta, handled, err := r.bashPPConvertToCollection(x); handled {
+			if err != nil {
+				return bashPPComparableValue{}, err
+			}
+			return bashPPComparableValue{value: value, meta: meta}, nil
+		}
+		if value, meta, handled, err := r.goSourceConvertedComposite(x); handled {
+			if err != nil {
+				return bashPPComparableValue{}, err
+			}
+			return bashPPComparableValue{value: value, meta: meta}, nil
 		}
 		if value, ok := r.goSourceTypedNilComparable(x); ok {
 			return value, nil
