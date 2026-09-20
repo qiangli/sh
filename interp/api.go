@@ -697,6 +697,11 @@ type Runner struct {
 	dirStack     []string
 	dirBootstrap [1]string
 
+	// driveCwd records the current directory per Windows drive letter
+	// (uppercase), so `cd D:` returns to where the shell last was on D:.
+	// Nil until the first cd onto a drive path; unused off Windows.
+	driveCwd map[byte]string
+
 	optState getopts
 
 	// redirScopes tracks nested statement cleanup. An exec redirection inside
@@ -3847,6 +3852,8 @@ func (r *Runner) subshell(background bool) *Runner {
 	r2.noErrExit = r.noErrExit
 
 	r2.dirStack = append(r2.dirBootstrap[:0], r.dirStack...)
+	// A subshell's cd must not move the parent's per-drive cwd bookmarks.
+	r2.driveCwd = maps.Clone(r.driveCwd)
 	// A foreground subshell runs inline in the parent's goroutine, so it can
 	// reach back into the parent's pending-signal queue. Background/async
 	// subshells run concurrently and must keep using a real OS signal, so

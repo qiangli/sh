@@ -27,6 +27,7 @@ import (
 	"golang.org/x/term"
 
 	"mvdan.cc/sh/v3/expand"
+	"mvdan.cc/sh/v3/pathconv"
 	"mvdan.cc/sh/v3/syntax"
 )
 
@@ -1246,6 +1247,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 	case "pwd":
 		evalSymlinks := false
+		windowsForm := false
 		for len(args) > 0 {
 			arg := args[0]
 			if arg == "--" {
@@ -1265,6 +1267,15 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					evalSymlinks = false
 				case 'P':
 					evalSymlinks = true
+				case 'W':
+					// Git-Bash extension: print the native Windows path with
+					// forward slashes. Remains an invalid option elsewhere,
+					// matching bash 5.3 on those hosts.
+					if runtime.GOOS == "windows" {
+						windowsForm = true
+					} else {
+						valid = false
+					}
 				default:
 					valid = false
 				}
@@ -1278,6 +1289,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			args = args[1:]
 		}
 		pwd := r.envGet("PWD")
+		osPwd := r.Dir
 		if !evalSymlinks && validLogicalPWD(pwd) {
 			// PWD is an ordinary shell variable and can be reassigned without
 			// changing the shell's logical current-directory state. Keep that
@@ -1287,14 +1299,18 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			var err error
 			// Physical mode is defined by the invocation's actual working
 			// directory, not by the possibly stale or user-modified PWD.
-			pwd, err = evalPhysicalPath(r.Dir)
+			osPwd, err = evalPhysicalPath(r.Dir)
 			if err != nil {
 				exit.fatal(err) // perhaps overly dramatic?
 				return exit
 			}
-			pwd = shellPathFromOS(pwd)
+			pwd = shellPathFromOS(osPwd)
 		}
-		r.outf("%s\n", pwd)
+		if windowsForm {
+			r.outf("%s\n", pathconv.ToSlash(osPwd, osPwd))
+		} else {
+			r.outf("%s\n", pwd)
+		}
 		// POSIX requires pwd -P to update PWD to the physical path. This
 		// deliberately leaves OLDPWD alone, as Bash's setpwd does.
 		if evalSymlinks && r.opts[optPosix] {
@@ -7668,6 +7684,13 @@ func (r *Runner) changeDir(ctx context.Context, cmd, path string, physical ...bo
 	if len(physical) > 0 {
 		phys = physical[0]
 	}
+	if runtime.GOOS == "windows" {
+		// `cd D:` returns to the drive's recorded current directory, the
+		// way cmd.exe tracks a cwd per drive.
+		if target, ok := driveOperandTarget(path, r.driveCwd); ok {
+			path = target
+		}
+	}
 	apath, err := r.resolveCdPath(ctx, path, phys)
 	if err != nil {
 		r.errf("%s%s: %s: %s\n",
@@ -7700,6 +7723,9 @@ func (r *Runner) changeDir(ctx context.Context, cmd, path string, physical ...bo
 	}
 	r.replaceDirFile(apath)
 	r.Dir = apath
+	if runtime.GOOS == "windows" {
+		r.driveCwd = recordDriveCwd(r.driveCwd, apath)
+	}
 	// Keep the top of the directory stack in sync with the current
 	// dir so `pushd`/`popd`/`dirs` see the cd's effect. Bash treats
 	// the topmost dirStack entry as the live "current dir".
