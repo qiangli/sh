@@ -3,6 +3,7 @@ package polyglot
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -11,13 +12,16 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
-	"strconv"
 	"strings"
 )
 
-// Rust analyzes declaration-only Rust fences and compiles them to a native
-// call worker. The worker is carried in Plan.Artifact, so a lowered Bash++
-// program does not need rustc at execution time.
+// Rust analyzes declaration-only Rust fences and builds them, with cargo and
+// the standard serde/serde_json crates, into a persistent worker. The worker
+// is carried in Plan.Artifact, so a lowered Bash++ program needs neither
+// cargo nor rustc at execution time. One worker serves a fence for the life
+// of its Module: static state persists between calls, and cancellation or
+// Close terminates it, after which the next call restarts it from the
+// immutable plan.
 type Rust struct {
 	Command     string
 	Environment *EnvironmentPlan
@@ -32,9 +36,15 @@ func (r Rust) executable() string {
 	}
 	return "rustc"
 }
+
+// arguments is unused: the worker is the compiled artifact itself, launched
+// by Module.ensure through artifactPrefix rather than an interpreter reading
+// a script.
 func (Rust) arguments(Plan) []string         { return nil }
-func (Rust) loadRequest(Plan) map[string]any { return nil }
+func (Rust) loadRequest(Plan) map[string]any { return map[string]any{"id": 0, "op": "load"} }
 func (Rust) name() string                    { return "Rust" }
+func (Rust) artifactPrefix() string          { return "bashpp-rust-run-" }
+
 func (r Rust) configure(cmd *exec.Cmd) {
 	if r.Environment != nil {
 		cmd.Dir = r.Environment.Dir
@@ -49,7 +59,10 @@ type rustExport struct {
 	resultWrap bool
 }
 
-var rustPublicFunction = regexp.MustCompile(`(?m)^[\t ]*pub[\t ]+fn[\t ]+([[:alpha:]_][[:alnum:]_]*)[\t ]*\(([^)]*)\)[\t ]*(?:->[\t ]*([^\{\n]+))?[\t ]*\{`)
+// rustPublicFunction matches top-level `pub fn` declarations only: an
+// indented `pub fn` is a method inside an impl block, which has no
+// free-function call form and is never exported.
+var rustPublicFunction = regexp.MustCompile(`(?m)^pub[\t ]+fn[\t ]+([[:alpha:]_][[:alnum:]_]*)[\t ]*\(([^)]*)\)[\t ]*(?:->[\t ]*([^\{\n]+))?[\t ]*\{`)
 
 func (r Rust) Analyze(ctx context.Context, source string) ([]Export, error) {
 	exports, _, err := r.AnalyzeArtifact(ctx, source)
@@ -68,37 +81,7 @@ func (r Rust) AnalyzeArtifact(ctx context.Context, source string) ([]Export, str
 	if err != nil {
 		return nil, "", err
 	}
-	dir, err := os.MkdirTemp("", "bashpp-rust-build-")
-	if err != nil {
-		return nil, "", err
-	}
-	defer os.RemoveAll(dir)
-	sourceFile := filepath.Join(dir, "module.rs")
-	output := filepath.Join(dir, "module")
-	if runtime.GOOS == "windows" {
-		output += ".exe"
-	}
-	if err := os.WriteFile(sourceFile, []byte(generated), 0o600); err != nil {
-		return nil, "", err
-	}
-	args := append(leadingArgs(r.Environment), "--edition=2024", "-C", "panic=unwind", "-C", "opt-level=0")
-	args = append(args, r.linkerArgs()...)
-	args = append(args, "-o", output, sourceFile)
-	cmd := exec.CommandContext(ctx, r.executable(), args...)
-	r.configure(cmd)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		if errors.Is(err, exec.ErrNotFound) || errors.Is(err, os.ErrNotExist) {
-			return nil, "", fmt.Errorf("Rust compiler unavailable: %w", err)
-		}
-		message := strings.TrimSpace(stderr.String())
-		if message == "" {
-			message = err.Error()
-		}
-		return nil, "", errors.New(message)
-	}
-	binary, err := os.ReadFile(output)
+	binary, err := r.build(ctx, generated)
 	if err != nil {
 		return nil, "", err
 	}
@@ -120,19 +103,19 @@ func analyzeRustExports(source string) ([]rustExport, error) {
 		}
 		seen[name] = true
 		var params, bridgeParams []string
-		if strings.TrimSpace(match[2]) != "" {
-			for _, field := range splitRustTypes(match[2]) {
-				_, typ, ok := strings.Cut(field, ":")
-				if !ok {
-					return nil, fmt.Errorf("Rust function %s has an unsupported parameter %q", name, strings.TrimSpace(field))
-				}
-				typ = normalizeRustType(typ)
-				bridge, ok := rustBridgeType(typ)
-				if !ok {
-					return nil, fmt.Errorf("Rust function %s has unsupported parameter type %s", name, typ)
-				}
-				params, bridgeParams = append(params, typ), append(bridgeParams, bridge)
+		for _, field := range splitRustTypes(match[2]) {
+			if field == "" {
+				continue
 			}
+			_, typ, ok := strings.Cut(field, ":")
+			if !ok {
+				return nil, fmt.Errorf("Rust function %s has an unsupported parameter %q", name, strings.TrimSpace(field))
+			}
+			typ = normalizeRustType(typ)
+			if why := rustUnsupportedType(typ); why != "" {
+				return nil, fmt.Errorf("Rust function %s has unsupported parameter type %s: %s", name, typ, why)
+			}
+			params, bridgeParams = append(params, typ), append(bridgeParams, rustBridgeType(typ))
 		}
 		result := normalizeRustType(match[3])
 		wrapped := false
@@ -145,15 +128,14 @@ func analyzeRustExports(source string) ([]rustExport, error) {
 		if result == "&str" {
 			return nil, fmt.Errorf("Rust function %s has unsupported borrowed result type &str; return String instead", name)
 		}
-		bridgeResult, ok := rustBridgeType(result)
-		if result == "()" {
-			bridgeResult, ok = "nil", true
+		if strings.HasPrefix(result, "&") {
+			return nil, fmt.Errorf("Rust function %s has unsupported borrowed result type %s; return an owned value instead", name, result)
 		}
-		if !ok {
-			return nil, fmt.Errorf("Rust function %s has unsupported result type %s", name, result)
+		if why := rustUnsupportedType(result); why != "" {
+			return nil, fmt.Errorf("Rust function %s has unsupported result type %s: %s", name, result, why)
 		}
 		sig := Signature{Params: bridgeParams}
-		if bridgeResult != "nil" {
+		if bridgeResult := rustBridgeType(result); bridgeResult != "nil" {
 			sig.Results = []string{bridgeResult}
 		}
 		out = append(out, rustExport{Export: Export{Name: name, Signature: sig}, params: params, result: result, resultWrap: wrapped})
@@ -198,214 +180,251 @@ func rustResultInner(typ string) (string, bool) {
 	return normalizeRustType(parts[0]), true
 }
 
-func rustBridgeType(typ string) (string, bool) {
-	switch typ {
-	case "bool":
-		return "bool", true
-	case "i8", "i16", "i32", "i64", "isize", "u8", "u16", "u32", "u64", "usize":
-		return "int", true
-	case "f32", "f64":
-		return "float64", true
-	case "String", "&str":
-		return "string", true
-	case "Vec<u8>":
-		return "bytes", true
+// rustUnsupportedType names the reason a type cannot cross the boundary at
+// all. Everything else is either a scalar or an "object" that rustc and serde
+// check: a type without Serialize/Deserialize fails at preparation with the
+// compiler's own diagnostic.
+func rustUnsupportedType(typ string) string {
+	switch {
+	case strings.HasPrefix(typ, "&mut "):
+		return "mutable borrows cannot cross the boundary"
+	case strings.Contains(typ, "'"):
+		return "lifetimes cannot cross the boundary"
+	case strings.HasPrefix(typ, "impl "), strings.HasPrefix(typ, "dyn "), strings.Contains(typ, "<impl "), strings.Contains(typ, "<dyn "):
+		return "trait objects cannot cross the boundary"
 	}
-	return "", false
+	return ""
 }
 
+// rustBridgeType maps a Rust type to the Bash# boundary kind. Scalars, bytes,
+// and unit keep their typed wrappers; every other type — a user struct, a
+// Vec<Struct>, Option<T>, a map, a tuple — is an Object that serde_json
+// converts on the worker side, so users write ordinary serde types.
+func rustBridgeType(typ string) string {
+	switch typ {
+	case "bool":
+		return "bool"
+	case "i8", "i16", "i32", "i64", "isize", "u8", "u16", "u32", "u64", "usize":
+		return "int"
+	case "f32", "f64":
+		return "float64"
+	case "String", "&str":
+		return "string"
+	case "Vec<u8>":
+		return "bytes"
+	case "()":
+		return "nil"
+	}
+	return "object"
+}
+
+// rustOwnedType is the type a borrowed parameter is deserialized into before
+// the call borrows it: &str → String, &[T] → Vec<T>, &T → T. Deref coercion
+// turns the borrow back into the declared parameter type.
+func rustOwnedType(typ string) string {
+	if !strings.HasPrefix(typ, "&") {
+		return typ
+	}
+	typ = strings.TrimSpace(typ[1:])
+	if typ == "str" {
+		return "String"
+	}
+	if strings.HasPrefix(typ, "[") && strings.HasSuffix(typ, "]") {
+		return "Vec<" + typ[1:len(typ)-1] + ">"
+	}
+	return typ
+}
+
+// rustWorkerSource is the fence source followed by the generated dispatcher
+// and the constant worker runtime. The dispatcher is the only per-fence code:
+// arity check, one serde decode per argument, the call, one serde encode.
 func rustWorkerSource(source string, exports []rustExport) (string, error) {
 	var out strings.Builder
 	out.WriteString(source)
-	out.WriteString(`
-fn __bpp_hex(data: &[u8]) -> String { data.iter().map(|b| format!("{:02x}", b)).collect() }
-fn __bpp_unhex(s: &str) -> Result<Vec<u8>, String> {
-    if s.len() % 2 != 0 { return Err("invalid byte argument".into()); }
-    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i+2], 16).map_err(|e| e.to_string())).collect()
-}
-fn __bpp_ok(kind: &str, value: String) { println!("\u{1e}BASHPP\tOK\t{}\t{}", kind, __bpp_hex(value.as_bytes())); }
-fn __bpp_err(value: String) { println!("\u{1e}BASHPP\tERR\terror\t{}", __bpp_hex(value.as_bytes())); }
-fn __bpp_dispatch(args: &[String]) -> Result<(), String> {
-    if args.is_empty() { return Err("missing Rust function name".into()); }
-    match args[0].as_str() {
-`)
+	out.WriteString("\n\nfn __bpp_dispatch(name: &str, args: &[serde_json::Value]) -> Result<serde_json::Value, String> {\n    match name {\n")
 	for _, export := range exports {
-		fmt.Fprintf(&out, "%q => {\n", export.Name)
-		fmt.Fprintf(&out, "if args.len() != %d { return Err(format!(\"Rust function %s expects %d arguments, got {}\", args.len()-1)); }\n", len(export.params)+1, export.Name, len(export.params))
-		var callArgs []string
+		fmt.Fprintf(&out, "        %q => {\n            __bpp::arity(%q, args, %d)?;\n", export.Name, export.Name, len(export.params))
+		callArgs := make([]string, len(export.params))
 		for i, typ := range export.params {
-			arg := fmt.Sprintf("args[%d].as_str()", i+1)
 			local := fmt.Sprintf("__bpp_arg%d", i)
-			var expr string
-			switch typ {
-			case "String", "&str":
-				fmt.Fprintf(&out, "let %s = String::from_utf8(__bpp_unhex(%s)?).map_err(|e| e.to_string())?;\n", local, arg)
-				if typ == "String" {
-					expr = local
-				} else {
-					expr = local + ".as_str()"
-				}
-			case "Vec<u8>":
-				fmt.Fprintf(&out, "let %s = __bpp_unhex(%s)?;\n", local, arg)
-				expr = local
-			default:
-				var err error
-				expr, err = rustArgumentExpr(typ, arg)
-				if err != nil {
-					return "", err
-				}
+			if typ == "Vec<u8>" {
+				fmt.Fprintf(&out, "            let %s: Vec<u8> = __bpp::bytes_arg(%q, args, %d)?;\n", local, export.Name, i)
+			} else {
+				fmt.Fprintf(&out, "            let %s: %s = __bpp::arg(%q, args, %d)?;\n", local, rustOwnedType(typ), export.Name, i)
 			}
-			callArgs = append(callArgs, expr)
+			if strings.HasPrefix(typ, "&") {
+				local = "&" + local
+			}
+			callArgs[i] = local
 		}
-		call := fmt.Sprintf("%s(%s)", export.Name, strings.Join(callArgs, ","))
-		if export.resultWrap {
-			fmt.Fprintf(&out, "let value = match %s { Ok(value) => value, Err(error) => return Err(error.to_string()) };\n", call)
-		} else if export.result == "()" {
-			fmt.Fprintf(&out, "%s; __bpp_ok(\"nil\", String::new()); return Ok(());\n", call)
-			out.WriteString("},\n")
-			continue
-		} else {
-			fmt.Fprintf(&out, "let value = %s;\n", call)
+		call := fmt.Sprintf("%s(%s)", export.Name, strings.Join(callArgs, ", "))
+		switch {
+		case export.resultWrap:
+			fmt.Fprintf(&out, "            let __bpp_value = match %s { Ok(value) => value, Err(error) => return Err(error.to_string()) };\n", call)
+		case export.result == "()":
+			fmt.Fprintf(&out, "            %s;\n", call)
+		default:
+			fmt.Fprintf(&out, "            let __bpp_value = %s;\n", call)
 		}
-		kind, value, err := rustResultExpr(export.result)
-		if err != nil {
-			return "", err
+		switch export.result {
+		case "()":
+			out.WriteString("            Ok(serde_json::Value::Null)\n")
+		case "Vec<u8>":
+			out.WriteString("            Ok(__bpp::bytes_value(&__bpp_value))\n")
+		default:
+			fmt.Fprintf(&out, "            __bpp::value(%q, __bpp_value)\n", export.Name)
 		}
-		fmt.Fprintf(&out, "__bpp_ok(%q, %s); Ok(())\n},\n", kind, value)
+		out.WriteString("        }\n")
 	}
-	out.WriteString(`_ => Err(format!("unknown Rust function {}", args[0])),
-    }
-}
-fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| __bpp_dispatch(&args)));
-    match outcome {
-        Ok(Ok(())) => {},
-        Ok(Err(error)) => __bpp_err(error),
-        Err(_) => __bpp_err("Rust function panicked".into()),
-    }
-}
-`)
+	out.WriteString("        _ => Err(format!(\"unknown Rust function {}\", name)),\n    }\n}\n")
+	out.WriteString(rustWorkerRuntime)
 	return out.String(), nil
 }
 
-func rustArgumentExpr(typ, arg string) (string, error) {
-	switch typ {
-	case "bool", "i8", "i16", "i32", "i64", "isize", "u8", "u16", "u32", "u64", "usize", "f32", "f64":
-		return arg + ".parse::<" + typ + ">().map_err(|e| e.to_string())?", nil
+// build writes the worker crate to a private temporary directory and drives
+// cargo: `cargo fetch` (offline first, so a warm registry cache never touches
+// the network) resolves and downloads serde, serde_json, and base64, and
+// `cargo build --frozen` compiles against exactly that resolution. The
+// target directory is shared across builds so the dependency crates compile
+// once per toolchain; the per-source binary name keeps concurrent builds
+// from overwriting each other.
+func (r Rust) build(ctx context.Context, generated string) ([]byte, error) {
+	cargo, err := r.cargo()
+	if err != nil {
+		return nil, err
 	}
-	return "", fmt.Errorf("unsupported Rust parameter type %s", typ)
-}
-
-func rustResultExpr(typ string) (kind, value string, err error) {
-	switch typ {
-	case "String":
-		return "string", "value", nil
-	case "&str":
-		return "string", "value.to_string()", nil
-	case "Vec<u8>":
-		return "bytes", "__bpp_hex(&value)", nil
-	case "bool":
-		return "bool", "value.to_string()", nil
-	case "i8", "i16", "i32", "i64", "isize", "u8", "u16", "u32", "u64", "usize":
-		return "int", "value.to_string()", nil
-	case "f32", "f64":
-		return "float64", "value.to_string()", nil
+	dir, err := os.MkdirTemp("", "bashpp-rust-build-")
+	if err != nil {
+		return nil, err
 	}
-	return "", "", fmt.Errorf("unsupported Rust result type %s", typ)
-}
-
-func (m *Module) callRust(ctx context.Context, _ Rust, name string, args []any, kwargs map[string]any) (CallResult, error) {
-	if len(kwargs) != 0 {
-		return CallResult{}, errors.New("Rust functions do not accept named arguments")
+	defer os.RemoveAll(dir)
+	sum := sha256.Sum256([]byte(generated))
+	name := "m" + hex.EncodeToString(sum[:8])
+	if err := os.WriteFile(filepath.Join(dir, "Cargo.toml"), []byte(fmt.Sprintf(rustManifest, name)), 0o600); err != nil {
+		return nil, err
 	}
-	if m.tempDir == "" {
-		dir, err := os.MkdirTemp("", "bashpp-rust-run-")
-		if err != nil {
-			return CallResult{}, err
-		}
-		path := filepath.Join(dir, "module")
-		if runtime.GOOS == "windows" {
-			path += ".exe"
-		}
-		if err := os.WriteFile(path, []byte(m.plan.Artifact), 0o700); err != nil {
-			os.RemoveAll(dir)
-			return CallResult{}, err
-		}
-		m.tempDir = dir
+	if err := os.MkdirAll(filepath.Join(dir, "src"), 0o700); err != nil {
+		return nil, err
 	}
-	path := filepath.Join(m.tempDir, "module")
-	if runtime.GOOS == "windows" {
-		path += ".exe"
+	if err := os.WriteFile(filepath.Join(dir, "src", "main.rs"), []byte(generated), 0o600); err != nil {
+		return nil, err
 	}
-	argv := []string{name}
-	var params []string
-	for _, export := range m.plan.Exports {
-		if export.Name == name {
-			params = export.Signature.Params
-			break
-		}
-	}
-	for i, arg := range args {
-		switch value := arg.(type) {
-		case []byte:
-			argv = append(argv, hex.EncodeToString(value))
-		default:
-			encoded := fmt.Sprint(value)
-			if i < len(params) && params[i] == "string" {
-				encoded = hex.EncodeToString([]byte(encoded))
+	target := rustTargetDir()
+	// Whatever the outcome, only the shared dependency artifacts stay in the
+	// cache; this build's own binary, deps, and fingerprints are removed.
+	defer func() {
+		for _, pattern := range []string{
+			filepath.Join(target, "debug", name+"*"),
+			filepath.Join(target, "debug", "deps", name+"-*"),
+			filepath.Join(target, "debug", ".fingerprint", name+"-*"),
+			filepath.Join(target, "debug", "incremental", name+"-*"),
+		} {
+			stale, _ := filepath.Glob(pattern)
+			for _, path := range stale {
+				_ = os.RemoveAll(path)
 			}
-			argv = append(argv, encoded)
+		}
+	}()
+	run := func(args ...string) (string, error) {
+		cmd := exec.CommandContext(ctx, cargo[0], append(append([]string(nil), cargo[1:]...), args...)...)
+		cmd.Dir = dir
+		cmd.Env = r.buildEnvironment(target)
+		var stderr bytes.Buffer
+		cmd.Stderr = &stderr
+		err := cmd.Run()
+		return strings.TrimSpace(stderr.String()), err
+	}
+	if message, err := run("fetch", "--offline", "--quiet"); err != nil {
+		if errors.Is(err, exec.ErrNotFound) || errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("Rust cargo unavailable: %w", err)
+		}
+		if message, err = run("fetch", "--quiet"); err != nil {
+			return nil, fmt.Errorf("Rust dependencies unavailable: %s", rustFailure(message, err))
 		}
 	}
-	cmd := exec.CommandContext(ctx, path, argv...)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	runErr := cmd.Run()
-	data := stdout.Bytes()
-	marker := []byte("\x1eBASHPP\t")
-	index := bytes.LastIndex(data, marker)
-	if index < 0 {
-		if runErr != nil {
-			return CallResult{Stdout: string(data), Stderr: stderr.String()}, fmt.Errorf("Rust worker failed: %w", runErr)
-		}
-		return CallResult{Stdout: string(data), Stderr: stderr.String()}, errors.New("Rust worker returned no result frame")
+	if message, err := run("build", "--frozen", "--quiet"); err != nil {
+		return nil, errors.New(rustFailure(message, err))
 	}
-	result := CallResult{Stdout: string(data[:index]), Stderr: stderr.String()}
-	fields := strings.Split(strings.TrimSpace(string(data[index+len(marker):])), "\t")
-	if len(fields) != 3 {
-		return result, errors.New("invalid Rust worker result frame")
+	output := filepath.Join(target, "debug", name)
+	if runtime.GOOS == "windows" {
+		output += ".exe"
 	}
-	payload, err := hex.DecodeString(fields[2])
-	if err != nil {
-		return result, errors.New("invalid Rust worker result payload")
-	}
-	if fields[0] != "OK" {
-		return result, errors.New(string(payload))
-	}
-	switch fields[1] {
-	case "nil":
-		result.Value = nil
-	case "string":
-		result.Value = string(payload)
-	case "bytes":
-		result.Value, err = hex.DecodeString(string(payload))
-	case "bool":
-		result.Value, err = strconv.ParseBool(string(payload))
-	case "int":
-		result.Value, err = strconv.ParseInt(string(payload), 10, 64)
-	case "float64":
-		result.Value, err = strconv.ParseFloat(string(payload), 64)
-	default:
-		err = fmt.Errorf("unknown Rust result type %q", fields[1])
-	}
-	if err != nil {
-		return result, err
-	}
-	return result, nil
+	return os.ReadFile(output)
 }
 
-// rustLinkerArgs names rustc's linker when the embedder's tool resolver
+func rustFailure(message string, err error) string {
+	if message == "" {
+		return err.Error()
+	}
+	return message
+}
+
+// cargo names the cargo that drives the build, as argv: the one beside the
+// selected rustc (rustup proxies and distribution toolchains ship them
+// together, so BASHPP_RUSTC and an overlay keep selecting one toolchain),
+// else the embedder's tool resolver, else PATH — the same rungs rustc itself
+// resolved through.
+func (r Rust) cargo() ([]string, error) {
+	suffix := ""
+	if runtime.GOOS == "windows" {
+		suffix = ".exe"
+	}
+	if rustc, err := exec.LookPath(r.executable()); err == nil {
+		if resolved, err := filepath.EvalSymlinks(rustc); err == nil {
+			rustc = resolved
+		}
+		beside := filepath.Join(filepath.Dir(rustc), "cargo"+suffix)
+		if info, err := os.Stat(beside); err == nil && !info.IsDir() {
+			return []string{beside}, nil
+		}
+	}
+	if ToolResolver != nil && !r.overridden() {
+		argv, _, err := ToolResolver("cargo")
+		if err != nil {
+			return nil, fmt.Errorf("Rust cargo unavailable: %w", err)
+		}
+		if len(argv) == 0 || argv[0] == "" {
+			return nil, errors.New("Rust cargo unavailable: tool resolver returned no program for cargo")
+		}
+		return argv, nil
+	}
+	cargo, err := exec.LookPath("cargo")
+	if err != nil {
+		return nil, fmt.Errorf("Rust cargo unavailable: %w", err)
+	}
+	return []string{cargo}, nil
+}
+
+// buildEnvironment is the cargo child environment: the plan's launch
+// environment (or the process's, for an unplanned runtime), the selected
+// rustc, the shared target directory, and the resolver's linker.
+func (r Rust) buildEnvironment(target string) []string {
+	var env []string
+	if r.Environment != nil {
+		env = append(env, r.Environment.Env...)
+	} else {
+		env = os.Environ()
+	}
+	if rustc := r.executable(); rustc != "rustc" {
+		env = append(env, "RUSTC="+rustc)
+	}
+	env = append(env, "CARGO_TARGET_DIR="+target, "CARGO_TERM_COLOR=never")
+	if args := r.linkerArgs(); len(args) != 0 {
+		env = append(env, "RUSTFLAGS="+strings.Join(args, " "))
+	}
+	return env
+}
+
+// rustTargetDir is the cargo target directory shared by every worker build:
+// the user cache, or the temp directory where no user cache exists.
+func rustTargetDir() string {
+	if dir, err := os.UserCacheDir(); err == nil {
+		return filepath.Join(dir, "bashpp", "rust-target")
+	}
+	return filepath.Join(os.TempDir(), "bashpp-rust-target")
+}
+
+// linkerArgs names rustc's linker when the embedder's tool resolver
 // provides one ("cc-linker": a single program that behaves as cc — bashy
 // answers with a wrapper over its provisioned zig cc). Without it rustc
 // looks for `cc` on PATH, which a host with no toolchain does not have;

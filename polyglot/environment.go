@@ -609,12 +609,27 @@ func discoverRustEnvironment(plan EnvironmentPlan, selected *environmentOverlay,
 		return EnvironmentPlan{}, fmt.Errorf("polyglot: Rust compiler unavailable: %w", err)
 	}
 	plan.Manager, plan.Runtime = "cargo", "native"
-	plan.Env = nativeLaunchEnvironment(env)
+	plan.Env = rustLaunchEnvironment(env)
 	plan.Fingerprint, err = environmentFingerprint(plan)
 	if err != nil {
 		return EnvironmentPlan{}, err
 	}
 	return plan.Clone(), nil
+}
+
+// rustLaunchEnvironment is the cargo child environment: the native toolchain
+// set plus the keys that place the registry cache and the rustup toolchain,
+// so a fence builds against the same crates and compiler as the user's own
+// `cargo build`.
+func rustLaunchEnvironment(env map[string]string) []string {
+	out := nativeLaunchEnvironment(env)
+	for _, key := range []string{"CARGO_HOME", "RUSTUP_HOME", "RUSTUP_TOOLCHAIN"} {
+		if value := environmentValue(env, key); value != "" {
+			out = append(out, key+"="+value)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 func recognizedPythonProject(dir string) bool {

@@ -18,9 +18,12 @@ phases and preserves the boundary's existing status/error behavior.
 The first structured-value consumer is Python: a declared `list[...]` or
 `dict[str, ...]` result crosses the foreign wrapper as an Object, while scalar
 signatures retain their existing wrappers. The corresponding input conversion
-accepts JSON-compatible Objects and refuses non-JSON values. Future streaming,
-pipeline, and `(T, error)` adapters extend these phases rather than adding a
-second evaluator or invocation path.
+accepts JSON-compatible Objects and refuses non-JSON values. Rust is the
+second: any ordinary `#[derive(Serialize, Deserialize)]` type — a user struct,
+`Vec<Struct>`, `Option<T>` — is an Object converted by serde_json inside one
+persistent worker per fence (see `bashpp-polyglot-fences.md` § Rust fences).
+Future streaming, pipeline, and `(T, error)` adapters extend these phases
+rather than adding a second evaluator or invocation path.
 
 Executable gates:
 
@@ -31,6 +34,12 @@ Executable gates:
   covers the same continuation contract in the interpreter.
 - `go test -tags full ./lower -run 'TestPythonFenceInterpretedNativeParity/structured_object_round_trip'`
   covers the first structured foreign-wrapper consumer in both modes.
+- `go test ./polyglot -run TestRustSerdeStructsPersistentWorker` is the Rust
+  boundary matrix (serde structs, Vec<Struct>, empty list, type mismatch,
+  Result/panic errors, output isolation, state persistence, cancellation and
+  restart); `go test -tags full ./interp -run TestBashPPRustSerdeStructObjectRoundTrip`
+  and `go test -tags full ./lower -run TestRustFenceSerdeStructParity` cover
+  the same fence in the interpreter and the lowered program.
 - `go test ./syntax -run TestBashPPDecoratorDialectIsolation` proves Bash and
   POSIX modes remain inert when Bash# is off.
 
