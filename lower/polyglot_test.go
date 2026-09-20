@@ -60,6 +60,13 @@ value := record()
 again := bounce(value)
 echo "$value|$again"
 `,
+		"structured object qualified": `~~~python as py
+def record() -> dict[str, list[int]]:
+    return {"items": [3, 4]}
+~~~
+value := py.record()
+echo "$value"
+`,
 	}
 	for name, source := range tests {
 		t.Run(name, func(t *testing.T) { testPythonFenceInterpretedNativeParity(t, source) })
@@ -79,10 +86,17 @@ echo "x=$x"
 `)
 }
 
-func TestRustFenceInterpretedNativeParity(t *testing.T) {
-	if _, err := exec.LookPath("rustc"); err != nil {
-		t.Skip("rustc unavailable")
+func requireRustToolchain(t *testing.T) {
+	t.Helper()
+	for _, tool := range []string{"rustc", "cargo"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skip(tool + " unavailable")
+		}
 	}
+}
+
+func TestRustFenceInterpretedNativeParity(t *testing.T) {
+	requireRustToolchain(t)
 	got := testPythonFenceInterpretedNativeParityAt(t, `~~~rust as rs
 pub fn add(a: i64, b: i64) -> i64 { println!("rust"); a + b }
 pub fn checked(value: i64) -> Result<i64, String> { if value < 0 { Err("negative".into()) } else { Ok(value) } }
@@ -91,6 +105,43 @@ x := rs.add(20, 22)
 echo "x=$x"
 `, "input.bpp")
 	if got != "rust\nx=42\n" {
+		t.Fatalf("output = %q", got)
+	}
+}
+
+// Ordinary serde structs and Vec<Struct> cross the Object mapping identically
+// in the interpreter and the lowered program, island stdout/stderr included,
+// and the one persistent worker keeps its state in both. Fixture shapes follow
+// serde_json v1.0.151 tests/test.rs `test_parse_struct` (MIT OR Apache-2.0).
+func TestRustFenceSerdeStructParity(t *testing.T) {
+	requireRustToolchain(t)
+	got := testPythonFenceInterpretedNativeParityAt(t, `~~~rust as rs
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize)]
+pub struct Inner { pub b: usize, pub c: Vec<String> }
+
+#[derive(Serialize, Deserialize)]
+pub struct Outer { pub inner: Vec<Inner> }
+
+pub fn make(b: usize) -> Outer { println!("made"); Outer { inner: vec![Inner { b, c: vec!["abc".into(), "xyz".into()] }] } }
+pub fn total(outer: Outer) -> usize { eprintln!("totalling"); outer.inner.iter().map(|inner| inner.b).sum() }
+pub fn bounce(outers: Vec<Outer>) -> Vec<Outer> { outers }
+pub fn empty() -> Vec<Outer> { Vec::new() }
+pub fn bump() -> i64 {
+    static COUNT: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+    COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1
+}
+~~~
+value := rs.make(2)
+sum := rs.total(value)
+none := rs.empty()
+again := rs.bounce(none)
+a := rs.bump()
+b := rs.bump()
+echo "$value|$sum|$none|$again|$a$b"
+`, "input.bpp")
+	if got != "made\n{\"inner\":[{\"b\":2,\"c\":[\"abc\",\"xyz\"]}]}|2|[]|[]|12\n" {
 		t.Fatalf("output = %q", got)
 	}
 }

@@ -80,10 +80,17 @@ func runPolyglot(t *testing.T, source string) (string, string, error) {
 	return stdout.String(), stderr.String(), err
 }
 
-func TestBashPPRustDirectAndQualifiedCalls(t *testing.T) {
-	if _, err := exec.LookPath("rustc"); err != nil {
-		t.Skip("rustc unavailable")
+func requireRustToolchain(t *testing.T) {
+	t.Helper()
+	for _, tool := range []string{"rustc", "cargo"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skip(tool + " unavailable")
+		}
 	}
+}
+
+func TestBashPPRustDirectAndQualifiedCalls(t *testing.T) {
+	requireRustToolchain(t)
 	direct := `~~~rust
 pub fn add(a: i64, b: i64) -> i64 { println!("rust"); a + b }
 ~~~
@@ -105,6 +112,64 @@ echo "$value"
 		t.Fatalf("qualified: out=%q diagnostic=%q err=%v", out, diagnostic, err)
 	}
 }
+
+// Ordinary serde structs and Vec<Struct> cross the Bash# Object mapping, the
+// one worker keeps state across calls, and island stdout/stderr stay on the
+// shell's streams. Fixture shapes follow serde_json v1.0.151 tests/test.rs
+// `test_parse_struct` (MIT OR Apache-2.0); see polyglot.TestRustSerdeStructsPersistentWorker.
+func TestBashPPRustSerdeStructObjectRoundTrip(t *testing.T) {
+	requireRustToolchain(t)
+	out, diagnostic, err := runPolyglot(t, rustSerdeStructScript)
+	if err != nil || out != rustSerdeStructStdout || diagnostic != rustSerdeStructStderr {
+		t.Fatalf("out=%q diagnostic=%q err=%v", out, diagnostic, err)
+	}
+	// Failure: a value that is not the struct is serde's own diagnostic, and
+	// the worker survives it.
+	out, diagnostic, err = runPolyglot(t, rustSerdeStructFence+`
+sum := rs.total('"hello"')
+echo "status=$?"
+n := rs.bump()
+echo "n=$n"
+`)
+	if err != nil || out != "status=2\nn=1\n" || !strings.Contains(diagnostic, `invalid type: string "hello", expected struct Outer`) {
+		t.Fatalf("out=%q diagnostic=%q err=%v", out, diagnostic, err)
+	}
+}
+
+const rustSerdeStructFence = `~~~rust as rs
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize)]
+pub struct Inner { pub b: usize, pub c: Vec<String> }
+
+#[derive(Serialize, Deserialize)]
+pub struct Outer { pub inner: Vec<Inner> }
+
+pub fn make(b: usize) -> Outer { println!("made"); Outer { inner: vec![Inner { b, c: vec!["abc".into(), "xyz".into()] }] } }
+pub fn total(outer: Outer) -> usize { eprintln!("totalling"); outer.inner.iter().map(|inner| inner.b).sum() }
+pub fn bounce(outers: Vec<Outer>) -> Vec<Outer> { outers }
+pub fn empty() -> Vec<Outer> { Vec::new() }
+pub fn bump() -> i64 {
+    static COUNT: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+    COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1
+}
+~~~
+`
+
+const rustSerdeStructScript = rustSerdeStructFence + `
+value := rs.make(2)
+sum := rs.total(value)
+none := rs.empty()
+again := rs.bounce(none)
+a := rs.bump()
+b := rs.bump()
+echo "$value|$sum|$none|$again|$a$b"
+`
+
+const (
+	rustSerdeStructStdout = "made\n{\"inner\":[{\"b\":2,\"c\":[\"abc\",\"xyz\"]}]}|2|[]|[]|12\n"
+	rustSerdeStructStderr = "totalling\n"
+)
 
 func TestBashPPGoDirectAndQualifiedCalls(t *testing.T) {
 	if _, err := exec.LookPath("go"); err != nil {

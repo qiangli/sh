@@ -202,6 +202,19 @@ func (e *emitter) callProjection(c *syntax.BashPPCall, index int) projection {
 	if len(c.Fun) > 1 && e.imports[c.Fun[0].Value] != "" {
 		return objectProjection()
 	}
+	if len(c.Fun) > 1 {
+		// A qualified fence call (rs.make) has no registered declaration;
+		// its result projects from the export exactly as a promoted one does.
+		parts := make([]string, len(c.Fun))
+		for i, part := range c.Fun {
+			parts[i] = part.Value
+		}
+		if foreign, ok := e.foreignFunctions[strings.Join(parts, ".")]; ok {
+			if p, ok := e.declResultProjection(lowerForeignDecl(foreign.export), index); ok {
+				return p
+			}
+		}
+	}
 	if len(c.Fun) == 1 {
 		name := c.Fun[0].Value
 		if name == "float32" || name == "float64" {
@@ -210,29 +223,36 @@ func (e *emitter) callProjection(c *syntax.BashPPCall, index int) projection {
 		if name == "make" && c.ArgType != nil {
 			return nativeAggregateProjection()
 		}
-		if f := e.functionDecls[name]; f != nil {
-			i := 0
-			for _, field := range f.Results {
-				count := len(field.Names)
-				if count == 0 {
-					count = 1
-				}
-				if index >= i && index < i+count {
-					if callableResultField(field) {
-						if typ, ok := e.callableResultABI(field); ok {
-							return e.projectionType(typ, nil)
-						}
-					}
-					typ, err := e.fieldType(field)
-					if err == nil {
-						return e.projectionType(typ, nil)
-					}
-				}
-				i += count
-			}
+		if p, ok := e.declResultProjection(e.functionDecls[name], index); ok {
+			return p
 		}
 	}
 	return scalarProjection()
+}
+func (e *emitter) declResultProjection(f *syntax.BashPPFuncDecl, index int) (projection, bool) {
+	if f == nil {
+		return projection{}, false
+	}
+	i := 0
+	for _, field := range f.Results {
+		count := len(field.Names)
+		if count == 0 {
+			count = 1
+		}
+		if index >= i && index < i+count {
+			if callableResultField(field) {
+				if typ, ok := e.callableResultABI(field); ok {
+					return e.projectionType(typ, nil), true
+				}
+			}
+			typ, err := e.fieldType(field)
+			if err == nil {
+				return e.projectionType(typ, nil), true
+			}
+		}
+		i += count
+	}
+	return projection{}, false
 }
 func (e *emitter) projectBinding(n syntax.Node, name, expression string) (text string, err error) {
 	if info, ok := e.projections.projectionLookup(name); ok && info.emptyWhen != "" {

@@ -123,6 +123,62 @@ third-party libraries. Each call launches a fresh worker, so
 native globals do not persist between calls. The boundary is process
 isolation, not a sandbox; fenced native code has the shell account's authority.
 
+## Rust fences
+
+`~~~rust` (or `~~~rs`) exposes top-level `pub fn` declarations through the
+same direct or `as NAME` call model. The fence body is the crate root of a
+generated cargo package that depends on the standard `serde` (with `derive`),
+`serde_json`, and `base64` crates, so a fence uses serde exactly as any Rust
+program does — there is no Bash#-specific carrier type:
+
+```bash
+~~~rust as rs
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize)]
+pub struct Item { pub name: String, pub qty: u32 }
+
+#[derive(Serialize, Deserialize)]
+pub struct Order { pub items: Vec<Item> }
+
+pub fn total(order: Order) -> u32 { order.items.iter().map(|i| i.qty).sum() }
+pub fn make(qty: u32) -> Order { Order { items: vec![Item { name: "a".into(), qty }] } }
+~~~
+
+order := rs.make(2)
+sum := rs.total(order)
+```
+
+Booleans, integer and floating-point kinds, `String`/`&str`, `Vec<u8>`
+(bytes), and `()` keep typed wrappers. Every other parameter or result type —
+a user struct, `Vec<Struct>`, `Option<T>`, a map, a tuple — is an Object that
+crosses the boundary as JSON through `serde_json::from_value` and `to_value`;
+a type without `Serialize`/`Deserialize` fails at preparation with rustc's own
+diagnostic. Borrowed parameters (`&T`, `&[T]`, `&str`) deserialize to owned
+values that are lent to the call; borrowed results, `&mut`, lifetimes, and
+`impl`/`dyn` types are refused. A `Result<T, E>` result unwraps `T` and turns
+`Err(e)` into a call error via `Display`; a panic is a call error too. A
+mismatched argument is serde's message (`invalid type: string "hello",
+expected struct Order`, ``missing field `items` ``).
+
+One persistent worker per fence serves the module for its lifetime, so
+`static` state persists across calls; `Vec<u8>` crosses as an explicit bytes
+value, never a JSON array. Requests and responses are the same newline JSON
+protocol the Python worker speaks (fd 3 on Unix; the marker-framed stdout on
+Windows), and island stdout/stderr are captured per call and replayed on the
+shell's streams — `dup2` on Unix, `SetStdHandle` on Windows. Cancellation or
+`Close` terminates the worker deterministically; the next call restarts it
+from the immutable plan, which carries the built binary so a lowered program
+needs neither cargo nor rustc.
+
+Preparation runs `cargo fetch --offline` (then online only if the registry
+cache lacks a crate) and `cargo build --frozen` in a private temporary
+package, with a target directory shared under the user cache so the serde
+crates compile once per toolchain. `BASHPP_RUSTC` or a `bashpp.yaml` runtime
+selects rustc, and cargo is the one beside it, else the embedder's tool
+resolver (`cargo`), else PATH. Indented `pub fn` items (impl methods) and
+non-`pub` functions are private helpers.
+
 ## Go fences
 
 `~~~go` exposes exported top-level functions through the same direct or

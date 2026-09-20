@@ -231,6 +231,16 @@ type Runtime interface {
 
 type configuredRuntime interface{ configure(*exec.Cmd) }
 
+// artifactWorker is a Runtime whose persistent worker is the compiled binary
+// carried in Plan.Artifact rather than an interpreter reading a script. ensure
+// writes the artifact to a private temp binary (under artifactPrefix) and
+// launches it directly; a restart after kill rewrites it from the immutable
+// plan.
+type artifactWorker interface {
+	Runtime
+	artifactPrefix() string
+}
+
 // Embedded adapts an in-process runtime without making polyglot depend on its
 // implementation package. Dialect islands use this path and never start an
 // external worker.
@@ -342,7 +352,17 @@ func (m *Module) ensure(ctx context.Context) error {
 	if m.cmd != nil {
 		return nil
 	}
-	name, argv := workerExecArgs(m.runtime.executable(), m.runtime.arguments(m.plan))
+	var name string
+	var argv []string
+	if worker, ok := m.runtime.(artifactWorker); ok {
+		path, err := m.artifactPath(worker.artifactPrefix())
+		if err != nil {
+			return err
+		}
+		name, argv = workerExecArgs(path, nil)
+	} else {
+		name, argv = workerExecArgs(m.runtime.executable(), m.runtime.arguments(m.plan))
+	}
 	cmd := exec.Command(name, argv...)
 	if configured, ok := m.runtime.(configuredRuntime); ok {
 		configured.configure(cmd)
@@ -433,8 +453,8 @@ func (m *Module) CallKeywords(ctx context.Context, name string, args []any, kwar
 	if _, ok := m.runtime.(Go); ok {
 		return m.callGo(ctx, name, args, kwargs)
 	}
-	if rustRuntime, ok := m.runtime.(Rust); ok {
-		return m.callRust(ctx, rustRuntime, name, args, kwargs)
+	if _, ok := m.runtime.(Rust); ok && len(kwargs) != 0 {
+		return CallResult{}, errors.New("Rust functions do not accept named arguments")
 	}
 	if _, ok := m.runtime.(C); ok {
 		return m.callNativeArtifact(ctx, "C", name, args, kwargs)
@@ -591,8 +611,11 @@ func (m *Module) request(ctx context.Context, request map[string]any, annotation
 func (m *Module) exchangeContext(ctx context.Context, request any, response *workerResponse) error {
 	done := make(chan error, 1)
 	in, out := m.in, m.out
+	// On Windows the TypeScript and Rust workers share stdout with island
+	// output, so only marker-framed lines are protocol.
 	_, typeScript := m.runtime.(TypeScript)
-	requireMarker := runtime.GOOS == "windows" && typeScript
+	_, rust := m.runtime.(Rust)
+	requireMarker := runtime.GOOS == "windows" && (typeScript || rust)
 	go func() { done <- exchange(in, out, request, response, requireMarker) }()
 	select {
 	case <-ctx.Done():
