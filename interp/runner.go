@@ -16,7 +16,6 @@ import (
 	"iter"
 	"maps"
 	"math"
-	mathrand "math/rand/v2"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -246,32 +245,17 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 			return nil
 		},
 		ProcSubst: func(ps *syntax.ProcSubst) (string, error) {
-			if runtime.GOOS == "windows" {
-				return "", fmt.Errorf("TODO: support process substitution on Windows")
-			}
 			if len(ps.Stmts) == 0 { // nothing to do
 				return os.DevNull, nil
 			}
 
-			// We can't atomically create a random unused temporary FIFO.
-			// Similar to [os.CreateTemp],
-			// keep trying new random paths until one does not exist.
-			// We use a uint64 because a uint32 easily runs into retries.
-			var path string
-			try := 0
-			for {
-				path = filepath.Join(r.tempDir, fifoNamePrefix+strconv.FormatUint(mathrand.Uint64(), 16))
-				err := mkfifo(path, 0o666)
-				if err == nil {
-					break
-				}
-				if !os.IsExist(err) {
-					return "", fmt.Errorf("cannot create fifo: %v", err)
-				}
-				if try++; try > 100 {
-					return "", fmt.Errorf("giving up at creating fifo: %v", err)
-				}
+			// The rendezvous is platform-specific: a temp-dir FIFO on Unix,
+			// a \\.\pipe\ named pipe on Windows. See procSubstPipe.
+			pipe, err := r.newProcSubstPipe(ps.Op == syntax.CmdIn)
+			if err != nil {
+				return "", err
 			}
+			path := pipe.path()
 
 			r2 := r.subshell(true)
 			stdout := r.origStdout
@@ -296,8 +280,8 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 						close(bg.pidReady)
 					}
 				}()
-				// The substitution's end of the FIFO is opened as Bash opens
-				// it: blocking, paired by the kernel with whichever peer
+				// The substitution's end of the pipe is opened as Bash opens
+				// a FIFO: blocking, paired by the kernel with whichever peer
 				// opens the other end — an external command or the shell's
 				// own redirection alike. Under Bash++ the descriptor is then
 				// published to the File's task group so a redirection that
@@ -312,9 +296,10 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 				}
 				switch ps.Op {
 				case syntax.CmdIn:
-					f, err := os.OpenFile(path, os.O_WRONLY, 0)
+					f, err := pipe.openWriter()
 					if err != nil {
 						r.errf("cannot open fifo for stdout: %v\n", err)
+						pipe.cleanup()
 						return
 					}
 					if c := r2.bashPPConcurrent; c != nil {
@@ -325,12 +310,13 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 						if err := closeEndpoint(f); err != nil {
 							r.errf("closing stdout fifo: %v\n", err)
 						}
-						os.Remove(path)
+						pipe.cleanup()
 					}()
 				case syntax.CmdOut:
-					f, err := os.OpenFile(path, os.O_RDONLY, 0)
+					f, err := pipe.openReader()
 					if err != nil {
 						r.errf("cannot open fifo for stdin: %v\n", err)
+						pipe.cleanup()
 						return
 					}
 					if c := r2.bashPPConcurrent; c != nil {
@@ -341,7 +327,7 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 
 					defer func() {
 						closeEndpoint(f)
-						os.Remove(path)
+						pipe.cleanup()
 					}()
 				default:
 					// Should only happen if we forgot a case above.
