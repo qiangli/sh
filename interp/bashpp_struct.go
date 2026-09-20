@@ -828,7 +828,14 @@ func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (value any, meta *bashPP
 			out = sequence[low:high]
 			childSeq = meta.sequence[low:high]
 		}
-		childType := &syntax.BashPPCollectionType{Kind: "slice", Element: collection.Element}
+		// Reslicing preserves the operand's own slice type: `s[i:j]` where s is a
+		// named slice type Slice is itself a Slice, not the element-built []E.
+		// Slicing an array (or array pointer) instead yields a fresh []E, since
+		// the array's named type is not a slice type; rebuild it from the element.
+		childType := meta.typ
+		if meta.kind != "slice" || childType == nil {
+			childType = &syntax.BashPPCollectionType{Kind: "slice", Element: collection.Element}
+		}
 		child := &bashPPCollectionMeta{kind: "slice", typ: childType, sequence: childSeq}
 		if r.bashPPGoSource && sequence == nil {
 			return nil, child, nil

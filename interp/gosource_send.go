@@ -235,6 +235,19 @@ func (r *Runner) goSourceChannelValueCell(expr syntax.BashPPExpr) (*bashPPCell, 
 		}
 	case *syntax.BashPPParenExpr:
 		return r.goSourceChannelValueCell(x.X)
+	case *syntax.BashPPDerefExpr:
+		// `*&c` and `*p` name the channel the pointer addresses. A channel lives
+		// on its cell's side field, not in the value storage a generic deref
+		// read surfaces, so resolve the addressed cell directly; otherwise the
+		// channel is dropped and the value falls to the scalar path.
+		ptr, err := r.bashPPPointerExprValue(x.X)
+		if err != nil || ptr == nil || len(ptr.path) != 0 || ptr.target == nil {
+			return nil, false, nil
+		}
+		cell := ptr.target
+		if _, channelType := r.bashPPUnderlyingType(cell.declType).(*syntax.BashPPChanType); cell.channel != nil || channelType {
+			return bashPPCopyAssignmentCell(cell), true, nil
+		}
 	case *syntax.BashPPUnaryExpr:
 		if x.Op == nil || x.Op.Value != "<-" {
 			return nil, false, nil

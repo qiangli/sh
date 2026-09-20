@@ -403,6 +403,14 @@ func (r *Runner) bashPPExprScalarType(expr syntax.BashPPExpr) syntax.BashPPTypeE
 		if x.Kind == "STRING" {
 			return &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "string"}}
 		}
+	case *syntax.BashPPAddressExpr:
+		// `&v` is a pointer to v's type; a later `*&v` deref must recover v's
+		// declared type, not fall back to its predeclared base. Without this the
+		// named type of `*&b` is dropped and the value boxes into an interface
+		// as the bare builtin, so `x.(Named)` reports the wrong dynamic type.
+		if elem := r.bashPPExprScalarType(x.X); elem != nil {
+			return &syntax.BashPPPointerType{Element: elem}
+		}
 	case *syntax.BashPPDerefExpr:
 		if pointer, ok := r.bashPPUnderlyingType(r.bashPPExprScalarType(x.X)).(*syntax.BashPPPointerType); ok {
 			return pointer.Element

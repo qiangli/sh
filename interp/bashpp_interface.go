@@ -8,11 +8,28 @@ import (
 	"fmt"
 	"go/constant"
 	"go/types"
+	"regexp"
 	"strings"
 
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
 )
+
+// bashPPLocalPackageQualifier matches the program's own "main." package
+// qualifier at a type-name boundary. Go forbids importing a package named
+// main, so this qualifier can only be the program-local one a value carries
+// after crossing the native bridge, where reflect spells a program-declared
+// type in Go's own "main.T" form. The word boundary keeps a genuine imported
+// package whose name ends in "main" (an unlikely "domain.T") untouched.
+var bashPPLocalPackageQualifier = regexp.MustCompile(`\bmain\.`)
+
+// bashPPStripLocalPackage removes the program-local "main." qualifier from a
+// canonical type spelling so a bridge-returned type identity — "func(main.M)",
+// "main.M" — compares equal to the same type spelled bare by the interpreter,
+// as the program itself wrote it.
+func bashPPStripLocalPackage(text string) string {
+	return bashPPLocalPackageQualifier.ReplaceAllString(text, "")
+}
 
 type bashPPInterfaceValue struct {
 	dynamic  syntax.BashPPTypeExpr
@@ -726,6 +743,17 @@ func (r *Runner) bashPPCellForInterfaceExpr(expr syntax.BashPPExpr) (*bashPPCell
 			}
 			return cell, cell.declType, nil
 		}
+		// A conversion to another interface type — the inner `I(x)` of a nested
+		// `E(I(x))` — contributes the operand's own dynamic value, not a scalar
+		// reading of its spelling that would record the interface type `I` as
+		// the dynamic type and lose the real `*S`. Unwrap it as any interface
+		// source, exactly as a variable of interface type is unwrapped.
+		if cell, handled, err := r.bashPPInterfaceConversion(x); handled {
+			if err != nil {
+				return nil, nil, err
+			}
+			return r.bashPPInterfaceSourceCell(cell, "interface conversion")
+		}
 	}
 	return r.bashPPScalarInterfaceCell(expr)
 }
@@ -903,7 +931,7 @@ func (r *Runner) bashPPTypeAssertCell(assert *syntax.BashPPTypeAssertExpr, comma
 		} else if assertingInterface {
 			matched = r.bashPPImplements(iv.dynamic, assertIface) == nil
 		} else {
-			matched = bashPPInterfaceAssertTypeText(r.bashPPPredeclaredAliases(iv.dynamic)) == bashPPInterfaceAssertTypeText(r.bashPPPredeclaredAliases(assert.Assert)) ||
+			matched = bashPPStripLocalPackage(bashPPInterfaceAssertTypeText(r.bashPPPredeclaredAliases(iv.dynamic))) == bashPPStripLocalPackage(bashPPInterfaceAssertTypeText(r.bashPPPredeclaredAliases(assert.Assert))) ||
 				r.goSourceNativeTypeIdentical(iv.dynamic, assert.Assert)
 			// A struct literal type is identified by its fields, not by the
 			// word "struct"; see gosource_struct_identity.go.

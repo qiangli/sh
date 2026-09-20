@@ -200,6 +200,18 @@ func (r *Runner) bashPPNativeFunctionCallback(ctx context.Context, id uint64, ar
 func synchronousFunctionCallback(req bashPPEvalRequest, q bashPPBridgeRequest) bool {
 	path := ""
 	if q.Receiver != nil && q.Receiver.Kind == "handle" {
+		// A bare call of a native function handle whose signature names a
+		// program type is a func/method value the interpreter itself produced:
+		// reflect over a local type M yields `Method(0).Func` of type
+		// `func(main.M)`, and calling its Interface() trampolines synchronously
+		// back into the interpreter's own method body. The call completes before
+		// this request returns, exactly like the reviewed callbacks below; the
+		// unsafe guard at the call site still refuses one that also hands the
+		// dependency an interpreter-owned reference to mutate.
+		if q.Selector == "" && q.Receiver.Function &&
+			(strings.Contains(q.Receiver.NativeType, "main.") || strings.Contains(q.Receiver.Type, "main.")) {
+			return true
+		}
 		if q.Receiver.Callable == "range-iterator" {
 			return true
 		}

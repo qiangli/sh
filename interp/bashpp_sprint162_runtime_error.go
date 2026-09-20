@@ -272,9 +272,32 @@ func (r *Runner) goSourceTypeAssertionText(static, dynamic, asserted syntax.Bash
 	assertedText := r.goSourceRuntimeTypeText(asserted)
 	text := "interface conversion: " + staticText + " is " + dynamicText + ", not " + assertedText
 	if dynamic != nil && dynamicText == assertedText {
-		text += " (types from different scopes)"
+		// Go's own disambiguation: identical spellings from different packages
+		// (an unexported field qualifies an anonymous struct by its package —
+		// fixedbugs/issue18911.go) versus from different scopes in one package
+		// (a function-local type declaration). Compare the linked-package tag
+		// of each type's source, the same tag struct identity is keyed on.
+		if r.goSourceTypePackageTag(dynamic) != r.goSourceTypePackageTag(asserted) {
+			text += " (types from different packages)"
+		} else {
+			text += " (types from different scopes)"
+		}
 	}
 	return text
+}
+
+// goSourceTypePackageTag reports the linked-package tag of the source a type
+// expression was spelled in, or "" for the program package or a synthesized
+// type with no source position.
+func (r *Runner) goSourceTypePackageTag(typ syntax.BashPPTypeExpr) string {
+	if !r.bashPPGoSource || typ == nil {
+		return ""
+	}
+	pos := typ.Pos()
+	if !pos.IsValid() {
+		return ""
+	}
+	return r.goSourcePackageAt(pos)
 }
 
 // bashPPPanicValueText renders a panic value the way the runtime prints it:
