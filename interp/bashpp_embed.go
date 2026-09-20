@@ -178,7 +178,14 @@ func (r *Runner) bashPPResolveSelection(root syntax.BashPPTypeExpr, name string,
 							continue
 						}
 						edges := append([]bashPPEmbedEdge(nil), node.edges...)
-						edges = append(edges, bashPPEmbedEdge{name: fieldName})
+						// A pointer-typed field records its indirection on
+						// the edge. Within this selection the flag is inert
+						// (every consumer derefs mid-path only), but a caller
+						// concatenating per-component selections into one
+						// path — s.Subp.SubpSub.test6() — relies on it for
+						// the implicit dereference between components.
+						_, fieldPointer := field.FieldTypeExpr.(*syntax.BashPPPointerType)
+						edges = append(edges, bashPPEmbedEdge{name: fieldName, pointer: fieldPointer})
 						matches = append(matches, bashPPSelection{edges: edges, fieldType: field.FieldTypeExpr})
 					}
 				}

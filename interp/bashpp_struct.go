@@ -422,6 +422,13 @@ func (r *Runner) bashPPEvalTypedValue(expr syntax.BashPPExpr, expected syntax.Ba
 		}
 		ptr, err := r.bashPPPointerExprValue(expr)
 		if err != nil {
+			// A dependency's own pointer — parse(...) returning
+			// *template.Template — is stored as its native handle, the same
+			// way a native-typed expression would have been above.
+			var native *bashPPNativePointerValueError
+			if errors.As(err, &native) && r.bashPPNativeType(expected) {
+				return r.goSourceNativeAssignedValue(*native.value, expected)
+			}
 			return nil, nil, err
 		}
 		actual := r.bashPPPointerExprType(expr, ptr)

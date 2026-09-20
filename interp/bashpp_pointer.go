@@ -241,10 +241,25 @@ func (r *Runner) bashPPPointerExprValue(expr syntax.BashPPExpr) (ptr *bashPPPoin
 		}
 		ptr, ok := value.(*bashPPPointer)
 		if !ok && value != nil {
+			if native, isNative := value.(*bashPPBridgeValue); isNative {
+				return nil, &bashPPNativePointerValueError{value: native}
+			}
 			return nil, fmt.Errorf("BASHPP-EPOINTER-TARGET: expression is not a pointer")
 		}
 		return ptr, nil
 	}
+}
+
+// bashPPNativePointerValueError reports a pointer-typed expression whose
+// value is a dependency's own pointer — an authenticated native handle, not
+// an interpreter pointer. `var recv = parse(...)` with parse returning
+// *template.Template evaluates to such a handle. Callers that can store the
+// handle recover it from the error; everywhere else it reads as the same
+// pointer-target refusal as before.
+type bashPPNativePointerValueError struct{ value *bashPPBridgeValue }
+
+func (e *bashPPNativePointerValueError) Error() string {
+	return "BASHPP-EPOINTER-TARGET: expression is not a pointer"
 }
 
 func (r *Runner) bashPPAddress(expr syntax.BashPPExpr) (result *bashPPPointer, err error) {
@@ -325,6 +340,17 @@ func (r *Runner) bashPPAddress(expr syntax.BashPPExpr) (result *bashPPPointer, e
 		case *syntax.BashPPSelectorExpr:
 			if err := descend(x.X); err != nil {
 				return err
+			}
+			// Go's selector dereferences a pointer base implicitly, so
+			// (*pn).left and s.Subp.SubpSub select on the pointee.
+			// bashPPResolveField follows that pointer statically; the
+			// runtime path must record the indirection too, or the stored
+			// path later reads the pointer value where struct storage is
+			// expected.
+			if pointer, isPointer := typ.(*syntax.BashPPPointerType); isPointer {
+				ptr.path = append(ptr.path, bashPPPointerStep{deref: true})
+				meta = nil
+				typ = pointer.Element
 			}
 			sel := r.bashPPResolveField(typ, x.Sel.Value)
 			if sel.ambiguous || len(sel.edges) == 0 {

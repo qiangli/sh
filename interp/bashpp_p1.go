@@ -298,6 +298,7 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 	}
 	legacyPointerVR := vr
 	legacyPointerInit := false
+	nativePointerInit := false
 	var valueMeta *bashPPCollectionMeta
 	var pointerValue *bashPPPointer
 	if d.Site == syntax.StartVar && d.DeclTypeExpr != nil {
@@ -325,7 +326,7 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 			}
 		} else if pointerType, ok := r.bashPPPointerType(d.DeclTypeExpr); ok {
 			if len(d.Init) > 0 {
-				value, _, err := r.bashPPEvalTypedValue(d.InitExpr, d.DeclTypeExpr)
+				value, meta, err := r.bashPPEvalTypedValue(d.InitExpr, d.DeclTypeExpr)
 				// Keep the established receiver construction surface (`var p
 				// *Count = 9`) by treating a direct element value as an allocated
 				// pointee. New code can spell the same operation as new(Count).
@@ -343,9 +344,20 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 					r.exit = exitStatus{code: 2}
 					return
 				}
-				pointerValue, _ = value.(*bashPPPointer)
+				if native, ok := value.(*bashPPBridgeValue); ok && native != nil {
+					// A dependency's own pointer — parse(...) returning
+					// *template.Template — lives in its native handle, not
+					// in an interpreter pointer cell; store it the way a
+					// native-typed declaration would.
+					vr, valueMeta = expand.NewObject(native), meta
+					nativePointerInit = true
+				} else {
+					pointerValue, _ = value.(*bashPPPointer)
+				}
 			}
-			vr = expand.Variable{Set: true, Kind: expand.String}
+			if !nativePointerInit {
+				vr = expand.Variable{Set: true, Kind: expand.String}
+			}
 		}
 		shape := r.bashPPUnderlyingType(d.DeclTypeExpr)
 		_, _, isStruct := r.bashPPStructFields(d.DeclTypeExpr)
@@ -409,7 +421,7 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 		if _, named := r.bashPPTypes[base]; named {
 			cell.typeName = base
 		}
-		if pointer {
+		if pointer && !nativePointerInit {
 			cell.pointer, cell.pointerValue = true, pointerValue
 			cell.nilPointer = pointerValue == nil
 			if legacyPointerInit {
