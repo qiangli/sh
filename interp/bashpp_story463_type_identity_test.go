@@ -9,15 +9,15 @@
 // reductions of the six roots:
 //
 //   - named.go               a named scalar/slice/map/array/chan/string round-
-//                            trips to its own type through interface{}.
+//     trips to its own type through interface{}.
 //   - reflectmethod1.go      reflect.TypeOf(v).Method(0).Func.Interface() is a
 //   - reflectmethod3.go      func(M) value whose call re-enters the method.
 //   - reflectmethod2.go      MethodByName reaches the same func(M) value.
 //   - typeparam/issue47925b  a nested interface-to-interface conversion
-//                            E[T](I[T](x)) keeps the operand's *S, not the
-//                            source interface type nor a dereferenced S.
+//     E[T](I[T](x)) keeps the operand's *S, not the
+//     source interface type nor a dereferenced S.
 //   - fixedbugs/issue18911   identical anonymous structs from two packages are
-//                            two types; the panic says "different packages".
+//     two types; the panic says "different packages".
 //
 // The negative space is the point: an unexported field, a pointer, a named
 // type and a bridge func type each keep their identity in the failure text.
