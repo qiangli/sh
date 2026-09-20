@@ -50,6 +50,16 @@ def main() -> str:
 value := py.main()
 echo "value=$value"
 `,
+		"structured object round trip": `~~~python
+def record() -> dict[str, list[int]]:
+    return {"items": [3, 4]}
+def bounce(value: dict[str, list[int]]) -> dict[str, list[int]]:
+    return value
+~~~
+value := record()
+again := bounce(value)
+echo "$value|$again"
+`,
 	}
 	for name, source := range tests {
 		t.Run(name, func(t *testing.T) { testPythonFenceInterpretedNativeParity(t, source) })

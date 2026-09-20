@@ -608,6 +608,8 @@ func coerceResult(value any, want string) (any, error) {
 	switch want {
 	case "any":
 		return value, nil
+	case "object":
+		return jsonObjectValue(value)
 	case "nil":
 		if value == nil {
 			return nil, nil
@@ -637,6 +639,35 @@ func coerceResult(value any, want string) (any, error) {
 		}
 	}
 	return nil, fmt.Errorf("got %T", value)
+}
+
+func jsonObjectValue(value any) (any, error) {
+	switch value := value.(type) {
+	case nil, bool, string, int64, float64:
+		return value, nil
+	case []any:
+		out := make([]any, len(value))
+		for i := range value {
+			var err error
+			out[i], err = jsonObjectValue(value[i])
+			if err != nil {
+				return nil, err
+			}
+		}
+		return out, nil
+	case map[string]any:
+		out := make(map[string]any, len(value))
+		for key, item := range value {
+			var err error
+			out[key], err = jsonObjectValue(item)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("got non-JSON %T", value)
+	}
 }
 
 func (m *Module) Close() error { m.mu.Lock(); defer m.mu.Unlock(); return m.kill() }
@@ -811,6 +842,18 @@ tree=ast.parse(src)
 nodes=tree.body
 if nodes and isinstance(nodes[0], ast.Expr) and isinstance(nodes[0].value, ast.Constant) and isinstance(nodes[0].value.value, str): nodes=nodes[1:]
 types={'int':'int','float':'float64','str':'string','bool':'bool','bytes':'bytes','None':'nil','Any':'any'}
+def annotation_type(node):
+    if isinstance(node,ast.Name): return types.get(node.id)
+    if isinstance(node,ast.Constant) and node.value is None: return 'nil'
+    if not isinstance(node,ast.Subscript) or not isinstance(node.value,ast.Name): return None
+    origin=node.value.id
+    if origin in ('list','List'):
+        return 'object' if annotation_type(node.slice) is not None else None
+    if origin in ('dict','Dict'):
+        parts=node.slice.elts if isinstance(node.slice,ast.Tuple) else []
+        if len(parts)!=2 or annotation_type(parts[0])!='string' or annotation_type(parts[1]) is None: return None
+        return 'object'
+    return None
 out=[]
 for node in nodes:
     if not isinstance(node, ast.FunctionDef): raise SyntaxError('only module docstrings and synchronous function declarations are allowed')
@@ -823,12 +866,12 @@ for node in nodes:
             except Exception: raise SyntaxError('function defaults must be literals')
     params=[]
     for arg in list(node.args.args):
-        name=arg.annotation.id if isinstance(arg.annotation,ast.Name) else None
-        if name not in types: dynamic=True
-        params.append(types.get(name,'any'))
-    ret=node.returns.id if isinstance(node.returns,ast.Name) else ('None' if isinstance(node.returns,ast.Constant) and node.returns.value is None else None)
-    if ret not in types: dynamic=True
-    if not node.name.startswith('_'): out.append({'name':node.name,'signature':{'params':params,'results':[] if ret=='None' else [types.get(ret,'any')],'dynamic':dynamic}})
+        typ=annotation_type(arg.annotation)
+        if typ is None: dynamic=True
+        params.append(typ or 'any')
+    ret=annotation_type(node.returns)
+    if ret is None: dynamic=True
+    if not node.name.startswith('_'): out.append({'name':node.name,'signature':{'params':params,'results':[] if ret=='nil' else [ret or 'any'],'dynamic':dynamic}})
 print(json.dumps(out,separators=(',',':')))
 `
 

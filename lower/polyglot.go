@@ -289,16 +289,23 @@ func lowerForeignDecl(export polyglot.Export) *syntax.BashPPFuncDecl {
 		return d
 	}
 	for i, typ := range export.Signature.Params {
-		field := &syntax.BashPPField{Names: []*syntax.Lit{{Value: fmt.Sprintf("arg%d", i)}}, FieldType: &syntax.Lit{Value: typ}}
+		field := &syntax.BashPPField{Names: []*syntax.Lit{{Value: fmt.Sprintf("arg%d", i)}}, FieldType: &syntax.Lit{Value: foreignShellType(typ)}}
 		if export.Signature.Variadic && i == len(export.Signature.Params)-1 {
 			field.Ellipsis = syntax.NewPos(0, 1, 1)
 		}
 		d.Params = append(d.Params, field)
 	}
 	for _, typ := range export.Signature.Results {
-		d.Results = append(d.Results, &syntax.BashPPField{FieldType: &syntax.Lit{Value: typ}})
+		d.Results = append(d.Results, &syntax.BashPPField{FieldType: &syntax.Lit{Value: foreignShellType(typ)}})
 	}
 	return d
+}
+
+func foreignShellType(typ string) string {
+	if typ == "object" {
+		return "any"
+	}
+	return typ
 }
 
 func (e *emitter) foreignDeclarations() string {
@@ -436,7 +443,7 @@ func foreignGoType(typ string) string {
 	if typ == "bytes" {
 		return "[]byte"
 	}
-	if typ == "nil" {
+	if typ == "nil" || typ == "object" {
 		return "any"
 	}
 	return typ

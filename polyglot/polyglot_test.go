@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -158,6 +159,44 @@ def hang():
 	got, err = m.Call(context.Background(), "add", int64(4), int64(5))
 	if err != nil || got.Value != int64(9) {
 		t.Fatalf("restart = %#v, %v", got, err)
+	}
+}
+
+func TestPythonStructuredAnnotationsAndObjectCodec(t *testing.T) {
+	plan := pythonPlan(t, `
+def records() -> list[dict[str, int]]:
+    return [{"n": 1}, {"n": 2}]
+def bounce(value: dict[str, list[int]]) -> dict[str, list[int]]:
+    return value
+def empty() -> list[dict[str, int]]:
+    return []
+def invalid() -> list[bytes]:
+    return [b"not-json"]
+`)
+	for _, export := range plan.Exports {
+		if export.Signature.Dynamic {
+			t.Fatalf("structured export %s is dynamic: %#v", export.Name, export.Signature)
+		}
+	}
+	m := Start(plan, Python{})
+	defer m.Close()
+
+	wantRecords := []any{map[string]any{"n": int64(1)}, map[string]any{"n": int64(2)}}
+	got, err := m.Call(context.Background(), "records")
+	if err != nil || !reflect.DeepEqual(got.Value, wantRecords) {
+		t.Fatalf("records = %#v, %v", got.Value, err)
+	}
+	wantMap := map[string]any{"items": []any{int64(3), int64(4)}}
+	got, err = m.Call(context.Background(), "bounce", wantMap)
+	if err != nil || !reflect.DeepEqual(got.Value, wantMap) {
+		t.Fatalf("bounce = %#v, %v", got.Value, err)
+	}
+	got, err = m.Call(context.Background(), "empty")
+	if err != nil || !reflect.DeepEqual(got.Value, []any{}) {
+		t.Fatalf("empty = %#v, %v", got.Value, err)
+	}
+	if _, err := m.Call(context.Background(), "invalid"); err == nil || !strings.Contains(err.Error(), "non-JSON") {
+		t.Fatalf("invalid structured result error = %v", err)
 	}
 }
 

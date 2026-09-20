@@ -218,16 +218,23 @@ func foreignDecl(name string, sig polyglot.Signature) *syntax.BashPPFuncDecl {
 		return decl
 	}
 	for i, typ := range sig.Params {
-		field := &syntax.BashPPField{Names: []*syntax.Lit{{Value: fmt.Sprintf("arg%d", i)}}, FieldType: &syntax.Lit{Value: typ}}
+		field := &syntax.BashPPField{Names: []*syntax.Lit{{Value: fmt.Sprintf("arg%d", i)}}, FieldType: &syntax.Lit{Value: foreignShellType(typ)}}
 		if sig.Variadic && i == len(sig.Params)-1 {
 			field.Ellipsis = syntax.NewPos(0, 1, 1)
 		}
 		decl.Params = append(decl.Params, field)
 	}
 	for _, typ := range sig.Results {
-		decl.Results = append(decl.Results, &syntax.BashPPField{FieldType: &syntax.Lit{Value: typ}})
+		decl.Results = append(decl.Results, &syntax.BashPPField{FieldType: &syntax.Lit{Value: foreignShellType(typ)}})
 	}
 	return decl
+}
+
+func foreignShellType(typ string) string {
+	if typ == "object" {
+		return "any"
+	}
+	return typ
 }
 
 func (r *Runner) bashPPInvokeForeign(ctx context.Context, fn *bashPPForeignFunc, args []string) []string {
@@ -301,6 +308,9 @@ func (r *Runner) bashPPInvokeForeign(ctx context.Context, fn *bashPPForeignFunc,
 			r.bashPPResultCells = []*bashPPCell{{vr: expand.NewObject(handle)}}
 			return []string{""}
 		}
+		if len(fn.export.Signature.Results) == 1 && fn.export.Signature.Results[0] == "object" {
+			r.bashPPResultCells = []*bashPPCell{{vr: expand.NewObject(result.Value)}}
+		}
 		return []string{foreignResult(result.Value)}
 	}
 	values := make([]any, len(args))
@@ -339,6 +349,9 @@ func (r *Runner) bashPPInvokeForeign(ctx context.Context, fn *bashPPForeignFunc,
 	}
 	r.exit = exitStatus{}
 	value := foreignResult(result.Value)
+	if len(fn.export.Signature.Results) == 1 && fn.export.Signature.Results[0] == "object" {
+		r.bashPPResultCells = []*bashPPCell{{vr: expand.NewObject(result.Value)}}
+	}
 	if fn.export.Signature.Dynamic {
 		return []string{value, ""}
 	}
@@ -360,6 +373,14 @@ func foreignArgument(text, typ string) (any, error) {
 		return []byte(text), nil
 	case "string", "any":
 		return text, nil
+	case "object":
+		decoder := json.NewDecoder(strings.NewReader(text))
+		decoder.UseNumber()
+		var value any
+		if err := decoder.Decode(&value); err != nil {
+			return nil, fmt.Errorf("want JSON object: %w", err)
+		}
+		return normalizeForeignJSON(value)
 	case "nil":
 		if text == "" {
 			return nil, nil
@@ -368,6 +389,33 @@ func foreignArgument(text, typ string) (any, error) {
 	default:
 		return text, nil
 	}
+}
+
+func normalizeForeignJSON(value any) (any, error) {
+	switch value := value.(type) {
+	case json.Number:
+		if integer, err := value.Int64(); err == nil {
+			return integer, nil
+		}
+		return value.Float64()
+	case []any:
+		for i := range value {
+			var err error
+			value[i], err = normalizeForeignJSON(value[i])
+			if err != nil {
+				return nil, err
+			}
+		}
+	case map[string]any:
+		for key := range value {
+			var err error
+			value[key], err = normalizeForeignJSON(value[key])
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	return value, nil
 }
 
 func foreignResult(value any) string {

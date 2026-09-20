@@ -345,6 +345,23 @@ env | grep '^py=' || true
 	}
 }
 
+func TestBashPPPythonStructuredObjectRoundTrip(t *testing.T) {
+	source := `~~~python
+def record() -> dict[str, list[int]]:
+    return {"items": [3, 4]}
+def bounce(value: dict[str, list[int]]) -> dict[str, list[int]]:
+    return value
+~~~
+value := record()
+again := bounce(value)
+echo "$value|$again"
+`
+	out, diagnostic, err := runPolyglot(t, source)
+	if err != nil || out != "{\"items\":[3,4]}|{\"items\":[3,4]}\n" || diagnostic != "" {
+		t.Fatalf("out=%q diagnostic=%q err=%v", out, diagnostic, err)
+	}
+}
+
 func TestBashPPTypeScriptDirectQualifiedAndCoexistence(t *testing.T) {
 	if os.Getenv("BASHPP_TYPESCRIPT_MODULE") == "" {
 		t.Skip("set BASHPP_TYPESCRIPT_MODULE to an official TypeScript compiler module")
