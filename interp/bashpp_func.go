@@ -566,7 +566,7 @@ func (r *Runner) bashPPLookupFunc(c *syntax.BashPPCall) (*bashPPFunc, bool) {
 		return fn, true
 	}
 	if len(c.Fun) == 2 {
-		if module := r.bashPPForeignImports[c.Fun[0].Value]; module != nil {
+		if module := r.bashPPImportModule(c.Fun[0].Value); module != nil {
 			name := c.Fun[1].Value
 			return bashPPDirectForeign(module, nil, name, strings.Join(foreignName, ".")), true
 		}

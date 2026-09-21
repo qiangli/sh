@@ -3,6 +3,7 @@ package interp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strconv"
@@ -67,6 +68,11 @@ func (r *Runner) bashPPPrepareSourceBlocks(ctx context.Context, file *syntax.Fil
 		source = filepath.Join(r.Dir, source)
 	}
 	r.bashPPForeignImports = make(map[string]*polyglot.Module, len(imports))
+	// One module identity — the same module or file in the same environment
+	// — is one worker, however many aliases name it: CPython gives
+	// `import x as a; import x as b` one module object, and a file's state
+	// must not fork by alias.
+	identities := map[string]*polyglot.Module{}
 	for _, imp := range imports {
 		modulePath, err := strconv.Unquote(`"` + imp.Path.Parts[0].(*syntax.Lit).Value + `"`)
 		if err != nil {
@@ -84,9 +90,13 @@ func (r *Runner) bashPPPrepareSourceBlocks(ctx context.Context, file *syntax.Fil
 		if err != nil {
 			return restore, fmt.Errorf("%s: %w", file.Name, err)
 		}
-		module := polyglot.StartImport(plan)
+		module := identities[plan.Identity()]
+		if module == nil {
+			module = polyglot.StartImport(plan)
+			identities[plan.Identity()] = module
+			r.bashPPForeignModules = append(r.bashPPForeignModules, module)
+		}
 		r.bashPPForeignImports[alias] = module
-		r.bashPPForeignModules = append(r.bashPPForeignModules, module)
 	}
 	if len(blocks) == 0 {
 		r.bashPPForeignFuncs = map[string]*bashPPFunc{}
@@ -537,5 +547,81 @@ func foreignResult(value any) string {
 	default:
 		data, _ := json.Marshal(x)
 		return string(data)
+	}
+}
+
+// bashPPImportModule resolves a direct-import alias: the running file's own
+// imports first, then any the embedder seeded through [ForeignImports].
+func (r *Runner) bashPPImportModule(alias string) *polyglot.Module {
+	if module := r.bashPPForeignImports[alias]; module != nil {
+		return module
+	}
+	return r.bashPPSeededImports[alias]
+}
+
+// bashPPForeignCommand resolves a command word of the form `alias.name` to
+// the island function it names — a direct import's module attribute or a
+// source block's exported function — when the word is not a shell function.
+// This is the command-alias adapter (B8): `alias greet=py.greet` then `greet
+// hi` dispatches here after alias expansion, as does `py.greet hi` itself and
+// a shell function wrapper `greet() { py.greet "$@"; }`. `command py.greet`
+// bypasses it, exactly as it bypasses a shell function.
+func (r *Runner) bashPPForeignCommand(word string) (*polyglot.Module, string, bool) {
+	if r.Dialect() != syntax.LangBashPP {
+		return nil, "", false
+	}
+	dot := strings.IndexByte(word, '.')
+	if dot <= 0 || dot == len(word)-1 || strings.ContainsAny(word, "/") {
+		return nil, "", false
+	}
+	alias, name := word[:dot], word[dot+1:]
+	if strings.ContainsRune(name, '.') {
+		return nil, "", false
+	}
+	if module := r.bashPPImportModule(alias); module != nil {
+		return module, name, true
+	}
+	if fn := r.bashPPForeignFuncs[word]; fn != nil && fn.foreign != nil && fn.foreign.module != nil && fn.foreign.receiver == nil {
+		if lang := fn.foreign.module.Plan().Language; lang == "python" {
+			return fn.foreign.module, fn.foreign.export.Name, true
+		}
+	}
+	return nil, "", false
+}
+
+// bashPPRunForeignCommand runs an island function as a shell command. The
+// argv words are the command's expanded arguments; what the function writes
+// goes to the command's stdout and stderr (so redirections and pipes apply);
+// its return value is the status by the xonsh callable-alias convention; a
+// lookup failure is the shell's own 127/126; a worker killed by a signal is a
+// foreground death, 128+signal; cancellation stops the shell as it would any
+// command. See [polyglot.Module.Command].
+func (r *Runner) bashPPRunForeignCommand(ctx context.Context, pos syntax.Pos, module *polyglot.Module, word, name string, argv []string) {
+	result, err := module.Command(ctx, name, argv)
+	if result.Stdout != "" {
+		fmt.Fprint(r.stdout, result.Stdout)
+	}
+	if result.Stderr != "" {
+		fmt.Fprint(r.stderr, result.Stderr)
+	}
+	switch {
+	case err == nil:
+		r.exit = exitStatus{code: uint8(result.Status)}
+	case ctx.Err() != nil:
+		r.exit.fatal(ctx.Err())
+	case errors.Is(err, polyglot.ErrCommandNotFound):
+		r.errf("%s%s: command not found\n", r.bashErrPrefix(pos), word)
+		r.exit.code = 127
+	case errors.Is(err, polyglot.ErrCommandNotCallable):
+		r.errf("%s%s: cannot execute: not a Python callable\n", r.bashErrPrefix(pos), word)
+		r.exit.code = 126
+	default:
+		var death *polyglot.WorkerExit
+		if errors.As(err, &death) && death.Signal > 0 {
+			r.exit.code = uint8(128 + death.Signal)
+			return
+		}
+		r.errf("%s%s: %v\n", r.bashErrPrefix(pos), word, err)
+		r.exit.code = 1
 	}
 }

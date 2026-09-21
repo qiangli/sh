@@ -69,6 +69,13 @@ func (e *emitter) lexicalStorage(source []byte, fs *token.FileSet, file *ast.Fil
 	edits = append(edits, e.lexicalConstants(file, fs, info)...)
 	globals := map[types.Object]string{}
 	for _, name := range pkg.Scope().Names() {
+		if e.isForeignWorkerVar(name) {
+			// A direct Python import's worker is process-level runtime
+			// plumbing, not a program value: it stays a package variable so
+			// the entry can hand it to the shell backend before the program
+			// (and its storage) exists.
+			continue
+		}
 		if object, ok := pkg.Scope().Lookup(name).(*types.Var); ok {
 			if e.foreignGlobals[name] {
 				// A foreign module binding stays a native package variable;

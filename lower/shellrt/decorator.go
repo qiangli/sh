@@ -202,6 +202,9 @@ func (c *decoratorChain) next(p *Program) {
 		return
 	}
 	native := Decorators[rung.Name]
+	if native == nil && rung.Name == timedDecoratorName {
+		native = timedDecorator(c.p)
+	}
 	if native == nil {
 		c.fail(fmt.Sprintf("BASHPP-EDECO-UNDEF: decorator %s is not defined", rung.Name))
 		return

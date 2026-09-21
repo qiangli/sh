@@ -448,6 +448,18 @@ type Module struct {
 	pendingCallbacks []uint64
 	nextCallback     uint64
 	callbackDepth    int
+	// lastExit describes how the previous worker process ended, recorded by
+	// kill so a request that failed because the worker died on its own can
+	// report the signal or status instead of a bare transport error.
+	lastExit workerExit
+}
+
+// workerExit is kill's record of a worker that had already ended when kill
+// reached it. died is false when kill itself ended the process.
+type workerExit struct {
+	died   bool
+	signal int
+	code   int
 }
 
 func Start(plan Plan, runtime Runtime) *Module { return &Module{plan: plan, runtime: runtime} }
@@ -672,6 +684,9 @@ func (m *Module) ensure(ctx context.Context) error {
 	}
 	if m.importPlan != nil {
 		load = map[string]any{"id": 0, "op": "import", "module": m.importPlan.Module}
+		if m.importPlan.Path != "" {
+			load["path"] = m.importPlan.Path
+		}
 	}
 	var response workerResponse
 	if err := m.exchangeContext(ctx, load, &response); err != nil {
@@ -922,8 +937,119 @@ func (m *Module) Release(ctx context.Context, handle *Handle) error {
 }
 
 func publicPythonAttribute(name string) bool {
-	return name == "__name__" || name != "" && name[0] != '_'
+	switch name {
+	case "__name__", "__file__", "__package__":
+		return true
+	}
+	return name != "" && name[0] != '_'
 }
+
+// Attr reads a module-level attribute of a direct import (or an island
+// namespace entry of a source block). Private names are refused as they are
+// on handles; the module identity dunders __name__, __file__ and __package__
+// are readable so a file import can be checked for what it loaded.
+func (m *Module) Attr(ctx context.Context, name string) (CallResult, error) {
+	if !publicPythonAttribute(name) {
+		return CallResult{}, fmt.Errorf("Python attribute %q is private", name)
+	}
+	unlock, err := m.lock(ctx)
+	if err != nil {
+		return CallResult{}, err
+	}
+	defer unlock()
+	if err := m.ensure(ctx); err != nil {
+		return CallResult{}, err
+	}
+	m.nextID++
+	return m.request(ctx, map[string]any{"id": m.nextID, "op": "getattr", "name": name}, nil)
+}
+
+// CommandResult is the outcome of an island function run as a shell command
+// through [Module.Command].
+type CommandResult struct {
+	Status         int
+	Stdout, Stderr string
+}
+
+// ErrCommandNotFound reports that the named island function does not exist;
+// ErrCommandNotCallable that the name exists but is not callable. Callers map
+// them to the shell's 127 and 126 statuses.
+var (
+	ErrCommandNotFound    = errors.New("polyglot: no such island function")
+	ErrCommandNotCallable = errors.New("polyglot: island target is not callable")
+)
+
+// Command runs the named island function as a command: argv words are passed
+// as positional strings, everything it writes to stdout and stderr is
+// returned as such, and its return value becomes the exit status by the
+// xonsh callable-alias convention — an int is the status, a str is written
+// to stdout, a (stdout, stderr, status) sequence is split, None reports 0.
+// SystemExit ends the command with its code, KeyboardInterrupt with 130, and
+// any other exception prints its traceback to stderr and reports 1; none of
+// these are errors to the caller. The error result is reserved for lookup
+// failures ([ErrCommandNotFound], [ErrCommandNotCallable]), cancellation, and
+// worker death ([WorkerExit]).
+func (m *Module) Command(ctx context.Context, name string, argv []string) (CommandResult, error) {
+	if !publicPythonAttribute(name) {
+		return CommandResult{}, fmt.Errorf("%w: %s is private", ErrCommandNotFound, name)
+	}
+	unlock, err := m.lock(ctx)
+	if err != nil {
+		return CommandResult{}, err
+	}
+	defer unlock()
+	if err := m.ensure(ctx); err != nil {
+		return CommandResult{}, err
+	}
+	m.nextID++
+	result, err := m.request(ctx, map[string]any{"id": m.nextID, "op": "command", "name": name, "args": StringsToAny(argv)}, nil)
+	out := CommandResult{Stdout: result.Stdout, Stderr: result.Stderr}
+	if err != nil {
+		if detail, ok := ForeignErrorDetail(err); ok {
+			switch detail.Code {
+			case "LookupError":
+				return out, fmt.Errorf("%w: %s", ErrCommandNotFound, name)
+			case "TypeError":
+				return out, fmt.Errorf("%w: %s", ErrCommandNotCallable, name)
+			case "KeyboardInterrupt":
+				// Interrupted between the adapter's own guards; the same
+				// outcome the adapter reports from inside the call.
+				out.Status = 130
+				return out, nil
+			}
+		}
+		return out, err
+	}
+	switch status := result.Value.(type) {
+	case int64:
+		out.Status = int(status)
+	case float64:
+		out.Status = int(status)
+	default:
+		return out, fmt.Errorf("decode %s command status: %T is not a status", m.runtime.name(), result.Value)
+	}
+	return out, nil
+}
+
+// WorkerExit reports that a foreign worker process ended on its own while a
+// request was in flight: Signal is the number of the signal that killed it
+// (0 when it exited) and Code its exit status (-1 when signaled). The shell
+// reports such a command as a foreground process death, 128+Signal.
+type WorkerExit struct {
+	Runtime string
+	Signal  int
+	Code    int
+	Err     error
+}
+
+func (e *WorkerExit) Error() string {
+	if e.Signal != 0 {
+		return fmt.Sprintf("%s worker killed by signal %d", e.Runtime, e.Signal)
+	}
+	return fmt.Sprintf("%s worker exited with status %d", e.Runtime, e.Code)
+}
+
+func (e *WorkerExit) Unwrap() error { return e.Err }
 
 func (m *Module) handleRequest(ctx context.Context, handle *Handle, request map[string]any) (CallResult, error) {
 	unlock, err := m.lock(ctx)
@@ -947,6 +1073,12 @@ func (m *Module) request(ctx context.Context, request map[string]any, annotation
 	var response workerResponse
 	if err := m.exchangeContext(ctx, request, &response); err != nil {
 		m.kill()
+		m.procMu.Lock()
+		exit := m.lastExit
+		m.procMu.Unlock()
+		if ctx.Err() == nil && exit.died {
+			return CallResult{}, &WorkerExit{Runtime: m.runtime.name(), Signal: exit.signal, Code: exit.code, Err: err}
+		}
 		return CallResult{}, err
 	}
 	if response.ID != id {
@@ -1195,6 +1327,12 @@ func (m *Module) killWorker() error {
 	_ = m.in.Close()
 	err := m.cmd.Process.Kill()
 	_ = m.cmd.Wait()
+	m.lastExit = workerExit{}
+	if state := m.cmd.ProcessState; state != nil {
+		// A worker that ended before kill reached it — killed by another
+		// signal or exited — is its own death, not ours.
+		m.lastExit = workerDeath(state)
+	}
 	if m.outFile != nil {
 		_ = m.outFile.Close()
 	}
@@ -1454,7 +1592,7 @@ print(json.dumps(out,separators=(',',':')))
 `
 
 const pythonWorker = pythonPathBootstrap + `
-import ast, base64, importlib, io, json, os, sys, tempfile, traceback
+import ast, base64, importlib, importlib.util, io, json, os, signal, sys, tempfile, traceback
 try:
     protocol=os.fdopen(3,'w',buffering=1,newline='\n')
 except OSError:
@@ -1464,6 +1602,39 @@ ns={'__name__':'__bashpp__'}
 module=None
 handles={}
 next_handle=0
+busy=False
+def on_sigint(signum, frame):
+    # A terminal Ctrl-C reaches the worker as a member of the foreground
+    # process group. While a call runs it is the call that is interrupted
+    # (KeyboardInterrupt, reported as status 130 by the command adapter);
+    # an idle worker is a child waiting on its parent and must not die with
+    # its module state, so the signal is dropped between requests.
+    if busy: raise KeyboardInterrupt
+signal.signal(signal.SIGINT, on_sigint)
+file_modules={}
+def import_file(path):
+    # CPython's documented recipe for importing a source file directly:
+    # spec_from_file_location + module_from_spec, registered in sys.modules
+    # before exec_module so dataclasses/pickle inside the file find it, and
+    # unregistered again when execution fails (importlib does the same for a
+    # module that fails to import). The module's __name__ is the file stem
+    # and __file__ the absolute path, exactly as SourceFileLoader reports.
+    path=os.path.abspath(path)
+    key=os.path.normcase(path)
+    if key in file_modules: return file_modules[key]
+    name=os.path.splitext(os.path.basename(path))[0]
+    spec=importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None: raise ImportError('cannot load Python source '+path, path=path)
+    mod=importlib.util.module_from_spec(spec)
+    previous=sys.modules.get(name)
+    sys.modules[name]=mod
+    try: spec.loader.exec_module(mod)
+    except BaseException:
+        if previous is None: sys.modules.pop(name, None)
+        else: sys.modules[name]=previous
+        raise
+    file_modules[key]=mod
+    return mod
 def dec(v):
     if isinstance(v,dict) and set(v)=={'$bytes'}: return base64.b64decode(v['$bytes'])
     if isinstance(v,dict) and set(v)=={'$handle'}:
@@ -1484,8 +1655,45 @@ def enc(v):
     except Exception: shown='<unrepresentable>'
     return {'$handle':{'id':next_handle,'type':type(v).__name__,'repr':shown,'callable':callable(v)}}
 def attr(target,name):
-    if name.startswith('_') and name!='__name__': raise AttributeError('private Python attribute: '+name)
+    if name.startswith('_') and name not in ('__name__','__file__','__package__'): raise AttributeError('private Python attribute: '+name)
     return getattr(target,name)
+def lookup(target,name):
+    # A module attribute or an island-namespace entry, by the same rule.
+    if target is ns: return target[name]
+    return attr(target,name)
+def endswith_newline(text):
+    return text if text.endswith('\n') else text+'\n'
+def command_status(r):
+    # xonsh parse_proxy_return: str -> stdout, int -> status, sequence ->
+    # (stdout, stderr, status), None -> nothing, anything else -> str(r).
+    status=0
+    if isinstance(r,str):
+        sys.stdout.write(r)
+    elif isinstance(r,int):
+        status=int(r)
+    elif isinstance(r,(list,tuple)):
+        if len(r)>0 and r[0] is not None: sys.stdout.write(str(r[0]))
+        if len(r)>1 and r[1] is not None: sys.stderr.write(endswith_newline(str(r[1])))
+        if len(r)>2 and isinstance(r[2],int): status=int(r[2])
+    elif r is not None:
+        sys.stdout.write(str(r))
+    sys.stdout.flush(); sys.stderr.flush()
+    return status
+def run_command(fn,argv):
+    try:
+        return command_status(fn(*argv))
+    except SystemExit as exc:
+        # As CPython's interpreter exit: an int is the status, None is 0,
+        # anything else is printed to stderr and exits 1.
+        if exc.code is None: return 0
+        if isinstance(exc.code,int): return exc.code
+        sys.stderr.write(endswith_newline(str(exc.code))); sys.stderr.flush()
+        return 1
+    except KeyboardInterrupt:
+        return 130
+    except Exception:
+        traceback.print_exc(); sys.stderr.flush()
+        return 1
 def envelope_error(exc, trace=None, seen=None, depth=0):
     if trace is None: trace=''.join(traceback.format_exception(type(exc),exc,exc.__traceback__))
     if seen is None: seen=set()
@@ -1521,6 +1729,7 @@ def capture(operation):
         return value,captured_out,captured_err
 for line in sys.stdin:
     req=json.loads(line); rid=req.get('id',0); captured_out=captured_err=''
+    busy=True
     try:
         op=req['op']
         if op=='load':
@@ -1531,10 +1740,21 @@ for line in sys.stdin:
         elif op=='import':
             def action():
                 global module
-                module=importlib.import_module(req['module'])
+                module=import_file(req['path']) if req.get('path') else importlib.import_module(req['module'])
             value,captured_out,captured_err=capture(action)
         elif op=='getattr':
-            value,captured_out,captured_err=capture(lambda:attr(handles[int(req['handle'])],req['name']))
+            if 'handle' in req: value,captured_out,captured_err=capture(lambda:attr(handles[int(req['handle'])],req['name']))
+            else: value,captured_out,captured_err=capture(lambda:lookup(module if module is not None else ns,req['name']))
+        elif op=='command':
+            # The command adapter: argv words are positional strings, the
+            # result is a status, output is whatever the function wrote.
+            # Lookup failures are reported before the call so the shell can
+            # spell them as command-not-found rather than a Python failure.
+            target=module if module is not None else ns
+            try: fn=lookup(target,req['name'])
+            except (AttributeError,KeyError): raise LookupError('no Python function '+req['name'])
+            if not callable(fn): raise TypeError('Python target is not callable: '+req['name'])
+            value,captured_out,captured_err=capture(lambda:run_command(fn,[str(a) for a in req.get('args',[])]))
         elif op=='call':
             def action():
                 target=handles[int(req['handle'])] if 'handle' in req else module if module is not None else ns
@@ -1550,5 +1770,7 @@ for line in sys.stdin:
         res={'id':rid,'ok':False,'error':failure.error,'stdout':failure.out,'stderr':failure.err}
     except Exception as exc:
         res={'id':rid,'ok':False,'error':envelope_error(exc),'stdout':captured_out,'stderr':captured_err}
+    finally:
+        busy=False
     protocol.write(json.dumps(res,separators=(',',':'))+'\n')
 `

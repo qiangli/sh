@@ -558,3 +558,27 @@ func TestRegisteredCommandSchemaBindsOncePerInvocationAndBlocksExecHandler(t *te
 		t.Fatalf("resolver calls = %d, want 2 (once per invocation, valid or not)", resolveCalls)
 	}
 }
+
+func TestRegisteredCommandSchemaIgnoresExistingHash(t *testing.T) {
+	resolve := func(name string) (interp.ResolvedCommand, bool) {
+		return interp.ResolvedCommand{Schema: &interp.CommandSchema{}}, name == "work"
+	}
+	out, errs, calls, err := runRegisteredSchema(t, `hash -p /old/external/work work; work`, resolve)
+	if err != nil || out != "work\n" || errs != "" || calls != 1 {
+		t.Fatalf("out=%q stderr=%q calls=%d err=%v", out, errs, calls, err)
+	}
+}
+
+func TestBindCommandSchemaFrontDoor(t *testing.T) {
+	schema := &interp.CommandSchema{Positionals: []interp.CommandParameter{{Name: "count", Type: "int", Required: true}}}
+	if _, err := interp.BindCommandSchema("work", schema, []string{"work", "bad"}); err == nil {
+		t.Fatal("invalid input accepted")
+	}
+	args, err := interp.BindCommandSchema("work", schema, []string{"work", "03"})
+	if err != nil || strings.Join(args, "|") != "work|3" {
+		t.Fatalf("args=%v err=%v", args, err)
+	}
+	if _, err := interp.BindCommandSchema("work", schema, nil); err == nil {
+		t.Fatal("empty invocation accepted")
+	}
+}

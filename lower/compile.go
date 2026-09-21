@@ -1571,7 +1571,7 @@ func (e *emitter) expr(x syntax.BashPPExpr) (string, error) {
 		}
 		return e.compositeExpr(n)
 	case *syntax.BashPPSelectorExpr:
-		if e.pythonExpr(n.X) {
+		if e.pythonExpr(n.X) || e.pythonModuleSelector(n) {
 			return e.pythonAttr(n)
 		}
 		return e.checkedSelector(n)

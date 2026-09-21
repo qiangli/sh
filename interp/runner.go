@@ -10883,6 +10883,14 @@ func (r *Runner) call(ctx context.Context, pos syntax.Pos, args []string) {
 		}
 		return
 	}
+	if module, fn, ok := r.bashPPForeignCommand(name); ok {
+		// An island function as a command word sits where a shell function
+		// does in the lookup order; `command NAME` skips it (B8).
+		releaseBgPid(ctx)
+		r.emitAudit("island", pos, args, true)
+		r.bashPPRunForeignCommand(ctx, pos, module, name, fn, args[1:])
+		return
+	}
 	if IsBuiltin(name) && !r.disabledBuiltins[name] {
 		// Strict POSIX: non-special, non-intrinsic builtins must be found in PATH.
 		// `builtin` is Bash's explicit in-process dispatcher, not a utility
@@ -11058,7 +11066,7 @@ func (r *Runner) execAs(ctx context.Context, pos syntax.Pos, argv0 string, clear
 				newlyHashed = true
 			}
 		}
-		if entry, ok := r.cmdHashTable[args[0]]; ok && !hashed && !newlyHashed {
+		if entry, ok := r.cmdHashTable[args[0]]; ok && !registeredSchema && !hashed && !newlyHashed {
 			hashed = true
 			entry.hits++
 			r.cmdHashTable[args[0]] = entry

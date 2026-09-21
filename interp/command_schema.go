@@ -13,6 +13,17 @@ type boundCommandSchema struct {
 	args []string
 }
 
+// BindCommandSchema validates and normalizes an invocation for embedders whose
+// front door bypasses Runner. args includes the command name at index zero.
+// It uses the same binder as shell dispatch; a nil schema preserves argv.
+func BindCommandSchema(command string, schema *CommandSchema, args []string) ([]string, error) {
+	if len(args) == 0 {
+		return nil, fmt.Errorf("%s: missing command name", command)
+	}
+	bound, err := bindCommandSchema(command, schema, args)
+	return bound.args, err
+}
+
 func bindCommandSchema(command string, schema *CommandSchema, args []string) (boundCommandSchema, error) {
 	if schema == nil {
 		return boundCommandSchema{args: append([]string(nil), args...)}, nil

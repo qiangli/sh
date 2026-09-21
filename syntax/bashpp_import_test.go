@@ -270,6 +270,15 @@ func TestBashPPPythonImport(t *testing.T) {
 		{`import python "nanochat.execution"`, "import python \"nanochat.execution\"\n", "", "execution"},
 		{`import python "nanochat.execution" as nano`, "import python \"nanochat.execution\" as nano\n", "", "nano"},
 		{`import python[training] "nanochat.execution" as nano`, "import python[training] \"nanochat.execution\" as nano\n", "training", "nano"},
+		// B9: a .py file by relative, absolute or Windows path; the default
+		// alias is the file stem.
+		{`import python "./tools/greet.py"`, "import python \"./tools/greet.py\"\n", "", "greet"},
+		{`import python "../lib/helpers.py" as h`, "import python \"../lib/helpers.py\" as h\n", "", "h"},
+		{`import python "/opt/tools/greet.py"`, "import python \"/opt/tools/greet.py\"\n", "", "greet"},
+		{`import python "greet.py"`, "import python \"greet.py\"\n", "", "greet"},
+		{`import python "C:/tools/greet.py"`, "import python \"C:/tools/greet.py\"\n", "", "greet"},
+		{`import python "C:\\tools\\greet.py"`, "import python \"C:\\\\tools\\\\greet.py\"\n", "", "greet"},
+		{`import python "/c/tools/GREET.PY" as greet`, "import python \"/c/tools/GREET.PY\" as greet\n", "", "greet"},
 	}
 	for _, test := range tests {
 		for _, oneByte := range []bool{false, true} {
@@ -335,6 +344,30 @@ func TestBashPPPythonImportReservedNearMisses(t *testing.T) {
 	for _, src := range []string{`import python "mod" as _`, `import python "mod" as .`} {
 		assertImportReservedError(t, src, false)
 		assertImportReservedError(t, src, true)
+	}
+	// A file operand must name a .py source, and a stem that is not an
+	// identifier needs an explicit alias.
+	for _, src := range []string{
+		`import python "./tools/greet"`, `import python "./tools/.py"`,
+		`import python "./tools/my-greet.py"`, `import python "./tools/1st.py"`,
+	} {
+		assertImportReservedError(t, src, false)
+		assertImportReservedError(t, src, true)
+	}
+	// Without a .py suffix a plain relative operand keeps its existing
+	// reading: a Go import of "tools/greet" bound as `python`.
+	file, err := NewParser(Variant(LangBashPP)).Parse(strings.NewReader(`import python "tools/greet"`), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if imp, ok := file.Stmts[0].Cmd.(*BashPPImport); !ok || imp.Language != nil || imp.Alias == nil || imp.Alias.Value != "python" {
+		t.Fatalf("Go import reading lost: %#v", file.Stmts[0].Cmd)
+	}
+	if _, ok := BashPPDerivedImportAlias("./tools/my-greet.py"); ok {
+		t.Fatal("derived an alias from a non-identifier stem")
+	}
+	if alias, ok := BashPPDerivedImportAlias(`C:\tools\Greet.PY`); !ok || alias != "Greet" {
+		t.Fatalf("derived alias for a Windows path = %q, %t", alias, ok)
 	}
 	for _, lang := range []LangVariant{LangBash, LangPOSIX} {
 		file, err := NewParser(Variant(lang)).Parse(strings.NewReader(`import python "mod" as py`), "")
