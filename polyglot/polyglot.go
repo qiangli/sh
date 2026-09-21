@@ -46,9 +46,9 @@ type Signature struct {
 type Export struct {
 	Name      string    `json:"name"`
 	Signature Signature `json:"signature"`
-	// Effect is the effect atom a world-changing text verb carries; "" for
-	// a source function or a read-only verb.
-	Effect string `json:"effect,omitempty"`
+	// Effects are the effect atoms a world-changing text verb carries; nil
+	// for a source function or a read-only verb.
+	Effects []string `json:"effects,omitempty"`
 }
 
 type Plan struct {

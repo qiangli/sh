@@ -25,6 +25,44 @@ import (
 // builtins may serve as runners.
 var FenceRunnerRegistered func(name string) bool
 
+// ForeignEffectGate, when set, is asked before a foreign export that
+// declares effects runs — a text verb, a runner method — with the call's
+// context and the declared atoms. A non-nil error denies the call before it
+// runs: the message is the diagnostic and the status is 126, the boundary
+// denial `@effects` yields under a `@guard` it exceeds. nil — a standalone
+// engine — enforces no cap.
+var ForeignEffectGate func(ctx context.Context, qualified string, effects []string) error
+
+// ForeignEffectDenied is the status of a foreign call the gate refused.
+const ForeignEffectDenied = 126
+
+// bashPPForeignEffectsAllowed asks the gate; false means the call was
+// denied and the diagnostic and status are already recorded.
+func (r *Runner) bashPPForeignEffectsAllowed(ctx context.Context, fn *bashPPForeignFunc) bool {
+	if len(fn.export.Effects) == 0 || ForeignEffectGate == nil {
+		return true
+	}
+	if err := ForeignEffectGate(ctx, fn.qualified, fn.export.Effects); err != nil {
+		r.errf("%v\n", err)
+		r.exit.code = ForeignEffectDenied
+		return false
+	}
+	return true
+}
+
+// foreignZeroResults is what a denied call binds: the zero value of each
+// declared result, so a `:=` site stays well-formed and reads the status.
+func foreignZeroResults(fn *bashPPForeignFunc) []string {
+	if fn.export.Signature.Dynamic {
+		return []string{"", ""}
+	}
+	out := make([]string, len(fn.export.Signature.Results))
+	for i, typ := range fn.export.Signature.Results {
+		out[i] = foreignZero(typ)
+	}
+	return out
+}
+
 // bashPPRunnerFence builds the runtime of a runner fence, binding the
 // runner to this Runner's dispatch. Fences are prepared before the unit's
 // first statement runs, so the runner's own top-level declaration, when the

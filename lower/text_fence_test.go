@@ -18,11 +18,11 @@ func TestLowerTextRowAndRunnerFence(t *testing.T) {
 		Canonical: "fakecfg2",
 		NewRuntime: func(cfg polyglot.RuntimeConfig) polyglot.LanguageRuntime {
 			return polyglot.Text{Type: "fakecfg2", FileName: "fake.cfg", Tool: "fake-tool",
-				Verbs: []polyglot.Verb{{Name: "show", Args: []string{"show", "{file}"}}, {Name: "apply", Args: []string{"apply", "{file}"}, Effect: "world"}}}
+				Verbs: []polyglot.Verb{{Name: "show", Args: []string{"show", "{file}"}}, {Name: "apply", Args: []string{"apply", "{file}"}, Effects: []string{"world"}}}}
 		},
 		LoweredRuntime: func(prefix, _ string) string {
 			return polyglot.Text{Type: "fakecfg2", FileName: "fake.cfg", Tool: "fake-tool",
-				Verbs: []polyglot.Verb{{Name: "show", Args: []string{"show", "{file}"}}, {Name: "apply", Args: []string{"apply", "{file}"}, Effect: "world"}}}.LoweredLiteral(prefix)
+				Verbs: []polyglot.Verb{{Name: "show", Args: []string{"show", "{file}"}}, {Name: "apply", Args: []string{"apply", "{file}"}, Effects: []string{"world"}}}}.LoweredLiteral(prefix)
 		},
 	})
 	file := parse(t, "~~~fakecfg2 as cfg\nk = v\n~~~\nout := cfg.show()\necho \"$out\"\n", "text.bpp")
@@ -34,9 +34,9 @@ func TestLowerTextRowAndRunnerFence(t *testing.T) {
 	// The generated source is gofmt'd, so the literals carry gofmt's spacing.
 	for _, want := range []string{
 		`polyglot.Text{Type: "fakecfg2", FileName: "fake.cfg", Tool: "fake-tool", Verbs: []`,
-		`{Name: "apply", Args: []string{"apply", "{file}"}, Effect: "world", Result: ""}`,
+		`{Name: "apply", Args: []string{"apply", "{file}"}, Effects: []string{"world"}, Result: ""}`,
 		`Source: "k = v\n"`,
-		`Effect: "world"}`,
+		`Effects: []string{"world"}}`,
 		`Variadic: true`,
 		`Runner: ""`,
 	} {

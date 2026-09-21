@@ -19,7 +19,7 @@ func TestTextRowMaterializesAndRunsTool(t *testing.T) {
 	t.Cleanup(func() { ToolResolver = saved })
 	text := Text{Type: "fakecfg", FileName: "fake.cfg", Tool: "fake-tool", Verbs: []Verb{
 		{Name: "show", Args: []string{"show", "{file}"}},
-		{Name: "apply", Args: []string{"apply", "{file}"}, Effect: "world"},
+		{Name: "apply", Args: []string{"apply", "{file}"}, Effects: []string{"write", "net"}},
 	}}
 	ctx := context.Background()
 	plans, err := Prepare(ctx, []Block{{Language: "fakecfg", Alias: "c", Source: "k=v\n"}}, map[string]Analyzer{"fakecfg": text})
@@ -27,7 +27,7 @@ func TestTextRowMaterializesAndRunsTool(t *testing.T) {
 		t.Fatal(err)
 	}
 	plan := plans[0]
-	if len(plan.Exports) != 2 || plan.Exports[1].Effect != "world" || !plan.Exports[0].Signature.Variadic {
+	if len(plan.Exports) != 2 || len(plan.Exports[1].Effects) != 2 || plan.Exports[1].Effects[1] != "net" || !plan.Exports[0].Signature.Variadic {
 		t.Fatalf("exports = %+v", plan.Exports)
 	}
 	module := Start(plan, text)
@@ -60,7 +60,7 @@ func TestRunnerFenceDeclaresMethods(t *testing.T) {
 		seen = append(seen, argv)
 		switch argv[0] {
 		case MethodsVerb:
-			return "{\"name\":\"count\"}\n\n{\"name\":\"apply\",\"effect\":\"world\",\"signature\":{\"params\":[\"string\"],\"results\":[\"string\"]}}\n", nil
+			return "{\"name\":\"count\"}\n\n{\"name\":\"apply\",\"effect\":\"write, net\",\"signature\":{\"params\":[\"string\"],\"results\":[\"string\"]}}\n", nil
 		case "count":
 			data, err := os.ReadFile(argv[1])
 			if err != nil {
@@ -76,7 +76,7 @@ func TestRunnerFenceDeclaresMethods(t *testing.T) {
 		t.Fatal(err)
 	}
 	plan := plans[0]
-	if plan.Runner != "tally" || len(plan.Exports) != 2 || plan.Exports[1].Effect != "world" || plan.Exports[1].Signature.Variadic {
+	if plan.Runner != "tally" || len(plan.Exports) != 2 || strings.Join(plan.Exports[1].Effects, "+") != "write+net" || plan.Exports[1].Signature.Variadic {
 		t.Fatalf("plan = %+v", plan)
 	}
 	module := Start(plan, fence)

@@ -349,6 +349,9 @@ func (r *Runner) bashPPForeignExchange(ctx context.Context, fn *bashPPForeignFun
 }
 
 func (r *Runner) bashPPInvokeForeign(ctx context.Context, fn *bashPPForeignFunc, args []string) []string {
+	if !r.bashPPForeignEffectsAllowed(ctx, fn) {
+		return foreignZeroResults(fn)
+	}
 	result, err, ok := r.bashPPForeignExchange(ctx, fn, args)
 	if !ok {
 		return nil
@@ -402,6 +405,9 @@ func (r *Runner) bashPPInvokeForeign(ctx context.Context, fn *bashPPForeignFunc,
 // the diagnostic, the failure status, zero results and a nil error, so a
 // script can never mistake a broken bridge for a domain error.
 func (r *Runner) bashPPInvokeForeignErr(ctx context.Context, fn *bashPPForeignFunc, args []string) []string {
+	if !r.bashPPForeignEffectsAllowed(ctx, fn) {
+		return append(foreignZeroResults(fn), "")
+	}
 	result, err, ok := r.bashPPForeignExchange(ctx, fn, args)
 	if !ok {
 		return nil
@@ -600,6 +606,11 @@ func (r *Runner) bashPPForeignCommand(word string) (*polyglot.Module, string, bo
 // foreground death, 128+signal; cancellation stops the shell as it would any
 // command. See [polyglot.Module.Command].
 func (r *Runner) bashPPRunForeignCommand(ctx context.Context, pos syntax.Pos, module *polyglot.Module, word, name string, argv []string) {
+	for _, export := range module.Plan().Exports {
+		if export.Name == name && !r.bashPPForeignEffectsAllowed(ctx, &bashPPForeignFunc{module: module, export: export, qualified: word}) {
+			return
+		}
+	}
 	// Foreign output shares the same sink locks as shell diagnostics, including
 	// iterator open/close output delivered by the background process substrate.
 	stdout, stderr := r.bashPPWriter(r.stdout), r.bashPPWriter(r.stderr)

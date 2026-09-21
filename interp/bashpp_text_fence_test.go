@@ -5,6 +5,7 @@ package interp
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -133,7 +134,7 @@ func TestBashPPTextRow(t *testing.T) {
 		Canonical: "fakecfg", Aliases: []string{"fc"},
 		NewRuntime: func(cfg polyglot.RuntimeConfig) polyglot.LanguageRuntime {
 			return polyglot.Text{Type: "fakecfg", FileName: "fake.cfg", Tool: "fake-tool", Dir: cfg.Dir, Environ: cfg.Environ,
-				Verbs: []polyglot.Verb{{Name: "show", Args: []string{"show", "{file}"}}, {Name: "apply", Args: []string{"apply", "{file}"}, Effect: "world"}}}
+				Verbs: []polyglot.Verb{{Name: "show", Args: []string{"show", "{file}"}}, {Name: "apply", Args: []string{"apply", "{file}"}, Effects: []string{"world"}}}}
 		},
 		LoweredRuntime: func(prefix, _ string) string { return prefix + "polyglot.Text{}" },
 	})
@@ -162,4 +163,52 @@ echo "$out"
 		t.Fatalf("unaliased text row accepted: %q", stderr)
 	}
 	_ = context.Background
+}
+
+// The effect gate: a verb that declares effects is asked of the embedder's
+// gate before it runs; a denial is the boundary status 126 with the gate's
+// diagnostic, and a verb without effects never asks.
+func TestBashPPForeignEffectGate(t *testing.T) {
+	dir := t.TempDir()
+	saved := ForeignEffectGate
+	var asked []string
+	ForeignEffectGate = func(_ context.Context, qualified string, effects []string) error {
+		asked = append(asked, qualified+":"+strings.Join(effects, ","))
+		for _, e := range effects {
+			if e == "world" {
+				return fmt.Errorf("%s: declared effects %s exceed the guard", qualified, strings.Join(effects, ","))
+			}
+		}
+		return nil
+	}
+	t.Cleanup(func() { ForeignEffectGate = saved })
+	src := `
+r() {
+  case "$1" in
+    methods) printf '%s\n' '{"name":"plan","effects":["read"]}' '{"name":"apply","effects":["read","world"]}' '{"name":"peek"}' ;;
+    *) echo "ran $1" ;;
+  esac
+}
+~~~t as x !r
+~~~
+p := x.plan()
+echo "$p"
+k := x.peek()
+echo "$k"
+a := x.apply()
+echo "status=$? a=[$a]"
+`
+	stdout, stderr, err := runBashPPInDir(t, dir, src)
+	if err != nil {
+		t.Fatalf("run: %v\nstderr: %s", err, stderr)
+	}
+	if stdout != "ran plan\nran peek\nstatus=126 a=[]\n" {
+		t.Fatalf("stdout = %q stderr = %q", stdout, stderr)
+	}
+	if !strings.Contains(stderr, "x.apply: declared effects read,world exceed the guard") {
+		t.Fatalf("stderr = %q", stderr)
+	}
+	if strings.Join(asked, " ") != "x.plan:read x.apply:read,world" {
+		t.Fatalf("gate asked %v", asked)
+	}
 }

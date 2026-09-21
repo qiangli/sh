@@ -548,7 +548,7 @@ func (e *emitter) foreignExports(exports []polyglot.Export) string {
 	var out strings.Builder
 	fmt.Fprintf(&out, "[]%spolyglot.Export{", e.prefix)
 	for _, export := range exports {
-		fmt.Fprintf(&out, "{Name:%s,Signature:%spolyglot.Signature{Params:%#v,Results:%#v,Dynamic:%t,Variadic:%t,Iterator:%q,Filter:%t},Effect:%q},", strconv.Quote(export.Name), e.prefix, export.Signature.Params, export.Signature.Results, export.Signature.Dynamic, export.Signature.Variadic, export.Signature.Iterator, export.Signature.Filter, export.Effect)
+		fmt.Fprintf(&out, "{Name:%s,Signature:%spolyglot.Signature{Params:%#v,Results:%#v,Dynamic:%t,Variadic:%t,Iterator:%q,Filter:%t},Effects:%#v},", strconv.Quote(export.Name), e.prefix, export.Signature.Params, export.Signature.Results, export.Signature.Dynamic, export.Signature.Variadic, export.Signature.Iterator, export.Signature.Filter, export.Effects)
 	}
 	out.WriteByte('}')
 	return out.String()

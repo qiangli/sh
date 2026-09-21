@@ -31,9 +31,9 @@ type Verb struct {
 	// materialized artifact, `{dir}` its directory; the call's own string
 	// arguments follow.
 	Args []string
-	// Effect is the effect atom a world-changing verb carries, read by the
-	// contract layer; "" for a read-only verb.
-	Effect string
+	// Effects are the effect atoms a world-changing verb carries, read by
+	// the contract layer; nil for a read-only verb.
+	Effects []string
 	// Result is the export's result type; "" means one string (the
 	// processor's stdout).
 	Result string
@@ -57,7 +57,8 @@ type Text struct {
 // interpreter dispatches to a Bash++ function or a registered command, a
 // lowered program calls the lowered function — with argv
 // `<verb> <file> [args…]`; the runner's stdout is the result. Methods come
-// from `runner methods <file>`: one export JSON object per line.
+// from `runner methods <file>`: one export JSON object per line, `name`
+// with an optional `signature` and `effects` (or a comma-joined `effect`).
 type RunnerFence struct {
 	Type     string
 	FileName string
@@ -101,7 +102,7 @@ func (t Text) Analyze(ctx context.Context, source string) ([]Export, error) {
 		if verb.Result != "" {
 			sig.Results = []string{verb.Result}
 		}
-		exports = append(exports, Export{Name: verb.Name, Signature: sig, Effect: verb.Effect})
+		exports = append(exports, Export{Name: verb.Name, Signature: sig, Effects: verb.Effects})
 	}
 	return exports, nil
 }
@@ -121,7 +122,7 @@ func (t Text) LoweredLiteral(prefix string) string {
 	var out strings.Builder
 	fmt.Fprintf(&out, "%spolyglot.Text{Type:%q,FileName:%q,Tool:%q,Verbs:[]%spolyglot.Verb{", prefix, t.Type, t.FileName, t.Tool, prefix)
 	for _, verb := range t.Verbs {
-		fmt.Fprintf(&out, "{Name:%q,Args:%#v,Effect:%q,Result:%q},", verb.Name, verb.Args, verb.Effect, verb.Result)
+		fmt.Fprintf(&out, "{Name:%q,Args:%#v,Effects:%#v,Result:%q},", verb.Name, verb.Args, verb.Effects, verb.Result)
 	}
 	out.WriteString("}}")
 	return out.String()
@@ -176,6 +177,7 @@ func ParseMethods(runner, answer string) ([]Export, error) {
 			Name      string     `json:"name"`
 			Signature *Signature `json:"signature"`
 			Effect    string     `json:"effect"`
+			Effects   []string   `json:"effects"`
 		}
 		if err := json.Unmarshal([]byte(text), &raw); err != nil {
 			return nil, fmt.Errorf("runner %s: %s line %d is not a method object: %v", runner, MethodsVerb, line, err)
@@ -194,7 +196,14 @@ func ParseMethods(runner, answer string) ([]Export, error) {
 		if raw.Signature != nil {
 			sig = *raw.Signature
 		}
-		exports = append(exports, Export{Name: raw.Name, Signature: sig, Effect: raw.Effect})
+		effects := raw.Effects
+		if raw.Effect != "" {
+			effects = append(effects, strings.Split(raw.Effect, ",")...)
+		}
+		for i, effect := range effects {
+			effects[i] = strings.TrimSpace(effect)
+		}
+		exports = append(exports, Export{Name: raw.Name, Signature: sig, Effects: effects})
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("runner %s: %s: %v", runner, MethodsVerb, err)
@@ -288,7 +297,7 @@ func (m *Module) callText(ctx context.Context, text Text, name string, args []an
 	if err != nil {
 		var exit *exec.ExitError
 		if errors.As(err, &exit) {
-			return result, fmt.Errorf("text fence %s.%s: %s exited %d", text.Type, name, filepath.Base(argv[0]), exit.ExitCode())
+			return result, fmt.Errorf("text fence %s.%s: %s exited %d", text.Type, name, text.Tool, exit.ExitCode())
 		}
 		return result, fmt.Errorf("text fence %s.%s: %w", text.Type, name, err)
 	}
