@@ -85,6 +85,7 @@ func (r *Runner) bashPPForeignCallback(ctx context.Context, name string, fn *bas
 	defer func() {
 		r.bashPPResultCells, r.bashPPCallCells = savedResults, savedCalls
 		r.bashPPCallChannels, r.bashPPCallInterfaces = savedChannels, savedInterfaces
+		r.exit, r.bashPPPanic = savedExit, savedPanic
 		r.ectx = savedCtx
 	}()
 	r.ectx = ctx

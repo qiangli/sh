@@ -8,6 +8,10 @@ are bounded at eight. Go embedders must pass the supplied callback context
 to nested calls and must not use it concurrently from other goroutines.
 Callbacks must observe cancellation; arbitrary host code cannot be forcibly
 stopped. Bash# callbacks use the runner's cancellable execution context.
+Lowered callbacks capture their calling Program and use a private copy with
+the callback context for nested calls. Foreign adapters receive that Program
+explicitly; neither context authority nor scratch exit status is process-global.
+Independent callers still serialize through the one worker protocol.
 
 ```bash
 ~~~rust as rs
@@ -49,3 +53,5 @@ bounded re-entry; interpreter/lowered bindings; race/cancellation and parity
 gates. Cancellation terminates only process state while an exchange is active,
 joins that exchange, then clears callback-owned pending output. Failed argument
 encoding also expires callbacks allocated before the failing argument.
+The compiled concurrent-context regression runs both Bash# tasks and two
+independent native entry invocations under the race detector.

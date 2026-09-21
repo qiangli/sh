@@ -1,6 +1,7 @@
 package lower
 
 import (
+	"fmt"
 	"go/types"
 	"strconv"
 	"strings"
@@ -10,7 +11,13 @@ import (
 
 // callArgument reads the authoritative typed edge when the parser committed
 // a scalar argument. Legacy words retain their ordinary source conversion.
-func (e *emitter) callArgument(c *syntax.BashPPCall, index int) (string, error) {
+func (e *emitter) callArgument(c *syntax.BashPPCall, index int) (result string, problem error) {
+	defer func() {
+		if problem == nil && e.execution && e.foreignParameterKind(c, index) == "callback" {
+			foreign := e.foreignFunctions[strings.Join(names(c.Fun), ".")]
+			result = fmt.Sprintf("%sresolveCallbacks%d(%s,%s)", e.prefix, foreign.plan, e.program(), result)
+		}
+	}()
 	if c.ArgExprs != nil {
 		if index >= len(c.ArgExprs) || c.ArgExprs[index] == nil {
 			return "", e.fail(c, CodeExpr, "missing typed call argument")

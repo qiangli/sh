@@ -28,6 +28,7 @@ func pong(n int) int {
   v := rs.ping(pong, m)
   return v
 }
+
 a := rs.call_with_one(double)
 x := 1
 addTwo := func() { x = x + 2 }
@@ -44,5 +45,46 @@ echo "reentry=$r"
 	want := "2,5\n7,0,RUST-ECALL: Rust function read argument 1: stale Rust handle 1: released or never created\nreentry=3\n"
 	if got != want {
 		t.Fatalf("output = %q, want %q", got, want)
+	}
+}
+
+// Two independent tasks contend for one worker while their callbacks re-enter
+// it. The callback's authority must not leak to the other task. Run the native
+// artifact under the race detector, not merely the compiler/test harness.
+func TestRustCallbacksConcurrentContextParity(t *testing.T) {
+	requireRustToolchain(t)
+	got := testForeignParityArtifactAt(t, `~~~rust as rs
+use bashpp::Callback;
+use serde_json::json;
+pub fn call_with_one(func: Callback) -> Result<i64, String> { func.call_as(vec![json!(1)]) }
+pub fn twice(x: i64) -> i64 { std::thread::sleep(std::time::Duration::from_millis(20)); x * 2 }
+~~~
+func double(x int) int { return rs.twice(x) }
+func invoke() int { return rs.call_with_one(double) }
+func worker(ch chan int) {
+  value := rs.call_with_one(double)
+  ch <- $value
+}
+func main() {
+ch := make(chan int)
+go worker(ch)
+go worker(ch)
+a := <-ch
+b := <-ch
+echo "$a,$b"
+}
+main()
+`, "input.bpp", `
+// Separate native entry invocations also overlap, independently of the Bash#
+// task scheduler. Each callback must carry only its own Program context.
+func init() {
+  results := make(chan int, 2)
+  go func() { results <- invoke() }()
+  go func() { results <- invoke() }()
+  if <-results != 2 || <-results != 2 { panic("concurrent callback result") }
+}
+`, "-race")
+	if got != "2,2\n" {
+		t.Fatalf("output = %q", got)
 	}
 }
