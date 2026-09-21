@@ -29,3 +29,4 @@
 {"op":"add","slug":"gate-string-carrier-numeric-conversions-by-source-type","tool":"codex-gpt-5.5-r","host":"dragon","episode":"weave-issue-200","at":"2026-09-13T22:04:26.269371Z"}
 {"op":"add","slug":"preserve-wide-integer-indices-through-bounds-checks","id":"01a0bc39-da65-7c2d-81c7-d4f56cc3bfcc","tool":"codex-gpt5.6-sol-p","host":"dragon","episode":"weave-issue-276","at":"2026-09-20T00:31:43.206392Z"}
 {"op":"add","slug":"go-error-adapts-only-the-public-callable-surface","id":"01a0c204-3429-7182-8b5a-037c9533e0e1","tool":"codex-gpt-5.5-c","host":"dragon","episode":"weave-issue-3","at":"2026-09-21T03:30:50.537858Z"}
+{"op":"note-add","slug":"b14-bounded-process-line-substrate-landed-bashpplineprocess","id":"01a0c27a-29a2-7dcf-880f-372bf2715255","tool":"claude-opus4.8-m","host":"dragon","episode":"weave-issue-13","at":"2026-09-21T05:39:41.091566Z"}
