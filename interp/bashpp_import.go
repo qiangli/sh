@@ -559,7 +559,7 @@ func bashPPGoIdentity() (bashPPGoIdentityInfo, error) {
 	if err != nil {
 		return bashPPGoIdentityInfo{}, err
 	}
-	if fi.IsDir() || fi.Mode()&0111 == 0 {
+	if fi.IsDir() || (runtime.GOOS != "windows" && fi.Mode()&0111 == 0) {
 		return bashPPGoIdentityInfo{}, fmt.Errorf("%s is not executable", real)
 	}
 	real, err = filepath.Abs(real)

@@ -1601,12 +1601,16 @@ print(json.dumps(out,separators=(',',':')))
 `
 
 const pythonWorker = pythonPathBootstrap + `
-import ast, base64, codecs, importlib, importlib.util, io, json, os, signal, sys, tempfile, traceback
+import ast, base64, codecs, importlib, importlib.util, importlib.machinery, io, json, os, signal, sys, tempfile, traceback
 try:
     protocol=os.fdopen(3,'w',buffering=1,newline='\n')
 except OSError:
     # No fd 3 (Windows): the protocol rides stdout; island output is captured per call.
     protocol=io.TextIOWrapper(io.FileIO(1,'w',closefd=False),line_buffering=True,newline='\n')
+# Shell text output uses LF on every host. Reconfigure the text wrappers,
+# never normalize captured bytes: explicit os.write/buffer writes stay exact.
+sys.stdout.reconfigure(newline='\n')
+sys.stderr.reconfigure(newline='\n')
 ns={'__name__':'__bashpp__'}
 module=None
 handles={}
@@ -1634,7 +1638,11 @@ def import_file(path):
     key=os.path.normcase(path)
     if key in file_modules: return file_modules[key]
     name=os.path.splitext(os.path.basename(path))[0]
-    spec=importlib.util.spec_from_file_location(name, path)
+    # The path resolver accepts case-insensitive .py on Windows, while
+    # importlib's suffix inference is case-sensitive. Select the source loader
+    # explicitly so the already-selected file keeps its original spelling.
+    loader=importlib.machinery.SourceFileLoader(name,path) if path.lower().endswith('.py') else None
+    spec=importlib.util.spec_from_file_location(name, path, loader=loader)
     if spec is None or spec.loader is None: raise ImportError('cannot load Python source '+path, path=path)
     mod=importlib.util.module_from_spec(spec)
     previous=sys.modules.get(name)

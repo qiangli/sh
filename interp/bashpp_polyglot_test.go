@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"mvdan.cc/sh/v3/expand"
+	"mvdan.cc/sh/v3/internal"
 	"mvdan.cc/sh/v3/interp"
 	"mvdan.cc/sh/v3/syntax"
 )
@@ -21,12 +22,8 @@ func TestBashPPPythonUsesSourceEnvironmentPlan(t *testing.T) {
 		t.Skip("python3 unavailable")
 	}
 	root := t.TempDir()
-	runtime := filepath.Join(root, "planned-python")
-	body := "#!/bin/sh\nexport BASHPP_SELECTED_RUNTIME=yes\nexec " + strconv.Quote(python) + " \"$@\"\n"
-	if err := os.WriteFile(runtime, []byte(body), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "bashpp.yaml"), []byte("runtime: planned-python\n"), 0o644); err != nil {
+	launcher := internal.PythonTestLauncher(t, python, filepath.Join(root, "planned-python"), "yes")
+	if err := os.WriteFile(filepath.Join(root, "bashpp.yaml"), []byte("runtime: "+filepath.Base(launcher)+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	name := filepath.Join(root, "program.bpp")

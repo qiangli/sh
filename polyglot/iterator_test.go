@@ -146,3 +146,22 @@ func TestIteratorObjectCodec(t *testing.T) {
 		t.Fatal("handle ownership changed")
 	}
 }
+
+// The worker's text stream is portable LF, but explicit binary output remains
+// bytes. In particular, normalizing the final capture would corrupt raw CRLF.
+func TestPythonWorkerTextAndRawNewlines(t *testing.T) {
+	plan := pythonPlanWithRuntime(t, `def output() -> int:
+    import os,sys
+    print('text',flush=True)
+    os.write(1,b'raw\r\n')
+    print('warning',file=sys.stderr,flush=True)
+    os.write(2,b'raw-warning\r\n')
+    return 0
+`, Python{})
+	module := Start(plan, Python{})
+	defer module.Close()
+	got, err := module.Call(t.Context(), "output")
+	if err != nil || got.Stdout != "text\nraw\r\n" || got.Stderr != "warning\nraw-warning\r\n" {
+		t.Fatalf("%+v %v", got, err)
+	}
+}
