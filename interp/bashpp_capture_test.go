@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand/v2"
+	"os"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -481,7 +482,10 @@ v, derr := json.Decode(out)
 func TestBashPPStructuredCaptureExample(t *testing.T) {
 	t.Parallel()
 	var out strings.Builder // bashpp-racegate:safe-synchronized
-	r := decodeRunner(t, &out)
+	// This example executes a real Go import. Preserve the native toolchain
+	// environment (including Windows cache/profile paths), unlike the other
+	// capture fixtures which deliberately use a sparse Unix search path.
+	r := captureRunner(t, &out, Env(expand.ListEnviron(os.Environ()...)))
 	err := captureRun(t, r, `import "encoding/json"
 report() { printf '{"name":"Ada","tags":["go","shell"]}'; }
 result, rerr := run(report)
@@ -491,7 +495,7 @@ if [ -n "$derr" ]; then printf 'decode:%s' "$derr"; fi
 printf '%s:%s' value.name value.tags[1]
 `)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("%v\n%s", err, out.String())
 	}
 	if got := stringVar(t, r, "rerr"); got != "" {
 		t.Fatalf("rerr = %q, want empty", got)

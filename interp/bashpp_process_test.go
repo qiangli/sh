@@ -354,7 +354,8 @@ func TestBashPPProcessContextCancelFake(t *testing.T) {
 // After a run completes, the cancel-watcher goroutine and the producer/stderr
 // goroutines must all exit — a process that finished normally must not leak.
 func TestBashPPProcessNoGoroutineLeak(t *testing.T) {
-	t.Parallel()
+	// Process-global goroutine accounting must run before parallel tests;
+	// otherwise unrelated live workers are counted as substrate leaks.
 	settle := func() int {
 		var n int
 		for i := 0; i < 50; i++ {

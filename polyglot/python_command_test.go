@@ -225,3 +225,18 @@ func TestPythonCommandCancellation(t *testing.T) {
 		t.Fatalf("restart after cancellation: %#v", got)
 	}
 }
+
+func TestPythonCommandNativeWorkerExit(t *testing.T) {
+	plan := pythonPlanWithRuntime(t, "def die() -> int:\n    import os\n    os._exit(3)\ndef alive() -> int:\n    return 7\n", Python{})
+	m := Start(plan, Python{})
+	defer m.Close()
+	_, err := m.Call(t.Context(), "die")
+	var exit *WorkerExit
+	if !errors.As(err, &exit) || exit.Code != 3 || exit.Signal != 0 {
+		t.Fatalf("worker exit = %#v, error = %v", exit, err)
+	}
+	result, err := m.Call(t.Context(), "alive")
+	if err != nil || result.Value != int64(7) {
+		t.Fatalf("restart = %+v, error = %v", result, err)
+	}
+}

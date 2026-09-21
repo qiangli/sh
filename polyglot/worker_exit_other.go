@@ -4,6 +4,13 @@ package polyglot
 
 import "os"
 
-// workerDeath classifies how a worker ended. Off Unix kill's TerminateProcess
-// is not distinguishable from the worker's own exit, so no death is reported.
-func workerDeath(*os.ProcessState) workerExit { return workerExit{} }
+// workerDeath preserves native exit codes. Windows Process.Kill uses
+// TerminateProcess with status 1; that status is indistinguishable from our
+// cleanup and is excluded, like SIGKILL in the Unix implementation.
+func workerDeath(state *os.ProcessState) workerExit {
+	code := state.ExitCode()
+	if code < 0 || code == 1 {
+		return workerExit{}
+	}
+	return workerExit{died: true, code: code}
+}
