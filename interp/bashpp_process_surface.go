@@ -197,7 +197,16 @@ type bashPPSubshellSource struct {
 
 func (s *bashPPSubshellSource) Stdout() io.Reader { return s.stdout }
 func (s *bashPPSubshellSource) Stderr() io.Reader { return nil }
-func (s *bashPPSubshellSource) Kill()             { s.cancel() }
+
+// Kill cancels the subshell — the exec handler signals the child — and
+// closes the read side of the stdout pipe. The close is what keeps a kill
+// prompt: a grandchild the signal did not reach (bash's own `sh -c 'sleep'`
+// shape) can otherwise hold the write end open indefinitely, and the exec
+// handler's copy would wait on it. Closing the reader ends that copy at once.
+func (s *bashPPSubshellSource) Kill() {
+	s.cancel()
+	_ = s.stdout.CloseWithError(context.Canceled)
+}
 func (s *bashPPSubshellSource) Wait() error {
 	<-s.done
 	if s.fatal != nil {

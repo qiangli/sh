@@ -239,7 +239,7 @@ main()
 func TestBashPPStartEarlyCloseReaps(t *testing.T) {
 	requireSh(t)
 	src := `func main() {
-	p, err := start("sh", "-c", 'i=0; while [ $i -lt 100000 ]; do echo "line $i"; i=$((i+1)); done; sleep 30')
+	p, err := start("sh", "-c", 'i=0; while [ $i -lt 100000 ]; do echo "line $i"; i=$((i+1)); done; exec sleep 30')
 	for line := range p.Lines() { echo "$line"; break }
 	p.Close()
 	echo "closed=$?"
@@ -258,14 +258,16 @@ main()
 // TestBashPPStartLinesCancel is the os/exec TestContext / TestContextCancel
 // port: cancelling the runner's context while ranging a live process kills
 // it, the range ends without a data line, and Wait reports the cancellation
-// as err rather than pretending the output was complete.
+// as err rather than pretending the output was complete. The child execs
+// its sleep because the engine's exec handler signals its direct child only
+// (no WaitDelay), so a grandchild holding the pipe is outside this story.
 func TestBashPPStartLinesCancel(t *testing.T) {
 	requireSh(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	var outBuf, errBuf strings.Builder
 	r := captureRunner(t, &errBuf, StdIO(nil, &outBuf, &errBuf))
 	src := `func main() {
-	p, err := start("sh", "-c", 'echo first; sleep 30; echo never')
+	p, err := start("sh", "-c", 'echo first; exec sleep 30')
 	for line := range p.Lines() { echo "got $line" }
 	status, err := p.Wait()
 	echo "status=$status err=[$err]"
@@ -331,7 +333,7 @@ func TestBashPPStartNoLeak(t *testing.T) {
 		p, err := start("sh", "-c", "echo a; echo b")
 		for line := range p.Lines() { : }
 		status, err := p.Wait()
-		q, err := start("sh", "-c", "echo x; sleep 30")
+		q, err := start("sh", "-c", "echo x; exec sleep 30")
 		for line := range q.Lines() { break }
 		q.Close()
 		i++
