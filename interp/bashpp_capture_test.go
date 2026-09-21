@@ -395,6 +395,44 @@ func TestBashPPCaptureInertOutsideBashPP(t *testing.T) {
 }
 
 // --- explicit decode ---
+//
+// Source-derived JSON boundary matrix: independently adapted from CPython's
+// Lib/test/test_json/test_decode.py, TestDecode.test_empty_objects and
+// TestDecode.test_extra_data at v3.14.0
+// (ebf955df7a89ed0c7968f79faec1de49f61ed7cb). CPython is distributed under
+// the Python Software Foundation License Version 2.  The fixtures below
+// express the same success/error boundaries in Bash#; they do not copy
+// CPython test code. The duplicate-key policy is explicit here because neither
+// JSON nor that source fixture rejects duplicate member names: as with Go's
+// encoding/json, the last member wins.
+
+// TestBashPPDecodeCPythonFixtures faithfully ports the exact JSON inputs and
+// success/error assertions from CPython TestDecode.test_empty_objects and
+// TestDecode.test_extra_data. The assertions are expressed against Bash#'s
+// decoded value model rather than copying CPython's unittest implementation.
+func TestBashPPDecodeCPythonFixtures(t *testing.T) {
+	t.Parallel()
+	emptyCases := []struct {
+		input string
+		check func(any) bool
+	}{
+		{`{}`, func(v any) bool { m, ok := v.(map[string]any); return ok && len(m) == 0 }},
+		{`[]`, func(v any) bool { s, ok := v.([]any); return ok && len(s) == 0 }},
+		{`""`, func(v any) bool { s, ok := v.(string); return ok && s == "" }},
+	}
+	for _, tc := range emptyCases {
+		value, err := bashPPDecodeJSON(tc.input)
+		if err != nil {
+			t.Fatalf("decode %q: %v", tc.input, err)
+		}
+		if !tc.check(value) {
+			t.Fatalf("decode %q = %#v, want the corresponding empty value", tc.input, value)
+		}
+	}
+	if value, err := bashPPDecodeJSON(`[1, 2, 3]5`); err == nil || !strings.Contains(err.Error(), "trailing data") {
+		t.Fatalf("decode extra data = (%#v, %v), want a trailing-data error", value, err)
+	}
+}
 
 func decodeRunner(t *testing.T, out *strings.Builder) *Runner { // bashpp-racegate:safe-synchronized
 	t.Helper()
@@ -432,6 +470,37 @@ v, derr := json.Decode(out)
 	tags, ok := obj["tags"].([]any)
 	if !ok || len(tags) != 2 || tags[0] != json.Number("1") {
 		t.Fatalf("tags = %#v, want json.Number elements preserving the source spelling", obj["tags"])
+	}
+}
+
+// TestBashPPStructuredCaptureExample is the runnable B15 contract from
+// docs/bashpp-structured-capture.md. `run` keeps process output in its
+// separate Stdout field; json.Decode is the one explicit output-conversion
+// step. In particular, neither run/capture nor a pipe infers an Object from
+// bytes that merely happen to be JSON.
+func TestBashPPStructuredCaptureExample(t *testing.T) {
+	t.Parallel()
+	var out strings.Builder // bashpp-racegate:safe-synchronized
+	r := decodeRunner(t, &out)
+	err := captureRun(t, r, `import "encoding/json"
+report() { printf '{"name":"Ada","tags":["go","shell"]}'; }
+result, rerr := run(report)
+if [ -n "$rerr" ]; then printf 'run:%s' "$rerr"; fi
+value, derr := json.Decode(result.Stdout)
+if [ -n "$derr" ]; then printf 'decode:%s' "$derr"; fi
+printf '%s:%s' value.name value.tags[1]
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := stringVar(t, r, "rerr"); got != "" {
+		t.Fatalf("rerr = %q, want empty", got)
+	}
+	if got := stringVar(t, r, "derr"); got != "" {
+		t.Fatalf("derr = %q, want empty", got)
+	}
+	if got := out.String(); got != "Ada:shell" {
+		t.Fatalf("output = %q, want %q", got, "Ada:shell")
 	}
 }
 
@@ -503,6 +572,21 @@ func TestBashPPDecodeScalarsStayStrings(t *testing.T) {
 	}
 	if got := out.String(); got != "null" {
 		t.Fatalf("null interpolates as %q, want %q", got, "null")
+	}
+}
+
+func TestBashPPDecodeDuplicateKeysLastWins(t *testing.T) {
+	t.Parallel()
+	decoded, err := bashPPDecodeJSON(`{"language":"first","language":"last"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	obj, ok := decoded.(map[string]any)
+	if !ok {
+		t.Fatalf("decoded = %#v, want object", decoded)
+	}
+	if got := obj["language"]; got != "last" {
+		t.Fatalf("duplicate-key value = %#v, want last member", got)
 	}
 }
 
