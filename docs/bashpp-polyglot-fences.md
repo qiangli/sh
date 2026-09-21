@@ -238,7 +238,9 @@ registered command of the host shell — never a PATH lookup — invoked as
 `runner <verb> <file> [args…]`. A command runner's stdout, with its trailing
 newlines removed as a command substitution reads them, is the result; a
 Bash++ function runner (`func r(verb string, file string, args ...string)
-string`) returns the result; a non-zero status is the call error. The alias
+string`) returns the result, or prints it — a function that returns nothing
+has its stdout as the result the same way; a non-zero status is the call
+error. The alias
 exposes exactly the methods the runner declares when invoked as
 `runner methods <file>` (one export JSON object per line — `name`, optional
 `signature`, optional `effect` atom that the contract layer reads); an empty
@@ -265,3 +267,38 @@ manifest row may be the **module** of a code fence in the same unit
 in it). A materialized manifest is left alone once written — the fence
 directory is keyed by content, and a processor's own edits to it (`go mod
 tidy`) belong to that fence.
+
+### Write your own fence
+
+A language or a toolchain the engine has never heard of needs a runner and
+nothing else. Provide one of two ways — registered once with the host shell
+and named from any script, or inline in the script as a Bash++ `func` or a
+shell function:
+
+```
+func builder(verb string, file string, args ...string) string {
+  case "$verb" in
+    methods) printf '%s\n' '{"name":"build","effects":["write","exec"]}' '{"name":"run","effects":["exec"]}' ;;
+    build)   mycc "$file" -o "${file%/*}/app" && echo "${file%/*}/app" ;;
+    run)     "${file%/*}/app" "${args[@]}" ;;
+  esac
+}
+~~~mylang as m !builder
+...
+~~~
+bin := m.build()
+m.run("arg")
+```
+
+The contract, in full: the runner is invoked as `runner <verb> <file>
+[args…]` in the caller's directory with the caller's environment, plus
+`BASHPP_FENCE_TYPE` and `BASHPP_FENCE_FILE`; `methods` is asked once, when the
+unit is prepared, and its answer — one JSON object per line, `name`, optional
+`signature` (the bridge honors typed parameters and results; the default is
+`(args ...string) string`), optional `effects` — is the alias's whole method
+set; the materialized body is `$2` and its directory is the fence's own
+scratch, stable across calls for the same body; stdout (trailing newlines
+removed) or a returned string is the value; a non-zero status is the call
+error; declared effects are what the contract layer checks, exactly as for a
+built-in row. A runner name resolves to a function in the unit, a builtin or
+a command the host registered — never a PATH program.

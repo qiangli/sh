@@ -102,11 +102,23 @@ func (r *Runner) bashPPInvokeRunner(ctx context.Context, block *syntax.SourceBlo
 		for i, arg := range argv {
 			args[i] = arg
 		}
+		// A Bash++ function runner answers either way: a returned string is
+		// the value; a function that prints instead (the shell habit) has
+		// its stdout, minus trailing newlines, as the value. What it prints
+		// when it also returns a value reaches the shell's stdout as usual.
+		var out bytes.Buffer
+		savedStdout := r.stdout
+		r.stdout = &out
 		result, err := r.bashPPForeignCallback(ctx, runner, fn, args)
+		r.stdout = savedStdout
 		if err != nil {
 			return "", err
 		}
-		return foreignResult(result), nil
+		if value := foreignResult(result); value != "" {
+			savedStdout.Write(out.Bytes())
+			return value, nil
+		}
+		return strings.TrimRight(out.String(), "\n"), nil
 	}
 	switch {
 	case r.Funcs[runner] != nil, IsBuiltin(runner) && !r.disabledBuiltins[runner],
