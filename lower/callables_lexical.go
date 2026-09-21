@@ -70,6 +70,11 @@ func (e *emitter) lexicalStorage(source []byte, fs *token.FileSet, file *ast.Fil
 	globals := map[types.Object]string{}
 	for _, name := range pkg.Scope().Names() {
 		if object, ok := pkg.Scope().Lookup(name).(*types.Var); ok {
+			if e.foreignGlobals[name] {
+				// A foreign module binding stays a native package variable;
+				// see foreignDeclarations.
+				continue
+			}
 			if _, known := e.globalTypes[name]; !known {
 				e.globalTypes[name] = types.TypeString(object.Type(), func(p *types.Package) string {
 					if p == pkg {

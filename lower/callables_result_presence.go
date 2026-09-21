@@ -29,7 +29,9 @@ func (e *emitter) callResultTypesForArity(c *syntax.BashPPCall, arity int) []str
 			for i, typ := range foreign.export.Signature.Results {
 				result[i] = foreignGoType(typ)
 			}
-			if arity == len(result)+1 && len(result) > 0 {
+			// One binding more than the export's results is the explicit
+			// error opt-in, a single error binding for a zero-result export.
+			if arity == len(result)+1 {
 				result = append(result, "error")
 			}
 			return result

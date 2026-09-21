@@ -44,6 +44,7 @@ type emitter struct {
 	resultNames          []string
 	resultCallFrame      string
 	resultCallWant       int
+	foreignGlobals       map[string]bool
 	dotNames             map[string]bool
 	declaredGlobals      map[string]bool
 	iotaValue            *int
@@ -1685,6 +1686,11 @@ func (e *emitter) group(text string) string {
 	return "(" + text + ")"
 }
 func (e *emitter) call(c *syntax.BashPPCall) (string, error) {
+	// The short declaration's binding count is this call's opt-in arity and
+	// nobody else's: a call nested in the arguments must not inherit it.
+	want := e.resultCallWant
+	e.resultCallWant = 0
+	defer func() { e.resultCallWant = want }()
 	if e.pythonCallKind(c) != "" {
 		return e.pythonCall(c)
 	}
@@ -1776,7 +1782,7 @@ func (e *emitter) call(c *syntax.BashPPCall) (string, error) {
 			name = fmt.Sprintf("%sforeignAlias%d.%s", e.prefix, foreign.plan, foreign.export.Name)
 		}
 		call := name + "(" + strings.Join(args, ",") + ")"
-		if e.resultCallWant > 0 && e.resultCallWant == len(foreign.export.Signature.Results)+1 && len(foreign.export.Signature.Results) > 0 && !foreign.export.Signature.Dynamic {
+		if want == len(foreign.export.Signature.Results)+1 && !foreign.export.Signature.Dynamic {
 			return e.framedForeignErrCall(c, foreign, frame)
 		}
 		if frame != "" {

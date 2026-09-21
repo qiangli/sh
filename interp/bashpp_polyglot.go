@@ -237,7 +237,11 @@ func foreignShellType(typ string) string {
 	return typ
 }
 
-func (r *Runner) bashPPInvokeForeign(ctx context.Context, fn *bashPPForeignFunc, args []string) []string {
+// bashPPForeignExchange is the worker round trip every foreign invocation
+// shape shares: argument conversion, the call itself and the island's captured
+// stdout/stderr. ok is false when an argument could not be converted; the
+// diagnostic and status are already recorded by then.
+func (r *Runner) bashPPForeignExchange(ctx context.Context, fn *bashPPForeignFunc, args []string) (result polyglot.CallResult, err error, ok bool) {
 	if fn.direct {
 		values := make([]any, len(args))
 		for i, arg := range args {
@@ -281,106 +285,6 @@ func (r *Runner) bashPPInvokeForeign(ctx context.Context, fn *bashPPForeignFunc,
 			kwargs[name] = values[positional+i]
 		}
 		values = values[:positional]
-		var result polyglot.CallResult
-		var err error
-		if fn.receiver != nil {
-			if fn.export.Name == "" {
-				result, err = fn.receiver.Call(ctx, values, kwargs)
-			} else {
-				result, err = fn.receiver.CallAttr(ctx, fn.export.Name, values, kwargs)
-			}
-		} else {
-			result, err = fn.module.CallKeywords(ctx, fn.export.Name, values, kwargs)
-		}
-		if result.Stdout != "" {
-			fmt.Fprint(r.stdout, result.Stdout)
-		}
-		if result.Stderr != "" {
-			fmt.Fprint(r.stderr, result.Stderr)
-		}
-		if err != nil {
-			r.errf("bash++: foreign call %s failed: %v\n", fn.qualified, err)
-			r.exit.code = 1
-			return nil
-		}
-		r.exit = exitStatus{}
-		if handle, ok := result.Value.(*polyglot.Handle); ok {
-			r.bashPPResultCells = []*bashPPCell{{vr: expand.NewObject(handle)}}
-			return []string{""}
-		}
-		if len(fn.export.Signature.Results) == 1 && fn.export.Signature.Results[0] == "object" {
-			r.bashPPResultCells = []*bashPPCell{{vr: expand.NewObject(result.Value)}}
-		}
-		return []string{foreignResult(result.Value)}
-	}
-	values := make([]any, len(args))
-	for i, arg := range args {
-		typ := "any"
-		if !fn.export.Signature.Dynamic && len(fn.export.Signature.Params) > 0 {
-			if i < len(fn.export.Signature.Params) {
-				typ = fn.export.Signature.Params[i]
-			} else if fn.export.Signature.Variadic {
-				typ = fn.export.Signature.Params[len(fn.export.Signature.Params)-1]
-			}
-		}
-		value, err := foreignArgument(arg, typ)
-		if err != nil {
-			r.errf("bash++: %s argument %d: %v\n", fn.qualified, i+1, err)
-			r.exit.code = 2
-			return nil
-		}
-		values[i] = value
-	}
-	result, err := fn.module.Call(ctx, fn.export.Name, values...)
-	if result.Stdout != "" {
-		fmt.Fprint(r.stdout, result.Stdout)
-	}
-	if result.Stderr != "" {
-		fmt.Fprint(r.stderr, result.Stderr)
-	}
-	if err != nil {
-		if fn.export.Signature.Dynamic {
-			r.exit = exitStatus{}
-			return []string{"", err.Error()}
-		}
-		r.errf("bash++: foreign call %s failed: %v\n", fn.qualified, err)
-		r.exit.code = 1
-		return nil
-	}
-	r.exit = exitStatus{}
-	value := foreignResult(result.Value)
-	if err != nil && len(fn.export.Signature.Results) > 0 {
-		value = foreignZero(fn.export.Signature.Results[0])
-	}
-	if len(fn.export.Signature.Results) == 1 && fn.export.Signature.Results[0] == "object" {
-		r.bashPPResultCells = []*bashPPCell{{vr: expand.NewObject(result.Value)}}
-	}
-	if fn.export.Signature.Dynamic {
-		return []string{value, ""}
-	}
-	if len(fn.export.Signature.Results) == 0 {
-		return nil
-	}
-	return []string{value}
-}
-
-func (r *Runner) bashPPInvokeForeignErr(ctx context.Context, fn *bashPPForeignFunc, args []string) []string {
-	var result polyglot.CallResult
-	var err error
-	if fn.direct {
-		values := make([]any, len(args))
-		for i, arg := range args {
-			values[i] = arg
-			if i < len(fn.argCells) && fn.argCells[i] != nil && fn.argCells[i].vr.Kind == expand.Object {
-				values[i] = fn.argCells[i].vr.Obj
-			}
-		}
-		positional := len(values) - len(fn.argNames)
-		kwargs := make(map[string]any, len(fn.argNames))
-		for i, name := range fn.argNames {
-			kwargs[name] = values[positional+i]
-		}
-		values = values[:positional]
 		if fn.receiver != nil {
 			if fn.export.Name == "" {
 				result, err = fn.receiver.Call(ctx, values, kwargs)
@@ -394,7 +298,7 @@ func (r *Runner) bashPPInvokeForeignErr(ctx context.Context, fn *bashPPForeignFu
 		values := make([]any, len(args))
 		for i, arg := range args {
 			typ := "any"
-			if len(fn.export.Signature.Params) > 0 {
+			if !fn.export.Signature.Dynamic && len(fn.export.Signature.Params) > 0 {
 				if i < len(fn.export.Signature.Params) {
 					typ = fn.export.Signature.Params[i]
 				} else if fn.export.Signature.Variadic {
@@ -405,7 +309,7 @@ func (r *Runner) bashPPInvokeForeignErr(ctx context.Context, fn *bashPPForeignFu
 			if convErr != nil {
 				r.errf("bash++: %s argument %d: %v\n", fn.qualified, i+1, convErr)
 				r.exit.code = 2
-				return nil
+				return polyglot.CallResult{}, nil, false
 			}
 			values[i] = value
 		}
@@ -417,20 +321,100 @@ func (r *Runner) bashPPInvokeForeignErr(ctx context.Context, fn *bashPPForeignFu
 	if result.Stderr != "" {
 		fmt.Fprint(r.stderr, result.Stderr)
 	}
-	r.exit = exitStatus{}
-	value := foreignResult(result.Value)
-	if err != nil && len(fn.export.Signature.Results) > 0 {
-		value = foreignZero(fn.export.Signature.Results[0])
+	return result, err, true
+}
+
+func (r *Runner) bashPPInvokeForeign(ctx context.Context, fn *bashPPForeignFunc, args []string) []string {
+	result, err, ok := r.bashPPForeignExchange(ctx, fn, args)
+	if !ok {
+		return nil
 	}
-	cells := []*bashPPCell{{vr: expand.Variable{Set: true, Kind: expand.String, Str: value}}, bashPPForeignErrorCell(err)}
-	if err == nil && len(fn.export.Signature.Results) == 1 && fn.export.Signature.Results[0] == "object" {
-		cells[0] = &bashPPCell{vr: expand.NewObject(result.Value)}
+	if err != nil {
+		if fn.export.Signature.Dynamic {
+			r.exit = exitStatus{}
+			return []string{"", err.Error()}
+		}
+		r.errf("bash++: foreign call %s failed: %v\n", fn.qualified, err)
+		r.exit.code = 1
+		return nil
+	}
+	r.exit = exitStatus{}
+	if fn.direct {
+		if handle, ok := result.Value.(*polyglot.Handle); ok {
+			r.bashPPResultCells = []*bashPPCell{{vr: expand.NewObject(handle)}}
+			return []string{""}
+		}
+	}
+	value := foreignResult(result.Value)
+	if len(fn.export.Signature.Results) == 1 && fn.export.Signature.Results[0] == "object" {
+		r.bashPPResultCells = []*bashPPCell{{vr: expand.NewObject(result.Value)}}
+	}
+	if fn.direct {
+		return []string{value}
+	}
+	if fn.export.Signature.Dynamic {
+		return []string{value, ""}
+	}
+	if len(fn.export.Signature.Results) == 0 {
+		return nil
+	}
+	return []string{value}
+}
+
+// bashPPInvokeForeignErr is the explicit error opt-in: the call site named one
+// binding more than the export declares results, so the worker's own failure
+// becomes a typed trailing error result with status 0 instead of a diagnostic.
+// A zero-result export (Python -> None, Rust Result<(), E>) opts in with a
+// single error binding.
+//
+// Only a failure carrying polyglot.ForeignErrorDetail is the worker's own.
+// A transport failure — EOF from a dead worker, cancellation, a response ID
+// mismatch, a decode or annotation violation, a launch failure — stays an
+// infrastructure failure reported exactly as the one-value form reports it:
+// the diagnostic, the failure status, zero results and a nil error, so a
+// script can never mistake a broken bridge for a domain error.
+func (r *Runner) bashPPInvokeForeignErr(ctx context.Context, fn *bashPPForeignFunc, args []string) []string {
+	result, err, ok := r.bashPPForeignExchange(ctx, fn, args)
+	if !ok {
+		return nil
+	}
+	resultTypes := fn.export.Signature.Results
+	values := make([]string, len(resultTypes)+1)
+	cells := make([]*bashPPCell, len(resultTypes)+1)
+	for i, typ := range resultTypes {
+		values[i] = foreignZero(typ)
+		cells[i] = &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: values[i]}}
+	}
+	last := len(resultTypes)
+	switch {
+	case err == nil:
+		r.exit = exitStatus{}
+		if len(resultTypes) > 0 {
+			values[0] = foreignResult(result.Value)
+			cells[0].vr.Str = values[0]
+			if len(resultTypes) == 1 && resultTypes[0] == "object" {
+				cells[0] = &bashPPCell{vr: expand.NewObject(result.Value)}
+			}
+		}
+		cells[last] = bashPPForeignErrorCell(nil)
+	case bashPPForeignDomainError(err):
+		r.exit = exitStatus{}
+		values[last] = err.Error()
+		cells[last] = bashPPForeignErrorCell(err)
+	default:
+		r.errf("bash++: foreign call %s failed: %v\n", fn.qualified, err)
+		r.exit.code = 1
+		cells[last] = bashPPForeignErrorCell(nil)
 	}
 	r.bashPPResultCells = cells
-	if err != nil {
-		return []string{value, err.Error()}
-	}
-	return []string{value, ""}
+	return values
+}
+
+// bashPPForeignDomainError reports whether err is the foreign function's own
+// failure, the one kind the explicit error opt-in turns into a result.
+func bashPPForeignDomainError(err error) bool {
+	_, ok := polyglot.ForeignErrorDetail(err)
+	return ok
 }
 
 func bashPPForeignErrorCell(err error) *bashPPCell {

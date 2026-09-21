@@ -2438,7 +2438,10 @@ func (r *Runner) bashPPShortDeclCall(ctx context.Context, d *syntax.BashPPShortD
 	shortFailureMark := r.bashPPShortFailureSeq
 	effectiveResults := fn.results()
 	var results []string
-	if fn.foreign != nil && !fn.foreign.export.Signature.Dynamic && len(fn.foreign.export.Signature.Results) > 0 && len(d.Lhs) == len(fn.foreign.export.Signature.Results)+1 {
+	if fn.foreign != nil && !fn.foreign.direct && !fn.foreign.export.Signature.Dynamic && len(d.Lhs) == len(fn.foreign.export.Signature.Results)+1 {
+		// One binding more than the export's results is the explicit error
+		// opt-in; see bashPPInvokeForeignErr. A direct Python handle call
+		// carries no signature at all and keeps its one dynamic value.
 		results = r.bashPPInvokeForeignErr(ctx, fn.foreign, args)
 		effectiveResults = append(append([]*syntax.BashPPField(nil), effectiveResults...), &syntax.BashPPField{FieldType: &syntax.Lit{Value: "error"}})
 	} else {
