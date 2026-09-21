@@ -250,9 +250,23 @@ is prepared, so the fence may name a function declared anywhere in the unit.
 Every text fence, row or runner, needs an alias: its methods are known only
 after preparation, too late for the parser's bare-call look-ahead. The body
 is materialized under the cache directory, keyed by the plan id, never into
-the checkout; built-in rows embed it verbatim in lowered output, while a
-runner fence runs interpreted only — lowering one is refused with a
-diagnostic that says so. The format is never inferred: an opener whose type
+the checkout; built-in rows embed it verbatim in lowered output. A runner
+fence whose runner is a Bash++ `func` of the unit with the runner signature
+**lowers with the program**: `methods` is answered at compile time by that
+declaration alone, evaluated through the interpreter (a fence is prepared
+before the unit's first statement runs, so the runner sees no program state
+either way), the plan carries the exports the interpreter would prepare, and
+the lowered program calls the lowered function directly with its stdout
+captured as the interpreter captures it — interpreted and lowered runs agree
+on stdout and status. A transpiled binary never depends on a shell on the
+target, so every other runner shape is refused at compile time by name with
+the route: a shell-function runner (it lives in the interpreter session), a
+builtin or registered-command runner (it lives in the shell that runs the
+program), and the rows whose processor is the running shell (`dag`, `skill`)
+— wrap the command in a Bash++ `func` runner to lower it. A `func` runner
+that itself calls a verb of the host shell (`"$BASH" zig …`) lowers, but the
+binary then needs that shell on the target: keep such a runner interpreted.
+The format is never inferred: an opener whose type
 is not in the table and carries no runner is rejected at prepare. The
 decision record and the row table are
 `bashsharp/docs/fenced-text-blocks-plan.md`.

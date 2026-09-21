@@ -106,6 +106,21 @@ type RunnerFence struct {
 	Invoke   func(ctx context.Context, argv []string) (string, error)
 }
 
+// hostKey carries the calling host through a runner call's context: a
+// lowered program's wrapper attaches its Program with WithHost so the
+// RunnerFence's Invoke — fixed when the module started, before any Program
+// existed — can call the lowered runner function on the Program that is
+// making the call, the way a shell callback is bound per call.
+type hostKey struct{}
+
+// WithHost attaches the calling host to ctx for the RunnerFence's Invoke.
+func WithHost(ctx context.Context, host any) context.Context {
+	return context.WithValue(ctx, hostKey{}, host)
+}
+
+// HostFrom answers the host WithHost attached, or nil.
+func HostFrom(ctx context.Context) any { return ctx.Value(hostKey{}) }
+
 // MethodsVerb is the reserved verb a runner answers with its method list.
 const MethodsVerb = "methods"
 

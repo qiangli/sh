@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"strings"
 
 	"mvdan.cc/sh/v3/polyglot"
@@ -155,4 +156,31 @@ func (r *Runner) bashPPInvokeRunner(ctx context.Context, block *syntax.SourceBlo
 		return value, fmt.Errorf("%s exited %d", runner, r.exit.code)
 	}
 	return value, nil
+}
+
+// FenceRunnerInvoke runs one runner call of a fence at compile time, the way
+// the running shell would: a fresh Runner rooted at dir evaluates only the
+// runner's own top-level declaration (the same hoist a prepare does, so the
+// runner sees no program state — a unit's first statement has not run when
+// its fences are prepared) and then dispatches argv to it. A lowered program
+// binds a RunnerFence to it so `runner methods <file>` is answered by the
+// declaration the interpreter would ask, through the same materialized file;
+// the Plan then carries the exports exactly as the interpreter's does.
+// stderr receives the runner's diagnostics; nil discards them.
+func FenceRunnerInvoke(ctx context.Context, file *syntax.File, block *syntax.SourceBlock, dir string, stderr io.Writer, argv []string) (string, error) {
+	if block == nil || block.Runner == nil {
+		return "", fmt.Errorf("fence runner: the block names no runner")
+	}
+	if stderr == nil {
+		stderr = io.Discard
+	}
+	r, err := New(Lang(syntax.LangBashPP), Dir(dir), StdIO(nil, io.Discard, stderr))
+	if err != nil {
+		return "", err
+	}
+	r.Reset()
+	r.fillExpandConfig(ctx)
+	r.filename = file.Name
+	fence := r.bashPPRunnerFence(ctx, file, block, polyglot.CanonicalLanguage(block.Language.Value))
+	return fence.Invoke(ctx, argv)
 }

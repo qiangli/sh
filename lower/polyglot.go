@@ -1,6 +1,7 @@
 package lower
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -9,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"mvdan.cc/sh/v3/interp"
 	"mvdan.cc/sh/v3/polyglot"
 	"mvdan.cc/sh/v3/syntax"
 )
@@ -32,6 +34,12 @@ func (e *emitter) loweredRuntimeImports() []string {
 		}
 	}
 	for _, plan := range e.foreignPlans {
+		if plan.Runner != "" {
+			// The runner adapter trims the captured stdout as the
+			// interpreter does; the runner's own row, if any, is bypassed.
+			add("strings")
+			continue
+		}
 		row, _ := polyglot.LookupLanguage(plan.Language)
 		for _, path := range row.LoweredImports {
 			add(path)
@@ -110,6 +118,7 @@ func (e *emitter) prepareForeign(ctx context.Context, file *syntax.File) error {
 	var blocks []polyglot.Block
 	var first *syntax.SourceBlock
 	var imports []*syntax.BashPPImport
+	var runnerBlocks map[string]*syntax.SourceBlock
 	for _, stmt := range file.Stmts {
 		switch node := stmt.Cmd.(type) {
 		case *syntax.SourceBlock:
@@ -120,13 +129,18 @@ func (e *emitter) prepareForeign(ctx context.Context, file *syntax.File) error {
 			if node.Alias != nil {
 				alias = node.Alias.Value
 			}
+			runner := ""
 			if node.Runner != nil {
-				// A runner fence hands its body to a function or command of
-				// the running shell; a lowered program has neither the
-				// interpreter's dispatch nor the host's registered commands.
-				return e.fail(node, CodeUnsupported, "runner fence ~~~"+node.Language.Value+" !"+node.Runner.Value+": runner fences run interpreted; lowering them is not supported")
+				// A runner fence lowers when its runner is a Bash# function
+				// of the unit (runnerLowers); the block is kept so the
+				// analyzer can be the runner itself, whatever the type's row.
+				runner = node.Runner.Value
+				if runnerBlocks == nil {
+					runnerBlocks = map[string]*syntax.SourceBlock{}
+				}
+				runnerBlocks[polyglot.CanonicalLanguage(node.Language.Value)] = node
 			}
-			blocks = append(blocks, polyglot.Block{Language: node.Language.Value, Alias: alias, Source: node.Body, Filename: file.Name, Line: int(node.BodyPos.Line())})
+			blocks = append(blocks, polyglot.Block{Language: node.Language.Value, Alias: alias, Runner: runner, Source: node.Body, Filename: file.Name, Line: int(node.BodyPos.Line())})
 		case *syntax.BashPPImport:
 			if node.Language != nil {
 				imports = append(imports, node)
@@ -211,9 +225,25 @@ func (e *emitter) prepareForeign(ctx context.Context, file *syntax.File) error {
 	if err != nil {
 		return e.fail(first, CodeUnsupported, err.Error())
 	}
+	var runnerStderr bytes.Buffer
 	for _, block := range blocks {
 		language := polyglot.CanonicalLanguage(block.Language)
 		if _, done := analyzers[language]; done {
+			continue
+		}
+		// A runner override processes the body whatever the type, as in the
+		// interpreter; its methods are answered at compile time by the
+		// runner's own declaration, evaluated through the interpreter.
+		if node := runnerBlocks[language]; node != nil {
+			if block.Alias == "" {
+				return e.fail(node, CodeType, "runner fence "+block.Language+" needs an alias (as NAME)")
+			}
+			if err := e.runnerLowers(file, node); err != nil {
+				return err
+			}
+			analyzers[language] = polyglot.RunnerFence{Type: language, Runner: node.Runner.Value, Invoke: func(ctx context.Context, argv []string) (string, error) {
+				return interp.FenceRunnerInvoke(ctx, file, node, e.options.Dir, &runnerStderr, argv)
+			}}
 			continue
 		}
 		row, ok := polyglot.LookupLanguage(language)
@@ -233,7 +263,11 @@ func (e *emitter) prepareForeign(ctx context.Context, file *syntax.File) error {
 			return e.fail(first, CodeType, "text fence "+block.Language+" needs an alias (as NAME)")
 		}
 		if row.InterpretedOnly {
-			return e.fail(first, CodeUnsupported, "text fence ~~~"+block.Language+": its processor is the running shell; lowering it is not supported")
+			// Its processor is the shell that would run the program — a dag
+			// runner, a skills ring — and a lowered program carries no
+			// shell to hand the body to: a transpiled binary never depends
+			// on a bashy on the target, so the row stays interpreted.
+			return e.fail(first, CodeUnsupported, "text fence ~~~"+block.Language+": its processor is the running shell, which a lowered program does not carry; run it interpreted, or process the body with a Bash# function runner (~~~"+block.Language+" as NAME !func), which lowers")
 		}
 		analyzers[language] = row.NewRuntime(config)
 	}
@@ -242,7 +276,11 @@ func (e *emitter) prepareForeign(ctx context.Context, file *syntax.File) error {
 		var err error
 		plans, err = polyglot.Prepare(ctx, blocks, analyzers)
 		if err != nil {
-			return e.fail(first, CodeUnsupported, err.Error())
+			text := err.Error()
+			if diagnostics := strings.TrimSpace(runnerStderr.String()); diagnostics != "" {
+				text += ": " + diagnostics
+			}
+			return e.fail(first, CodeUnsupported, text)
 		}
 	}
 	for pi, plan := range plans {
@@ -473,9 +511,15 @@ func (e *emitter) foreignDeclarations() string {
 		module := fmt.Sprintf("%sforeign%d", e.prefix, i)
 		e.foreignGlobals[module] = true
 		row, _ := polyglot.LookupLanguage(plan.Language)
-		runtime := row.LoweredRuntime(e.prefix, e.environmentLiteral(e.foreignEnvs[plan.Language]))
+		runtime := ""
+		if plan.Runner != "" {
+			runtime = e.runnerLiteral(i, plan)
+			out.WriteString(e.runnerAdapter(i, plan))
+		} else {
+			runtime = row.LoweredRuntime(e.prefix, e.environmentLiteral(e.foreignEnvs[plan.Language]))
+		}
 		fmt.Fprintf(&out, "var %s = %spolyglot.Start(%spolyglot.Plan{ID:%s,Language:%s,Alias:%s,Runner:%s,Source:%s,Artifact:%s,Exports:%s}, %s)\n", module, e.prefix, e.prefix, strconv.Quote(plan.ID), strconv.Quote(plan.Language), strconv.Quote(plan.Alias), strconv.Quote(plan.Runner), strconv.Quote(plan.Source), strconv.Quote(plan.Artifact), e.foreignExports(plan.Exports), runtime)
-		if row.Callbacks {
+		if row.Callbacks && plan.Runner == "" {
 			out.WriteString(e.foreignCallbacks(i, module))
 		}
 		if plan.Alias != "" {
@@ -487,13 +531,13 @@ func (e *emitter) foreignDeclarations() string {
 			e.foreignGlobals[alias] = true
 			fmt.Fprintf(&out, "type %s struct{}\nvar %s %s\n", typ, alias, typ)
 			for _, export := range plan.Exports {
-				out.WriteString(e.foreignWrapper("("+alias+" "+typ+") ", module, export))
-				out.WriteString(e.foreignErrWrapper(i, module, plan.Alias, export))
+				out.WriteString(e.foreignWrapper("("+alias+" "+typ+") ", module, export, plan.Runner != ""))
+				out.WriteString(e.foreignErrWrapper(i, module, plan.Alias, export, plan.Runner != ""))
 			}
 		} else {
 			for _, export := range plan.Exports {
-				out.WriteString(e.foreignWrapper("", module, export))
-				out.WriteString(e.foreignErrWrapper(i, module, plan.Alias, export))
+				out.WriteString(e.foreignWrapper("", module, export, plan.Runner != ""))
+				out.WriteString(e.foreignErrWrapper(i, module, plan.Alias, export, plan.Runner != ""))
 			}
 		}
 	}
@@ -560,7 +604,7 @@ func (e *emitter) foreignExports(exports []polyglot.Export) string {
 	return out.String()
 }
 
-func (e *emitter) foreignWrapper(receiver, module string, export polyglot.Export) (source string) {
+func (e *emitter) foreignWrapper(receiver, module string, export polyglot.Export, runner bool) (source string) {
 	defer func() { source = e.foreignProgramStatus(source, e.prefix+"foreignProgram") }()
 	var params []string
 	if export.Signature.Dynamic {
@@ -601,6 +645,11 @@ func (e *emitter) foreignWrapper(receiver, module string, export polyglot.Export
 	if e.execution {
 		params = append([]string{e.prefix + "foreignProgram *" + e.prefix + "foreignProgramState"}, params...)
 		ctx = e.prefix + "foreignProgram.Context"
+		if runner {
+			// The runner's Invoke calls the lowered function on the
+			// Program making this call (runnerAdapter).
+			ctx = e.prefix + "polyglot.WithHost(" + ctx + ", " + e.prefix + "foreignProgram)"
+		}
 	}
 	var out strings.Builder
 	fmt.Fprintf(&out, "func %s%s(%s)", receiver, export.Name, strings.Join(params, ","))
@@ -644,7 +693,7 @@ func (e *emitter) foreignErrAdapterName(plan int, export polyglot.Export) string
 // exactly like the one-value form reports it, diagnostic and failure status,
 // and the helper returns zero results with a nil error. The interpreter's
 // bashPPInvokeForeignErr is the same contract.
-func (e *emitter) foreignErrWrapper(plan int, module, alias string, export polyglot.Export) (source string) {
+func (e *emitter) foreignErrWrapper(plan int, module, alias string, export polyglot.Export, runner bool) (source string) {
 	defer func() { source = e.foreignProgramStatus(source, e.prefix+"foreignProgram") }()
 	if export.Signature.Dynamic || export.Signature.Iterator != "" {
 		return ""
@@ -678,6 +727,11 @@ func (e *emitter) foreignErrWrapper(plan int, module, alias string, export polyg
 	if e.execution {
 		params = append([]string{e.prefix + "foreignProgram *" + e.prefix + "foreignProgramState"}, params...)
 		ctx = e.prefix + "foreignProgram.Context"
+		if runner {
+			// The runner's Invoke calls the lowered function on the
+			// Program making this call (runnerAdapter).
+			ctx = e.prefix + "polyglot.WithHost(" + ctx + ", " + e.prefix + "foreignProgram)"
+		}
 	}
 	results := make([]string, len(export.Signature.Results))
 	zeros := make([]string, len(results))
@@ -833,4 +887,107 @@ func foreignResultExpr(value, typ string) string {
 		return value + ".(string)"
 	}
 	return value
+}
+
+// runnerContract is the signature a fence runner declares, verbatim from the
+// text-fence plan: `runner <verb> <file> [args…]`, stdout or the returned
+// string is the value.
+const runnerContract = "func NAME(verb string, file string, args ...string) string"
+
+// runnerLowers decides whether the fence's runner lowers with the program:
+// only a Bash# function of the unit does, with the runner contract's
+// signature, since that is what the emitter can call directly. A shell
+// function lives in the interpreter session, a builtin and a registered
+// command in the shell that runs the program — none of which a transpiled
+// binary carries — so those are refused by name, with the route: a Bash#
+// function runner wrapping the command.
+func (e *emitter) runnerLowers(file *syntax.File, block *syntax.SourceBlock) error {
+	runner := block.Runner.Value
+	fence := "runner fence ~~~" + block.Language.Value + " !" + runner
+	for _, stmt := range file.Stmts {
+		switch decl := stmt.Cmd.(type) {
+		case *syntax.FuncDecl:
+			if decl.Name.Value == runner {
+				return e.fail(block, CodeUnsupported, fence+": "+runner+" is a shell function, which runs in the interpreter session a lowered program does not carry; declare the runner as a Bash# function ("+strings.ReplaceAll(runnerContract, "NAME", runner)+") to lower it")
+			}
+		case *syntax.BashPPFuncDecl:
+			if decl.Receiver != nil || decl.Name.Value != runner {
+				continue
+			}
+			if !runnerSignatureMatches(decl) {
+				return e.fail(decl, CodeType, fence+": "+runner+" does not have the runner signature "+strings.ReplaceAll(runnerContract, "NAME", runner))
+			}
+			return nil
+		}
+	}
+	return e.fail(block, CodeUnsupported, fence+": "+runner+" is not a Bash# function of this unit (a builtin or a registered command runs in the shell that runs the program, which a lowered program does not carry); wrap it in a Bash# function ("+strings.ReplaceAll(runnerContract, "NAME", runner)+") to lower it")
+}
+
+// runnerSignatureMatches reports whether the declaration spells the runner
+// contract: two string parameters, a variadic string tail, one string
+// result, no type parameters and no defaults.
+func runnerSignatureMatches(decl *syntax.BashPPFuncDecl) bool {
+	if len(decl.TypeParams) > 0 {
+		return false
+	}
+	var params []*syntax.BashPPField
+	for _, f := range decl.Params {
+		if f.Default != nil || f.FieldType == nil || f.FieldType.Value != "string" {
+			return false
+		}
+		if f.Variadic() {
+			params = append(params, f)
+			continue
+		}
+		for range f.Names {
+			params = append(params, f)
+		}
+	}
+	if len(params) != 3 || params[0].Variadic() || params[1].Variadic() || !params[2].Variadic() {
+		return false
+	}
+	if len(decl.Results) != 1 || decl.Results[0].FieldType == nil || decl.Results[0].FieldType.Value != "string" || len(decl.Results[0].Names) > 1 {
+		return false
+	}
+	return true
+}
+
+// runnerLiteral is the lowered runtime of a runner plan: a RunnerFence whose
+// Invoke is the adapter runnerAdapter emits.
+func (e *emitter) runnerLiteral(plan int, p polyglot.Plan) string {
+	return fmt.Sprintf("%spolyglot.RunnerFence{Type:%s,Runner:%s,Invoke:%sforeignRunner%d}", e.prefix, strconv.Quote(p.Language), strconv.Quote(p.Runner), e.prefix, plan)
+}
+
+// runnerAdapter emits the Invoke of a runner plan: a direct call of the
+// lowered runner function with `<verb> <file> [args…]`, its stdout captured
+// the way the interpreter captures a Bash# function runner's — a returned
+// string is the value and what was printed reaches stdout; a function that
+// printed instead has its stdout, minus trailing newlines, as the value.
+// Under the execution runtime the call needs the Program making it, which
+// the wrapper attaches to the context (polyglot.WithHost), and the capture
+// swaps the session's stdout so shell regions of the body are caught too.
+func (e *emitter) runnerAdapter(plan int, p polyglot.Plan) string {
+	pre := e.prefix
+	name := e.goName(p.Runner)
+	runner := strconv.Quote(p.Runner)
+	var out strings.Builder
+	fmt.Fprintf(&out, "func %sforeignRunner%d(%sctx %scontext.Context, %sargv []string) (string, error) {\n", pre, plan, pre, pre, pre)
+	fmt.Fprintf(&out, "if len(%sargv) < 2 { return \"\", %sfmt.Errorf(\"runner %%s: verb and file expected\", %s) }\n", pre, pre, runner)
+	fmt.Fprintf(&out, "var %sout %sstrings.Builder\n", pre, pre)
+	if e.execution {
+		fmt.Fprintf(&out, "%sprogram, _ := %spolyglot.HostFrom(%sctx).(*%srt.Program)\n", pre, pre, pre, pre)
+		fmt.Fprintf(&out, "if %sprogram == nil || %sprogram.Session == nil { return \"\", %sfmt.Errorf(\"runner %%s: no program to run it\", %s) }\n", pre, pre, pre, runner)
+		fmt.Fprintf(&out, "%ssaved := %sprogram.Session.Stdio().Out\n", pre, pre)
+		fmt.Fprintf(&out, "%sprogram.Session.SetStdio(nil, &%sout, nil)\n", pre, pre)
+		fmt.Fprintf(&out, "%svalue := %s(%sprogram, %srt.Site{Name:%s}, %sargv[0], %sargv[1], %sargv[2:]...)\n", pre, name, pre, pre, runner, pre, pre, pre)
+		fmt.Fprintf(&out, "%sprogram.Session.SetStdio(nil, %ssaved, nil)\n", pre, pre)
+	} else {
+		fmt.Fprintf(&out, "%ssaved := %srt.Stdout\n", pre, pre)
+		fmt.Fprintf(&out, "%srt.Stdout = &%sout\n", pre, pre)
+		fmt.Fprintf(&out, "%svalue := %s(%sargv[0], %sargv[1], %sargv[2:]...)\n", pre, name, pre, pre, pre)
+		fmt.Fprintf(&out, "%srt.Stdout = %ssaved\n", pre, pre)
+	}
+	fmt.Fprintf(&out, "if %svalue != \"\" { %sfmt.Fprint(%ssaved, %sout.String()); return %svalue, nil }\n", pre, pre, pre, pre, pre)
+	fmt.Fprintf(&out, "return %sstrings.TrimRight(%sout.String(), \"\\n\"), nil\n}\n", pre, pre)
+	return out.String()
 }
