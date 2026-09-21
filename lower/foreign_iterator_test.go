@@ -2,7 +2,10 @@
 
 package lower_test
 
-import "testing"
+import (
+	"mvdan.cc/sh/v3/internal"
+	"testing"
+)
 
 func TestPythonIteratorLowered(t *testing.T) {
 	source := `~~~python
@@ -23,6 +26,7 @@ main()
 }
 
 func TestPythonTextIOFilterLowered(t *testing.T) {
+	internal.StreamTestConsumers(t)
 	source := `~~~python as py
 def upper(stdin: TextIO) -> Iterator[str]:
     for line in stdin:
@@ -79,6 +83,7 @@ two()
 // a decorator can bind/transform inputs before Next; iteration completes and
 // closes before the result/contract phase observes the result.
 func TestForeignStreamingDecoratorParity(t *testing.T) {
+	internal.StreamTestConsumers(t)
 	got := testPythonFenceInterpretedNativeParityAt(t, `~~~python as py
 def items(n: int) -> Iterator[int]:
     for i in range(n): yield i

@@ -3,8 +3,14 @@
 package interp_test
 
 import (
+	"context"
 	"strings"
 	"testing"
+	"time"
+
+	"mvdan.cc/sh/v3/internal"
+	"mvdan.cc/sh/v3/interp"
+	"mvdan.cc/sh/v3/syntax"
 )
 
 func TestPythonIteratorLanguage(t *testing.T) {
@@ -34,6 +40,7 @@ func TestPythonIteratorLanguage(t *testing.T) {
 }
 
 func TestPythonIteratorPipeline(t *testing.T) {
+	internal.StreamTestConsumers(t)
 	out, stderr, err := runPolyglot(t, `~~~python as py
 def values() -> Iterator[int]:
     yield 1
@@ -47,6 +54,7 @@ py.values | cat
 }
 
 func TestPythonTextIOFilterLanguage(t *testing.T) {
+	internal.StreamTestConsumers(t)
 	out, stderr, err := runPolyglot(t, `~~~python as py
 def upper(stdin: TextIO) -> Iterator[str]:
     for line in stdin:
@@ -56,6 +64,36 @@ printf 'one\ntwo\n' | py.upper | cat
 `)
 	if err != nil || stderr != "" || out != "ONE\nTWO\n" {
 		t.Fatalf("out=%q stderr=%q err=%v", out, stderr, err)
+	}
+}
+
+func TestPythonTextIOFilterMissingConsumer(t *testing.T) {
+	file, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(`~~~python as py
+def upper(stdin: TextIO) -> Iterator[str]:
+    try:
+        for line in stdin: yield line.upper()
+    finally:
+        state.closed = True
+def state() -> bool:
+    return getattr(state,'closed',False)
+~~~
+printf 'one\ntwo\n' | py.upper | s221_nonexistent_pipeline_consumer
+code=$?
+closed := py.state()
+echo "$code:$closed"
+`), "missing-consumer.bpp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr strings.Builder
+	runner, err := interp.New(interp.Lang(syntax.LangBashPP), interp.StdIO(nil, &stdout, &stderr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	if err := runner.Run(ctx, file); err != nil || stdout.String() != "127:true\n" || !strings.Contains(stderr.String(), "s221_nonexistent_pipeline_consumer") {
+		t.Fatalf("out=%q stderr=%q err=%v", stdout.String(), stderr.String(), err)
 	}
 }
 
@@ -148,6 +186,7 @@ func TestRustIteratorLanguage(t *testing.T) {
 }
 
 func TestPythonTextIOFilterLargeAndEarlyExit(t *testing.T) {
+	internal.StreamTestConsumers(t)
 	for _, tc := range []struct{ name, body, tail, want string }{
 		{"large", "    for i in range(2000): yield 'x'*100+'\\n'", "wc -l", "2000"},
 		{"early", "    while True: yield 'first\\n'", "head -n 1", "first"},
@@ -207,6 +246,7 @@ main()
 }
 
 func TestPythonTextIOFilterPrintRouting(t *testing.T) {
+	internal.StreamTestConsumers(t)
 	out, stderr, err := runPolyglot(t, `~~~python as py
 def output(stdin: TextIO) -> Iterator[str]:
     print('before')

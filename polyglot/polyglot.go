@@ -1605,8 +1605,9 @@ import ast, base64, codecs, importlib, importlib.util, importlib.machinery, io, 
 try:
     protocol=os.fdopen(3,'w',buffering=1,newline='\n')
 except OSError:
-    # No fd 3 (Windows): the protocol rides stdout; island output is captured per call.
-    protocol=io.TextIOWrapper(io.FileIO(1,'w',closefd=False),line_buffering=True,newline='\n')
+    # No fd 3 (Windows): retain the original stdout pipe independently of fd 1.
+    # capture() redirects fd 1, including while TextIO sends callback frames.
+    protocol=os.fdopen(os.dup(1),'w',buffering=1,newline='\n')
 # Shell text output uses LF on every host. Reconfigure the text wrappers,
 # never normalize captured bytes: explicit os.write/buffer writes stay exact.
 sys.stdout.reconfigure(newline='\n')

@@ -88,6 +88,34 @@ func TestIteratorFilterInputCancel(t *testing.T) {
 	}
 }
 
+// A callback is emitted while stdout is redirected for call capture. On
+// Windows the protocol shares the original stdout pipe, so this also verifies
+// that its descriptor remains independent of the captured stdout descriptor.
+func TestIteratorFilterInputDuringCapture(t *testing.T) {
+	plan := pythonPlanWithRuntime(t, "def upper(stdin: TextIO) -> Iterator[str]:\n    print('before callback')\n    for line in stdin: yield line.upper()\n", Python{})
+	m := Start(plan, Python{})
+	defer m.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	it, _, err := m.OpenIterator(ctx, "upper", []any{FilterInput(strings.NewReader("one\ntwo\n"))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer it.Close(ctx)
+	for i, want := range []string{"ONE\n", "TWO\n"} {
+		value, more, err := it.Next(ctx)
+		if err != nil || !more || value.Value != want {
+			t.Fatalf("item %d: %+v, more=%v, err=%v", i, value, more, err)
+		}
+		if i == 0 && value.Stdout != "before callback\n" {
+			t.Fatalf("captured stdout = %q", value.Stdout)
+		}
+	}
+	if _, more, err := it.Next(ctx); err != nil || more {
+		t.Fatalf("EOF: more=%v err=%v", more, err)
+	}
+}
+
 func TestIteratorCallbackOpenFailure(t *testing.T) {
 	plan := pythonPlanWithRuntime(t, "def f() -> int: return 1\n", Python{})
 	m := Start(plan, Python{})
