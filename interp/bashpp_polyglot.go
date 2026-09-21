@@ -134,7 +134,8 @@ func (r *Runner) bashPPPrepareSourceBlocks(ctx context.Context, file *syntax.Fil
 		if !ok {
 			continue
 		}
-		config := polyglot.RuntimeConfig{Dir: r.Dir, Environ: execEnv(r.writeEnv)}
+		config := polyglot.RuntimeConfig{Dir: r.Dir, Cwd: func() string { return r.Dir },
+			Environ: execEnv(r.writeEnv), Env: func() []string { return execEnv(r.writeEnv) }}
 		if row.NeedsEnvironment {
 			environment, err := polyglot.DiscoverEnvironment(polyglot.EnvironmentRequest{
 				Source: source, Language: language, Environ: nativeExecEnv(execEnv(r.writeEnv)),

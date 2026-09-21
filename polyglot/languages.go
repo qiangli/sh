@@ -17,11 +17,40 @@ type LanguageRuntime interface {
 }
 
 // RuntimeConfig is what a source unit knows when it constructs a runtime.
-// Environment is nil for a language whose row does not read one.
+// Environment is nil for a language whose row does not read one. Dir is the
+// caller's directory when the unit was prepared; Cwd, when set, answers the
+// caller's directory at call time (an interpreter whose script may `cd`
+// before a fence call).
 type RuntimeConfig struct {
 	Environment *EnvironmentPlan
 	Dir         string
+	Cwd         func() string
 	Environ     []string
+	// Env, when set, answers the caller's environment at call time, the way
+	// Cwd answers its directory: a variable exported after the unit was
+	// prepared reaches a verb called later.
+	Env func() []string
+}
+
+// CallerDir answers the caller's directory now: Cwd when set, else Dir.
+func (c RuntimeConfig) CallerDir() string {
+	if c.Cwd != nil {
+		if dir := c.Cwd(); dir != "" {
+			return dir
+		}
+	}
+	return c.Dir
+}
+
+// CallerEnv answers the caller's environment now: Env when set, else
+// Environ.
+func (c RuntimeConfig) CallerEnv() []string {
+	if c.Env != nil {
+		if env := c.Env(); env != nil {
+			return env
+		}
+	}
+	return c.Environ
 }
 
 // Language is one row of the fence language table: the spelling(s) a fence

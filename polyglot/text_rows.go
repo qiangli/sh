@@ -19,7 +19,7 @@ func TextRow(canonical string, aliases []string, text Text) Language {
 		Text:      true,
 		NewRuntime: func(cfg RuntimeConfig) LanguageRuntime {
 			t := text
-			t.Dir, t.Environ = cfg.Dir, cfg.Environ
+			t.Dir, t.CwdFunc, t.Environ, t.EnvFunc = cfg.Dir, cfg.Cwd, cfg.Environ, cfg.Env
 			return t
 		},
 		LoweredRuntime: func(prefix, _ string) string { return text.LoweredLiteral(prefix) },

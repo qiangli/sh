@@ -61,7 +61,22 @@ type Text struct {
 	// file).
 	WorkDir string
 	Dir     string
+	// CwdFunc, when set, answers the caller's directory at call time and
+	// wins over Dir; it is a host binding, never part of a lowered literal.
+	CwdFunc func() string
 	Environ []string
+	// EnvFunc, when set, answers the caller's environment at call time and
+	// wins over Environ; a host binding like CwdFunc.
+	EnvFunc func() []string
+}
+
+func (t Text) environ() []string {
+	if t.EnvFunc != nil {
+		if env := t.EnvFunc(); env != nil {
+			return env
+		}
+	}
+	return t.Environ
 }
 
 // RunnerFence is the runtime of a fence whose opener named a runner
@@ -287,6 +302,11 @@ func (m *Module) callText(ctx context.Context, text Text, name string, args []an
 	dir := filepath.Dir(file)
 	root := filepath.Join(textRoot(), m.plan.ID)
 	cwd := text.Dir
+	if text.CwdFunc != nil {
+		if dir := text.CwdFunc(); dir != "" {
+			cwd = dir
+		}
+	}
 	if cwd == "" {
 		cwd, _ = os.Getwd()
 	}
@@ -300,7 +320,8 @@ func (m *Module) callText(ctx context.Context, text Text, name string, args []an
 	if verb.Tool != "" {
 		toolName = verb.Tool
 	}
-	env := envMap(text.Environ)
+	environ := text.environ()
+	env := envMap(environ)
 	tool, _, err := resolveTool(env, toolName)
 	if err != nil {
 		return CallResult{}, fmt.Errorf("text fence %s: %s: %w", text.Type, toolName, err)
@@ -317,7 +338,7 @@ func (m *Module) callText(ctx context.Context, text Text, name string, args []an
 	if text.WorkDir != "" {
 		cmd.Dir = expand(text.WorkDir)
 	}
-	cmd.Env = append(environOf(text.Environ), "BASHPP_FENCE_TYPE="+text.Type, "BASHPP_FENCE_FILE="+file)
+	cmd.Env = append(environOf(environ), "BASHPP_FENCE_TYPE="+text.Type, "BASHPP_FENCE_FILE="+file)
 	for _, entry := range verb.Env {
 		cmd.Env = append(cmd.Env, expand(entry))
 	}
