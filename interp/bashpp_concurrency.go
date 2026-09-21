@@ -1582,7 +1582,7 @@ func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
 }
 
 func (r *Runner) bashPPRange(ctx context.Context, rng *syntax.BashPPRange) {
-	if r.bashPPRangeLines(ctx, rng) {
+	if r.bashPPRangeLines(ctx, rng) || r.bashPPRangeForeignIterator(ctx, rng) {
 		return
 	}
 	if r.goSourceRangeFunction(ctx, rng) {

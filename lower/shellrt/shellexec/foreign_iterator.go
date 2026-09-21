@@ -1,0 +1,19 @@
+package shellexec
+
+import (
+	"context"
+	"mvdan.cc/sh/v3/interp"
+	"mvdan.cc/sh/v3/lower/shellrt"
+	"mvdan.cc/sh/v3/polyglot"
+)
+
+func NewForeignIterator(module *polyglot.Module, name string, args []any) *shellrt.ForeignIterator {
+	signature, _ := module.StreamSignature(name)
+	return &shellrt.ForeignIterator{Element: signature.Iterator, Start: func(ctx context.Context) (shellrt.IteratorProcess, error) {
+		cmd, err := module.StreamCommand(name, args, false)
+		if err != nil {
+			return nil, err
+		}
+		return interp.StartLineCommand(ctx, cmd, 256)
+	}}
+}

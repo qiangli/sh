@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -338,7 +339,15 @@ func (r *Runner) bashPPForeignExchange(ctx context.Context, fn *bashPPForeignFun
 			}
 			values[i] = value
 		}
-		result, err = fn.module.Call(ctx, fn.export.Name, values...)
+		if signature, streaming := fn.module.StreamSignature(fn.export.Name); streaming {
+			if signature.Filter {
+				return polyglot.CallResult{}, fmt.Errorf("%s requires a byte-pipeline invocation", fn.qualified), true
+			}
+			cmd, commandErr := fn.module.StreamCommand(fn.export.Name, values, false)
+			result.Value, err = &bashPPForeignIterator{cmd: cmd, element: signature.Iterator}, commandErr
+		} else {
+			result, err = fn.module.Call(ctx, fn.export.Name, values...)
+		}
 	}
 	if result.Stdout != "" {
 		fmt.Fprint(r.stdout, result.Stdout)
@@ -364,6 +373,10 @@ func (r *Runner) bashPPInvokeForeign(ctx context.Context, fn *bashPPForeignFunc,
 		return nil
 	}
 	r.exit = exitStatus{}
+	if iterator, ok := result.Value.(*bashPPForeignIterator); ok {
+		r.bashPPResultCells = []*bashPPCell{{vr: expand.NewObject(iterator)}}
+		return []string{""}
+	}
 	if fn.direct {
 		if handle, ok := result.Value.(*polyglot.Handle); ok {
 			r.bashPPResultCells = []*bashPPCell{{vr: expand.NewObject(handle)}}
@@ -597,6 +610,52 @@ func (r *Runner) bashPPForeignCommand(word string) (*polyglot.Module, string, bo
 // foreground death, 128+signal; cancellation stops the shell as it would any
 // command. See [polyglot.Module.Command].
 func (r *Runner) bashPPRunForeignCommand(ctx context.Context, pos syntax.Pos, module *polyglot.Module, word, name string, argv []string) {
+	if signature, streaming := module.StreamSignature(name); streaming {
+		values := make([]any, len(argv))
+		for i, arg := range argv {
+			parameter := i
+			if signature.Filter {
+				parameter++
+			}
+			typ := "any"
+			if parameter < len(signature.Params) {
+				typ = signature.Params[parameter]
+			}
+			value, err := foreignArgument(arg, typ)
+			if err != nil {
+				r.errf("%s: %v\n", word, err)
+				r.exit.code = 2
+				return
+			}
+			values[i] = value
+		}
+		cmd, err := module.StreamCommand(name, values, signature.Filter)
+		if err != nil {
+			r.errf("%s: %v\n", word, err)
+			r.exit.code = 1
+			return
+		}
+		var upstream io.Reader = strings.NewReader("")
+		if r.stdin != nil {
+			upstream = r.stdin
+		}
+		filter, err := bashPPStartPipelineFilter(ctx, cmd, upstream, r.stdout, false)
+		if err != nil {
+			r.errf("%s: %v\n", word, err)
+			r.exit.code = 1
+			return
+		}
+		status, err := filter.Wait()
+		fmt.Fprint(r.stderr, filter.Stderr())
+		r.exit.code = uint8(status)
+		if ctx.Err() != nil {
+			r.exit.fatal(ctx.Err())
+		} else if err != nil && status == 0 {
+			r.errf("%s: %v\n", word, err)
+			r.exit.code = 1
+		}
+		return
+	}
 	result, err := module.Command(ctx, name, argv)
 	if result.Stdout != "" {
 		fmt.Fprint(r.stdout, result.Stdout)

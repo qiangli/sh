@@ -47,10 +47,12 @@ func (i bridgeImporter) importShellExec(path string) (*types.Package, error) {
 	source := `package shellexec
 import rt "` + i.path + `"
 import interp "mvdan.cc/sh/v3/interp"
+import polyglot "mvdan.cc/sh/v3/polyglot"
 type Option func()
 func BashPP() Option
 func New(options ...Option) rt.ShellFactory
 func RunnerOptions(opts ...interp.RunnerOption) Option
+func NewForeignIterator(module *polyglot.Module,name string,args []any) *rt.ForeignIterator
 `
 	file, err := parser.ParseFile(positions, "shellexec.go", source, 0)
 	if err != nil {

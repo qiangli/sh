@@ -36,6 +36,8 @@ type Signature struct {
 	Results  []string `json:"results"`
 	Dynamic  bool     `json:"dynamic"`
 	Variadic bool     `json:"variadic,omitempty"`
+	Iterator string   `json:"iterator,omitempty"`
+	Filter   bool     `json:"filter,omitempty"`
 }
 
 type Export struct {
@@ -1557,12 +1559,16 @@ src=sys.stdin.read()
 tree=ast.parse(src)
 nodes=tree.body
 if nodes and isinstance(nodes[0], ast.Expr) and isinstance(nodes[0].value, ast.Constant) and isinstance(nodes[0].value.value, str): nodes=nodes[1:]
-types={'int':'int','float':'float64','str':'string','bool':'bool','bytes':'bytes','None':'nil','Any':'any'}
+types={'int':'int','float':'float64','str':'string','bool':'bool','bytes':'bytes','None':'nil','Any':'any','TextIO':'textio'}
 def annotation_type(node):
     if isinstance(node,ast.Name): return types.get(node.id)
     if isinstance(node,ast.Constant) and node.value is None: return 'nil'
     if not isinstance(node,ast.Subscript) or not isinstance(node.value,ast.Name): return None
     origin=node.value.id
+    if origin in ('Iterator','Iterable','Generator'):
+        item=node.slice.elts[0] if isinstance(node.slice,ast.Tuple) else node.slice
+        typ=annotation_type(item)
+        return 'iterator:'+typ if typ is not None else None
     if origin in ('list','List'):
         return 'object' if annotation_type(node.slice) is not None else None
     if origin in ('dict','Dict'):
@@ -1587,7 +1593,8 @@ for node in nodes:
         params.append(typ or 'any')
     ret=annotation_type(node.returns)
     if ret is None: dynamic=True
-    if not node.name.startswith('_'): out.append({'name':node.name,'signature':{'params':params,'results':[] if ret=='nil' else [ret or 'any'],'dynamic':dynamic}})
+    iterator=ret.removeprefix('iterator:') if ret and ret.startswith('iterator:') else ''
+    if not node.name.startswith('_'): out.append({'name':node.name,'signature':{'params':params,'results':[] if ret=='nil' else ['any' if iterator else ret or 'any'],'dynamic':dynamic,'iterator':iterator,'filter':bool(iterator and params and params[0]=='textio')}})
 print(json.dumps(out,separators=(',',':')))
 `
 

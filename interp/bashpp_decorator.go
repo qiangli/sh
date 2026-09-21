@@ -5,6 +5,7 @@ package interp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strconv"
@@ -237,6 +238,10 @@ type bashPPDecoratorChain struct {
 	frame bashPPDecoratorFrame
 	// resultNames lets the body boundary re-read named results after defers.
 	resultNames []string
+	// ctxs is the context each open Next was entered with, innermost last,
+	// so a rung that cancelled its own child context can be told apart from
+	// a cancellation of the chain's caller.
+	ctxs []context.Context
 	// declScope is the TARGET's captured declaration scope for a typed
 	// target, and nil for a shell one: a typed rung's arguments evaluate
 	// there on every invocation, so neither a decorator's locals nor the
@@ -500,8 +505,25 @@ func (c *bashPPDecoratorChain) next(ctx context.Context) {
 	depth := c.depth
 	c.depth++
 	advised := c.call.Advised
+	c.ctxs = append(c.ctxs, ctx)
 	defer func() {
 		c.depth = depth
+		// A rung that ran Next under its own derived context (a timeout
+		// decorator) owns that context's cancellation: when the runner went
+		// fatal on exactly that error and the rung's own context is still
+		// live, the fatal unwinds no further than the rung, which seals the
+		// call with the status it chooses. A cancellation from outside the
+		// chain keeps unwinding.
+		c.ctxs = c.ctxs[:len(c.ctxs)-1]
+		if r.exit.fatalExit && ctx.Err() != nil && errors.Is(r.exit.err, ctx.Err()) {
+			outer := context.Background()
+			if n := len(c.ctxs); n > 0 {
+				outer = c.ctxs[n-1]
+			}
+			if outer.Err() == nil {
+				r.exit = exitStatus{code: r.exit.code}
+			}
+		}
 		// The rung this Next entered set Advised for its own run; the rung
 		// that resumes after Next is the one this restores, on the context
 		// and in the script-visible struct alike.

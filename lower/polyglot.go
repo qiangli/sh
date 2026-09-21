@@ -34,7 +34,16 @@ func (e *emitter) hasEmbeddedShellRuntime() bool {
 // through interp.ForeignImports so `alias.fn args` in a region reaches the
 // program's own worker (B8), not an external lookup.
 func (e *emitter) seedsForeignImports() bool {
-	return e.mixedShell && len(e.foreignImports) > 0
+	return e.mixedShell && (len(e.foreignImports) > 0 || e.hasForeignStreams())
+}
+
+func (e *emitter) hasForeignStreams() bool {
+	for _, f := range e.foreignFunctions {
+		if f.export.Signature.Iterator != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // isForeignWorkerVar reports whether a generated package-level name is one of
@@ -67,6 +76,16 @@ func (e *emitter) foreignImportSeed() string {
 			out.WriteString(",")
 		}
 		fmt.Fprintf(&out, "%s:%spython%d", strconv.Quote(alias), e.prefix, e.foreignImportAliases[alias])
+	}
+	for i, plan := range e.foreignPlans {
+		if plan.Alias == "" {
+			continue
+		}
+		if len(aliases) > 0 {
+			out.WriteString(",")
+		}
+		fmt.Fprintf(&out, "%s:%sforeign%d", strconv.Quote(plan.Alias), e.prefix, i)
+		aliases = append(aliases, plan.Alias)
 	}
 	out.WriteString("}))")
 	return out.String()
@@ -261,6 +280,7 @@ func (e *emitter) prepareForeign(ctx context.Context, file *syntax.File) error {
 }
 
 func (e *emitter) findPythonValues(file *syntax.File) {
+	e.foreignIteratorValues = map[string]bool{}
 	for range 3 {
 		syntax.Walk(file, func(node syntax.Node) bool {
 			d, ok := node.(*syntax.BashPPShortDecl)
@@ -269,6 +289,12 @@ func (e *emitter) findPythonValues(file *syntax.File) {
 			}
 			if d.Call != nil && e.pythonCallKind(d.Call) != "" || d.Expr != nil && e.pythonExpr(d.Expr) {
 				e.pythonValues[d.Lhs[0].Value] = true
+			}
+			if d.Call != nil {
+				if f, ok := e.foreignFunctions[strings.Join(names(d.Call.Fun), ".")]; ok && f.export.Signature.Iterator != "" {
+					e.foreignIteratorValues[d.Lhs[0].Value] = true
+					e.mixedShell = true
+				}
 			}
 			return true
 		})
@@ -528,7 +554,7 @@ func (e *emitter) foreignExports(exports []polyglot.Export) string {
 	var out strings.Builder
 	fmt.Fprintf(&out, "[]%spolyglot.Export{", e.prefix)
 	for _, export := range exports {
-		fmt.Fprintf(&out, "{Name:%s,Signature:%spolyglot.Signature{Params:%#v,Results:%#v,Dynamic:%t}},", strconv.Quote(export.Name), e.prefix, export.Signature.Params, export.Signature.Results, export.Signature.Dynamic)
+		fmt.Fprintf(&out, "{Name:%s,Signature:%spolyglot.Signature{Params:%#v,Results:%#v,Dynamic:%t,Iterator:%q,Filter:%t}},", strconv.Quote(export.Name), e.prefix, export.Signature.Params, export.Signature.Results, export.Signature.Dynamic, export.Signature.Iterator, export.Signature.Filter)
 	}
 	out.WriteByte('}')
 	return out.String()
@@ -584,6 +610,11 @@ func (e *emitter) foreignWrapper(receiver, module string, export polyglot.Export
 		fmt.Fprintf(&out, " (%s)", strings.Join(results, ","))
 	}
 	out.WriteString(" {\n")
+	if export.Signature.Iterator != "" {
+		values := strings.TrimPrefix(args, ",")
+		fmt.Fprintf(&out, "return %sshellexec.NewForeignIterator(%s,%q,[]any{%s})\n}\n", e.prefix, module, export.Name, values)
+		return out.String()
+	}
 	fmt.Fprintf(&out, "result, err := %s.Call(%s, %s%s)\n", module, ctx, strconv.Quote(export.Name), args)
 	fmt.Fprintf(&out, "if result.Stdout != \"\" { %sfmt.Fprint(%srt.Stdout, result.Stdout) }; if result.Stderr != \"\" { %sfmt.Fprint(%srt.Stderr, result.Stderr) }\n", e.prefix, e.prefix, e.prefix, e.prefix)
 	if export.Signature.Dynamic {
@@ -615,7 +646,7 @@ func (e *emitter) foreignErrAdapterName(plan int, export polyglot.Export) string
 // bashPPInvokeForeignErr is the same contract.
 func (e *emitter) foreignErrWrapper(plan int, module, alias string, export polyglot.Export) (source string) {
 	defer func() { source = e.foreignProgramStatus(source, e.prefix+"foreignProgram") }()
-	if export.Signature.Dynamic {
+	if export.Signature.Dynamic || export.Signature.Iterator != "" {
 		return ""
 	}
 	qualified := export.Name
@@ -764,6 +795,8 @@ func (e *emitter) framedForeignErrCall(c *syntax.BashPPCall, foreign foreignFunc
 
 func foreignGoType(typ string) string {
 	switch typ {
+	case "textio":
+		return "any"
 	case "bytes":
 		return "[]byte"
 	case "nil", "object", "handle", "callback":
