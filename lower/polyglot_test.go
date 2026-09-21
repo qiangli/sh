@@ -43,6 +43,13 @@ def loose(value):
 x, callErr := loose(ok)
 echo "$x:$callErr"
 `,
+		"dynamic structured error": `~~~python
+def fail():
+    raise ValueError("boom")
+~~~
+value, callErr := fail()
+echo "$value:$callErr"
+`,
 		"py alias launcher": `~~~py as py
 def main() -> str:
     return "launched"

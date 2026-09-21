@@ -13,7 +13,22 @@ import (
 )
 
 func (e *emitter) callResultTypes(c *syntax.BashPPCall) []string {
-	if c == nil || len(c.Fun) != 1 {
+	if c == nil {
+		return nil
+	}
+	if len(c.Fun) > 0 {
+		if foreign, ok := e.foreignFunctions[strings.Join(names(c.Fun), ".")]; ok {
+			if foreign.export.Signature.Dynamic {
+				return []string{"any", "error"}
+			}
+			result := make([]string, len(foreign.export.Signature.Results))
+			for i, typ := range foreign.export.Signature.Results {
+				result[i] = foreignGoType(typ)
+			}
+			return result
+		}
+	}
+	if len(c.Fun) != 1 {
 		return nil
 	}
 	if f := e.functionDecls[c.Fun[0].Value]; f != nil {

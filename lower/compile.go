@@ -1772,7 +1772,13 @@ func (e *emitter) call(c *syntax.BashPPCall) (string, error) {
 		if foreign.alias == "go" {
 			name = fmt.Sprintf("%sforeignAlias%d.%s", e.prefix, foreign.plan, foreign.export.Name)
 		}
-		return name + "(" + strings.Join(args, ",") + ")", nil
+		call := name + "(" + strings.Join(args, ",") + ")"
+		if frame != "" {
+			if types := e.callResultTypes(c); len(types) > 0 {
+				return e.framedForeignCall(c, call, frame, types), nil
+			}
+		}
+		return call, nil
 	}
 	if len(c.Fun) > 1 && e.execution && e.imports[c.Fun[0].Value] == "" {
 		return e.methodCall(c)

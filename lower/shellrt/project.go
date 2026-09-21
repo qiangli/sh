@@ -64,9 +64,9 @@ var (
 	jsonMarshalerType = reflect.TypeFor[json.Marshaler]()
 	textMarshalerType = reflect.TypeFor[encoding.TextMarshaler]()
 	stringerType      = reflect.TypeFor[fmt.Stringer]()
-	errorType         = reflect.TypeFor[error]()
 	jsonNumberType    = reflect.TypeFor[json.Number]()
 	isZeroerType      = reflect.TypeFor[interface{ IsZero() bool }]()
+	projectErrorType  = reflect.TypeFor[projectError]()
 )
 
 // ProjectionError is the typed failure a projection raises. It is a distinct
@@ -85,6 +85,20 @@ func AsProjectionError(recovered any) (*ProjectionError, bool) {
 	err, ok := recovered.(*ProjectionError)
 	return err, ok
 }
+
+type projectError interface {
+	shellrtProjectError() string
+}
+
+type trustedErrorText string
+
+func (e trustedErrorText) shellrtProjectError() string { return string(e) }
+func (e trustedErrorText) Error() string               { return string(e) }
+
+// TrustedErrorText adapts an already-sanitized error string for projection
+// without giving the projected value a caller-controlled Error method. It is
+// the only error-like dynamic value interfaceText trusts.
+func TrustedErrorText(message string) error { return trustedErrorText(message) }
 
 // ProjectErr renders value as the shell text for the given kind, returning any
 // failure. It is pure: it reads value, touches no package-level state, and in
@@ -134,6 +148,9 @@ func interfaceText(value any) (string, error) {
 	v := reflect.ValueOf(value)
 	if !v.IsValid() || isNilValue(v) {
 		return "", nil
+	}
+	if err, ok := value.(projectError); ok {
+		return err.shellrtProjectError(), nil
 	}
 	switch v.Kind() {
 	case reflect.Pointer:
@@ -340,7 +357,7 @@ func implementsUnsafeMethod(t reflect.Type) bool {
 	return t.Implements(jsonMarshalerType) ||
 		t.Implements(textMarshalerType) ||
 		t.Implements(stringerType) ||
-		t.Implements(errorType)
+		t.Implements(projectErrorType)
 }
 
 func validJSONMapKey(t reflect.Type) bool {

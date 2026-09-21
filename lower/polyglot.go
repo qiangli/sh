@@ -282,7 +282,8 @@ func (e *emitter) pythonAttr(selector *syntax.BashPPSelectorExpr) (string, error
 }
 
 func lowerForeignDecl(export polyglot.Export) *syntax.BashPPFuncDecl {
-	d := &syntax.BashPPFuncDecl{Name: &syntax.Lit{Value: export.Name}}
+	pos := syntax.NewPos(0, 1, 1)
+	d := &syntax.BashPPFuncDecl{Kw: &syntax.Lit{ValuePos: pos, Value: "func"}, Name: &syntax.Lit{ValuePos: pos, Value: export.Name}}
 	if export.Signature.Dynamic {
 		d.Params = []*syntax.BashPPField{{Names: []*syntax.Lit{{Value: "args"}}, FieldType: &syntax.Lit{Value: "any"}, Ellipsis: syntax.NewPos(0, 1, 1)}}
 		d.Results = []*syntax.BashPPField{{FieldType: &syntax.Lit{Value: "any"}}, {FieldType: &syntax.Lit{Value: "error"}}}
@@ -427,15 +428,38 @@ func (e *emitter) foreignWrapper(receiver, module string, export polyglot.Export
 	fmt.Fprintf(&out, "result, err := %s.Call(%scontext.Background(), %s%s)\n", module, e.prefix, strconv.Quote(export.Name), args)
 	fmt.Fprintf(&out, "if result.Stdout != \"\" { %sfmt.Fprint(%srt.Stdout, result.Stdout) }; if result.Stderr != \"\" { %sfmt.Fprint(%srt.Stderr, result.Stderr) }\n", e.prefix, e.prefix, e.prefix, e.prefix)
 	if export.Signature.Dynamic {
-		out.WriteString("return result.Value, err\n}\n")
+		fmt.Fprintf(&out, "if err != nil { return result.Value, %srt.TrustedErrorText(err.Error()) }; return result.Value, nil\n}\n", e.prefix)
 		return out.String()
 	}
 	if len(results) == 0 {
-		fmt.Fprintf(&out, "if err != nil { %srt.Fail(err) }; return\n}\n", e.prefix)
+		fmt.Fprintf(&out, "if err != nil { %srt.Fail(err); %srt.Status = %srt.ExitCode(err) }; return\n}\n", e.prefix, e.prefix, e.prefix)
 		return out.String()
 	}
 	zero := foreignZero(export.Signature.Results[0])
-	fmt.Fprintf(&out, "if err != nil { %srt.Fail(err); return %s }; return %s\n}\n", e.prefix, zero, foreignResultExpr("result.Value", export.Signature.Results[0]))
+	fmt.Fprintf(&out, "if err != nil { %srt.Fail(err); %srt.Status = %srt.ExitCode(err); return %s }; return %s\n}\n", e.prefix, e.prefix, e.prefix, zero, foreignResultExpr("result.Value", export.Signature.Results[0]))
+	return out.String()
+}
+
+func (e *emitter) framedForeignCall(node syntax.Node, call, frame string, types []string) string {
+	offset := 0
+	if node != nil {
+		offset = int(node.Pos().Offset())
+	}
+	temps := make([]string, len(types))
+	for i := range temps {
+		temps[i] = fmt.Sprintf("%sforeignResult%d_%d", e.prefix, offset, i)
+	}
+	var out strings.Builder
+	if len(types) == 1 {
+		fmt.Fprintf(&out, "func() %s {\n%sforeignStatus := %srt.Status\n%srt.Status = 0\n%s := %s\n", types[0], e.prefix, e.prefix, e.prefix, temps[0], call)
+	} else {
+		fmt.Fprintf(&out, "func() (%s) {\n%sforeignStatus := %srt.Status\n%srt.Status = 0\n%s := %s\n", strings.Join(types, ","), e.prefix, e.prefix, e.prefix, strings.Join(temps, ","), call)
+	}
+	fmt.Fprintf(&out, "if %srt.Status != 0 { return %s }\n%srt.Status = %sforeignStatus\n", e.prefix, strings.Join(temps, ","), e.prefix, e.prefix)
+	for i, temp := range temps {
+		fmt.Fprintf(&out, "%srt.MustResult(%srt.SetResult(%s,%d,%s))\n", e.prefix, e.prefix, frame, i, temp)
+	}
+	fmt.Fprintf(&out, "return %s\n}()", strings.Join(temps, ","))
 	return out.String()
 }
 

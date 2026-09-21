@@ -366,10 +366,10 @@ def fail():
 value, callErr := loose(ok)
 echo "$value:${callErr:+error}"
 failed, failErr := fail()
-echo "${failErr:+caught}"
+echo "$failErr"
 `
 	out, diagnostic, err := runPolyglot(t, dynamic)
-	if err != nil || out != "ok!:\ncaught\n" || diagnostic != "" {
+	if err != nil || out != "ok!:\nValueError: boom\n" || diagnostic != "" {
 		t.Fatalf("dynamic: out=%q diagnostic=%q err=%v", out, diagnostic, err)
 	}
 

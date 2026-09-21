@@ -6,6 +6,7 @@ package shellrt
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"math"
 	"os"
 	"os/exec"
@@ -128,18 +129,46 @@ type projMarshaler struct{ N int }
 
 func (projMarshaler) MarshalJSON() ([]byte, error) { panic("projection must not call MarshalJSON") }
 
+type projError struct {
+	N     int
+	calls *int
+}
+
+func (e projError) Error() string {
+	(*e.calls)++
+	panic("projection must not call Error")
+}
+
 // A map alias or struct carrying a caller method must not have that method run
 // during projection, and must not leak a marshaling handle.
 func TestProjectNeverRunsCallerMethods(t *testing.T) {
+	errorCalls := 0
 	for name, v := range map[string]any{
-		"stringer":  projStringer{N: 1},
-		"marshaler": projMarshaler{N: 1},
-		"nested":    projHolderOf(projStringer{N: 1}),
+		"stringer":     projStringer{N: 1},
+		"marshaler":    projMarshaler{N: 1},
+		"error object": projError{N: 1, calls: &errorCalls},
+		"nested":       projHolderOf(projStringer{N: 1}),
 	} {
 		got := Project(v, KindObject)
+		if name == "error object" {
+			if got != `{"N":1}` {
+				t.Fatalf("%s: got %s want JSON fields only", name, got)
+			}
+			continue
+		}
 		if got != InvalidObject {
 			t.Fatalf("%s: got %s want the fixed invalid marker", name, got)
 		}
+	}
+	var asInterface any = projError{N: 2, calls: &errorCalls}
+	if got, err := ProjectErr(asInterface, KindInterface); err != nil || got != `{"N":2}` {
+		t.Fatalf("interface custom error = %q, %v", got, err)
+	}
+	if errorCalls != 0 {
+		t.Fatalf("projection called Error %d times", errorCalls)
+	}
+	if got, err := ProjectErr(TrustedErrorText("trusted"), KindInterface); err != nil || got != "trusted" {
+		t.Fatalf("trusted adapter = %q, %v", got, err)
 	}
 }
 
@@ -321,6 +350,12 @@ func TestProjectInterfaceRootIsNilCapable(t *testing.T) {
 	}
 	if got, err := ProjectErr(any(projCount(7)), KindInterface); err != nil || got != "7" {
 		t.Fatalf("interface holding named scalar: got %q, %v; want 7", got, err)
+	}
+	if got, err := ProjectErr(TrustedErrorText("boom"), KindInterface); err != nil || got != "boom" {
+		t.Fatalf("interface holding trusted error text: got %q, %v; want boom", got, err)
+	}
+	if got, err := ProjectErr(fmt.Errorf("boom"), KindInterface); err != nil || got != "" {
+		t.Fatalf("interface holding generic error: got %q, %v; want empty pointer projection", got, err)
 	}
 }
 
