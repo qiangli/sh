@@ -349,6 +349,9 @@ func (r *Runner) bashPPInvokeForeign(ctx context.Context, fn *bashPPForeignFunc,
 	}
 	r.exit = exitStatus{}
 	value := foreignResult(result.Value)
+	if err != nil && len(fn.export.Signature.Results) > 0 {
+		value = foreignZero(fn.export.Signature.Results[0])
+	}
 	if len(fn.export.Signature.Results) == 1 && fn.export.Signature.Results[0] == "object" {
 		r.bashPPResultCells = []*bashPPCell{{vr: expand.NewObject(result.Value)}}
 	}
@@ -359,6 +362,88 @@ func (r *Runner) bashPPInvokeForeign(ctx context.Context, fn *bashPPForeignFunc,
 		return nil
 	}
 	return []string{value}
+}
+
+func (r *Runner) bashPPInvokeForeignErr(ctx context.Context, fn *bashPPForeignFunc, args []string) []string {
+	var result polyglot.CallResult
+	var err error
+	if fn.direct {
+		values := make([]any, len(args))
+		for i, arg := range args {
+			values[i] = arg
+			if i < len(fn.argCells) && fn.argCells[i] != nil && fn.argCells[i].vr.Kind == expand.Object {
+				values[i] = fn.argCells[i].vr.Obj
+			}
+		}
+		positional := len(values) - len(fn.argNames)
+		kwargs := make(map[string]any, len(fn.argNames))
+		for i, name := range fn.argNames {
+			kwargs[name] = values[positional+i]
+		}
+		values = values[:positional]
+		if fn.receiver != nil {
+			if fn.export.Name == "" {
+				result, err = fn.receiver.Call(ctx, values, kwargs)
+			} else {
+				result, err = fn.receiver.CallAttr(ctx, fn.export.Name, values, kwargs)
+			}
+		} else {
+			result, err = fn.module.CallKeywords(ctx, fn.export.Name, values, kwargs)
+		}
+	} else {
+		values := make([]any, len(args))
+		for i, arg := range args {
+			typ := "any"
+			if len(fn.export.Signature.Params) > 0 {
+				if i < len(fn.export.Signature.Params) {
+					typ = fn.export.Signature.Params[i]
+				} else if fn.export.Signature.Variadic {
+					typ = fn.export.Signature.Params[len(fn.export.Signature.Params)-1]
+				}
+			}
+			value, convErr := foreignArgument(arg, typ)
+			if convErr != nil {
+				r.errf("bash++: %s argument %d: %v\n", fn.qualified, i+1, convErr)
+				r.exit.code = 2
+				return nil
+			}
+			values[i] = value
+		}
+		result, err = fn.module.Call(ctx, fn.export.Name, values...)
+	}
+	if result.Stdout != "" {
+		fmt.Fprint(r.stdout, result.Stdout)
+	}
+	if result.Stderr != "" {
+		fmt.Fprint(r.stderr, result.Stderr)
+	}
+	r.exit = exitStatus{}
+	value := foreignResult(result.Value)
+	if err != nil && len(fn.export.Signature.Results) > 0 {
+		value = foreignZero(fn.export.Signature.Results[0])
+	}
+	cells := []*bashPPCell{{vr: expand.Variable{Set: true, Kind: expand.String, Str: value}}, bashPPForeignErrorCell(err)}
+	if err == nil && len(fn.export.Signature.Results) == 1 && fn.export.Signature.Results[0] == "object" {
+		cells[0] = &bashPPCell{vr: expand.NewObject(result.Value)}
+	}
+	r.bashPPResultCells = cells
+	if err != nil {
+		return []string{value, err.Error()}
+	}
+	return []string{value, ""}
+}
+
+func bashPPForeignErrorCell(err error) *bashPPCell {
+	errType := &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "error"}}
+	if err == nil {
+		return &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String}, declType: errType, interfaceValue: &bashPPInterfaceValue{nilIface: true}}
+	}
+	payload := &bashPPCell{vr: expand.NewObject(err), declType: errType}
+	return &bashPPCell{
+		vr:             expand.Variable{Set: true, Kind: expand.String, Str: err.Error()},
+		declType:       errType,
+		interfaceValue: &bashPPInterfaceValue{cell: payload, dynamic: errType},
+	}
 }
 
 func foreignArgument(text, typ string) (any, error) {
@@ -389,6 +474,16 @@ func foreignArgument(text, typ string) (any, error) {
 	default:
 		return text, nil
 	}
+}
+
+func foreignZero(typ string) string {
+	switch typ {
+	case "bool":
+		return "false"
+	case "float64", "int":
+		return "0"
+	}
+	return ""
 }
 
 func normalizeForeignJSON(value any) (any, error) {

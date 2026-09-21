@@ -2436,7 +2436,14 @@ func (r *Runner) bashPPShortDeclCall(ctx context.Context, d *syntax.BashPPShortD
 		return
 	}
 	shortFailureMark := r.bashPPShortFailureSeq
-	results := r.bashPPInvoke(ctx, fn, args)
+	effectiveResults := fn.results()
+	var results []string
+	if fn.foreign != nil && !fn.foreign.export.Signature.Dynamic && len(fn.foreign.export.Signature.Results) > 0 && len(d.Lhs) == len(fn.foreign.export.Signature.Results)+1 {
+		results = r.bashPPInvokeForeignErr(ctx, fn.foreign, args)
+		effectiveResults = append(append([]*syntax.BashPPField(nil), effectiveResults...), &syntax.BashPPField{FieldType: &syntax.Lit{Value: "error"}})
+	} else {
+		results = r.bashPPInvoke(ctx, fn, args)
+	}
 	// A call abandoned by panic or hard termination produced no values. Do not
 	// turn that control transfer into a secondary assignment-mismatch error;
 	// the caller's frame must get the original unwind unchanged.
@@ -2449,8 +2456,8 @@ func (r *Runner) bashPPShortDeclCall(ctx context.Context, d *syntax.BashPPShortD
 		r.exit = exitStatus{code: 2}
 		return
 	}
-	resultTypes := bashppResultTypes(fn.results())
-	resultTypeExprs := bashppResultTypeExprs(fn.results())
+	resultTypes := bashppResultTypes(effectiveResults)
+	resultTypeExprs := bashppResultTypeExprs(effectiveResults)
 	for i, lhs := range d.Lhs {
 		// Go's blank identifier discards the result: `_, err := f()` declares
 		// no binding for the first result, so there is nothing to look up and

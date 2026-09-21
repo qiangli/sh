@@ -50,6 +50,20 @@ def fail():
 value, callErr := fail()
 echo "$value:$callErr"
 `,
+		"typed structured error opt in": `~~~python
+def fail() -> int:
+    raise ValueError("boom")
+~~~
+value, callErr := fail()
+echo "value=$value err=$callErr status=$?"
+`,
+		"typed structured success opt in": `~~~python
+def ok() -> int:
+    return 7
+~~~
+value, callErr := ok()
+echo "value=$value err=$callErr status=$?"
+`,
 		"py alias launcher": `~~~py as py
 def main() -> str:
     return "launched"
@@ -112,6 +126,15 @@ x := rs.add(20, 22)
 echo "x=$x"
 `, "input.bpp")
 	if got != "rust\nx=42\n" {
+		t.Fatalf("output = %q", got)
+	}
+	got = testPythonFenceInterpretedNativeParityAt(t, `~~~rust as rs
+pub fn checked() -> Result<i64, String> { Err("negative".into()) }
+~~~
+value, callErr := rs.checked()
+echo "value=$value err=$callErr status=$?"
+`, "input.bpp")
+	if got != "value=0 err=RUST-ECALL: negative status=0\n" {
 		t.Fatalf("output = %q", got)
 	}
 }

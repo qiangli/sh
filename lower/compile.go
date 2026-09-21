@@ -43,6 +43,7 @@ type emitter struct {
 	resultTypes          []string
 	resultNames          []string
 	resultCallFrame      string
+	resultCallWant       int
 	dotNames             map[string]bool
 	declaredGlobals      map[string]bool
 	iotaValue            *int
@@ -1229,8 +1230,10 @@ func (e *emitter) command(c syntax.Command) (string, error) {
 		var err error
 		switch {
 		case n.Call != nil:
-
+			savedWant := e.resultCallWant
+			e.resultCallWant = len(n.Lhs)
 			rhs, err = e.call(n.Call)
+			e.resultCallWant = savedWant
 		case n.Expr != nil:
 			if assertion, ok := n.Expr.(*syntax.BashPPTypeAssertExpr); ok {
 				rhs, err = e.valueAssertion(assertion, len(n.Lhs) == 2)
@@ -1773,6 +1776,9 @@ func (e *emitter) call(c *syntax.BashPPCall) (string, error) {
 			name = fmt.Sprintf("%sforeignAlias%d.%s", e.prefix, foreign.plan, foreign.export.Name)
 		}
 		call := name + "(" + strings.Join(args, ",") + ")"
+		if e.resultCallWant > 0 && e.resultCallWant == len(foreign.export.Signature.Results)+1 && len(foreign.export.Signature.Results) > 0 && !foreign.export.Signature.Dynamic {
+			return e.framedForeignErrCall(c, foreign, frame)
+		}
 		if frame != "" {
 			if types := e.callResultTypes(c); len(types) > 0 {
 				return e.framedForeignCall(c, call, frame, types), nil

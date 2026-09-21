@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -271,6 +272,33 @@ def fail():
 	detail, ok := ForeignErrorDetail(err)
 	if !ok || detail.Code != "RuntimeError" || detail.Cause == nil || detail.Cause.Code != "ValueError" {
 		t.Fatalf("nested Python error = %#v, ok=%t (%v)", detail, ok, err)
+	}
+}
+
+func TestPythonStructuredErrorsConcurrent(t *testing.T) {
+	plan := pythonPlan(t, `
+def fail():
+    raise ValueError("boom")
+`)
+	module := Start(plan, Python{})
+	defer module.Close()
+	var wg sync.WaitGroup
+	errs := make(chan error, 8)
+	for i := 0; i < cap(errs); i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := module.Call(context.Background(), "fail")
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		detail, ok := ForeignErrorDetail(err)
+		if !ok || detail.Code != "ValueError" || detail.Message != "boom" {
+			t.Fatalf("concurrent structured error = %#v, ok=%t (%v)", detail, ok, err)
+		}
 	}
 }
 

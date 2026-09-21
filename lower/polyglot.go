@@ -348,10 +348,12 @@ func (e *emitter) foreignDeclarations() string {
 			fmt.Fprintf(&out, "type %s struct{}\nvar %s %s\n", typ, alias, typ)
 			for _, export := range plan.Exports {
 				out.WriteString(e.foreignWrapper("("+alias+" "+typ+") ", module, export))
+				out.WriteString(e.foreignErrWrapper(i, module, export))
 			}
 		} else {
 			for _, export := range plan.Exports {
 				out.WriteString(e.foreignWrapper("", module, export))
+				out.WriteString(e.foreignErrWrapper(i, module, export))
 			}
 		}
 	}
@@ -440,6 +442,54 @@ func (e *emitter) foreignWrapper(receiver, module string, export polyglot.Export
 	return out.String()
 }
 
+func (e *emitter) foreignErrAdapterName(plan int, export polyglot.Export) string {
+	return fmt.Sprintf("%sforeignErr%d_%s", e.prefix, plan, export.Name)
+}
+
+func (e *emitter) foreignErrWrapper(plan int, module string, export polyglot.Export) string {
+	if export.Signature.Dynamic || len(export.Signature.Results) == 0 {
+		return ""
+	}
+	var params []string
+	for i, typ := range export.Signature.Params {
+		if export.Signature.Variadic && i == len(export.Signature.Params)-1 {
+			params = append(params, fmt.Sprintf("arg%d ...%s", i, foreignGoType(typ)))
+		} else {
+			params = append(params, fmt.Sprintf("arg%d %s", i, foreignGoType(typ)))
+		}
+	}
+	var results []string
+	for _, typ := range export.Signature.Results {
+		results = append(results, foreignGoType(typ))
+	}
+	args := ""
+	if export.Signature.Variadic {
+		args = fmt.Sprintf("%spolyglot.StringsToAny(arg0)...", e.prefix)
+	} else {
+		names := make([]string, len(export.Signature.Params))
+		for i := range names {
+			names[i] = fmt.Sprintf("arg%d", i)
+		}
+		args = strings.Join(names, ",")
+	}
+	if args != "" {
+		args = "," + args
+	}
+	var out strings.Builder
+	fmt.Fprintf(&out, "func %s(%s) (%s,error) {\n", e.foreignErrAdapterName(plan, export), strings.Join(params, ","), strings.Join(results, ","))
+	fmt.Fprintf(&out, "result, err := %s.Call(%scontext.Background(), %s%s)\n", module, e.prefix, strconv.Quote(export.Name), args)
+	fmt.Fprintf(&out, "if result.Stdout != \"\" { %sfmt.Fprint(%srt.Stdout, result.Stdout) }; if result.Stderr != \"\" { %sfmt.Fprint(%srt.Stderr, result.Stderr) }\n", e.prefix, e.prefix, e.prefix, e.prefix)
+	zeros := make([]string, len(export.Signature.Results))
+	returns := make([]string, len(export.Signature.Results))
+	for i, typ := range export.Signature.Results {
+		zeros[i] = foreignZero(typ)
+		returns[i] = foreignResultExpr("result.Value", typ)
+	}
+	fmt.Fprintf(&out, "if err != nil { %srt.Status = 0; return %s,err }\n", e.prefix, strings.Join(zeros, ","))
+	fmt.Fprintf(&out, "return %s,err\n}\n", strings.Join(returns, ","))
+	return out.String()
+}
+
 func (e *emitter) framedForeignCall(node syntax.Node, call, frame string, types []string) string {
 	offset := 0
 	if node != nil {
@@ -461,6 +511,48 @@ func (e *emitter) framedForeignCall(node syntax.Node, call, frame string, types 
 	}
 	fmt.Fprintf(&out, "return %s\n}()", strings.Join(temps, ","))
 	return out.String()
+}
+
+func (e *emitter) framedForeignErrCall(c *syntax.BashPPCall, foreign foreignFunction, frame string) (string, error) {
+	offset := 0
+	if c != nil {
+		offset = int(c.Pos().Offset())
+	}
+	values := make([]string, len(c.Args))
+	for i := range c.Args {
+		values[i] = fmt.Sprintf("%sforeignArg%d_%d", e.prefix, offset, i)
+	}
+	resultTypes := make([]string, len(foreign.export.Signature.Results))
+	zeros := make([]string, len(resultTypes))
+	for i, typ := range foreign.export.Signature.Results {
+		resultTypes[i] = foreignGoType(typ)
+		zeros[i] = foreignZero(typ)
+	}
+	for i := range c.Args {
+		value, err := e.callArgument(c, i)
+		if err != nil {
+			return "", err
+		}
+		values[i] = value
+	}
+	call := e.foreignErrAdapterName(foreign.plan, foreign.export) + "(" + strings.Join(values, ",") + ")"
+	if frame == "" {
+		return call, nil
+	}
+	temps := make([]string, len(resultTypes))
+	for i := range temps {
+		temps[i] = fmt.Sprintf("%sforeignResult%d_%d", e.prefix, offset, i)
+	}
+	var out strings.Builder
+	fmt.Fprintf(&out, "func() (%s,error) {\n%sforeignStatus := %srt.Status\n%srt.Status = 0\n%s, err := %s\n", strings.Join(resultTypes, ","), e.prefix, e.prefix, e.prefix, strings.Join(temps, ","), call)
+	fmt.Fprintf(&out, "if err != nil { %srt.Status = 0; %srt.MustResult(%srt.SetResult(%s,%d,err)); return %s,err }\n", e.prefix, e.prefix, e.prefix, frame, len(resultTypes), strings.Join(zeros, ","))
+	fmt.Fprintf(&out, "%srt.Status = %sforeignStatus\n", e.prefix, e.prefix)
+	for i, temp := range temps {
+		fmt.Fprintf(&out, "%srt.MustResult(%srt.SetResult(%s,%d,%s))\n", e.prefix, e.prefix, frame, i, temp)
+	}
+	fmt.Fprintf(&out, "%srt.MustResult(%srt.SetResult(%s,%d,err))\n", e.prefix, e.prefix, frame, len(resultTypes))
+	fmt.Fprintf(&out, "return %s,err\n}()", strings.Join(temps, ","))
+	return out.String(), nil
 }
 
 func foreignGoType(typ string) string {
