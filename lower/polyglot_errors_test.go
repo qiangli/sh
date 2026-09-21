@@ -135,7 +135,7 @@ func TestForeignErrorOptInPython(t *testing.T) {
 		{"annotation violation stays infrastructure", "value, callErr := lie()\necho \"value=$value err=$callErr status=$?\"\n",
 			foreignOutcome{"value=0 err= status=1\n", "bash++: foreign call lie failed: Python function lie violated its int result annotation: got string\n"}},
 		{"worker death stays infrastructure", "value, callErr := die()\necho \"value=$value err=$callErr status=$?\"\n",
-			foreignOutcome{"value=0 err= status=1\n", "bash++: foreign call die failed: EOF\n"}},
+			foreignOutcome{"value=0 err= status=1\n", "bash++: foreign call die failed: Python worker exited with status 3\n"}},
 		{"zero result success", "err := touch()\necho \"err=$err status=$?\"\n",
 			foreignOutcome{"touched\nerr= status=0\n", ""}},
 		{"zero result domain error", "err := boom()\necho \"err=$err status=$?\"\n",
@@ -226,20 +226,34 @@ func TestForeignErrorOptInGeneratedShape(t *testing.T) {
 			generated := strings.ReplaceAll(strings.ReplaceAll(string(result.Source), "\t", ""), " ", "")
 			want := []string{
 				"var__bpp0_foreign0=__bpp0_polyglot.Start(",
-				"func__bpp0_foreignErr0_fail()(int,error){",
-				"func__bpp0_foreignErr0_touch()error{",
 				"if_,foreign:=__bpp0_polyglot.ForeignErrorDetail(err);!foreign{",
 				"__bpp0_rt.Fail(__bpp0_fmt.Errorf(\"bash++:foreigncallfailfailed:%w\",err))",
 			}
 			if mode == "execution" {
+				// The accepted callback bridge carries context and status on
+				// each calling Program, including these error-opt-in wrappers.
 				want = append(want,
+					"type__bpp0_foreignProgramState=__bpp0_rt.Program",
+					"func__bpp0_foreignErr0_fail(__bpp0_foreignProgram*__bpp0_foreignProgramState)(int,error){",
+					"func__bpp0_foreignErr0_touch(__bpp0_foreignProgram*__bpp0_foreignProgramState)error{",
+					"__bpp0_foreign0.Call(__bpp0_foreignProgram.Context,\"fail\")",
+					"__bpp0_foreign0.Call(__bpp0_foreignProgram.Context,\"touch\")",
+					"__bpp0_foreignErr0_fail(__bpp0_program)\n",
+					"__bpp0_foreignErr0_touch(__bpp0_program)\n",
+					"__bpp0_foreignProgram.SetStatus(__bpp0_rt.ExitCode(err))",
 					"__bpp0_program.SetStatus(__bpp0_foreignExit)",
 					",0,__bpp0_foreignResult",
 					",1,err))",
 					",0,err))",
 				)
 			} else {
-				want = append(want, "__bpp0_foreignErr0_fail()\n", "__bpp0_foreignErr0_touch()\n")
+				want = append(want,
+					"func__bpp0_foreignErr0_fail()(int,error){",
+					"func__bpp0_foreignErr0_touch()error{",
+					"__bpp0_foreign0.Call(__bpp0_context.Background(),\"fail\")",
+					"__bpp0_foreign0.Call(__bpp0_context.Background(),\"touch\")",
+					"__bpp0_foreignErr0_fail()\n", "__bpp0_foreignErr0_touch()\n",
+				)
 			}
 			for _, fragment := range want {
 				if !strings.Contains(generated, fragment) {
