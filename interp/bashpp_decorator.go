@@ -548,6 +548,10 @@ func (c *bashPPDecoratorChain) next(ctx context.Context) {
 		c.fail("BASHPP-EDECO-SIG: %s is not a decorator: a shell function has no *Call parameter\n", rung.name)
 		return
 	}
+	if rung.name == bashPPTimedDecoratorName {
+		c.runNative(ctx, rung, bashPPTimedDecorator(r))
+		return
+	}
 	c.fail("BASHPP-EDECO-UNDEF: decorator %s is not defined\n", rung.name)
 }
 

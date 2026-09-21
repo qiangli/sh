@@ -76,6 +76,17 @@ func genericMethodOracle(t *testing.T, source string) (string, string, int) {
 
 func executeBuild(t *testing.T, r compiledCase, flags ...string) (string, string) {
 	t.Helper()
+	return executeBuildNormalized(t, r, nil, flags...)
+}
+
+// executeBuildNormalized is executeBuild with a hook for legitimately
+// nondeterministic output: normalize (when non-nil) rewrites each engine's
+// stdout and stderr before the byte-for-byte parity diff, and the normalized
+// compiled streams are what the caller receives. The @timed attestation line
+// is the one consumer: its measured duration differs per run by design, so
+// parity is proven on the line with the duration canonicalized.
+func executeBuildNormalized(t *testing.T, r compiledCase, normalize func(string) string, flags ...string) (string, string) {
+	t.Helper()
 	dir := t.TempDir()
 	p := filepath.Join(dir, "generated.go")
 	if err := os.WriteFile(p, r.Source, 0600); err != nil {
@@ -131,11 +142,17 @@ func executeBuild(t *testing.T, r compiledCase, flags ...string) (string, string
 		}
 		interpretedStatus = int(exit)
 	}
+	compiledOut, compiledErr := out.String(), stderr.String()
+	interpretedOut, interpretedErr := interpOut.String(), interpErr.String()
+	if normalize != nil {
+		compiledOut, compiledErr = normalize(compiledOut), normalize(compiledErr)
+		interpretedOut, interpretedErr = normalize(interpretedOut), normalize(interpretedErr)
+	}
 	if compiledStatus != interpretedStatus {
-		t.Fatalf("status compiled=%d interpreted=%d; compiled=(%q,%q), interpreted=(%q,%q)", compiledStatus, interpretedStatus, out.String(), stderr.String(), interpOut.String(), interpErr.String())
+		t.Fatalf("status compiled=%d interpreted=%d; compiled=(%q,%q), interpreted=(%q,%q)", compiledStatus, interpretedStatus, compiledOut, compiledErr, interpretedOut, interpretedErr)
 	}
-	if out.String() != interpOut.String() || stderr.String() != interpErr.String() {
-		t.Fatalf("parity mismatch: compiled=(%q,%q), interpreted=(%q,%q)\n%s", out.String(), stderr.String(), interpOut.String(), interpErr.String(), r.Source)
+	if compiledOut != interpretedOut || compiledErr != interpretedErr {
+		t.Fatalf("parity mismatch: compiled=(%q,%q), interpreted=(%q,%q)\n%s", compiledOut, compiledErr, interpretedOut, interpretedErr, r.Source)
 	}
-	return out.String(), stderr.String()
+	return compiledOut, compiledErr
 }
