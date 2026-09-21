@@ -244,8 +244,10 @@ type Runner struct {
 	bashPPDeferDepth int
 	// bashPPConcurrent is intentionally runner-session local.  It is shared
 	// only by Bash++ go tasks, never by shell copies such as subshells.
-	bashPPConcurrent     *bashPPConcurrent
-	bashPPIssuedHandles  *bashPPHandleProvenance
+	bashPPConcurrent    *bashPPConcurrent
+	bashPPIssuedHandles *bashPPHandleProvenance
+	// bashPPProcs registers live start(...) handles; shared with subshells.
+	bashPPProcs          *bashPPProcessTable
 	bashPPCallChannels   []*bashPPChannel
 	bashPPCallInterfaces []*bashPPInterfaceValue
 	bashPPCallCells      []*bashPPCell
@@ -3682,6 +3684,7 @@ func (r *Runner) subshell(background bool) *Runner {
 		openHandler:          r.openHandler,
 		dryRunOpenHandler:    r.dryRunOpenHandler,
 		bashPPCustomOpen:     r.bashPPCustomOpen,
+		bashPPProcs:          r.bashPPProcs,
 		readDirHandler:       r.readDirHandler,
 		statHandler:          r.statHandler,
 		stdin:                r.stdin,

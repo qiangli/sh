@@ -1285,6 +1285,12 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 	// Rhs never matches a multi-name left-hand side; the real arity check is
 	// against the function's declared results, done inside.
 	if d.Call != nil {
+		// `status, err := p.Wait()` on a live start(...) handle: the handle
+		// is an opaque Object, never a declared function, so it is answered
+		// before the selector lookup would report it has no typed path.
+		if r.bashPPShortDeclProcessWait(ctx, d) {
+			return
+		}
 		if r.bashPPEnumConstruct(d) {
 			return
 		}
@@ -1354,6 +1360,9 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 		// before the generic imported-selector delegation hands it to the
 		// toolchain. See bashpp_capture.go.
 		if r.bashPPShortDeclCapture(ctx, d) {
+			return
+		}
+		if r.bashPPShortDeclStart(ctx, d) {
 			return
 		}
 		if r.bashPPShortDeclDecode(ctx, d) {
@@ -2145,6 +2154,12 @@ func (r *Runner) bashPPCall(ctx context.Context, c *syntax.BashPPCall) {
 	// always wins over a same-named tool binding. A Go computed callee —
 	// `fs[i]()`, `get()()`, `(*T).M(p)` — resolves to its function value the
 	// same way it does in expression position.
+	// `p.Wait()` / `p.Close()` on a live start(...) handle; see
+	// bashpp_process_surface.go. The handle is an opaque Object, so the
+	// selector lookup below could only report it has no typed path.
+	if r.bashPPProcessCommandCall(ctx, c) {
+		return
+	}
 	if fn, ok := r.bashPPLookupFunc(c); ok {
 		args, ok := r.bashPPCallValues(c, fn)
 		if !ok {

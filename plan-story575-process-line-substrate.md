@@ -88,10 +88,36 @@ Recorded in full in the header of `interp/bashpp_process_test.go`:
 
 ## Surface status
 
-The substrate (this commit) is complete, race-clean, and is the artefact the
-downstream streaming stories (B5/B7) consume. The `run(...).Lines()` and
-`start(...)` **surface spellings** additionally require dialect parser support
-for a `.method(...)` tail after a call and a runtime method-dispatch hook for
-capture-objects / live handles (the shell-dialect `bashppParenForm` call
-terminator does not admit a chained call today; see `syntax/bashpp_short.go`).
-That surface wiring is tracked as remaining work on top of this substrate.
+The substrate is complete and the dialect spellings are wired on top of it
+(`interp/bashpp_process_surface.go`), through the narrowest seams the story
+permits — no general method evaluator, no second streaming abstraction:
+
+- **Parser** (`syntax/bashpp_concurrency.go`, `bashppRangeLinesCall`): a range
+  admits exactly one chained call, `x.Lines()` (two-part selector, no
+  arguments), recorded as `BashPPRange.Call`; `Chan` keeps the spelled text so
+  the printer round-trips and `Walk` needs no new case. `p, err := start(...)`
+  and `status, err := p.Wait()` / `p.Close()` already parse as `BashPPCall`s.
+- **B13** `for line := range r.Lines()` over a completed `run(...)` result
+  splits the buffered `Stdout` with the same scanner boundaries as the live
+  substrate (`bashPPSplitLines`): final unterminated line is a line, empty
+  middle lines are lines, a trailing newline adds nothing. It never streams.
+- **B14** `p, err := start(...)` launches argv in an in-process subshell as a
+  `bashPPProcessSource` (`bashPPSubshellSource`: stdout piped to the substrate,
+  stderr passed straight through, cancel = kill, done = wait) and binds an
+  opaque handle Object. `range p.Lines()` receives from the bounded channel and
+  is cancellable by the runner's context (cancel → kill, drain, reap; `Wait`
+  then reports the cancellation). `status, err := p.Wait()` is exact-once and
+  the sole blocking call. `p.Close()` abandons early (kill, drain, reap) and is
+  a no-op after `Wait`. Both dispatch ahead of the selector lookup, only when
+  the base name is a live handle.
+- **Lowering**: `run`/`capture`/`start` are the interpreter's process boundary
+  and are not lowered; a `range x.Lines()` reports itself interpreter-only
+  rather than emitting Go that could not compile (`lower/callables.go`).
+
+Acceptance tests for the literal spellings (`interp/bashpp_process_surface_test.go`,
+`TestBashPPRunLines*` / `TestBashPPStart*`) carry the same os/exec go1.27.1
+BSD-3-Clause and Bash 5.3 exit-status provenance as the substrate tests, and
+cover: empty / final unterminated / empty middle lines, non-zero status,
+cancellation, early close + reap, large stdout **and** stderr, exact-once
+wait, signal status (143), diagnostics, printer round-trip, and no goroutine
+leak.
