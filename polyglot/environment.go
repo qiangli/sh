@@ -142,7 +142,7 @@ func DiscoverEnvironment(request EnvironmentRequest) (EnvironmentPlan, error) {
 		lang = "python"
 	}
 	lang = canonicalLanguage(lang)
-	if lang != "python" && lang != "typescript" && lang != "rust" && lang != "c" && lang != "cpp" && lang != "go" {
+	if !languageFlag(lang, func(l Language) bool { return l.NeedsEnvironment }) {
 		return EnvironmentPlan{}, fmt.Errorf("polyglot: no environment metadata reader for %q", lang)
 	}
 	if request.Source == "" {

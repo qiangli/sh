@@ -9,6 +9,7 @@ import (
 	"go/parser"
 	"go/token"
 	"go/types"
+	"path"
 	"reflect"
 	"sort"
 	"strconv"
@@ -58,12 +59,7 @@ type emitter struct {
 	foreignImports        []polyglot.ImportPlan
 	foreignImportAliases  map[string]int
 	pythonValues          map[string]bool
-	foreignPythonEnv      *polyglot.EnvironmentPlan
-	foreignTypeScriptEnv  *polyglot.EnvironmentPlan
-	foreignRustEnv        *polyglot.EnvironmentPlan
-	foreignCEnv           *polyglot.EnvironmentPlan
-	foreignCPPEnv         *polyglot.EnvironmentPlan
-	foreignGoEnv          *polyglot.EnvironmentPlan
+	foreignEnvs           map[string]*polyglot.EnvironmentPlan
 	goErrorFuncs          map[*syntax.BashPPFuncDecl]bool
 	methodDeclarations    []*syntax.BashPPFuncDecl
 	enumMembers           map[string][]*syntax.Lit
@@ -435,9 +431,7 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 	if len(e.foreignPlans) > 0 || len(e.foreignImports) > 0 {
 		imports = append(imports, "context", "mvdan.cc/sh/v3/polyglot")
 	}
-	if e.hasEmbeddedShellRuntime() {
-		imports = append(imports, "mvdan.cc/sh/v3/interp")
-	}
+	imports = append(imports, e.loweredRuntimeImports()...)
 	if e.bridge {
 		imports = append(imports, options.Runtime)
 	}
@@ -468,8 +462,8 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 		fmt.Fprintf(&raw, "import %scontext \"context\"\n", e.prefix)
 		fmt.Fprintf(&raw, "import %spolyglot \"mvdan.cc/sh/v3/polyglot\"\n", e.prefix)
 	}
-	if e.hasEmbeddedShellRuntime() {
-		fmt.Fprintf(&raw, "import %sinterp \"mvdan.cc/sh/v3/interp\"\n", e.prefix)
+	for _, importPath := range e.loweredRuntimeImports() {
+		fmt.Fprintf(&raw, "import %s%s %s\n", e.prefix, path.Base(importPath), strconv.Quote(importPath))
 	}
 	if e.bridge {
 		fmt.Fprintf(&raw, "import %srt %s\n", e.prefix, strconv.Quote(options.Runtime))

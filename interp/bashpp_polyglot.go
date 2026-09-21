@@ -103,48 +103,35 @@ func (r *Runner) bashPPPrepareSourceBlocks(ctx context.Context, file *syntax.Fil
 		r.bashPPForeignFuncs = map[string]*bashPPFunc{}
 		return restore, nil
 	}
-	pythonRuntime := polyglot.Python{}
-	typeScriptRuntime := polyglot.TypeScript{}
-	rustRuntime := polyglot.Rust{}
-	cRuntime := polyglot.C{}
-	cppRuntime := polyglot.CPP{}
-	goRuntime := polyglot.Go{}
-	bashRuntime := ShellRuntime("bash", r.Dir, execEnv(r.writeEnv))
-	shRuntime := ShellRuntime("sh", r.Dir, execEnv(r.writeEnv))
+	// One runtime per language per source unit, constructed from its row;
+	// a language without a row reaches Prepare, which names it in its
+	// refusal.
+	runtimes := map[string]polyglot.LanguageRuntime{}
+	analyzers := map[string]polyglot.Analyzer{}
 	for _, block := range blocks {
 		language := polyglot.CanonicalLanguage(block.Language)
-		if language == "python" || language == "typescript" || language == "rust" || language == "c" || language == "cpp" || language == "go" {
-			source := file.Name
-			if source == "" {
-				source = filepath.Join(r.Dir, ".bashpp-stdin")
-			} else if !filepath.IsAbs(source) {
-				source = filepath.Join(r.Dir, source)
-			}
+		if _, done := runtimes[language]; done {
+			continue
+		}
+		row, ok := polyglot.LookupLanguage(language)
+		if !ok {
+			continue
+		}
+		config := polyglot.RuntimeConfig{Dir: r.Dir, Environ: execEnv(r.writeEnv)}
+		if row.NeedsEnvironment {
 			environment, err := polyglot.DiscoverEnvironment(polyglot.EnvironmentRequest{
 				Source: source, Language: language, Environ: nativeExecEnv(execEnv(r.writeEnv)),
 			})
 			if err != nil {
 				return restore, fmt.Errorf("%s: %w", file.Name, err)
 			}
-			if language == "python" {
-				pythonRuntime.Environment = &environment
-			} else if language == "typescript" {
-				typeScriptRuntime.Environment = &environment
-			} else if language == "rust" {
-				rustRuntime.Environment = &environment
-			} else if language == "c" {
-				cRuntime.Environment = &environment
-			} else if language == "cpp" {
-				cppRuntime.Environment = &environment
-			} else {
-				goRuntime.Environment = &environment
-			}
+			config.Environment = &environment
 		}
+		runtime := row.NewRuntime(config)
+		runtimes[language] = runtime
+		analyzers[language] = runtime
 	}
-	plans, err := polyglot.Prepare(ctx, blocks, map[string]polyglot.Analyzer{
-		"python": pythonRuntime, "typescript": typeScriptRuntime, "rust": rustRuntime, "c": cRuntime, "cpp": cppRuntime, "go": goRuntime,
-		"bash": bashRuntime, "sh": shRuntime,
-	})
+	plans, err := polyglot.Prepare(ctx, blocks, analyzers)
 	if err != nil {
 		return restore, fmt.Errorf("%s: %w", file.Name, err)
 	}
@@ -170,24 +157,8 @@ func (r *Runner) bashPPPrepareSourceBlocks(ctx context.Context, file *syntax.Fil
 	}
 	foreign := map[string]*bashPPFunc{}
 	for _, plan := range plans {
-		var runtime polyglot.Runtime = pythonRuntime
-		if plan.Language == "typescript" {
-			runtime = typeScriptRuntime
-		} else if plan.Language == "rust" {
-			runtime = rustRuntime
-		} else if plan.Language == "c" {
-			runtime = cRuntime
-		} else if plan.Language == "cpp" {
-			runtime = cppRuntime
-		} else if plan.Language == "go" {
-			runtime = goRuntime
-		} else if plan.Language == "bash" {
-			runtime = bashRuntime
-		} else if plan.Language == "sh" {
-			runtime = shRuntime
-		}
-		module := polyglot.Start(plan, runtime)
-		if plan.Language == "rust" {
+		module := polyglot.Start(plan, runtimes[plan.Language])
+		if row, _ := polyglot.LookupLanguage(plan.Language); row.Callbacks {
 			module.SetCallbacks(r.bashPPForeignCallbacks())
 		}
 		r.bashPPForeignModules = append(r.bashPPForeignModules, module)

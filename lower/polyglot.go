@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"strings"
 
-	"mvdan.cc/sh/v3/interp"
 	"mvdan.cc/sh/v3/polyglot"
 	"mvdan.cc/sh/v3/syntax"
 )
@@ -20,13 +19,29 @@ type foreignFunction struct {
 	alias  string
 }
 
-func (e *emitter) hasEmbeddedShellRuntime() bool {
-	for _, plan := range e.foreignPlans {
-		if plan.Language == "bash" || plan.Language == "sh" {
-			return true
+// loweredRuntimeImports lists the import paths the fence runtimes of this
+// unit need in the lowered program, as their rows declare them, plus the
+// interpreter when shell regions must see the unit's direct imports.
+func (e *emitter) loweredRuntimeImports() []string {
+	seen := map[string]bool{}
+	var paths []string
+	add := func(path string) {
+		if !seen[path] {
+			seen[path] = true
+			paths = append(paths, path)
 		}
 	}
-	return e.seedsForeignImports()
+	for _, plan := range e.foreignPlans {
+		row, _ := polyglot.LookupLanguage(plan.Language)
+		for _, path := range row.LoweredImports {
+			add(path)
+		}
+	}
+	if e.seedsForeignImports() {
+		add("mvdan.cc/sh/v3/interp")
+	}
+	sort.Strings(paths)
+	return paths
 }
 
 // seedsForeignImports reports whether the program's shell regions must see
@@ -182,49 +197,34 @@ func (e *emitter) prepareForeign(ctx context.Context, file *syntax.File) error {
 		e.foreignImportAliases[alias] = index
 		reserved[alias] = "Python import"
 	}
-	pythonRuntime := polyglot.Python{}
-	typeScriptRuntime := polyglot.TypeScript{}
-	rustRuntime := polyglot.Rust{}
-	cRuntime := polyglot.C{}
-	cppRuntime := polyglot.CPP{}
-	goRuntime := polyglot.Go{}
-	bashRuntime := interp.ShellRuntime("bash", e.options.Dir, os.Environ())
-	shRuntime := interp.ShellRuntime("sh", e.options.Dir, os.Environ())
+	// One runtime per language per unit, from its row; the environment is
+	// kept so the lowered program can construct the same runtime.
+	e.foreignEnvs = map[string]*polyglot.EnvironmentPlan{}
+	analyzers := map[string]polyglot.Analyzer{}
 	for _, block := range blocks {
 		language := polyglot.CanonicalLanguage(block.Language)
-		if language == "python" || language == "typescript" || language == "rust" || language == "c" || language == "cpp" || language == "go" {
+		if _, done := analyzers[language]; done {
+			continue
+		}
+		row, ok := polyglot.LookupLanguage(language)
+		if !ok {
+			continue
+		}
+		config := polyglot.RuntimeConfig{Dir: e.options.Dir, Environ: os.Environ()}
+		if row.NeedsEnvironment {
 			environment, err := polyglot.DiscoverEnvironment(polyglot.EnvironmentRequest{Source: source, Language: language})
 			if err != nil {
 				return e.fail(first, CodeUnsupported, err.Error())
 			}
-			if language == "python" {
-				e.foreignPythonEnv = &environment
-				pythonRuntime.Environment = &environment
-			} else if language == "typescript" {
-				e.foreignTypeScriptEnv = &environment
-				typeScriptRuntime.Environment = &environment
-			} else if language == "rust" {
-				e.foreignRustEnv = &environment
-				rustRuntime.Environment = &environment
-			} else if language == "c" {
-				e.foreignCEnv = &environment
-				cRuntime.Environment = &environment
-			} else if language == "cpp" {
-				e.foreignCPPEnv = &environment
-				cppRuntime.Environment = &environment
-			} else {
-				e.foreignGoEnv = &environment
-				goRuntime.Environment = &environment
-			}
+			e.foreignEnvs[language] = &environment
+			config.Environment = &environment
 		}
+		analyzers[language] = row.NewRuntime(config)
 	}
 	var plans []polyglot.Plan
 	if len(blocks) > 0 {
 		var err error
-		plans, err = polyglot.Prepare(ctx, blocks, map[string]polyglot.Analyzer{
-			"python": pythonRuntime, "typescript": typeScriptRuntime, "rust": rustRuntime, "c": cRuntime, "cpp": cppRuntime, "go": goRuntime,
-			"bash": bashRuntime, "sh": shRuntime,
-		})
+		plans, err = polyglot.Prepare(ctx, blocks, analyzers)
 		if err != nil {
 			return e.fail(first, CodeUnsupported, err.Error())
 		}
@@ -261,7 +261,7 @@ func (e *emitter) prepareForeign(ctx context.Context, file *syntax.File) error {
 	// otherwise scalar-only units. The hidden callable ABI supplies that
 	// context without process-global or goroutine-local re-entry authority.
 	for _, plan := range plans {
-		if plan.Language != "rust" {
+		if row, _ := polyglot.LookupLanguage(plan.Language); !row.Callbacks {
 			continue
 		}
 		for _, export := range plan.Exports {
@@ -456,22 +456,10 @@ func (e *emitter) foreignDeclarations() string {
 	for i, plan := range e.foreignPlans {
 		module := fmt.Sprintf("%sforeign%d", e.prefix, i)
 		e.foreignGlobals[module] = true
-		runtime := fmt.Sprintf("%spolyglot.Python{Environment:%s}", e.prefix, e.foreignEnvironment())
-		if plan.Language == "typescript" {
-			runtime = fmt.Sprintf("%spolyglot.TypeScript{Environment:%s}", e.prefix, e.environmentLiteral(e.foreignTypeScriptEnv))
-		} else if plan.Language == "rust" {
-			runtime = fmt.Sprintf("%spolyglot.Rust{Environment:%s}", e.prefix, e.environmentLiteral(e.foreignRustEnv))
-		} else if plan.Language == "c" {
-			runtime = fmt.Sprintf("%spolyglot.C{Environment:%s}", e.prefix, e.environmentLiteral(e.foreignCEnv))
-		} else if plan.Language == "cpp" {
-			runtime = fmt.Sprintf("%spolyglot.CPP{Environment:%s}", e.prefix, e.environmentLiteral(e.foreignCPPEnv))
-		} else if plan.Language == "go" {
-			runtime = fmt.Sprintf("%spolyglot.Go{Environment:%s}", e.prefix, e.environmentLiteral(e.foreignGoEnv))
-		} else if plan.Language == "bash" || plan.Language == "sh" {
-			runtime = fmt.Sprintf("%sinterp.ShellRuntime(%s,\"\",nil)", e.prefix, strconv.Quote(plan.Language))
-		}
+		row, _ := polyglot.LookupLanguage(plan.Language)
+		runtime := row.LoweredRuntime(e.prefix, e.environmentLiteral(e.foreignEnvs[plan.Language]))
 		fmt.Fprintf(&out, "var %s = %spolyglot.Start(%spolyglot.Plan{ID:%s,Language:%s,Alias:%s,Source:%s,Artifact:%s,Exports:%s}, %s)\n", module, e.prefix, e.prefix, strconv.Quote(plan.ID), strconv.Quote(plan.Language), strconv.Quote(plan.Alias), strconv.Quote(plan.Source), strconv.Quote(plan.Artifact), e.foreignExports(plan.Exports), runtime)
-		if plan.Language == "rust" {
+		if row.Callbacks {
 			out.WriteString(e.foreignCallbacks(i, module))
 		}
 		if plan.Alias != "" {
@@ -536,11 +524,6 @@ return PREFIXcallback.Invoke(PREFIXctx,append([]any{&PREFIXchild,PREFIXrt.Site{N
 	fmt.Fprintf(&out, "func init() {\n%s.SetCallbacks(%spolyglot.Callbacks{\n", module, e.prefix)
 	fmt.Fprintf(&out, "Output: func(stdout, stderr string) { if stdout != \"\" { %sfmt.Fprint(%srt.Stdout, stdout) }; if stderr != \"\" { %sfmt.Fprint(%srt.Stderr, stderr) } },\n})\n}\n", e.prefix, e.prefix, e.prefix, e.prefix)
 	return out.String()
-}
-
-func (e *emitter) foreignEnvironment() string {
-	p := e.foreignPythonEnv
-	return e.environmentLiteral(p)
 }
 
 func (e *emitter) environmentLiteral(p *polyglot.EnvironmentPlan) string {

@@ -116,7 +116,7 @@ func Prepare(ctx context.Context, blocks []Block, analyzers map[string]Analyzer)
 }
 
 func aggregateSource(language string, blocks []Block) string {
-	if language != "c" && language != "cpp" {
+	if !languageFlag(language, func(l Language) bool { return l.LineDirectives }) {
 		sources := make([]string, len(blocks))
 		for i := range blocks {
 			sources[i] = blocks[i].Source
@@ -139,28 +139,6 @@ func aggregateSource(language string, blocks []Block) string {
 		}
 	}
 	return out.String()
-}
-
-// CanonicalLanguage maps a fence or import language spelling to the name the
-// analyzers and runtimes are keyed by. Short spellings are aliases, never
-// separate languages: `~~~ts` is `typescript` and `~~~py` is `python`.
-func CanonicalLanguage(language string) string {
-	return canonicalLanguage(language)
-}
-
-func canonicalLanguage(language string) string {
-	language = strings.ToLower(strings.TrimSpace(language))
-	switch language {
-	case "ts":
-		return "typescript"
-	case "py":
-		return "python"
-	case "rs":
-		return "rust"
-	case "cxx":
-		return "cpp"
-	}
-	return language
 }
 
 type Python struct {

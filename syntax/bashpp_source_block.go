@@ -90,59 +90,18 @@ func (p *Parser) bashppSourceBlock() *SourceBlock {
 
 // bashppRegisterSourceBlockFuncs supplies the parser only with the small bit
 // of look-ahead it needs to distinguish a later zero-argument direct call
-// from a shell function header. The Python AST analyzer remains authoritative
-// for declarations, visibility, signatures, and diagnostics.
+// from a shell function header. The language's own analyzer remains
+// authoritative for declarations, visibility, signatures, and diagnostics.
+// The per-language line reader comes from the fence look-ahead table; a
+// language without a row (every text fence, which promotes nothing) needs
+// none.
 func (p *Parser) bashppRegisterSourceBlockFuncs(language, body string) {
+	lookahead := bashppFenceLookahead[strings.ToLower(language)]
+	if lookahead == nil {
+		return
+	}
 	for _, line := range strings.Split(body, "\n") {
-		var declaration string
-		switch strings.ToLower(language) {
-		case "python", "py":
-			if strings.HasPrefix(line, "def ") {
-				declaration = strings.TrimPrefix(line, "def ")
-			}
-		case "typescript", "ts":
-			declaration = strings.TrimPrefix(line, "export ")
-			if !strings.HasPrefix(declaration, "function ") {
-				declaration = ""
-			} else {
-				declaration = strings.TrimPrefix(declaration, "function ")
-			}
-		case "rust", "rs":
-			declaration = strings.TrimSpace(line)
-			if !strings.HasPrefix(declaration, "pub fn ") {
-				declaration = ""
-			} else {
-				declaration = strings.TrimPrefix(declaration, "pub fn ")
-			}
-		case "c", "cpp", "cxx":
-			declaration = strings.TrimSpace(line)
-			if strings.HasPrefix(declaration, "static ") || strings.HasPrefix(declaration, "#") {
-				declaration = ""
-			} else if before, after, ok := strings.Cut(declaration, "("); ok && before != "" && !strings.HasSuffix(strings.TrimSpace(before), "if") && !strings.HasSuffix(strings.TrimSpace(before), "for") && !strings.HasSuffix(strings.TrimSpace(before), "while") {
-				parts := strings.Fields(before)
-				if len(parts) > 1 {
-					declaration = parts[len(parts)-1] + "(" + after
-				} else {
-					declaration = ""
-				}
-			} else {
-				declaration = ""
-			}
-		case "go":
-			declaration = strings.TrimSpace(line)
-			if !strings.HasPrefix(declaration, "func ") {
-				declaration = ""
-			} else {
-				declaration = strings.TrimPrefix(declaration, "func ")
-			}
-		case "bash", "sh":
-			declaration = strings.TrimSpace(line)
-			if before, _, ok := strings.Cut(declaration, "()"); ok {
-				declaration = strings.TrimSpace(before) + "("
-			} else {
-				declaration = ""
-			}
-		}
+		declaration := lookahead(line)
 		if declaration == "" {
 			continue
 		}

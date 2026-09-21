@@ -12,6 +12,24 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
+// The dialect islands are fence language rows like every other language;
+// the interpreter owns their runtime, so it registers them. A lowered
+// program constructs the same runtime from a process-environment snapshot.
+func init() {
+	for _, language := range []string{"bash", "sh"} {
+		polyglot.RegisterLanguage(polyglot.Language{
+			Canonical: language,
+			NewRuntime: func(cfg polyglot.RuntimeConfig) polyglot.LanguageRuntime {
+				return ShellRuntime(language, cfg.Dir, cfg.Environ)
+			},
+			LoweredRuntime: func(prefix, _ string) string {
+				return fmt.Sprintf("%sinterp.ShellRuntime(%q,\"\",nil)", prefix, language)
+			},
+			LoweredImports: []string{"mvdan.cc/sh/v3/interp"},
+		})
+	}
+}
+
 // ShellRuntime returns the embedded runtime for a Bash or POSIX dialect
 // island. Every call constructs a fresh Runner from the captured environment;
 // no host shell or worker process is involved.
