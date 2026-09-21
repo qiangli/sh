@@ -52,7 +52,8 @@ type emitter struct {
 	functionDecls         map[string]*syntax.BashPPFuncDecl
 	initEntries           map[string]bool
 	foreignFunctions      map[string]foreignFunction
-	foreignIteratorValues map[string]bool
+	foreignIteratorValues map[string]string
+	iteratorScopes        []map[string]string
 	foreignPlans          []polyglot.Plan
 	foreignImports        []polyglot.ImportPlan
 	foreignImportAliases  map[string]int
@@ -810,6 +811,7 @@ func (e *emitter) bound(name string) bool {
 func (e *emitter) bind(name string) {
 	if name != "_" {
 		e.scopes[len(e.scopes)-1][name] = true
+		delete(e.foreignIteratorValues, name)
 		e.projections.projectionBind(name, scalarProjection())
 	}
 }
@@ -823,10 +825,23 @@ func (e *emitter) syntheticName() string {
 	}
 }
 func (e *emitter) push() {
+	e.iteratorScopes = append(e.iteratorScopes, e.foreignIteratorValues)
+	cloned := map[string]string{}
+	for name, value := range e.foreignIteratorValues {
+		cloned[name] = value
+	}
+	e.foreignIteratorValues = cloned
 	e.scopes = append(e.scopes, map[string]bool{})
 	e.projections.projectionPush()
 }
-func (e *emitter) pop() { e.scopes = e.scopes[:len(e.scopes)-1]; e.projections.projectionPop() }
+func (e *emitter) pop() {
+	e.scopes = e.scopes[:len(e.scopes)-1]
+	e.projections.projectionPop()
+	if len(e.iteratorScopes) > 0 {
+		e.foreignIteratorValues = e.iteratorScopes[len(e.iteratorScopes)-1]
+		e.iteratorScopes = e.iteratorScopes[:len(e.iteratorScopes)-1]
+	}
+}
 func (e *emitter) statementFlags(s *syntax.Stmt) error {
 	if s.Negated || s.Background || s.Coprocess || s.Disown || len(s.Redirs) > 0 {
 		return e.fail(s, CodeUnsupported, "statement flags and redirections need the shell runtime slice")
@@ -1222,6 +1237,26 @@ func (e *emitter) command(c syntax.Command) (string, error) {
 		e.projections.projectionBind(n.Name.Value, projection)
 		return n.Kw.Value + " " + n.Name.Value + typ + init + e.unused([]string{n.Name.Value}), nil
 	case *syntax.BashPPShortDecl:
+		iterator := ""
+		if n.Call != nil {
+			f, ok := e.foreignFunctions[strings.Join(names(n.Call.Fun), ".")]
+			if ok {
+				iterator = f.export.Signature.Iterator
+			}
+		}
+		if len(n.Rhs) == 1 {
+			if iterator == "" {
+				iterator = e.foreignIteratorValues[n.Rhs[0].Lit()]
+			}
+		}
+		defer func() {
+			if len(n.Lhs) == 1 && iterator != "" {
+				if e.foreignIteratorValues == nil {
+					e.foreignIteratorValues = map[string]string{}
+				}
+				e.foreignIteratorValues[n.Lhs[0].Value] = iterator
+			}
+		}()
 		if text, handled, err := e.shortResultCall(n); handled || err != nil {
 			return text, err
 		}

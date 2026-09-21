@@ -35,3 +35,136 @@ printf 'one\ntwo\n' | py.upper | cat
 		t.Fatalf("out=%q", out)
 	}
 }
+
+func TestRustIteratorLowered(t *testing.T) {
+	requireRustToolchain(t)
+	got := testPythonFenceInterpretedNativeParityAt(t, `~~~rust as rs
+pub fn items() -> impl Iterator<Item = i64> { 1..3 }
+~~~
+func main() {
+ values := rs.items()
+ for value := range values { echo "$value"; }
+}
+main()
+`, "input.bpp")
+	if got != "1\n2\n" {
+		t.Fatal(got)
+	}
+}
+
+func TestPythonIteratorLexicalShadowLowered(t *testing.T) {
+	got := testPythonFenceInterpretedNativeParityAt(t, `~~~python
+def items() -> Iterator[int]:
+    yield 8
+~~~
+func one() {
+ values := items()
+ for value := range values { echo "$value"; }
+}
+func two() {
+ values := make(chan int, 1)
+ values <- 9
+ close(values)
+ for value := range values { echo "$value"; }
+}
+one()
+two()
+`, "input.bpp")
+	if got != "8\n9\n" {
+		t.Fatal(got)
+	}
+}
+
+// Existing decorator phases remain in order around generated foreign adapters:
+// a decorator can bind/transform inputs before Next; iteration completes and
+// closes before the result/contract phase observes the result.
+func TestForeignStreamingDecoratorParity(t *testing.T) {
+	got := testPythonFenceInterpretedNativeParityAt(t, `~~~python as py
+def items(n: int) -> Iterator[int]:
+    for i in range(n): yield i
+def upper(stdin: TextIO) -> Iterator[str]:
+    for line in stdin: yield line.upper()
+~~~
+func observe(c *Call) {
+ echo before
+ c.Next()
+ echo after
+}
+@observe()
+@go.error()
+func count(n int) int {
+ values := py.items(n)
+ total := 0
+ for value := range values { total = total + 1; }
+ return total
+}
+@observe()
+func filter() {
+ printf 'one\ntwo\n' | py.upper | cat
+}
+n, err := count(3)
+echo "$n,$err"
+filter()
+`, "input.bpp")
+	if got != "before\nafter\n3,\nbefore\nONE\nTWO\nafter\n" {
+		t.Fatal(got)
+	}
+}
+
+func TestPythonIteratorTypedArithmeticLowered(t *testing.T) {
+	got := testPythonFenceInterpretedNativeParityAt(t, `~~~python
+def items() -> Iterator[int]:
+    yield 2
+    yield 3
+~~~
+func sum() int {
+ values := items()
+ total := 0
+ for value := range values { total = total + value; }
+ return total
+}
+n := sum()
+echo "$n"
+`, "input.bpp")
+	if got != "5\n" {
+		t.Fatal(got)
+	}
+}
+
+func TestPythonIteratorBytesLowered(t *testing.T) {
+	got := testPythonFenceInterpretedNativeParityAt(t, `~~~python
+def items() -> Iterator[bytes]:
+    yield b'abc'
+~~~
+func main() {
+ values := items()
+ for value := range values { echo "$value"; }
+}
+main()
+`, "input.bpp")
+	if got == "" {
+		t.Fatal("bytes disappeared")
+	}
+}
+
+func TestRustIteratorObjectBytesLowered(t *testing.T) {
+	requireRustToolchain(t)
+	got := testPythonFenceInterpretedNativeParityAt(t, `~~~rust as rs
+use serde::Serialize;
+#[derive(Serialize)]
+struct Item { n:i64 }
+pub fn bytes() -> impl Iterator<Item = Vec<u8>> { vec![vec![97u8,98,99]].into_iter() }
+pub fn items() -> impl Iterator<Item = Item> { vec![Item{n:7}].into_iter() }
+~~~
+func main() {
+ bytes := rs.bytes()
+ for value := range bytes { echo "$value"; }
+ items := rs.items()
+ for value := range items { echo "$value"; }
+}
+main()
+`, "input.bpp")
+	if got != "\"YWJj\"\n{\"n\":7}\n" {
+		t.Fatal(got)
+	}
+}

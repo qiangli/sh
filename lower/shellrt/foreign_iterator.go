@@ -2,10 +2,10 @@ package shellrt
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
-	"strings"
+	"mvdan.cc/sh/v3/polyglot"
 	"sync"
 )
 
@@ -21,6 +21,7 @@ type ForeignIterator struct {
 	mu      sync.Mutex
 	Start   func(context.Context) (IteratorProcess, error)
 	Element string
+	Decode  func(context.Context, string, string) (polyglot.CallResult, error)
 	used    bool
 }
 
@@ -43,24 +44,21 @@ func IteratorSequence(ctx context.Context, value any) func(func(any) bool) {
 		if err != nil {
 			panic(ValueAbort{Err: err})
 		}
-		defer func() { _ = process.Close(); _, _ = io.WriteString(Stderr, process.Stderr()) }()
-		for line := range process.Lines() {
-			var value any
-			decoder := json.NewDecoder(strings.NewReader(line))
-			decoder.UseNumber()
-			if err := decoder.Decode(&value); err != nil {
+		defer func() {
+			err := process.Close()
+			_, _ = io.WriteString(Stderr, process.Stderr())
+			if err != nil && !errors.Is(err, context.Canceled) {
 				panic(ValueAbort{Err: err})
 			}
-			if number, ok := value.(json.Number); ok {
-				if iterator.Element == "int" {
-					value, err = number.Int64()
-				} else {
-					value, err = number.Float64()
-				}
-				if err != nil {
-					panic(ValueAbort{Err: err})
-				}
+		}()
+		for line := range process.Lines() {
+			frame, err := iterator.Decode(ctx, line, iterator.Element)
+			if err != nil {
+				panic(ValueAbort{Err: err})
 			}
+			fmt.Fprint(Stdout, frame.Stdout)
+			fmt.Fprint(Stderr, frame.Stderr)
+			value := frame.Value
 			if !yield(value) {
 				return
 			}

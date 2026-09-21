@@ -59,7 +59,9 @@ type rustExport struct {
 	resultWrap bool
 	// release marks the synthetic release export, which has no dispatcher
 	// arm: the worker serves it as its release operation.
-	release bool
+	release        bool
+	iteratorItem   string
+	iteratorResult bool
 }
 
 // rustPublicFunction matches top-level `pub fn` declarations only: an
@@ -143,18 +145,35 @@ func analyzeRustExports(source string) ([]rustExport, error) {
 		if strings.HasPrefix(result, "&") {
 			return nil, fmt.Errorf("Rust function %s has unsupported borrowed result type %s; return an owned value instead", name, result)
 		}
-		if why := rustUnsupportedType(result); why != "" {
+		iteratorItem := ""
+		iteratorResult := false
+		if strings.HasPrefix(result, "impl Iterator<Item=") && strings.HasSuffix(result, ">") {
+			iteratorItem = strings.TrimSuffix(strings.TrimPrefix(result, "impl Iterator<Item="), ">")
+		} else if strings.HasPrefix(result, "impl Iterator<Item = ") && strings.HasSuffix(result, ">") {
+			iteratorItem = strings.TrimSuffix(strings.TrimPrefix(result, "impl Iterator<Item = "), ">")
+		}
+		if inner, ok := rustResultInner(iteratorItem); ok {
+			iteratorItem, iteratorResult = inner, true
+		}
+		if why := rustUnsupportedType(result); why != "" && iteratorItem == "" {
 			return nil, fmt.Errorf("Rust function %s has unsupported result type %s: %s", name, result, why)
 		}
 		sig := Signature{Params: bridgeParams}
+		if iteratorItem != "" {
+			sig.Iterator = rustBridgeType(iteratorItem)
+			handles = handles || sig.Iterator == "handle"
+		}
 		if bridgeResult := rustBridgeType(result); bridgeResult != "nil" {
 			if bridgeResult == "callback" {
 				return nil, fmt.Errorf("Rust function %s has unsupported result type %s: a callback expires with the call that passed it", name, result)
 			}
 			handles = handles || bridgeResult == "handle"
 			sig.Results = []string{bridgeResult}
+			if iteratorItem != "" {
+				sig.Results = []string{"any"}
+			}
 		}
-		out = append(out, rustExport{Export: Export{Name: name, Signature: sig}, params: params, result: result, resultWrap: wrapped})
+		out = append(out, rustExport{Export: Export{Name: name, Signature: sig}, params: params, result: result, resultWrap: wrapped, iteratorItem: iteratorItem, iteratorResult: iteratorResult})
 	}
 	if handles {
 		if seen[RustReleaseExport] {
@@ -328,6 +347,19 @@ func rustWorkerSource(source string, exports []rustExport) (string, error) {
 			fmt.Fprintf(&out, "            %s;\n", call)
 		default:
 			fmt.Fprintf(&out, "            let __bpp_value = %s;\n", call)
+		}
+		if export.iteratorItem != "" {
+			conversion := "serde_json::to_value(value).map_err(|error| error.to_string())"
+			if export.iteratorItem == "Vec<u8>" {
+				conversion = "Ok(__bpp::bytes_value(&value))"
+			}
+			if export.iteratorResult {
+				fmt.Fprintf(&out, "            Ok(__bpp::iterator(__bpp_value.map(|item| item.map_err(|error| error.to_string()).and_then(|value| %s))))\n", conversion)
+			} else {
+				fmt.Fprintf(&out, "            Ok(__bpp::iterator(__bpp_value.map(|value| %s)))\n", conversion)
+			}
+			out.WriteString("        }\n")
+			continue
 		}
 		switch export.result {
 		case "()":

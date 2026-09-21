@@ -1,0 +1,20 @@
+~~~python as py
+def numbers(n: int) -> Iterator[int]:
+    try:
+        for i in range(n): yield i
+    finally:
+        print('generator closed')
+def upper(stdin: TextIO) -> Iterator[str]:
+    for line in stdin: yield line.upper()
+~~~
+~~~rust as rs
+pub fn numbers(n: i64) -> impl Iterator<Item = i64> { 0..n }
+~~~
+func consume() {
+    values := py.numbers(3)
+    for value := range values { echo "$value"; }
+    other := rs.numbers(3)
+    for value := range other { echo "$value"; break; }
+}
+consume()
+printf 'one\ntwo\n' | py.upper | cat

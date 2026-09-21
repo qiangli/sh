@@ -419,6 +419,8 @@ func (p Python) configure(cmd *exec.Cmd) {
 }
 
 type Module struct {
+	jobOnce    sync.Once
+	jobSem     chan struct{}
 	plan       Plan
 	importPlan *ImportPlan
 	runtime    Runtime
@@ -1599,7 +1601,7 @@ print(json.dumps(out,separators=(',',':')))
 `
 
 const pythonWorker = pythonPathBootstrap + `
-import ast, base64, importlib, importlib.util, io, json, os, signal, sys, tempfile, traceback
+import ast, base64, codecs, importlib, importlib.util, io, json, os, signal, sys, tempfile, traceback
 try:
     protocol=os.fdopen(3,'w',buffering=1,newline='\n')
 except OSError:
@@ -1608,6 +1610,8 @@ except OSError:
 ns={'__name__':'__bashpp__'}
 module=None
 handles={}
+iterators={}
+next_iterator=0
 next_handle=0
 busy=False
 def on_sigint(signum, frame):
@@ -1644,6 +1648,7 @@ def import_file(path):
     return mod
 def dec(v):
     if isinstance(v,dict) and set(v)=={'$bytes'}: return base64.b64decode(v['$bytes'])
+    if isinstance(v,dict) and set(v)=={'$callback'}: return PipelineInput(v['$callback'])
     if isinstance(v,dict) and set(v)=={'$handle'}:
         key=int(v['$handle'])
         if key not in handles: raise ValueError('stale Python handle')
@@ -1651,6 +1656,33 @@ def dec(v):
     if isinstance(v,list): return [dec(x) for x in v]
     if isinstance(v,dict): return {k:dec(x) for k,x in v.items()}
     return v
+class PipelineInput(io.TextIOBase):
+    def __init__(self, callback):
+        self.callback=callback
+        self.buffer=''
+        self.eof=False
+        self.decoder=codecs.getincrementaldecoder('utf-8')()
+    def readable(self): return True
+    def _fill(self):
+        protocol.write(json.dumps({'id':0,'call':'shell','callback':self.callback,'args':[65536]})+'\n')
+        protocol.flush()
+        reply=json.loads(sys.stdin.readline())
+        if not reply.get('ok'): raise OSError(reply.get('error',{}).get('message','pipeline read failed'))
+        data=dec(reply['result'])
+        if not data: self.eof=True
+        self.buffer+=self.decoder.decode(data,final=self.eof)
+    def read(self,size=-1):
+        while not self.eof and (size<0 or len(self.buffer)<size): self._fill()
+        if size<0: size=len(self.buffer)
+        result,self.buffer=self.buffer[:size],self.buffer[size:]
+        return result
+    def readline(self,size=-1):
+        while '\n' not in self.buffer and not self.eof and (size<0 or len(self.buffer)<size): self._fill()
+        end=self.buffer.find('\n')+1
+        if end==0: end=len(self.buffer)
+        if size>=0: end=min(end,size)
+        result,self.buffer=self.buffer[:end],self.buffer[end:]
+        return result
 def enc(v):
     global next_handle
     if isinstance(v,bytes): return {'$bytes':base64.b64encode(v).decode('ascii')}
@@ -1739,7 +1771,12 @@ for line in sys.stdin:
     busy=True
     try:
         op=req['op']
-        if op=='load':
+        if op=='job_join' or op=='job_leave':
+            if hasattr(os,'setpgid'):
+                os.setpgid(0,int(req.get('pgid',0)))
+                value=os.getpgrp()
+            else: value=os.getpid()
+        elif op=='load':
             def action():
                 source='from __future__ import annotations\n'+req['source']
                 exec(compile(source,'<bash++ python>','exec'),ns,ns)
@@ -1768,6 +1805,30 @@ for line in sys.stdin:
                 if req.get('name'): target=attr(target,req['name']) if module is not None or 'handle' in req else target[req['name']]
                 if not callable(target): raise TypeError('Python target is not callable')
                 return target(*dec(req.get('args',[])),**dec(req.get('kwargs',{})))
+            value,captured_out,captured_err=capture(action)
+        elif op=='iter_open':
+            def action():
+                global next_iterator
+                target=module if module is not None else ns
+                iterator=iter(lookup(target,req['name'])(*dec(req.get('args',[]))))
+                next_iterator+=1
+                iterators[next_iterator]=iterator
+                return next_iterator
+            value,captured_out,captured_err=capture(action)
+        elif op=='iter_next':
+            def action():
+                key=int(req['iterator'])
+                if key not in iterators: raise ValueError('stale Python iterator')
+                try: return {'done':False,'value':next(iterators[key])}
+                except StopIteration:
+                    iterators.pop(key)
+                    return {'done':True}
+            value,captured_out,captured_err=capture(action)
+        elif op=='iter_close':
+            def action():
+                iterator=iterators.pop(int(req['iterator']),None)
+                close=getattr(iterator,'close',None)
+                if close is not None: close()
             value,captured_out,captured_err=capture(action)
         elif op=='release':
             handles.pop(int(req['handle']),None); value=None

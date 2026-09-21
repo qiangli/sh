@@ -1,57 +1,71 @@
-# S221.5 — streaming adapter checkpoint
+# Foreign streaming adapters
 
 Sprint: #221 · Story: #576 · Story-ID: 050586a14a25
 
-## Implemented and measured
+The original fresh-process Python checkpoint is superseded by persistent
+worker iterator operations. Python `Iterator[T]`/`Generator[T,...]` exports and
+Rust `impl Iterator<Item = T>` exports generate wrappers through the existing
+foreign wrapper emitter. `Iterator<Item = Result<T,E>>` separates a Rust error
+from earlier values. Python `TextIO -> Iterator[str]` exports adapt byte-pipeline
+input through the existing callback frames. No separate worker, process
+supervisor, value codec, or decorator registry is introduced.
 
-Python source fences with declared Iterator[T] return a lazy, single-consumer
-iterator. The first range starts a real worker child, uses B14's bounded
-line-channel primitive, decodes NDJSON and closes/reaps on completion, error,
-return or early break. Merely assigning an iterator starts no child.
+The public iterator is single-consumer and rangeable. Its delivery uses the
+B14 bounded Go channel: one producer closes, the queue is fixed, wait is
+exact-once, errors remain separate, and range exit closes the iterator. This
+is the internal Go-channel contract; public channel receive/select syntax is
+not introduced. A variable merely holding an iterator does not start work.
+Lexical binding ownership in lowering is scope-local, not a source-wide name
+classification. Element conversion uses the existing foreign result adapter.
 
-Declared TextIO -> Iterator[str] exports are real byte-pipeline filters.
-An ordinary iterator export invoked as a command emits NDJSON. Both use
-the existing pipeline process-group hooks and native process cleanup.
-No special inherited file descriptor is required: stream requests are argv
-data and stdin remains the ordinary byte pipe, including on Windows.
+The worker owns iterator state and normal module state together. Each next
+request produces one value; close executes Python finally/Rust drop without
+resetting unrelated state. Early close first closes delivery and allows an
+in-flight next to settle; an unresponsive next is cancelled after 100 ms and
+its worker is killed/reaped through the existing Module lifecycle. A cancelled
+worker invalidates its iterators. This is cancellation, not successful partial
+completion. Filters read bounded byte chunks, decode UTF-8 incrementally, and
+never share pipeline bytes with protocol stdin (including Windows).
 
-Generated wrappers and range lowering use the same polyglot StreamCommand
-and the process story's public interp.StartLineCommand bridge, not another
-line-process implementation. Interpreted/lowered smoke fixtures pass for
-iterator values and a printf | py.upper | cat filter. A focused race gate
-covers those paths and rejected marker declarations.
+Source-level decorator interaction uses the existing `*Call`/`Next` stack and
+`@go.error` wrapper around a body that invokes the generated adapter. The
+fixture proves before/body/result order; no no-op `@go.stream` or `@go.filter`
+markers are added. The runnable sample is `examples/foreign-streams.bpp`.
 
-Original-source validation: CPython v3.14.0,
-Lib/test/test_generators.py GeneratorTest.test_issue103488, PSF-2.0:
-the original `yield; raise ValueError()` body runs as a typed island and
-must preserve its partial value before reporting the error. Additional
-local fixtures cover empty/many streams, infinite-generator early break,
-NDJSON command output and TextIO pipeline transformation.
+Pipeline process-group reservation is implemented separately in
+`interp/bashpp_stream_group*.go`: workers change their own group through an
+acknowledged operation on the same protocol, avoiding the POSIX prohibition
+on a parent changing a child group after exec. Worker module leases serialize
+pipeline ownership. Classic pipelines are unaffected. Pipeline stream commands
+must be statically resolvable before launch (literal module commands or named
+shell wrappers); an unreserved dynamic command is refused. One persistent
+module cannot occupy two concurrent pipeline stages because its one protocol
+may be waiting on an input callback; different modules can occupy distinct
+stages. Sequential calls within one stage are supported.
 
-## Explicit residuals — story is NOT complete
+## Source provenance and fixtures
 
-- Rust Iterator returns are not yet implemented.
-- The declared foreign Iterator/TextIO adapters exist; the previous candidate's
-  invented ordinary-function @go.stream/@go.filter markers are now refused,
-  never silently treated as successful no-ops. A general decorator adapter
-  contract is not delivered.
-- Imports of Python files have no analyzed Iterator signature; this chunk
-  targets declared source-fence exports.
-- Iterator values are rangeable objects, not yet general Bash# channel values;
-  assigned-variable range is tested, direct range-over-call needs parser work.
-- A streaming invocation owns a separate child. It does not share mutable
-  globals with the persistent non-streaming module worker.
-- Python finalizers are not promised on forced child cancellation.
-- Native Windows runtime and signal/job-control integration gates remain open.
-- The old candidate's lower/shellrt lineprocess/pipelinefilter copies are
-  not used by these generated adapters and should not be delivered as a second
-  substrate. Manager should select only the needed pipeline helper or replace
-  it with the shared process API.
-- The emitter records iterator binding names source-wide; lexical shadowing
-  needs a dedicated diagnostic/ownership test before claiming general support.
+- CPython `23116f998f6789d8c2fbe5ed5b8146854c8c2a4f`, PSF-2.0,
+  `Lib/test/test_generators.py`: empty/exhausted generators, partial output then
+  exception, `close`/finally, early abandonment. Independent bridge cases:
+  `polyglot/iterator_test.go`, `interp/bashpp_foreign_iterator_test.go`.
+- Rust `59807616e1fa2540724bfbac14d7976d7e4a3860`, MIT OR Apache-2.0,
+  `library/core/src/iter/traits/iterator.rs` next/termination and
+  `library/core/src/result.rs` error propagation. Independent bridge cases:
+  `TestRustIteratorLanguage`, `TestRustIteratorLowered`.
+- xonsh `e2b76f7fa54d2272c0b5a84b77a816fe882bee48`, BSD-2-Clause,
+  `xonsh/procs/pipelines.py`/`tests/xintegration/test_integrations.py`:
+  streaming aliases, partial output/failure, downstream early exit, job signals.
+  Independent byte-filter and group cases live in `interp` and `lower`.
+- Go `862c888e612ac346c7c4d99c9392bdfd265f33b0`, BSD-3-Clause,
+  `src/os/exec/exec_test.go` lifecycle. Reuse the actual B14 substrate fixture
+  `TestBashPPProcessBoundedBackpressure` and cancellation/oversize/reap tests.
 
-## Focused gate
+Focused acceptance command:
 
-`go test -race -tags full ./interp ./lower -run 'TestPython(Iterator|TextIO)|Test.*GoStreamGoFilterDecorator' -count=1 -timeout=90s`
+```
+go test -race -tags full ./polyglot ./interp ./lower -run 'TestIterator|Test(Python(Iterator|TextIO)|RustIterator|ForeignStreaming)|TestBashPPProcess' -count=1 -timeout=120s
+```
 
-This checkpoint intentionally does not claim complete Sprint 221 acceptance.
+Three-platform and complete release gates are recorded by the sprint manager
+against the final integrated candidate; this plan makes no unmeasured claim.

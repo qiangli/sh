@@ -2,10 +2,9 @@ package interp
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
-	"os/exec"
-	"strings"
+	"mvdan.cc/sh/v3/polyglot"
 	"sync"
 
 	"mvdan.cc/sh/v3/expand"
@@ -16,7 +15,9 @@ import (
 // first range owns the B14 line process and closes/reaps it on every exit.
 type bashPPForeignIterator struct {
 	mu      sync.Mutex
-	cmd     *exec.Cmd
+	module  *polyglot.Module
+	name    string
+	args    []any
 	element string
 	used    bool
 }
@@ -50,35 +51,30 @@ func (r *Runner) bashPPRangeForeignIterator(ctx context.Context, rng *syntax.Bas
 		r.exit.code = 2
 		return true
 	}
-	process, err := bashPPStartCmd(ctx, iterator.cmd, bashPPDefaultLineBuffer)
+	process, err := StartForeignIterator(ctx, iterator.module, iterator.name, iterator.args, r.stdout, r.stderr)
 	if err != nil {
 		r.errf("foreign iterator: %v\n", err)
 		r.exit.code = 1
 		return true
 	}
-	defer func() { _ = process.Close(); fmt.Fprint(r.stderr, process.Stderr()) }()
+	defer func() {
+		if err := process.Close(); err != nil && !errors.Is(err, context.Canceled) {
+			r.errf("foreign iterator: %v\n", err)
+			r.exit.code = 1
+		}
+		fmt.Fprint(r.stderr, process.Stderr())
+	}()
 	for line := range process.Lines() {
-		var value any
-		decoder := json.NewDecoder(strings.NewReader(line))
-		decoder.UseNumber()
-		if err := decoder.Decode(&value); err != nil {
-			r.errf("foreign iterator: invalid NDJSON: %v\n", err)
+		frame, err := iterator.module.DecodeIteratorFrame(ctx, line, iterator.element)
+		if err != nil {
+			r.errf("foreign iterator: %v\n", err)
 			r.exit.code = 1
 			return true
 		}
-		if number, ok := value.(json.Number); ok {
-			if iterator.element == "int" {
-				value, err = number.Int64()
-			} else {
-				value, err = number.Float64()
-			}
-			if err != nil {
-				r.errf("foreign iterator: %v\n", err)
-				r.exit.code = 1
-				return true
-			}
-		}
-		if !r.bashPPRangeIteration(ctx, rng, value, bashPPRangeNamedType(iterator.element), nil, nil, nil) {
+		fmt.Fprint(r.stdout, frame.Stdout)
+		fmt.Fprint(r.stderr, frame.Stderr)
+		value := frame.Value
+		if !r.bashPPForeignRangeValue(ctx, rng, value, iterator.element) {
 			return true
 		}
 	}
@@ -90,4 +86,24 @@ func (r *Runner) bashPPRangeForeignIterator(ctx context.Context, rng *syntax.Bas
 		r.exit.code = uint8(status)
 	}
 	return true
+}
+
+// Foreign aggregate values retain their Object cell through the range binding;
+// fmt.Sprint would discard byte/handle identity and make fields inaccessible.
+func (r *Runner) bashPPForeignRangeValue(ctx context.Context, rng *syntax.BashPPRange, value any, element string) bool {
+	switch value.(type) {
+	case nil, []byte, []any, map[string]any, *polyglot.Handle:
+		leave := r.bashPPPushScope()
+		if len(rng.Names) > 0 && rng.Names[0].Value != "_" {
+			name := rng.Names[0].Value
+			r.bashPPDeclareName(name, expand.NewObject(value))
+			cell := r.bashPPScope.lookup(name)
+			cell.declType = bashPPRangeNamedType(foreignShellType(element))
+		}
+		r.cmd(r.bashPPTaskContext(ctx), rng.Body)
+		leave()
+		return r.bashPPRangeControl()
+	default:
+		return r.bashPPRangeIteration(ctx, rng, value, bashPPRangeNamedType(element), nil, nil, nil)
+	}
 }

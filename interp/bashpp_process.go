@@ -199,6 +199,9 @@ func (p *bashPPLineProcess) Wait() (int, error) {
 		p.mu.Unlock()
 
 		switch {
+		case werr != nil && p.status < 0:
+			p.status = 1
+			p.waitErr = werr
 		case p.ctx.Err() != nil:
 			// A cancelled stream reports the cancellation rather than whatever
 			// exit the kill produced, mirroring the run/capture boundary.

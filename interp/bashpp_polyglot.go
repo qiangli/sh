@@ -343,8 +343,7 @@ func (r *Runner) bashPPForeignExchange(ctx context.Context, fn *bashPPForeignFun
 			if signature.Filter {
 				return polyglot.CallResult{}, fmt.Errorf("%s requires a byte-pipeline invocation", fn.qualified), true
 			}
-			cmd, commandErr := fn.module.StreamCommand(fn.export.Name, values, false)
-			result.Value, err = &bashPPForeignIterator{cmd: cmd, element: signature.Iterator}, commandErr
+			result.Value = &bashPPForeignIterator{module: fn.module, name: fn.export.Name, args: values, element: signature.Iterator}
 		} else {
 			result, err = fn.module.Call(ctx, fn.export.Name, values...)
 		}
@@ -611,6 +610,13 @@ func (r *Runner) bashPPForeignCommand(word string) (*polyglot.Module, string, bo
 // command. See [polyglot.Module.Command].
 func (r *Runner) bashPPRunForeignCommand(ctx context.Context, pos syntax.Pos, module *polyglot.Module, word, name string, argv []string) {
 	if signature, streaming := module.StreamSignature(name); streaming {
+		leave, joinErr := r.bashPPJoinStreamJob(ctx, module)
+		if joinErr != nil {
+			r.errf("%s: %v\n", word, joinErr)
+			r.exit.code = 1
+			return
+		}
+		defer leave()
 		values := make([]any, len(argv))
 		for i, arg := range argv {
 			parameter := i
@@ -629,24 +635,55 @@ func (r *Runner) bashPPRunForeignCommand(ctx context.Context, pos syntax.Pos, mo
 			}
 			values[i] = value
 		}
-		cmd, err := module.StreamCommand(name, values, signature.Filter)
-		if err != nil {
-			r.errf("%s: %v\n", word, err)
-			r.exit.code = 1
-			return
-		}
 		var upstream io.Reader = strings.NewReader("")
 		if r.stdin != nil {
 			upstream = r.stdin
 		}
-		filter, err := bashPPStartPipelineFilter(ctx, cmd, upstream, r.stdout, false)
+		if signature.Filter {
+			values = append([]any{polyglot.FilterInput(upstream)}, values...)
+		}
+		process, err := StartForeignIterator(ctx, module, name, values, r.stdout, r.stderr)
 		if err != nil {
 			r.errf("%s: %v\n", word, err)
 			r.exit.code = 1
 			return
 		}
-		status, err := filter.Wait()
-		fmt.Fprint(r.stderr, filter.Stderr())
+		defer process.Close()
+		for line := range process.Lines() {
+			frame, decodeErr := module.DecodeIteratorFrame(ctx, line, signature.Iterator)
+			if decodeErr != nil {
+				err = decodeErr
+				break
+			}
+			fmt.Fprint(r.stdout, frame.Stdout)
+			fmt.Fprint(r.stderr, frame.Stderr)
+			if signature.Filter {
+				value, ok := frame.Value.(string)
+				if !ok {
+					err = fmt.Errorf("TextIO filter must yield string")
+					break
+				}
+				_, err = io.WriteString(r.stdout, value)
+			} else {
+				encoded, encodeErr := json.Marshal(frame.Value)
+				if encodeErr != nil {
+					err = encodeErr
+					break
+				}
+				_, err = fmt.Fprintln(r.stdout, string(encoded))
+			}
+			if err != nil {
+				process.Close()
+				break
+			}
+		}
+		if err != nil {
+			process.Close()
+		}
+		status, waitErr := process.Wait()
+		if err == nil {
+			err = waitErr
+		}
 		r.exit.code = uint8(status)
 		if ctx.Err() != nil {
 			r.exit.fatal(ctx.Err())

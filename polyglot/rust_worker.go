@@ -86,6 +86,10 @@ mod __bpp {
         pub args: Vec<Value>,
         #[serde(default)]
         pub handle: u64,
+        #[serde(default)]
+        pub iterator: u64,
+        #[serde(default)]
+        pub pgid: i32,
     }
 
     struct Entry {
@@ -104,6 +108,8 @@ mod __bpp {
     }
 
     thread_local! {
+        static ITERATORS: RefCell<HashMap<u64, Box<dyn Iterator<Item=Result<Value,String>>>> > = RefCell::new(HashMap::new());
+        static NEXT_ITERATOR: Cell<u64> = const { Cell::new(0) };
         static HANDLES: RefCell<HashMap<u64, Entry>> = RefCell::new(HashMap::new());
         static NEXT_HANDLE: Cell<u64> = const { Cell::new(0) };
         static NEXT_CALLBACK: Cell<u64> = const { Cell::new(0) };
@@ -158,6 +164,21 @@ mod __bpp {
         out
     }
 
+    pub fn iterator(value: impl Iterator<Item=Result<Value,String>> + 'static) -> Value {
+        let id=NEXT_ITERATOR.with(|n| {n.set(n.get()+1);n.get()});
+        ITERATORS.with(|items| items.borrow_mut().insert(id,Box::new(value)));
+        serde_json::json!(id)
+    }
+    fn iterator_next(id: u64) -> Result<Value,String> {
+        // Remove while advancing: callbacks may re-enter without borrowing the
+        // registry through user code. The iterator is restored only when live.
+        let mut item=ITERATORS.with(|items| items.borrow_mut().remove(&id)).ok_or_else(|| "stale Rust iterator".to_string())?;
+        match item.next() {
+            Some(Ok(value)) => {ITERATORS.with(|items| items.borrow_mut().insert(id,item)); Ok(serde_json::json!({"done":false,"value":value}))},
+            Some(Err(error)) => Err(error),
+            None => Ok(serde_json::json!({"done":true})),
+        }
+    }
     fn stale(id: u64) -> String {
         format!("stale Rust handle {}: released or never created", id)
     }
@@ -518,10 +539,24 @@ mod __bpp {
             Ok(request) => respond(request),
         }
     }
+    #[cfg(unix)]
+    fn process_group(group: i32) -> Result<i32,String> {
+        unsafe extern "C" { fn setpgid(pid:i32,pgid:i32)->i32; fn getpgrp()->i32; }
+        if unsafe{setpgid(0,group)} != 0 { return Err(std::io::Error::last_os_error().to_string()) }
+        Ok(unsafe{getpgrp()})
+    }
+    #[cfg(not(unix))]
+    fn process_group(_group: i32) -> Result<i32,String> {Ok(std::process::id() as i32)}
     fn respond(request: Request) -> Value {
         match request.op.as_str() {
+            "job_join" | "job_leave" => {
+                match process_group(request.pgid) {
+                    Ok(group) => serde_json::json!({"id":request.id,"ok":true,"result":group}),
+                    Err(message) => serde_json::json!({"id":request.id,"ok":false,"error":envelope_error("RUST-EPGID",message)}),
+                }
+            }
             "load" => serde_json::json!({"id": request.id, "ok": true, "result": null, "stdout": "", "stderr": ""}),
-            "call" => {
+            "call" | "iter_open" => {
                 let depth = DEPTH.with(|depth| depth.get());
                 if depth >= MAX_DEPTH {
                     return serde_json::json!({"id": request.id, "ok": false, "error": envelope_error("RUST-EWORKER-DEPTH", format!("shell callback re-entry exceeds the worker bound of {}", MAX_DEPTH)), "stdout": "", "stderr": ""});
@@ -540,6 +575,16 @@ mod __bpp {
                 match result {
                     Ok(value) => serde_json::json!({"id": request.id, "ok": true, "result": value, "stdout": out, "stderr": err}),
                     Err(message) => serde_json::json!({"id": request.id, "ok": false, "error": envelope_error("RUST-ECALL", message), "stdout": out, "stderr": err}),
+                }
+            }
+            "iter_next" | "iter_close" => {
+                let (result,out,err)=capture(request.id, || {
+                    if request.op == "iter_next" { iterator_next(request.iterator) }
+                    else { ITERATORS.with(|items| items.borrow_mut().remove(&request.iterator)); Ok(Value::Null) }
+                });
+                match result {
+                    Ok(value) => serde_json::json!({"id":request.id,"ok":true,"result":value,"stdout":out,"stderr":err}),
+                    Err(message) => serde_json::json!({"id":request.id,"ok":false,"error":envelope_error("RUST-EITERATOR",message),"stdout":out,"stderr":err}),
                 }
             }
             "release" => match release_id(request.handle) {

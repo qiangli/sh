@@ -606,7 +606,7 @@ func (e *emitter) rangeStmt(n *syntax.BashPPRange) (string, error) {
 	if n.Call != nil {
 		return e.processRange(n)
 	}
-	if n.Chan != nil && e.foreignIteratorValues[n.Chan.Lit()] {
+	if n.Chan != nil && e.foreignIteratorValues[n.Chan.Lit()] != "" {
 		return e.foreignIteratorRange(n)
 	}
 	if e.execution && n.Chan != nil {

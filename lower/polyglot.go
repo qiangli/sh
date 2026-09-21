@@ -280,7 +280,7 @@ func (e *emitter) prepareForeign(ctx context.Context, file *syntax.File) error {
 }
 
 func (e *emitter) findPythonValues(file *syntax.File) {
-	e.foreignIteratorValues = map[string]bool{}
+	e.foreignIteratorValues = map[string]string{}
 	for range 3 {
 		syntax.Walk(file, func(node syntax.Node) bool {
 			d, ok := node.(*syntax.BashPPShortDecl)
@@ -292,7 +292,7 @@ func (e *emitter) findPythonValues(file *syntax.File) {
 			}
 			if d.Call != nil {
 				if f, ok := e.foreignFunctions[strings.Join(names(d.Call.Fun), ".")]; ok && f.export.Signature.Iterator != "" {
-					e.foreignIteratorValues[d.Lhs[0].Value] = true
+					// Binding ownership is recorded during lexical emission, not by name here.
 					e.mixedShell = true
 				}
 			}
@@ -438,6 +438,7 @@ func (e *emitter) foreignDeclarations() string {
 		e.foreignGlobals = map[string]bool{}
 	}
 	var out strings.Builder
+	fmt.Fprintf(&out, "var _ = %scontext.Background\n", e.prefix)
 	if e.execution && len(e.foreignPlans) > 0 {
 		// Adapter plumbing is not a script callable scope: the private alias
 		// keeps lexical-storage registration out of generated adapter locals.
