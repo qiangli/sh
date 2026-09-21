@@ -1515,8 +1515,15 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 	switch cmd := cmd.(type) {
 	case *SourceBlock:
 		p.writeLit(cmd.Fence + cmd.Language.Value)
-		if cmd.Alias != nil {
+		switch {
+		case cmd.Alias != nil && cmd.Runner != nil && cmd.Alias.Value == cmd.Runner.Value:
+			p.writeLit(" as !" + cmd.Runner.Value)
+		case cmd.Alias != nil && cmd.Runner != nil:
+			p.writeLit(" as " + cmd.Alias.Value + " !" + cmd.Runner.Value)
+		case cmd.Alias != nil:
 			p.writeLit(" as " + cmd.Alias.Value)
+		case cmd.Runner != nil:
+			p.writeLit(" !" + cmd.Runner.Value)
 		}
 		p.w.WriteByte('\n')
 		p.w.WriteString(cmd.Body)

@@ -221,7 +221,7 @@ authority—an explicit external command may still start that command—but the
 fence runtime itself has no worker, toolchain, cache artifact, or host-shell
 dependency.
 
-## Text fences and the runner override (planned — B30)
+## Text fences and the runner override (B30)
 
 The same fence may carry a declarative **text** artifact instead of source.
 The opener then takes an optional runner override after the alias:
@@ -235,13 +235,22 @@ built-in text types (`dockerfile`, `tf`, `k8s`, `helm`, `dag`, `skill`;
 `compose` is reserved) the alias exposes the processor's verbs from a fixed
 table. With `!<runner>` the runner is a Bash++ function in the same unit or a
 registered command of the host shell — never a PATH lookup — invoked as
-`runner <verb> <file> [args…]` with stdout as the result and a non-zero status
-as the call error, and the alias exposes exactly the methods the runner
-declares when invoked as `runner methods <file>` (one export JSON object per
-line, optionally carrying an `effect` atom that `@guard` enforces). An
-undeclared method is a prepare-time error; an empty or malformed declaration
-is a refusal. The body is materialized under the cache directory, keyed by the
-plan id, never into the checkout, and is embedded verbatim in lowered output.
-The format is never inferred: an opener whose type is not in the table and
-carries no runner is rejected at prepare. The decision record and the row
-table are `bashsharp/docs/fenced-text-blocks-plan.md`.
+`runner <verb> <file> [args…]`. A command runner's stdout, with its trailing
+newlines removed as a command substitution reads them, is the result; a
+Bash++ function runner (`func r(verb string, file string, args ...string)
+string`) returns the result; a non-zero status is the call error. The alias
+exposes exactly the methods the runner declares when invoked as
+`runner methods <file>` (one export JSON object per line — `name`, optional
+`signature`, optional `effect` atom that the contract layer reads); an empty
+or malformed declaration is a refusal, an undeclared method is an unknown
+callable. The runner's own top-level declaration is evaluated when the unit
+is prepared, so the fence may name a function declared anywhere in the unit.
+Every text fence, row or runner, needs an alias: its methods are known only
+after preparation, too late for the parser's bare-call look-ahead. The body
+is materialized under the cache directory, keyed by the plan id, never into
+the checkout; built-in rows embed it verbatim in lowered output, while a
+runner fence runs interpreted only — lowering one is refused with a
+diagnostic that says so. The format is never inferred: an opener whose type
+is not in the table and carries no runner is rejected at prepare. The
+decision record and the row table are
+`bashsharp/docs/fenced-text-blocks-plan.md`.

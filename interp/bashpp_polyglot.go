@@ -45,14 +45,19 @@ func (r *Runner) bashPPPrepareSourceBlocks(ctx context.Context, file *syntax.Fil
 	}
 	var blocks []polyglot.Block
 	var imports []*syntax.BashPPImport
+	runnerBlocks := map[string]*syntax.SourceBlock{}
 	for _, stmt := range file.Stmts {
 		switch node := stmt.Cmd.(type) {
 		case *syntax.SourceBlock:
-			alias := ""
+			alias, runner := "", ""
 			if node.Alias != nil {
 				alias = node.Alias.Value
 			}
-			blocks = append(blocks, polyglot.Block{Language: node.Language.Value, Alias: alias, Source: node.Body, Filename: file.Name, Line: int(node.BodyPos.Line())})
+			if node.Runner != nil {
+				runner = node.Runner.Value
+				runnerBlocks[polyglot.CanonicalLanguage(node.Language.Value)] = node
+			}
+			blocks = append(blocks, polyglot.Block{Language: node.Language.Value, Alias: alias, Runner: runner, Source: node.Body, Filename: file.Name, Line: int(node.BodyPos.Line())})
 		case *syntax.BashPPImport:
 			if node.Language != nil {
 				imports = append(imports, node)
@@ -113,6 +118,18 @@ func (r *Runner) bashPPPrepareSourceBlocks(ctx context.Context, file *syntax.Fil
 		if _, done := runtimes[language]; done {
 			continue
 		}
+		// A runner override processes the body whatever the type; a text
+		// fence needs an alias since its methods are only known once the
+		// runner has answered, after the parser has been.
+		if node := runnerBlocks[language]; node != nil {
+			if block.Alias == "" {
+				return restore, fmt.Errorf("%s: runner fence %s needs an alias (as NAME)", file.Name, block.Language)
+			}
+			runtime := r.bashPPRunnerFence(ctx, file, node, language)
+			runtimes[language] = runtime
+			analyzers[language] = runtime
+			continue
+		}
 		row, ok := polyglot.LookupLanguage(language)
 		if !ok {
 			continue
@@ -128,6 +145,9 @@ func (r *Runner) bashPPPrepareSourceBlocks(ctx context.Context, file *syntax.Fil
 			config.Environment = &environment
 		}
 		runtime := row.NewRuntime(config)
+		if _, text := runtime.(polyglot.Text); text && block.Alias == "" {
+			return restore, fmt.Errorf("%s: text fence %s needs an alias (as NAME)", file.Name, block.Language)
+		}
 		runtimes[language] = runtime
 		analyzers[language] = runtime
 	}

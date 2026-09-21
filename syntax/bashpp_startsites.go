@@ -141,7 +141,7 @@ func recognizeSourceFence(src string) bool {
 	}
 	line, _, _ := strings.Cut(src, "\n")
 	fields := strings.Fields(line)
-	if len(fields) != 1 && len(fields) != 3 {
+	if len(fields) == 0 {
 		return false
 	}
 	opener := fields[0]
@@ -152,7 +152,61 @@ func recognizeSourceFence(src string) bool {
 	if n < 3 || n == len(opener) || !bashppValidSourceLanguage(opener[n:]) {
 		return false
 	}
-	return len(fields) == 1 || fields[1] == "as" && bashppValidSourceAlias(opener[n:], fields[2])
+	_, _, ok := bashppSourceFenceTail(opener[n:], fields[1:])
+	return ok
+}
+
+// bashppSourceFenceTail reads what follows the opener word:
+//
+//	[as ALIAS] [!RUNNER]        as !RUNNER is short for as RUNNER !RUNNER
+//
+// It returns the alias and runner, or ok=false when the words are not that
+// shape — a Class E near miss that stays ordinary shell text.
+func bashppSourceFenceTail(language string, fields []string) (alias, runner string, ok bool) {
+	if len(fields) > 0 && fields[0] == "as" {
+		if len(fields) < 2 {
+			return "", "", false
+		}
+		if strings.HasPrefix(fields[1], "!") {
+			runner = fields[1][1:]
+			alias = runner
+			if !bashppValidSourceRunner(runner) || !bashppValidSourceAlias(language, alias) {
+				return "", "", false
+			}
+			return alias, runner, len(fields) == 2
+		}
+		alias = fields[1]
+		if !bashppValidSourceAlias(language, alias) {
+			return "", "", false
+		}
+		fields = fields[2:]
+	}
+	if len(fields) > 0 {
+		if len(fields) != 1 || !strings.HasPrefix(fields[0], "!") {
+			return "", "", false
+		}
+		runner = fields[0][1:]
+		if !bashppValidSourceRunner(runner) {
+			return "", "", false
+		}
+	}
+	return alias, runner, true
+}
+
+// A runner names a function or a registered command, so it may carry the
+// dashes command names do; it never carries a path separator or a glob.
+func bashppValidSourceRunner(runner string) bool {
+	if runner == "" || runner[0] == '-' || runner[len(runner)-1] == '-' {
+		return false
+	}
+	for i := 0; i < len(runner); i++ {
+		c := runner[i]
+		if c == '-' || c == '_' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func recognizeImportPrefix(s string) bool {

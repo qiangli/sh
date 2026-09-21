@@ -27,16 +27,9 @@ func (p *Parser) bashppSourceBlock() *SourceBlock {
 		tail.WriteRune(p.r)
 		p.rune()
 	}
-	fields := strings.Fields(tail.String())
-	var alias string
-	switch len(fields) {
-	case 0:
-	case 2:
-		if fields[0] != "as" || !bashppValidSourceAlias(language, fields[1]) {
-			return nil
-		}
-		alias = fields[1]
-	default:
+	rest := tail.String()
+	alias, runner, ok := bashppSourceFenceTail(language, strings.Fields(rest))
+	if !ok {
 		return nil
 	}
 	langPos := posAddCol(pos, n)
@@ -45,8 +38,18 @@ func (p *Parser) bashppSourceBlock() *SourceBlock {
 		Language: &Lit{ValuePos: langPos, ValueEnd: posAddCol(langPos, len(language)), Value: language},
 	}
 	if alias != "" {
-		aliasPos := posAddCol(pos, len(opener)+len(" as "))
+		// The alias word is the one after "as": either the alias itself or
+		// the "!runner" it is short for.
+		word := alias
+		if i := strings.Index(rest, " as !"+runner); runner != "" && alias == runner && i >= 0 {
+			word = "!" + runner
+		}
+		aliasPos := posAddCol(pos, len(opener)+strings.Index(rest, word))
 		block.Alias = &Lit{ValuePos: aliasPos, ValueEnd: posAddCol(aliasPos, len(alias)), Value: alias}
+	}
+	if runner != "" {
+		runnerPos := posAddCol(pos, len(opener)+strings.LastIndex(rest, "!"+runner)+1)
+		block.Runner = &Lit{ValuePos: runnerPos, ValueEnd: posAddCol(runnerPos, len(runner)), Value: runner}
 	}
 	if p.r == utf8.RuneSelf {
 		p.posErr(pos, "unclosed source block %q", fence)
@@ -114,9 +117,24 @@ func (p *Parser) bashppRegisterSourceBlockFuncs(language, body string) {
 }
 
 // A fence language is a lexical identifier, not a Go declaration name. The Go
-// adapter therefore legitimately uses the otherwise-reserved word "go".
+// adapter therefore legitimately uses the otherwise-reserved word "go", and a
+// text format is named the way a Markdown info string names it — `c++`,
+// `docker-compose` — so `-` and `+` are admitted after the first character.
 func bashppValidSourceLanguage(language string) bool {
-	return BashPPValidIdent(language) || language == "go"
+	if BashPPValidIdent(language) || language == "go" {
+		return true
+	}
+	if language == "" || !(language[0] == '_' || language[0] >= 'a' && language[0] <= 'z' || language[0] >= 'A' && language[0] <= 'Z') {
+		return false
+	}
+	for i := 1; i < len(language); i++ {
+		c := language[i]
+		if c == '-' || c == '+' || c == '_' || c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 // A Go fence may use the natural `go` qualifier promised by the dag front

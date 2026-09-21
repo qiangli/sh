@@ -26,6 +26,9 @@ import (
 type Block struct {
 	Language string
 	Alias    string
+	// Runner is the fence's runner override (`!name`), "" for the
+	// language's own adapter.
+	Runner   string
 	Source   string
 	Filename string
 	Line     int
@@ -43,12 +46,16 @@ type Signature struct {
 type Export struct {
 	Name      string    `json:"name"`
 	Signature Signature `json:"signature"`
+	// Effect is the effect atom a world-changing text verb carries; "" for
+	// a source function or a read-only verb.
+	Effect string `json:"effect,omitempty"`
 }
 
 type Plan struct {
 	ID       string
 	Language string
 	Alias    string
+	Runner   string
 	Source   string
 	Artifact string
 	Exports  []Export
@@ -67,6 +74,7 @@ type artifactAnalyzer interface {
 func Prepare(ctx context.Context, blocks []Block, analyzers map[string]Analyzer) ([]Plan, error) {
 	type aggregate struct {
 		alias  string
+		runner string
 		blocks []Block
 	}
 	groups := map[string]*aggregate{}
@@ -77,11 +85,14 @@ func Prepare(ctx context.Context, blocks []Block, analyzers map[string]Analyzer)
 		}
 		group := groups[lang]
 		if group == nil {
-			group = &aggregate{alias: block.Alias}
+			group = &aggregate{alias: block.Alias, runner: block.Runner}
 			groups[lang] = group
 		}
 		if group.alias != block.Alias {
 			return nil, fmt.Errorf("polyglot: inconsistent aliases for %s", lang)
+		}
+		if group.runner != block.Runner {
+			return nil, fmt.Errorf("polyglot: inconsistent runners for %s", lang)
 		}
 		group.blocks = append(group.blocks, block)
 	}
@@ -109,8 +120,8 @@ func Prepare(ctx context.Context, blocks []Block, analyzers map[string]Analyzer)
 		if err != nil {
 			return nil, fmt.Errorf("polyglot %s: %w", lang, err)
 		}
-		hash := sha256.Sum256([]byte(lang + "\x00" + group.alias + "\x00" + source + "\x00" + artifact))
-		plans = append(plans, Plan{ID: hex.EncodeToString(hash[:]), Language: lang, Alias: group.alias, Source: source, Artifact: artifact, Exports: exports})
+		hash := sha256.Sum256([]byte(lang + "\x00" + group.alias + "\x00" + source + "\x00" + artifact + "\x00" + group.runner))
+		plans = append(plans, Plan{ID: hex.EncodeToString(hash[:]), Language: lang, Alias: group.alias, Runner: group.runner, Source: source, Artifact: artifact, Exports: exports})
 	}
 	return plans, nil
 }
@@ -700,6 +711,12 @@ func (m *Module) CallKeywords(ctx context.Context, name string, args []any, kwar
 	defer unlock()
 	if embedded, ok := m.runtime.(Embedded); ok {
 		return embedded.CallFunc(ctx, m.plan, name, args, kwargs)
+	}
+	if text, ok := m.runtime.(Text); ok {
+		return m.callText(ctx, text, name, args, kwargs)
+	}
+	if fence, ok := m.runtime.(RunnerFence); ok {
+		return m.callRunner(ctx, fence, name, args, kwargs)
 	}
 	if _, ok := m.runtime.(Go); ok {
 		return m.callGo(ctx, name, args, kwargs)

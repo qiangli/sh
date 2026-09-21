@@ -147,6 +147,10 @@ type Runner struct {
 	// site. It is preserved across [Runner.Reset] alongside Funcs for the same
 	// reason bashPPFuncScopes is.
 	bashPPFuncs map[string]*bashPPFunc
+	// bashPPHoistedDecls are the function declarations a runner fence
+	// evaluated at prepare; their statements are skipped when reached in
+	// order, since a Bash++ function is declared once per session.
+	bashPPHoistedDecls map[*syntax.BashPPFuncDecl]bool
 	// Foreign modules are private runtime records. They never enter shell
 	// variables or the environment.
 	bashPPForeignFuncs   map[string]*bashPPFunc

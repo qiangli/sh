@@ -8,11 +8,14 @@ import "fmt"
 // SourceBlock is a raw, fenced foreign-language declaration unit. It is
 // recognized only by the Bash++ grammar at a statement boundary. Body is
 // opaque to the shell parser; the selected language adapter owns its text.
+// Runner, when set, names the function or registered command that processes
+// the body instead of the language's own adapter (`~~~tf as iac !my-tofu`).
 type SourceBlock struct {
 	Fence      string
 	FencePos   Pos
 	Language   *Lit
 	Alias      *Lit
+	Runner     *Lit
 	Body       string
 	BodyPos    Pos
 	ClosingPos Pos

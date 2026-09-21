@@ -120,6 +120,12 @@ func (e *emitter) prepareForeign(ctx context.Context, file *syntax.File) error {
 			if node.Alias != nil {
 				alias = node.Alias.Value
 			}
+			if node.Runner != nil {
+				// A runner fence hands its body to a function or command of
+				// the running shell; a lowered program has neither the
+				// interpreter's dispatch nor the host's registered commands.
+				return e.fail(node, CodeUnsupported, "runner fence ~~~"+node.Language.Value+" !"+node.Runner.Value+": runner fences run interpreted; lowering them is not supported")
+			}
 			blocks = append(blocks, polyglot.Block{Language: node.Language.Value, Alias: alias, Source: node.Body, Filename: file.Name, Line: int(node.BodyPos.Line())})
 		case *syntax.BashPPImport:
 			if node.Language != nil {
@@ -219,7 +225,11 @@ func (e *emitter) prepareForeign(ctx context.Context, file *syntax.File) error {
 			e.foreignEnvs[language] = &environment
 			config.Environment = &environment
 		}
-		analyzers[language] = row.NewRuntime(config)
+		runtime := row.NewRuntime(config)
+		if _, text := runtime.(polyglot.Text); text && block.Alias == "" {
+			return e.fail(first, CodeType, "text fence "+block.Language+" needs an alias (as NAME)")
+		}
+		analyzers[language] = runtime
 	}
 	var plans []polyglot.Plan
 	if len(blocks) > 0 {
@@ -458,7 +468,7 @@ func (e *emitter) foreignDeclarations() string {
 		e.foreignGlobals[module] = true
 		row, _ := polyglot.LookupLanguage(plan.Language)
 		runtime := row.LoweredRuntime(e.prefix, e.environmentLiteral(e.foreignEnvs[plan.Language]))
-		fmt.Fprintf(&out, "var %s = %spolyglot.Start(%spolyglot.Plan{ID:%s,Language:%s,Alias:%s,Source:%s,Artifact:%s,Exports:%s}, %s)\n", module, e.prefix, e.prefix, strconv.Quote(plan.ID), strconv.Quote(plan.Language), strconv.Quote(plan.Alias), strconv.Quote(plan.Source), strconv.Quote(plan.Artifact), e.foreignExports(plan.Exports), runtime)
+		fmt.Fprintf(&out, "var %s = %spolyglot.Start(%spolyglot.Plan{ID:%s,Language:%s,Alias:%s,Runner:%s,Source:%s,Artifact:%s,Exports:%s}, %s)\n", module, e.prefix, e.prefix, strconv.Quote(plan.ID), strconv.Quote(plan.Language), strconv.Quote(plan.Alias), strconv.Quote(plan.Runner), strconv.Quote(plan.Source), strconv.Quote(plan.Artifact), e.foreignExports(plan.Exports), runtime)
 		if row.Callbacks {
 			out.WriteString(e.foreignCallbacks(i, module))
 		}
@@ -538,7 +548,7 @@ func (e *emitter) foreignExports(exports []polyglot.Export) string {
 	var out strings.Builder
 	fmt.Fprintf(&out, "[]%spolyglot.Export{", e.prefix)
 	for _, export := range exports {
-		fmt.Fprintf(&out, "{Name:%s,Signature:%spolyglot.Signature{Params:%#v,Results:%#v,Dynamic:%t,Iterator:%q,Filter:%t}},", strconv.Quote(export.Name), e.prefix, export.Signature.Params, export.Signature.Results, export.Signature.Dynamic, export.Signature.Iterator, export.Signature.Filter)
+		fmt.Fprintf(&out, "{Name:%s,Signature:%spolyglot.Signature{Params:%#v,Results:%#v,Dynamic:%t,Variadic:%t,Iterator:%q,Filter:%t},Effect:%q},", strconv.Quote(export.Name), e.prefix, export.Signature.Params, export.Signature.Results, export.Signature.Dynamic, export.Signature.Variadic, export.Signature.Iterator, export.Signature.Filter, export.Effect)
 	}
 	out.WriteByte('}')
 	return out.String()

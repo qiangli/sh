@@ -298,6 +298,10 @@ type bashPPReturnState struct {
 // bashPPFuncDecl registers a typed function, capturing the lexical environment
 // it was written in so the body closes over its definition site.
 func (r *Runner) bashPPFuncDecl(d *syntax.BashPPFuncDecl) {
+	if r.bashPPHoistedDecls[d] {
+		delete(r.bashPPHoistedDecls, d)
+		return
+	}
 	if !r.objectsEnabled() {
 		r.errf("bash++ function declaration evaluated with extensions disabled\n")
 		r.exit = exitStatus{code: 2}

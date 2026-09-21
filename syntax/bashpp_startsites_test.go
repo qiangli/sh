@@ -96,13 +96,17 @@ func TestStartSiteDay1(t *testing.T) {
 }
 
 func TestStartSiteSourceFence(t *testing.T) {
-	for _, src := range []string{"~~~python", "~~~~python", "~~~python as py", "~~~go", "~~~go as native"} {
+	for _, src := range []string{"~~~python", "~~~~python", "~~~python as py", "~~~go", "~~~go as native",
+		"~~~tf as iac", "~~~tf as iac !my-tofu", "~~~tf as !tofu", "~~~dockerfile !img-runner", "~~~foo as x !run_it",
+		"~~~my-config as cfg !my-runner", "~~~c++ as cxx"} {
 		got := RecognizeStartSite(src)
 		if got.Site != StartSource || got.Class != ClassE || !got.Bounded {
 			t.Fatalf("RecognizeStartSite(%q) = %#v", src, got)
 		}
 	}
-	for _, src := range []string{" ~~~python", "~~python", "~~~", "~~~python nope", "```python"} {
+	for _, src := range []string{" ~~~python", "~~python", "~~~", "~~~python nope", "```python",
+		"~~~tf as", "~~~tf as iac extra", "~~~tf !", "~~~tf !-bad", "~~~tf !a/b", "~~~tf as !my-tofu", "~~~tf as !x !y", "~~~tf !x as y",
+		"~~~-bad as x", "~~~a/b as x", "~~~a.b as x"} {
 		if got := RecognizeStartSite(src); got.Site != StartNone {
 			t.Fatalf("RecognizeStartSite(%q) = %#v, want no match", src, got)
 		}

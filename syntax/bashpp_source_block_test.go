@@ -202,3 +202,68 @@ func TestBashPPSourceBlockPyAliasDirectCallLookahead(t *testing.T) {
 		}
 	}
 }
+
+func TestBashPPSourceBlockRunnerOverride(t *testing.T) {
+	// The runner override, with and without an explicit alias, parses,
+	// prints back byte-identical and walks the runner literal; the "as !R"
+	// shorthand binds the alias to the runner's name.
+	for src, want := range map[string][2]string{
+		"~~~tf as iac !my-tofu\nresource \"x\" \"y\" {}\n~~~\n": {"iac", "my-tofu"},
+		"~~~tf as !tofu\nx = 1\n~~~\n":                          {"tofu", "tofu"},
+		"~~~dockerfile !img_runner\nFROM scratch\n~~~\n":        {"", "img_runner"},
+		"~~~dockerfile as img\nFROM scratch\n~~~\n":             {"img", ""},
+	} {
+		f, err := NewParser(Variant(LangBashPP)).Parse(strings.NewReader(src), "fence.bsh")
+		if err != nil {
+			t.Fatalf("%q: %v", src, err)
+		}
+		block, ok := f.Stmts[0].Cmd.(*SourceBlock)
+		if !ok {
+			t.Fatalf("%q: command = %T", src, f.Stmts[0].Cmd)
+		}
+		alias, runner := "", ""
+		if block.Alias != nil {
+			alias = block.Alias.Value
+		}
+		if block.Runner != nil {
+			runner = block.Runner.Value
+			if block.Runner.Pos().Line() != 1 || block.Runner.Pos().Col() == 0 {
+				t.Fatalf("%q: runner position %v", src, block.Runner.Pos())
+			}
+			if col := block.Runner.Pos().Col(); src[col-1] != runner[0] {
+				t.Fatalf("%q: runner column %d points at %q", src, col, src[col-1:col])
+			}
+		}
+		if alias != want[0] || runner != want[1] {
+			t.Fatalf("%q: alias=%q runner=%q, want %v", src, alias, runner, want)
+		}
+		walked := false
+		Walk(f, func(n Node) bool {
+			if lit, ok := n.(*Lit); ok && block.Runner != nil && lit == block.Runner {
+				walked = true
+			}
+			return true
+		})
+		if block.Runner != nil && !walked {
+			t.Fatalf("%q: runner literal not walked", src)
+		}
+		var out bytes.Buffer
+		if err := NewPrinter().Print(&out, f); err != nil {
+			t.Fatal(err)
+		}
+		if out.String() != src {
+			t.Fatalf("%q printed as %q", src, out.String())
+		}
+	}
+	// A shorthand whose runner name is not a valid alias is a near miss, not
+	// a fence: the shape needs an explicit alias.
+	f, err := NewParser(Variant(LangBashPP)).Parse(strings.NewReader("~~~tf as !my-tofu\n"), "")
+	if err == nil {
+		Walk(f, func(n Node) bool {
+			if _, ok := n.(*SourceBlock); ok {
+				t.Fatal("as !my-tofu claimed as a fence")
+			}
+			return true
+		})
+	}
+}
