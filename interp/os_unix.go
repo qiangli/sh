@@ -368,6 +368,10 @@ func openReadFifoWithContext(ctx context.Context, path string, flags int, perm o
 type waitStatus = syscall.WaitStatus
 
 func prepareBackgroundJobCmd(ctx context.Context, cmd *exec.Cmd) {
+	if job, _ := ctx.Value(bashPPStreamJobKey{}).(*bashPPStreamJob); job != nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pgid: job.group}
+		return
+	}
 	bg, _ := ctx.Value(bgProcCtxKey{}).(*bgProc)
 	if bg == nil || !bg.jobControl {
 		return

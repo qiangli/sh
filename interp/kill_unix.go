@@ -179,6 +179,9 @@ func continueIfStopped(pid int) {
 }
 
 func jobSignalPid(bg *bgProc) int {
+	if group := bg.streamPgrp.Load(); group > 0 {
+		return -int(group)
+	}
 	pid := int(bg.pid.Load())
 	if bg.jobControl {
 		if pgrp := int(bg.pgrp.Load()); pgrp > 0 {

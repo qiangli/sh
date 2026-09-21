@@ -6328,6 +6328,14 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 				r.stmt(ctx, cm.Y)
 			}
 		case syntax.Pipe, syntax.PipeAll:
+			streamCtx, finishStreamJob, streamErr := r.bashPPPrepareStreamPipeline(ctx, cm)
+			if streamErr != nil {
+				r.errf("%v\n", streamErr)
+				r.exit.code = 1
+				return
+			}
+			defer finishStreamJob()
+			ctx = streamCtx
 			pr, pw, err := os.Pipe()
 			if err != nil {
 				r.exit.fatal(err) // not being able to create a pipe is rare but critical
