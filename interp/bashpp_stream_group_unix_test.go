@@ -9,12 +9,16 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/creack/pty"
+	"golang.org/x/sys/unix"
 
 	"mvdan.cc/sh/v3/interp"
 	"mvdan.cc/sh/v3/syntax"
@@ -302,5 +306,139 @@ wait
 	}
 	if strings.Contains(out, "late") {
 		t.Fatalf("signal did not terminate worker: %q", out)
+	}
+}
+
+// Like TestForegroundCommandStartsWithTerminal, this executes a separate shell
+// in a new controlling PTY. Input is a terminal VINTR byte, never a context
+// cancellation or direct kill, so foreground ownership determines delivery.
+func TestForeignStreamPipelineTerminalInterrupt(t *testing.T) {
+	const helperKey = "BASHPP_STREAM_TTY_HELPER"
+	if os.Getenv(helperKey) == "1" {
+		source := `~~~python as py
+def rows(stdin: TextIO) -> Iterator[str]:
+    import os, signal, time
+    tty = os.open('/dev/tty', os.O_RDWR)
+    def interrupt(signum, frame):
+        os.write(tty, b'TTY_INTERRUPT\n')
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGINT, interrupt)
+    try:
+        yield 'TTY_WORKER pid=%d pgrp=%d foreground=%d\n' % (os.getpid(), os.getpgrp(), os.tcgetpgrp(tty))
+        while True:
+            time.sleep(60)
+    finally:
+        os.close(tty)
+~~~
+set -m
+py.rows | ` + streamGroupChild(t, "copy") + `
+printf 'TTY_STATUS=%s\n' "$?"
+`
+		file, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(source), "stream-tty.bpp")
+		if err != nil {
+			t.Fatal(err)
+		}
+		runner, err := interp.New(interp.Lang(syntax.LangBashPP), interp.Interactive(true), interp.StdIO(os.Stdin, os.Stdout, os.Stderr))
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		if err = runner.Run(ctx, file); err != nil {
+			t.Fatal(err)
+		}
+		foreground, err := unix.IoctlGetInt(int(os.Stdin.Fd()), unix.TIOCGPGRP)
+		if err != nil || foreground != syscall.Getpgrp() {
+			t.Fatalf("terminal not restored: foreground=%d shell=%d err=%v", foreground, syscall.Getpgrp(), err)
+		}
+		fmt.Printf("TTY_RESTORED shell=%d foreground=%d\n", syscall.Getpgrp(), foreground)
+		return
+	}
+	requireStreamGroupPython(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestForeignStreamPipelineTerminalInterrupt$", "-test.timeout=18s")
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(entry, "GOSH_PROG=") && !strings.HasPrefix(entry, "GOSH_CMD=") && !strings.HasPrefix(entry, helperKey+"=") {
+			cmd.Env = append(cmd.Env, entry)
+		}
+	}
+	cmd.Env = append(cmd.Env, helperKey+"=1")
+	primary, err := pty.Start(cmd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer primary.Close()
+	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
+	lines := make(chan string, 64)
+	go func() {
+		defer close(lines)
+		scanner := bufio.NewScanner(primary)
+		for scanner.Scan() {
+			select {
+			case lines <- scanner.Text() + "\n":
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	var output strings.Builder
+	waitFor := func(want string) {
+		t.Helper()
+		timer := time.NewTimer(8 * time.Second)
+		defer timer.Stop()
+		for !strings.Contains(output.String(), want) {
+			select {
+			case line, ok := <-lines:
+				if !ok {
+					t.Fatalf("PTY closed before %q: %s", want, output.String())
+				}
+				output.WriteString(line)
+			case <-timer.C:
+				t.Fatalf("PTY timeout before %q: %s", want, output.String())
+			}
+		}
+	}
+	waitFor("TTY_WORKER")
+	identity := regexp.MustCompile(`TTY_WORKER pid=([0-9]+) pgrp=([0-9]+) foreground=([0-9]+)`).FindStringSubmatch(output.String())
+	if identity == nil || identity[1] != identity[2] || identity[2] != identity[3] || identity[2] == strconv.Itoa(cmd.Process.Pid) {
+		t.Fatalf("worker does not own foreground job: %s", output.String())
+	}
+	workerPID, _ := strconv.Atoi(identity[1])
+	defer func() {
+		// A failed assertion must not orphan the isolated test worker.
+		if group, err := syscall.Getpgid(workerPID); err == nil && group == workerPID {
+			_ = syscall.Kill(-group, syscall.SIGKILL)
+		}
+	}()
+	// The PTY's default VINTR is ^C; this exercises the terminal line discipline.
+	if _, err = primary.Write([]byte{3}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor("TTY_INTERRUPT")
+	waitFor("TTY_RESTORED")
+	if err = cmd.Wait(); err != nil {
+		t.Fatalf("PTY shell: %v; %s", err, output.String())
+	}
+	for line := range lines {
+		output.WriteString(line)
+	}
+	text := normalizePTYOutput(output.String())
+	if !strings.Contains(text, "TTY_STATUS=130\n") {
+		t.Fatalf("terminal interrupt status not preserved: %s", text)
+	}
+	child := regexp.MustCompile(`child=([0-9]+) group=([0-9]+)`).FindStringSubmatch(text)
+	if child == nil || child[2] != identity[2] {
+		t.Fatalf("pipeline child not in foreground worker group: %s", text)
+	}
+	for _, id := range []string{identity[1], child[1]} {
+		pid, _ := strconv.Atoi(id)
+		if err := syscall.Kill(pid, 0); err != syscall.ESRCH {
+			t.Errorf("terminal-interrupted child %d not reaped: %v; %s", pid, err, text)
+		}
+	}
+	restored := regexp.MustCompile(`TTY_RESTORED shell=([0-9]+) foreground=([0-9]+)`).FindStringSubmatch(text)
+	if restored == nil || restored[1] != restored[2] || restored[1] != strconv.Itoa(cmd.Process.Pid) {
+		t.Fatalf("terminal ownership not restored to original shell: %s", text)
 	}
 }
