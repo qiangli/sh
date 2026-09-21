@@ -11066,7 +11066,7 @@ func (r *Runner) execAs(ctx context.Context, pos syntax.Pos, argv0 string, clear
 				newlyHashed = true
 			}
 		}
-		if entry, ok := r.cmdHashTable[args[0]]; ok && !hashed && !newlyHashed {
+		if entry, ok := r.cmdHashTable[args[0]]; ok && !registeredSchema && !hashed && !newlyHashed {
 			hashed = true
 			entry.hits++
 			r.cmdHashTable[args[0]] = entry
