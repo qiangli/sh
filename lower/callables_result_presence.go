@@ -13,6 +13,10 @@ import (
 )
 
 func (e *emitter) callResultTypes(c *syntax.BashPPCall) []string {
+	return e.callResultTypesForArity(c, 0)
+}
+
+func (e *emitter) callResultTypesForArity(c *syntax.BashPPCall, arity int) []string {
 	if c == nil {
 		return nil
 	}
@@ -24,6 +28,11 @@ func (e *emitter) callResultTypes(c *syntax.BashPPCall) []string {
 			result := make([]string, len(foreign.export.Signature.Results))
 			for i, typ := range foreign.export.Signature.Results {
 				result[i] = foreignGoType(typ)
+			}
+			// One binding more than the export's results is the explicit
+			// error opt-in, a single error binding for a zero-result export.
+			if arity == len(result)+1 {
+				result = append(result, "error")
 			}
 			return result
 		}
@@ -96,7 +105,7 @@ func (e *emitter) shortResultCall(n *syntax.BashPPShortDecl) (string, bool, erro
 	if !e.execution || n.Call == nil {
 		return "", false, nil
 	}
-	types := e.callResultTypes(n.Call)
+	types := e.callResultTypesForArity(n.Call, len(n.Lhs))
 	if len(types) == 0 || len(types) != len(n.Lhs) {
 		return "", false, nil
 	}
@@ -112,9 +121,12 @@ func (e *emitter) shortResultCall(n *syntax.BashPPShortDecl) (string, bool, erro
 	failure := fmt.Sprintf("%sresultFailure%d", e.prefix, n.Pos().Offset())
 	mark := frame + "Mark"
 	saved := e.resultCallFrame
+	savedWant := e.resultCallWant
 	e.resultCallFrame = frame
+	e.resultCallWant = len(types)
 	call, err := e.call(n.Call)
 	e.resultCallFrame = saved
+	e.resultCallWant = savedWant
 	if err != nil {
 		return "", true, err
 	}

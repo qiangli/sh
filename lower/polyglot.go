@@ -313,8 +313,16 @@ func (e *emitter) foreignDeclarations() string {
 	if len(e.foreignPlans) == 0 && len(e.foreignImports) == 0 {
 		return ""
 	}
+	// Every package-level binding declared here is engine storage for a
+	// foreign module, not script state: the lexical storage pass must leave
+	// these declarations in place, because the generated wrappers reference
+	// them from plain Go functions that hold no program scope.
+	if e.foreignGlobals == nil {
+		e.foreignGlobals = map[string]bool{}
+	}
 	var out strings.Builder
 	for i, plan := range e.foreignImports {
+		e.foreignGlobals[fmt.Sprintf("%spython%d", e.prefix, i)] = true
 		fmt.Fprintf(&out, "var %spython%d = %spolyglot.StartImport(%spolyglot.ImportPlan{ID:%s,Language:%s,Module:%s,Alias:%s,Environment:*%s})\n", e.prefix, i, e.prefix, e.prefix, strconv.Quote(plan.ID), strconv.Quote(plan.Language), strconv.Quote(plan.Module), strconv.Quote(plan.Alias), e.environmentLiteral(&plan.Environment))
 	}
 	if len(e.foreignImports) > 0 {
@@ -324,6 +332,7 @@ func (e *emitter) foreignDeclarations() string {
 	}
 	for i, plan := range e.foreignPlans {
 		module := fmt.Sprintf("%sforeign%d", e.prefix, i)
+		e.foreignGlobals[module] = true
 		runtime := fmt.Sprintf("%spolyglot.Python{Environment:%s}", e.prefix, e.foreignEnvironment())
 		if plan.Language == "typescript" {
 			runtime = fmt.Sprintf("%spolyglot.TypeScript{Environment:%s}", e.prefix, e.environmentLiteral(e.foreignTypeScriptEnv))
@@ -345,13 +354,16 @@ func (e *emitter) foreignDeclarations() string {
 			if alias == "go" {
 				alias = fmt.Sprintf("%sforeignAlias%d", e.prefix, i)
 			}
+			e.foreignGlobals[alias] = true
 			fmt.Fprintf(&out, "type %s struct{}\nvar %s %s\n", typ, alias, typ)
 			for _, export := range plan.Exports {
 				out.WriteString(e.foreignWrapper("("+alias+" "+typ+") ", module, export))
+				out.WriteString(e.foreignErrWrapper(i, module, plan.Alias, export))
 			}
 		} else {
 			for _, export := range plan.Exports {
 				out.WriteString(e.foreignWrapper("", module, export))
+				out.WriteString(e.foreignErrWrapper(i, module, plan.Alias, export))
 			}
 		}
 	}
@@ -440,6 +452,76 @@ func (e *emitter) foreignWrapper(receiver, module string, export polyglot.Export
 	return out.String()
 }
 
+func (e *emitter) foreignErrAdapterName(plan int, export polyglot.Export) string {
+	return fmt.Sprintf("%sforeignErr%d_%s", e.prefix, plan, export.Name)
+}
+
+// foreignErrWrapper is the explicit error opt-in adapter emitted beside the
+// legacy wrapper of every typed export: `value, err := f()` (or `err := f()`
+// for a zero-result export) calls this helper instead of the wrapper. The
+// worker's own failure — one carrying polyglot.ForeignErrorDetail — comes back
+// as the trailing error with status 0. A transport failure (EOF from a dead
+// worker, cancellation, a response ID mismatch, a decode or annotation
+// violation, a launch failure) is not the function's error: it is reported
+// exactly like the one-value form reports it, diagnostic and failure status,
+// and the helper returns zero results with a nil error. The interpreter's
+// bashPPInvokeForeignErr is the same contract.
+func (e *emitter) foreignErrWrapper(plan int, module, alias string, export polyglot.Export) string {
+	if export.Signature.Dynamic {
+		return ""
+	}
+	qualified := export.Name
+	if alias != "" {
+		qualified = alias + "." + export.Name
+	}
+	var params []string
+	for i, typ := range export.Signature.Params {
+		if export.Signature.Variadic && i == len(export.Signature.Params)-1 {
+			params = append(params, fmt.Sprintf("arg%d ...%s", i, foreignGoType(typ)))
+		} else {
+			params = append(params, fmt.Sprintf("arg%d %s", i, foreignGoType(typ)))
+		}
+	}
+	args := ""
+	if export.Signature.Variadic {
+		args = fmt.Sprintf("%spolyglot.StringsToAny(arg0)...", e.prefix)
+	} else {
+		names := make([]string, len(export.Signature.Params))
+		for i := range names {
+			names[i] = fmt.Sprintf("arg%d", i)
+		}
+		args = strings.Join(names, ",")
+	}
+	if args != "" {
+		args = "," + args
+	}
+	results := make([]string, len(export.Signature.Results))
+	zeros := make([]string, len(results))
+	returns := make([]string, len(results))
+	for i, typ := range export.Signature.Results {
+		results[i] = foreignGoType(typ)
+		zeros[i] = foreignZero(typ)
+		returns[i] = foreignResultExpr("result.Value", typ)
+	}
+	var out strings.Builder
+	fmt.Fprintf(&out, "func %s(%s) %s {\n", e.foreignErrAdapterName(plan, export), strings.Join(params, ","), foreignErrSignature(results))
+	fmt.Fprintf(&out, "result, err := %s.Call(%scontext.Background(), %s%s)\n", module, e.prefix, strconv.Quote(export.Name), args)
+	fmt.Fprintf(&out, "if result.Stdout != \"\" { %sfmt.Fprint(%srt.Stdout, result.Stdout) }; if result.Stderr != \"\" { %sfmt.Fprint(%srt.Stderr, result.Stderr) }\n", e.prefix, e.prefix, e.prefix, e.prefix)
+	fmt.Fprintf(&out, "if err != nil {\nif _, foreign := %spolyglot.ForeignErrorDetail(err); !foreign {\n%srt.Fail(%sfmt.Errorf(%s, err))\n%srt.Status = %srt.ExitCode(err)\nreturn %s\n}\n%srt.Status = 0\nreturn %s\n}\n",
+		e.prefix, e.prefix, e.prefix, strconv.Quote("bash++: foreign call "+qualified+" failed: %w"), e.prefix, e.prefix, strings.Join(append(append([]string(nil), zeros...), "nil"), ","), e.prefix, strings.Join(append(append([]string(nil), zeros...), "err"), ","))
+	fmt.Fprintf(&out, "%srt.Status = 0\nreturn %s\n}\n", e.prefix, strings.Join(append(append([]string(nil), returns...), "nil"), ","))
+	return out.String()
+}
+
+// foreignErrSignature spells the adapter's result list: the export's results
+// followed by the error, which is the whole list for a zero-result export.
+func foreignErrSignature(results []string) string {
+	if len(results) == 0 {
+		return "error"
+	}
+	return "(" + strings.Join(results, ",") + ",error)"
+}
+
 func (e *emitter) framedForeignCall(node syntax.Node, call, frame string, types []string) string {
 	offset := 0
 	if node != nil {
@@ -461,6 +543,48 @@ func (e *emitter) framedForeignCall(node syntax.Node, call, frame string, types 
 	}
 	fmt.Fprintf(&out, "return %s\n}()", strings.Join(temps, ","))
 	return out.String()
+}
+
+// framedForeignErrCall is the call site of foreignErrWrapper. Outside the
+// execution runtime the adapter is called directly. Under it the call is
+// framed like framedForeignCall: rt.Status is the adapter's scratch failure
+// signal, so it is zeroed around the call and the outcome is carried into the
+// program's status — 0 for success and for the function's own error, the
+// failure status for a transport failure. Every result slot is recorded on
+// every outcome, the zero results included, so the short declaration never
+// reports a missing result for a call that did complete.
+func (e *emitter) framedForeignErrCall(c *syntax.BashPPCall, foreign foreignFunction, frame string) (string, error) {
+	values := make([]string, len(c.Args))
+	for i := range c.Args {
+		value, err := e.callArgument(c, i)
+		if err != nil {
+			return "", err
+		}
+		values[i] = value
+	}
+	call := e.foreignErrAdapterName(foreign.plan, foreign.export) + "(" + strings.Join(values, ",") + ")"
+	if !e.execution {
+		return call, nil
+	}
+	offset := int(c.Pos().Offset())
+	resultTypes := make([]string, len(foreign.export.Signature.Results))
+	temps := make([]string, len(resultTypes))
+	for i, typ := range foreign.export.Signature.Results {
+		resultTypes[i] = foreignGoType(typ)
+		temps[i] = fmt.Sprintf("%sforeignResult%d_%d", e.prefix, offset, i)
+	}
+	returned := strings.Join(append(append([]string(nil), temps...), "err"), ",")
+	var out strings.Builder
+	fmt.Fprintf(&out, "func() %s {\n%sforeignStatus := %srt.Status\n%srt.Status = 0\n%s := %s\n", foreignErrSignature(resultTypes), e.prefix, e.prefix, e.prefix, returned, call)
+	fmt.Fprintf(&out, "%sforeignExit := %srt.Status\n%srt.Status = %sforeignStatus\n%s.SetStatus(%sforeignExit)\n", e.prefix, e.prefix, e.prefix, e.prefix, e.program(), e.prefix)
+	if frame != "" {
+		for i, temp := range temps {
+			fmt.Fprintf(&out, "%srt.MustResult(%srt.SetResult(%s,%d,%s))\n", e.prefix, e.prefix, frame, i, temp)
+		}
+		fmt.Fprintf(&out, "%srt.MustResult(%srt.SetResult(%s,%d,err))\n", e.prefix, e.prefix, frame, len(temps))
+	}
+	fmt.Fprintf(&out, "return %s\n}()", returned)
+	return out.String(), nil
 }
 
 func foreignGoType(typ string) string {
