@@ -406,6 +406,34 @@ func TestBashPPCaptureInertOutsideBashPP(t *testing.T) {
 // JSON nor that source fixture rejects duplicate member names: as with Go's
 // encoding/json, the last member wins.
 
+// TestBashPPDecodeCPythonFixtures faithfully ports the exact JSON inputs and
+// success/error assertions from CPython TestDecode.test_empty_objects and
+// TestDecode.test_extra_data. The assertions are expressed against Bash#'s
+// decoded value model rather than copying CPython's unittest implementation.
+func TestBashPPDecodeCPythonFixtures(t *testing.T) {
+	t.Parallel()
+	emptyCases := []struct {
+		input string
+		check func(any) bool
+	}{
+		{`{}`, func(v any) bool { m, ok := v.(map[string]any); return ok && len(m) == 0 }},
+		{`[]`, func(v any) bool { s, ok := v.([]any); return ok && len(s) == 0 }},
+		{`""`, func(v any) bool { s, ok := v.(string); return ok && s == "" }},
+	}
+	for _, tc := range emptyCases {
+		value, err := bashPPDecodeJSON(tc.input)
+		if err != nil {
+			t.Fatalf("decode %q: %v", tc.input, err)
+		}
+		if !tc.check(value) {
+			t.Fatalf("decode %q = %#v, want the corresponding empty value", tc.input, value)
+		}
+	}
+	if value, err := bashPPDecodeJSON(`[1, 2, 3]5`); err == nil || !strings.Contains(err.Error(), "trailing data") {
+		t.Fatalf("decode extra data = (%#v, %v), want a trailing-data error", value, err)
+	}
+}
+
 func decodeRunner(t *testing.T, out *strings.Builder) *Runner { // bashpp-racegate:safe-synchronized
 	t.Helper()
 	r := captureRunner(t, out)

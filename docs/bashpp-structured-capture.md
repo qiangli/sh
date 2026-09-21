@@ -50,7 +50,10 @@ diagnostic. Duplicate object keys are accepted with **last key wins**, matching
 Go's `encoding/json` map decode; this is intentional policy, not an implicit
 validation pass.
 
-The boundary fixtures are adapted (not copied) from CPython v3.14.0 commit
+The boundary fixtures faithfully port CPython's exact `{}`, `[]`, `""`, and
+`[1, 2, 3]5` inputs and their success/error assertions, independently
+expressed in Bash# rather than copying the upstream test implementation. The
+source is CPython v3.14.0 commit
 [`ebf955df7a89ed0c7968f79faec1de49f61ed7cb`](https://github.com/python/cpython/commit/ebf955df7a89ed0c7968f79faec1de49f61ed7cb):
 [`Lib/test/test_json/test_decode.py`](https://github.com/python/cpython/blob/ebf955df7a89ed0c7968f79faec1de49f61ed7cb/Lib/test/test_json/test_decode.py),
 `TestDecode.test_empty_objects` and `TestDecode.test_extra_data`. CPython is
