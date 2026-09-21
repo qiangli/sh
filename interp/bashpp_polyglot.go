@@ -609,6 +609,9 @@ func (r *Runner) bashPPForeignCommand(word string) (*polyglot.Module, string, bo
 // foreground death, 128+signal; cancellation stops the shell as it would any
 // command. See [polyglot.Module.Command].
 func (r *Runner) bashPPRunForeignCommand(ctx context.Context, pos syntax.Pos, module *polyglot.Module, word, name string, argv []string) {
+	// Foreign output shares the same sink locks as shell diagnostics, including
+	// iterator open/close output delivered by the background process substrate.
+	stdout, stderr := r.bashPPWriter(r.stdout), r.bashPPWriter(r.stderr)
 	if signature, streaming := module.StreamSignature(name); streaming {
 		leave, joinErr := r.bashPPJoinStreamJob(ctx, module)
 		if joinErr != nil {
@@ -642,7 +645,7 @@ func (r *Runner) bashPPRunForeignCommand(ctx context.Context, pos syntax.Pos, mo
 		if signature.Filter {
 			values = append([]any{polyglot.FilterInput(upstream)}, values...)
 		}
-		process, err := StartForeignIterator(ctx, module, name, values, r.stdout, r.stderr)
+		process, err := StartForeignIterator(ctx, module, name, values, stdout, stderr)
 		if err != nil {
 			r.errf("%s: %v\n", word, err)
 			r.exit.code = 1
@@ -655,22 +658,22 @@ func (r *Runner) bashPPRunForeignCommand(ctx context.Context, pos syntax.Pos, mo
 				err = decodeErr
 				break
 			}
-			fmt.Fprint(r.stdout, frame.Stdout)
-			fmt.Fprint(r.stderr, frame.Stderr)
+			fmt.Fprint(stdout, frame.Stdout)
+			fmt.Fprint(stderr, frame.Stderr)
 			if signature.Filter {
 				value, ok := frame.Value.(string)
 				if !ok {
 					err = fmt.Errorf("TextIO filter must yield string")
 					break
 				}
-				_, err = io.WriteString(r.stdout, value)
+				_, err = io.WriteString(stdout, value)
 			} else {
 				encoded, encodeErr := json.Marshal(frame.Value)
 				if encodeErr != nil {
 					err = encodeErr
 					break
 				}
-				_, err = fmt.Fprintln(r.stdout, string(encoded))
+				_, err = fmt.Fprintln(stdout, string(encoded))
 			}
 			if err != nil {
 				process.Close()
@@ -695,10 +698,10 @@ func (r *Runner) bashPPRunForeignCommand(ctx context.Context, pos syntax.Pos, mo
 	}
 	result, err := module.Command(ctx, name, argv)
 	if result.Stdout != "" {
-		fmt.Fprint(r.stdout, result.Stdout)
+		fmt.Fprint(stdout, result.Stdout)
 	}
 	if result.Stderr != "" {
-		fmt.Fprint(r.stderr, result.Stderr)
+		fmt.Fprint(stderr, result.Stderr)
 	}
 	switch {
 	case err == nil:

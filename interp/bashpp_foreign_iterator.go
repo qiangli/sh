@@ -51,7 +51,8 @@ func (r *Runner) bashPPRangeForeignIterator(ctx context.Context, rng *syntax.Bas
 		r.exit.code = 2
 		return true
 	}
-	process, err := StartForeignIterator(ctx, iterator.module, iterator.name, iterator.args, r.stdout, r.stderr)
+	stdout, stderr := r.bashPPWriter(r.stdout), r.bashPPWriter(r.stderr)
+	process, err := StartForeignIterator(ctx, iterator.module, iterator.name, iterator.args, stdout, stderr)
 	if err != nil {
 		r.errf("foreign iterator: %v\n", err)
 		r.exit.code = 1
@@ -62,7 +63,7 @@ func (r *Runner) bashPPRangeForeignIterator(ctx context.Context, rng *syntax.Bas
 			r.errf("foreign iterator: %v\n", err)
 			r.exit.code = 1
 		}
-		fmt.Fprint(r.stderr, process.Stderr())
+		fmt.Fprint(stderr, process.Stderr())
 	}()
 	for line := range process.Lines() {
 		frame, err := iterator.module.DecodeIteratorFrame(ctx, line, iterator.element)
@@ -71,8 +72,8 @@ func (r *Runner) bashPPRangeForeignIterator(ctx context.Context, rng *syntax.Bas
 			r.exit.code = 1
 			return true
 		}
-		fmt.Fprint(r.stdout, frame.Stdout)
-		fmt.Fprint(r.stderr, frame.Stderr)
+		fmt.Fprint(stdout, frame.Stdout)
+		fmt.Fprint(stderr, frame.Stderr)
 		value := frame.Value
 		if !r.bashPPForeignRangeValue(ctx, rng, value, iterator.element) {
 			return true
