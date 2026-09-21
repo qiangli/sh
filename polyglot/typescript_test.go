@@ -266,7 +266,7 @@ func TestTypeScriptStdoutTransportRequiresMarker(t *testing.T) {
 	input := bufio.NewReader(strings.NewReader("{\"id\":99,\"ok\":true}\n\x1eBASHPP{\"id\":1,\"ok\":true}\n"))
 	var written bytes.Buffer
 	var response workerResponse
-	if err := exchange(&written, input, map[string]any{"id": 1}, &response, true); err != nil {
+	if err := exchange(&written, input, map[string]any{"id": 1}, &response, true, nil); err != nil {
 		t.Fatal(err)
 	}
 	if response.ID != 1 {

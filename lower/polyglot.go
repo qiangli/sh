@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -303,7 +304,8 @@ func lowerForeignDecl(export polyglot.Export) *syntax.BashPPFuncDecl {
 }
 
 func foreignShellType(typ string) string {
-	if typ == "object" {
+	switch typ {
+	case "object", "handle", "callback":
 		return "any"
 	}
 	return typ
@@ -330,6 +332,14 @@ func (e *emitter) foreignDeclarations() string {
 		fmt.Fprintf(&out, "func %spythonValue(result %spolyglot.CallResult, err error) any { if result.Stdout != \"\" { %sfmt.Fprint(%srt.Stdout,result.Stdout) }; if result.Stderr != \"\" { %sfmt.Fprint(%srt.Stderr,result.Stderr) }; if err != nil { panic(%srt.ValueAbort{Err:err}) }; return result.Value }\n", e.prefix, e.prefix, e.prefix, e.prefix, e.prefix, e.prefix, e.prefix)
 		fmt.Fprintf(&out, "func %spythonHandle(value any) *%spolyglot.Handle { handle,ok:=value.(*%spolyglot.Handle); if !ok { panic(%srt.ValueAbort{Err:%sfmt.Errorf(\"Python value %%T is not an object\",value)}) }; return handle }\n", e.prefix, e.prefix, e.prefix, e.prefix, e.prefix)
 	}
+	if len(e.foreignPlans) > 0 {
+		// foreignContext is the context every foreign call runs under: the
+		// program's background context, or, while a shell callback runs, the
+		// callback's own context, which is what lets the callback's nested
+		// foreign calls re-enter the module instead of waiting on it.
+		e.foreignGlobals[e.prefix+"foreignContext"] = true
+		fmt.Fprintf(&out, "var %sforeignContext = %scontext.Background()\n", e.prefix, e.prefix)
+	}
 	for i, plan := range e.foreignPlans {
 		module := fmt.Sprintf("%sforeign%d", e.prefix, i)
 		e.foreignGlobals[module] = true
@@ -348,6 +358,9 @@ func (e *emitter) foreignDeclarations() string {
 			runtime = fmt.Sprintf("%sinterp.ShellRuntime(%s,\"\",nil)", e.prefix, strconv.Quote(plan.Language))
 		}
 		fmt.Fprintf(&out, "var %s = %spolyglot.Start(%spolyglot.Plan{ID:%s,Language:%s,Alias:%s,Source:%s,Artifact:%s,Exports:%s}, %s)\n", module, e.prefix, e.prefix, strconv.Quote(plan.ID), strconv.Quote(plan.Language), strconv.Quote(plan.Alias), strconv.Quote(plan.Source), strconv.Quote(plan.Artifact), e.foreignExports(plan.Exports), runtime)
+		if plan.Language == "rust" {
+			out.WriteString(e.foreignCallbacks(i, module))
+		}
 		if plan.Alias != "" {
 			typ := fmt.Sprintf("%sforeignModule%d", e.prefix, i)
 			alias := plan.Alias
@@ -367,6 +380,33 @@ func (e *emitter) foreignDeclarations() string {
 			}
 		}
 	}
+	return out.String()
+}
+
+// foreignCallbacks emits a Rust module's shell callback wiring: a resolver
+// over the program's own functions for callbacks passed by name, the
+// callback-scoped foreignContext swap, and island output delivered to the
+// program's streams before a callback runs. The interpreter's
+// bashPPForeignCallbacks is the same contract.
+func (e *emitter) foreignCallbacks(plan int, module string) string {
+	resolver := fmt.Sprintf("%sresolveCallbacks%d", e.prefix, plan)
+	names := make([]string, 0, len(e.funcs))
+	for name := range e.funcs {
+		if _, foreign := e.foreignFunctions[name]; foreign || e.functionDecls[name] == nil {
+			continue
+		}
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var out strings.Builder
+	fmt.Fprintf(&out, "func %s(name string) (%spolyglot.Callback, bool) {\nswitch name {\n", resolver, e.prefix)
+	for _, name := range names {
+		fmt.Fprintf(&out, "case %s:\nreturn %spolyglot.FuncCallback(name, %s), true\n", strconv.Quote(name), e.prefix, e.goName(name))
+	}
+	fmt.Fprintf(&out, "}\nreturn %spolyglot.Callback{}, false\n}\n", e.prefix)
+	fmt.Fprintf(&out, "func init() {\n%s.SetCallbacks(%spolyglot.Callbacks{\nResolve: %s,\n", module, e.prefix, resolver)
+	fmt.Fprintf(&out, "Enter: func(ctx %scontext.Context) func() { saved := %sforeignContext; %sforeignContext = ctx; return func() { %sforeignContext = saved } },\n", e.prefix, e.prefix, e.prefix, e.prefix)
+	fmt.Fprintf(&out, "Output: func(stdout, stderr string) { if stdout != \"\" { %sfmt.Fprint(%srt.Stdout, stdout) }; if stderr != \"\" { %sfmt.Fprint(%srt.Stderr, stderr) } },\n})\n}\n", e.prefix, e.prefix, e.prefix, e.prefix)
 	return out.String()
 }
 
@@ -437,7 +477,7 @@ func (e *emitter) foreignWrapper(receiver, module string, export polyglot.Export
 		fmt.Fprintf(&out, " (%s)", strings.Join(results, ","))
 	}
 	out.WriteString(" {\n")
-	fmt.Fprintf(&out, "result, err := %s.Call(%scontext.Background(), %s%s)\n", module, e.prefix, strconv.Quote(export.Name), args)
+	fmt.Fprintf(&out, "result, err := %s.Call(%sforeignContext, %s%s)\n", module, e.prefix, strconv.Quote(export.Name), args)
 	fmt.Fprintf(&out, "if result.Stdout != \"\" { %sfmt.Fprint(%srt.Stdout, result.Stdout) }; if result.Stderr != \"\" { %sfmt.Fprint(%srt.Stderr, result.Stderr) }\n", e.prefix, e.prefix, e.prefix, e.prefix)
 	if export.Signature.Dynamic {
 		fmt.Fprintf(&out, "if err != nil { return result.Value, %srt.TrustedErrorText(err.Error()) }; return result.Value, nil\n}\n", e.prefix)
@@ -505,7 +545,7 @@ func (e *emitter) foreignErrWrapper(plan int, module, alias string, export polyg
 	}
 	var out strings.Builder
 	fmt.Fprintf(&out, "func %s(%s) %s {\n", e.foreignErrAdapterName(plan, export), strings.Join(params, ","), foreignErrSignature(results))
-	fmt.Fprintf(&out, "result, err := %s.Call(%scontext.Background(), %s%s)\n", module, e.prefix, strconv.Quote(export.Name), args)
+	fmt.Fprintf(&out, "result, err := %s.Call(%sforeignContext, %s%s)\n", module, e.prefix, strconv.Quote(export.Name), args)
 	fmt.Fprintf(&out, "if result.Stdout != \"\" { %sfmt.Fprint(%srt.Stdout, result.Stdout) }; if result.Stderr != \"\" { %sfmt.Fprint(%srt.Stderr, result.Stderr) }\n", e.prefix, e.prefix, e.prefix, e.prefix)
 	fmt.Fprintf(&out, "if err != nil {\nif _, foreign := %spolyglot.ForeignErrorDetail(err); !foreign {\n%srt.Fail(%sfmt.Errorf(%s, err))\n%srt.Status = %srt.ExitCode(err)\nreturn %s\n}\n%srt.Status = 0\nreturn %s\n}\n",
 		e.prefix, e.prefix, e.prefix, strconv.Quote("bash++: foreign call "+qualified+" failed: %w"), e.prefix, e.prefix, strings.Join(append(append([]string(nil), zeros...), "nil"), ","), e.prefix, strings.Join(append(append([]string(nil), zeros...), "err"), ","))
@@ -588,10 +628,10 @@ func (e *emitter) framedForeignErrCall(c *syntax.BashPPCall, foreign foreignFunc
 }
 
 func foreignGoType(typ string) string {
-	if typ == "bytes" {
+	switch typ {
+	case "bytes":
 		return "[]byte"
-	}
-	if typ == "nil" || typ == "object" {
+	case "nil", "object", "handle", "callback":
 		return "any"
 	}
 	return typ

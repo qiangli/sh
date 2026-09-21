@@ -3,6 +3,7 @@ package lower
 import (
 	"go/types"
 	"strconv"
+	"strings"
 
 	"mvdan.cc/sh/v3/syntax"
 )
@@ -22,7 +23,10 @@ func (e *emitter) callArgument(c *syntax.BashPPCall, index int) (string, error) 
 		}
 		return text, err
 	}
-	if name := c.Args[index].Lit(); e.funcs[name] && e.callParameterType(c, index) == "string" {
+	if name := c.Args[index].Lit(); e.funcs[name] && (e.callParameterType(c, index) == "string" || e.foreignParameterKind(c, index) == "callback") {
+		// A function named for a foreign callback parameter crosses by name,
+		// resolved by the module's generated resolver, exactly as the
+		// interpreter passes it; a closure variable crosses as its value.
 		return strconv.Quote(name), nil
 	}
 	text, err := e.argument(c.Args[index])
@@ -108,4 +112,21 @@ func (e *emitter) callParameterType(c *syntax.BashPPCall, index int) string {
 		index -= count
 	}
 	return ""
+}
+
+// foreignParameterKind is the boundary kind ("callback", "handle", …) the
+// foreign export called by c declares for argument index, or "".
+func (e *emitter) foreignParameterKind(c *syntax.BashPPCall, index int) string {
+	if len(c.Fun) == 0 {
+		return ""
+	}
+	names := make([]string, len(c.Fun))
+	for i, part := range c.Fun {
+		names[i] = part.Value
+	}
+	foreign, ok := e.foreignFunctions[strings.Join(names, ".")]
+	if !ok || index >= len(foreign.export.Signature.Params) {
+		return ""
+	}
+	return foreign.export.Signature.Params[index]
 }

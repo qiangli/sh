@@ -57,6 +57,9 @@ type rustExport struct {
 	params     []string
 	result     string
 	resultWrap bool
+	// release marks the synthetic release export, which has no dispatcher
+	// arm: the worker serves it as its release operation.
+	release bool
 }
 
 // rustPublicFunction matches top-level `pub fn` declarations only: an
@@ -92,10 +95,17 @@ func (r Rust) AnalyzeArtifact(ctx context.Context, source string) ([]Export, str
 	return exports, string(binary), nil
 }
 
+// RustReleaseExport is the export every Rust fence that uses bashpp::Handle
+// gains: `release(handle)` frees the worker-owned value exactly once, and a
+// second release — or any later use — is refused as stale. The name is
+// reserved in such a fence.
+const RustReleaseExport = "release"
+
 func analyzeRustExports(source string) ([]rustExport, error) {
 	matches := rustPublicFunction.FindAllStringSubmatch(source, -1)
 	out := make([]rustExport, 0, len(matches))
 	seen := map[string]bool{}
+	handles := false
 	for _, match := range matches {
 		name := match[1]
 		if seen[name] {
@@ -115,7 +125,9 @@ func analyzeRustExports(source string) ([]rustExport, error) {
 			if why := rustUnsupportedType(typ); why != "" {
 				return nil, fmt.Errorf("Rust function %s has unsupported parameter type %s: %s", name, typ, why)
 			}
-			params, bridgeParams = append(params, typ), append(bridgeParams, rustBridgeType(typ))
+			bridge := rustBridgeType(typ)
+			handles = handles || bridge == "handle"
+			params, bridgeParams = append(params, typ), append(bridgeParams, bridge)
 		}
 		result := normalizeRustType(match[3])
 		wrapped := false
@@ -136,11 +148,36 @@ func analyzeRustExports(source string) ([]rustExport, error) {
 		}
 		sig := Signature{Params: bridgeParams}
 		if bridgeResult := rustBridgeType(result); bridgeResult != "nil" {
+			if bridgeResult == "callback" {
+				return nil, fmt.Errorf("Rust function %s has unsupported result type %s: a callback expires with the call that passed it", name, result)
+			}
+			handles = handles || bridgeResult == "handle"
 			sig.Results = []string{bridgeResult}
 		}
 		out = append(out, rustExport{Export: Export{Name: name, Signature: sig}, params: params, result: result, resultWrap: wrapped})
 	}
+	if handles {
+		if seen[RustReleaseExport] {
+			return nil, fmt.Errorf("Rust function %s is reserved: it releases a bashpp::Handle", RustReleaseExport)
+		}
+		out = append(out, rustExport{Export: Export{Name: RustReleaseExport, Signature: Signature{Params: []string{"handle"}}}, release: true})
+	}
 	return out, nil
+}
+
+// rustReleaseExport reports whether plan is a Rust plan that carries the
+// synthetic release export, which Module.CallKeywords routes to the worker's
+// release operation instead of a dispatched function.
+func rustReleaseExport(plan Plan) bool {
+	if plan.Language != "rust" {
+		return false
+	}
+	for _, export := range plan.Exports {
+		if export.Name == RustReleaseExport && len(export.Signature.Params) == 1 && export.Signature.Params[0] == "handle" && len(export.Signature.Results) == 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func splitRustTypes(source string) []string {
@@ -197,10 +234,15 @@ func rustUnsupportedType(typ string) string {
 }
 
 // rustBridgeType maps a Rust type to the Bash# boundary kind. Scalars, bytes,
-// and unit keep their typed wrappers; every other type — a user struct, a
-// Vec<Struct>, Option<T>, a map, a tuple — is an Object that serde_json
-// converts on the worker side, so users write ordinary serde types.
+// and unit keep their typed wrappers; bashpp::Handle<T> is an opaque handle
+// and bashpp::Callback a shell callback, both by value or shared borrow;
+// every other type — a user struct, a Vec<Struct>, Option<T>, a map, a tuple
+// — is an Object that serde_json converts on the worker side, so users write
+// ordinary serde types.
 func rustBridgeType(typ string) string {
+	if kind := rustBoundaryType(strings.TrimSpace(strings.TrimPrefix(typ, "&"))); kind != "" {
+		return kind
+	}
 	switch typ {
 	case "bool":
 		return "bool"
@@ -216,6 +258,24 @@ func rustBridgeType(typ string) string {
 		return "nil"
 	}
 	return "object"
+}
+
+// rustBoundaryType recognizes the two runtime-published boundary types by
+// their qualified or `use`d spelling.
+func rustBoundaryType(typ string) string {
+	for _, prefix := range []string{"bashpp::", "crate::bashpp::", "__bpp::", "crate::__bpp::", ""} {
+		rest, ok := strings.CutPrefix(typ, prefix)
+		if !ok {
+			continue
+		}
+		if rest == "Callback" {
+			return "callback"
+		}
+		if strings.HasPrefix(rest, "Handle<") && strings.HasSuffix(rest, ">") {
+			return "handle"
+		}
+	}
+	return ""
 }
 
 // rustOwnedType is the type a borrowed parameter is deserialized into before
@@ -243,6 +303,9 @@ func rustWorkerSource(source string, exports []rustExport) (string, error) {
 	out.WriteString(source)
 	out.WriteString("\n\nfn __bpp_dispatch(name: &str, args: &[serde_json::Value]) -> Result<serde_json::Value, String> {\n    match name {\n")
 	for _, export := range exports {
+		if export.release {
+			continue
+		}
 		fmt.Fprintf(&out, "        %q => {\n            __bpp::arity(%q, args, %d)?;\n", export.Name, export.Name, len(export.params))
 		callArgs := make([]string, len(export.params))
 		for i, typ := range export.params {
