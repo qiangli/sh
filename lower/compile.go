@@ -60,6 +60,7 @@ type emitter struct {
 	foreignCEnv          *polyglot.EnvironmentPlan
 	foreignCPPEnv        *polyglot.EnvironmentPlan
 	foreignGoEnv         *polyglot.EnvironmentPlan
+	goErrorFuncs         map[*syntax.BashPPFuncDecl]bool
 	methodDeclarations   []*syntax.BashPPFuncDecl
 	enumMembers          map[string][]*syntax.Lit
 	projections          projector
@@ -190,7 +191,7 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 	if !token.IsIdentifier(options.Package) || token.Lookup(options.Package).IsKeyword() {
 		return nil, ErrorList{{Code: CodeType, Msg: "invalid package name", Pos: file.Pos()}}
 	}
-	e := &emitter{goSource: file.GoSource, sourceFile: file, writtenNames: map[string]bool{}, inferredParams: map[*syntax.BashPPField]string{}, declaredTypes: map[string]*syntax.BashPPDecl{}, functionDecls: map[string]*syntax.BashPPFuncDecl{}, enumMembers: map[string][]*syntax.Lit{}, options: options, funcs: map[string]bool{}, scopes: []map[string]bool{{}}, globals: map[string]bool{}, visibleGlobals: map[string]bool{}, imports: map[string]string{}, importAliased: map[string]bool{}, fileImports: map[string][]sourceImport{}, callableParams: map[*syntax.BashPPField]string{}, dotNames: map[string]bool{}, declaredGlobals: map[string]bool{}, typeNames: map[string]bool{}, globalTypes: globalTypes, foreignImportAliases: map[string]int{}, pythonValues: map[string]bool{}}
+	e := &emitter{goSource: file.GoSource, sourceFile: file, writtenNames: map[string]bool{}, inferredParams: map[*syntax.BashPPField]string{}, declaredTypes: map[string]*syntax.BashPPDecl{}, functionDecls: map[string]*syntax.BashPPFuncDecl{}, enumMembers: map[string][]*syntax.Lit{}, options: options, funcs: map[string]bool{}, scopes: []map[string]bool{{}}, globals: map[string]bool{}, visibleGlobals: map[string]bool{}, imports: map[string]string{}, importAliased: map[string]bool{}, fileImports: map[string][]sourceImport{}, callableParams: map[*syntax.BashPPField]string{}, dotNames: map[string]bool{}, declaredGlobals: map[string]bool{}, typeNames: map[string]bool{}, globalTypes: globalTypes, foreignImportAliases: map[string]int{}, pythonValues: map[string]bool{}, goErrorFuncs: map[*syntax.BashPPFuncDecl]bool{}}
 	e.foreignFunctions = map[string]foreignFunction{}
 	e.moduleImporter = newModuleImporter(options.Dir)
 	if options.Importer != nil {
@@ -1006,7 +1007,7 @@ func (e *emitter) function(f *syntax.BashPPFuncDecl) (string, error) {
 			}
 		}
 	}
-	signature, err := e.signature(f.Params, f.Results, f.Body)
+	signature, err := e.signature(f.Params, e.publicResults(f), f.Body)
 	if err != nil {
 		return "", err
 	}

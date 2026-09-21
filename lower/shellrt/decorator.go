@@ -170,9 +170,17 @@ func (p *Program) Decorate(c *Call, rungs []Decorator, body func(*Program) error
 	if chain.failed {
 		return false
 	}
-	p.SetStatus(c.Status)
+	// A shell exit status is 8-bit: `$?` wraps a decorator-set Status the same
+	// way the interpreter does (interp truncates the settled status to uint8),
+	// so an out-of-range c.Status normalizes identically in both engines and
+	// stays consistent with the @go.error message minted from the same value.
+	p.SetStatus(NormalStatus(c.Status))
 	return true
 }
+
+// NormalStatus wraps a status into the 8-bit range a shell `$?` reports, so a
+// decorator-supplied Status matches the interpreter's uint8 truncation.
+func NormalStatus(status int) int { return int(uint8(status)) }
 
 func (c *decoratorChain) next(p *Program) {
 	if c.failed {

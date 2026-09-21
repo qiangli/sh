@@ -20,9 +20,10 @@ func (e *emitter) callResultTypes(c *syntax.BashPPCall) []string {
 		if len(f.TypeParams) > 0 {
 			return nil
 		}
-		result := e.returnTypes(f.Results)
+		results := e.publicResults(f)
+		result := e.returnTypes(results)
 		i := 0
-		for _, field := range f.Results {
+		for _, field := range results {
 			count := len(field.Names)
 			if count == 0 {
 				count = 1

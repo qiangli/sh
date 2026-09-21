@@ -14,7 +14,22 @@ import (
 var Stdout io.Writer = os.Stdout
 var Stderr io.Writer = os.Stderr
 
-func Word(v any) string { return fmt.Sprint(v) }
+// Word renders an interpolated value. A nil interface — an unset interface
+// binding or a nil error, such as the successful trailing result of a
+// @go.error callable — renders as the empty string, matching how the
+// interpreter interpolates a nil interface value (its cell carries an empty
+// string). This is deliberately the general nil-interface rule, not an
+// error-only seam: the interpreter renders every nil interface as empty, so a
+// narrower error-only rendering would diverge from it. A typed nil (a nil
+// pointer, map or slice boxed in an interface) is a non-nil interface and
+// keeps fmt.Sprint's spelling; only the untyped nil interface is empty.
+// See TestWord for the pinned nil/interface/pointer boundary.
+func Word(v any) string {
+	if v == nil {
+		return ""
+	}
+	return fmt.Sprint(v)
+}
 
 var Status int
 
