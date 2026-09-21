@@ -268,6 +268,9 @@ func (c *bashPPConcurrent) writer(w io.Writer) io.Writer {
 	if w == nil {
 		return nil
 	}
+	if _, ok := w.(*bashPPProcessWriter); ok {
+		return w // private pipe owns its locks; stderr keeps the shared lock
+	}
 	if locked, ok := w.(*bashPPLockedWriter); ok && locked.mu == &c.ioMu {
 		return w
 	}
@@ -322,10 +325,14 @@ func (r *Runner) bashPPLockLogicalOutput(name string) func() {
 	if r.bashPPLogicalDepth > 1 {
 		return func() { r.bashPPLogicalDepth-- }
 	}
-	r.bashPPConcurrent.logicalMu.Lock()
+	mu := &r.bashPPConcurrent.logicalMu
+	if w, ok := r.stdout.(*bashPPProcessWriter); ok {
+		mu = &w.logicalMu
+	}
+	mu.Lock()
 	return func() {
 		r.bashPPLogicalDepth--
-		r.bashPPConcurrent.logicalMu.Unlock()
+		mu.Unlock()
 	}
 }
 

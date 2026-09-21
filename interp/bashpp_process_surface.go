@@ -242,6 +242,21 @@ type bashPPStatusError struct{ code int }
 
 func (e *bashPPStatusError) Error() string { return "exit status " + strconv.Itoa(e.code) }
 
+// bashPPProcessWriter owns the locks for a private streaming pipe. Sharing
+// the foreground sink lock would deadlock when backpressure stalls a Write
+// while the consumer prints a line before requesting the next one.
+type bashPPProcessWriter struct {
+	w         io.Writer
+	mu        sync.Mutex
+	logicalMu sync.Mutex
+}
+
+func (w *bashPPProcessWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.w.Write(p)
+}
+
 // bashPPStartSubshell launches argv concurrently in a subshell of r and
 // returns the live line process over its stdout.
 func (r *Runner) bashPPStartSubshell(ctx context.Context, argv []string) *bashPPLineProcess {
@@ -257,7 +272,7 @@ func (r *Runner) bashPPStartSubshell(ctx context.Context, argv []string) *bashPP
 	r2 := r.subshell(true)
 	r2.bgProcs = r.bgProcs
 	r2.jobsReadOnly = true
-	r2.stdout = pw
+	r2.stdout = &bashPPProcessWriter{w: pw}
 	if !r.functraceEnabled() {
 		delete(r2.trapCallbacks, "DEBUG")
 	}
