@@ -32,6 +32,9 @@ var moduleSums = map[string]string{
 	"darwin-arm64": "h1:51Yfd9AJPm34szJ1qdVX7+kqAGDd3vI9FzVuY7UqLfA=",
 	"linux-amd64":  "h1:MeqkXdYlyiVdqJXENOTyX7xd8QjDM/mxR52RKOFBS0M=",
 	"linux-arm64":  "h1:BhjYbTkha2ZqOR13zJ7cl8yLP1Y2RsrE0vqkhjs4lmQ=",
+	// sum.golang.org records 61743625 and 61743797, respectively.
+	"windows-amd64": "h1:uvUPiZUFKn246/ZPbYpTzP8aUKAjcMH5rgIl9vsjoyQ=",
+	"windows-arm64": "h1:YXjMLllerbcM7q21nbeWiTLWhvauClJgEhPAVqX+KaM=",
 }
 
 func run(goBin string, env []string, args ...string) string {

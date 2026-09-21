@@ -102,11 +102,16 @@ type bashPPGoReview struct {
 // bashPPGoReviews is the testable allow-list for platforms on which P2A may
 // execute Go. Each digest reviews the bin/go payload in the official Go
 // toolchain module, not whichever executable happens to be on PATH.
+// Windows payloads were authenticated through sum.golang.org module records
+// 61743625 (amd64) and 61743797 (arm64); module sums are pinned in
+// syntax/gen_go127stdlib.go. The provisioned Windows amd64 binary also matched.
 var bashPPGoReviews = []bashPPGoReview{
 	{Version: "go1.27.1", GOOS: "darwin", GOARCH: "amd64", SHA256: "285418143831d996755c236ca0938ad317b22edeeb1d61bfa082f50550399fe3"},
 	{Version: "go1.27.1", GOOS: "darwin", GOARCH: "arm64", SHA256: "132b69336a1f809932a8a20b0201dbbb980e86e3a323ae32e893639d83d71598"},
 	{Version: "go1.27.1", GOOS: "linux", GOARCH: "amd64", SHA256: "30969f97169d7f43fe6a085873d75613adc21e30818a8c61d95bd27275df4624"},
 	{Version: "go1.27.1", GOOS: "linux", GOARCH: "arm64", SHA256: "1675694ef690db0f18fbe7046a886170904bede1d9db6ec96ae27945c1705c64"},
+	{Version: "go1.27.1", GOOS: "windows", GOARCH: "amd64", SHA256: "d3ccdb604eafa6031133aefe1a3db24f0bb7362b857bc2125ac4e4c178b4b490"},
+	{Version: "go1.27.1", GOOS: "windows", GOARCH: "arm64", SHA256: "854e5383bc5d7fa3f3a58268a3c1ca45d9ddc1ec3f34b53f4234fd6b59e79a46"},
 }
 
 type bashPPGoIdentityInfo struct {
