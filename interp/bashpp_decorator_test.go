@@ -431,6 +431,67 @@ func TestBashPPDecoratorDiagnostics(t *testing.T) {
 	}
 }
 
+func TestBashPPGoErrorDecoratorRegistration(t *testing.T) {
+	t.Run("claimed marker is not a rung", func(t *testing.T) {
+		out, stderr, err := runDecorated(t, `@go.error()
+func f() int { return 7 }
+v, err := f()
+echo "v=$v err=[$err] status=$?"
+`)
+		qt.Assert(t, qt.Equals(stderr, ""))
+		qt.Assert(t, qt.IsNil(err))
+		qt.Assert(t, qt.Equals(out, "v=7 err=[] status=0\n"))
+	})
+	for _, tc := range []struct{ name, src, want string }{
+		{"arguments refused", "@go.error(1)\nfunc f() int { return 1 }\n", "BASHPP-EDECO-GOERROR"},
+		{"twice refused", "@go.error()\n@go.error()\nfunc f() int { return 1 }\n", "BASHPP-EDECO-GOERROR"},
+		{"method refused", "type T int\n@go.error()\nfunc (v T) M() int { return 1 }\n", "BASHPP-EDECO-GOERROR"},
+		{"generic refused", "@go.error()\nfunc f[T any](v T) T { return v }\n", "BASHPP-EDECO-GOERROR"},
+		{"trailing error refused", "@go.error()\nfunc f() (int, error) { return 1, nil }\n", "BASHPP-EDECO-GOERROR"},
+		{"other namespaced names stay reserved", "@go.retry()\nfunc f() int { return 1 }\n", "BASHPP-EDECO-RESERVED"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, stderr, err := runDecorated(t, tc.src)
+			qt.Assert(t, qt.IsNotNil(err))
+			if !strings.Contains(stderr, tc.want) {
+				t.Fatalf("stderr %q does not mention %q", stderr, tc.want)
+			}
+		})
+	}
+}
+
+func TestBashPPGoErrorDecoratorStatusBoundary(t *testing.T) {
+	// A shell exit status is 8-bit: a decorator-set c.Status wraps into 0..255
+	// for both `$?` and the minted @go.error message, so a value that wraps to
+	// zero is a nil error (a success). This pins the interpreter side; the
+	// lowered parity harness (TestGoErrorDecoratorStatusBoundary) proves both
+	// engines agree on the same boundary values.
+	for _, tc := range []struct {
+		name   string
+		status int
+		want   string
+	}{
+		{"zero is success", 0, "v=7 err=[] status=0\n"},
+		{"max 8-bit is failure", 255, "v=7 err=[deploy: exit status 255] status=255\n"},
+		{"out of range wraps to zero is success", 256, "v=7 err=[] status=0\n"},
+		{"out of range wraps into range", 257, "v=7 err=[deploy: exit status 1] status=1\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			src := fmt.Sprintf(`func mark(c *Call) { c.Next(); c.Status = %d }
+@mark()
+@go.error()
+func deploy() int { return 7 }
+v, err := deploy()
+echo "v=$v err=[$err] status=$?"
+`, tc.status)
+			out, stderr, err := runDecorated(t, src)
+			qt.Assert(t, qt.Equals(stderr, ""))
+			qt.Assert(t, qt.IsNil(err))
+			qt.Assert(t, qt.Equals(out, tc.want))
+		})
+	}
+}
+
 func TestBashPPDecoratorNative(t *testing.T) {
 	var seen []string
 	natives := map[string]interp.DecoratorFunc{

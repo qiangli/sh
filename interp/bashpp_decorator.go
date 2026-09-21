@@ -14,6 +14,8 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
+const bashPPGoErrorDecoratorName = "go.error"
+
 // Call is the decorator context: the one value every decorator receives,
 // whether it is a Bash++ function whose first parameter is the predeclared
 // `*Call` or a native [DecoratorFunc] from the [Decorators] registry.
@@ -346,7 +348,17 @@ func (r *Runner) bashPPDecoratorSignature(fn *bashPPFunc) bool {
 // records any advice for name. It reports false when the declaration must be
 // refused.
 func (r *Runner) bashPPRegisterDecorators(name string, pos syntax.Pos, decorators []*syntax.BashPPDecorator, agentic bool) ([]DecoratorSpec, bool) {
+	goError := false
 	for _, d := range decorators {
+		if d.Name.Value == bashPPGoErrorDecoratorName {
+			if goError || len(d.Args) != 0 || len(d.ArgNames) != 0 {
+				r.errf("%sBASHPP-EDECO-GOERROR: @go.error requires no arguments and may appear once\n", r.bashErrPrefix(d.Pos()))
+				r.exit.code = 2
+				return nil, false
+			}
+			goError = true
+			continue
+		}
 		if strings.Contains(d.Name.Value, ".") {
 			r.errf("%sBASHPP-EDECO-RESERVED: @%s: namespaced decorators are reserved\n", r.bashErrPrefix(d.Pos()), d.Name.Value)
 			r.exit.code = 2
@@ -389,9 +401,55 @@ func bashPPDecoratorRungs(decorators []*syntax.BashPPDecorator, advised []Decora
 		rungs = append(rungs, bashPPDecoratorRung{name: spec.Name, literal: spec.Args, advised: spec.ID})
 	}
 	for _, d := range decorators {
+		if d.Name.Value == bashPPGoErrorDecoratorName {
+			continue
+		}
 		rungs = append(rungs, bashPPDecoratorRung{name: d.Name.Value, args: d.Args, argNames: d.ArgNames})
 	}
 	return rungs
+}
+
+func bashPPGoErrorDecorated(d *syntax.BashPPFuncDecl) bool {
+	for _, dec := range d.Decorators {
+		if dec.Name.Value == bashPPGoErrorDecoratorName {
+			return true
+		}
+	}
+	return false
+}
+
+func bashPPGoErrorResultField() *syntax.BashPPField {
+	return &syntax.BashPPField{FieldType: &syntax.Lit{Value: "error"}}
+}
+
+func bashPPTrailingErrorResult(results []*syntax.BashPPField) bool {
+	if len(results) == 0 {
+		return false
+	}
+	last := results[len(results)-1]
+	if last.FieldType != nil && last.FieldType.Value == "error" {
+		return true
+	}
+	named, ok := last.FieldTypeExpr.(*syntax.BashPPNamedType)
+	return ok && named.Name != nil && named.Name.Value == "error" && len(named.TypeArgs) == 0
+}
+
+func bashPPGoErrorCell(name string, status int) (*bashPPCell, string) {
+	// Normalize to the 8-bit range `$?` reports (r.exit.code truncates the same
+	// value to uint8), so the minted error's presence and message agree with
+	// `$?` and with the lowered shellrt.GoError for any decorator-set status.
+	status = int(uint8(status))
+	errorType := &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "error"}}
+	if status == 0 {
+		cell := &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String}, declType: errorType}
+		cell.interfaceValue = &bashPPInterfaceValue{nilIface: true}
+		return cell, ""
+	}
+	text := fmt.Sprintf("%s: exit status %d", name, status)
+	payload := &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: text}, declType: &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "string"}}}
+	cell := &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: text}, declType: errorType}
+	cell.interfaceValue = &bashPPInterfaceValue{cell: payload, dynamic: payload.declType}
+	return cell, text
 }
 
 // bashPPNewDecoratorChain prepares the chain for one invocation. It is called
@@ -1011,7 +1069,7 @@ func (r *Runner) bashPPInvokeDecorated(ctx context.Context, fn *bashPPFunc, args
 	if !ok || r.exit.exiting || r.bashPPPanicking() {
 		return nil, false
 	}
-	count := bashppResultCount(fn.results())
+	count := bashppResultCount(fn.bodyResults())
 	resultValues := chain.call.Results
 	r.exit = exitStatus{code: uint8(chain.call.Status)}
 	if count == 0 {
@@ -1020,12 +1078,17 @@ func (r *Runner) bashPPInvokeDecorated(ctx context.Context, fn *bashPPFunc, args
 			r.exit.code = 1
 			return nil, false
 		}
+		if fn.goError {
+			cell, text := bashPPGoErrorCell(name, chain.call.Status)
+			r.bashPPResultCells = []*bashPPCell{cell}
+			return []string{text}, true
+		}
 		return nil, true
 	}
 	if len(resultValues) == 0 {
 		// A skipped body yields zero results.
 		resultValues = make([]any, count)
-		resultTypes := bashppResultTypeExprs(fn.results())
+		resultTypes := bashppResultTypeExprs(fn.bodyResults())
 		for i := range resultValues {
 			if i < len(resultTypes) {
 				zero, meta := r.bashPPZeroValue(resultTypes[i])
@@ -1041,7 +1104,7 @@ func (r *Runner) bashPPInvokeDecorated(ctx context.Context, fn *bashPPFunc, args
 		r.exit.code = 1
 		return nil, false
 	}
-	resultTypes := bashppResultTypeExprs(fn.results())
+	resultTypes := bashppResultTypeExprs(fn.bodyResults())
 	results := make([]string, count)
 	r.bashPPResultCells = make([]*bashPPCell, count)
 	for i, value := range resultValues {
@@ -1074,6 +1137,11 @@ func (r *Runner) bashPPInvokeDecorated(ctx context.Context, fn *bashPPFunc, args
 				r.setVarString(resultNames[i], text)
 			}
 		}
+	}
+	if fn.goError {
+		cell, text := bashPPGoErrorCell(name, chain.call.Status)
+		results = append(results, text)
+		r.bashPPResultCells = append(r.bashPPResultCells, cell)
 	}
 	// Results were settled by the chain, so the frame's own return state
 	// must not settle them again.

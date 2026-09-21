@@ -31,6 +31,7 @@ import (
 // declaring `type Call` shadows it, exactly as in the interpreter, and its
 // functions taking that type are simply not decorators.
 const decoratorCallType = "Call"
+const goErrorDecoratorName = "go.error"
 
 // decoratorCallProjection is the predeclared Call as the emitter's projection
 // tables see it, so `c.Name`, `c.Status`, `c.Results[0]` and the rest lower
@@ -145,7 +146,16 @@ func (e *emitter) prepareDecorators(file *syntax.File) error {
 // engine validates it at registration and resolves it at call time.
 func (e *emitter) checkDecorators(f *syntax.BashPPFuncDecl) error {
 	name := f.Name.Value
+	goError := false
 	for _, d := range f.Decorators {
+		if d.Name.Value == goErrorDecoratorName {
+			if goError || len(d.Args) != 0 || len(d.ArgNames) != 0 || f.Receiver != nil || len(f.TypeParams) != 0 || trailingErrorResult(f.Results) {
+				return e.fail(d, "BASHPP-EDECO-GOERROR", "@go.error requires a receiver-less non-generic function with no arguments and no trailing error result")
+			}
+			goError = true
+			e.goErrorFuncs[f] = true
+			continue
+		}
 		switch {
 		case strings.Contains(d.Name.Value, "."):
 			return e.fail(d, "BASHPP-EDECO-RESERVED", "@"+d.Name.Value+": namespaced decorators are reserved")
@@ -168,6 +178,30 @@ func (e *emitter) checkDecorators(f *syntax.BashPPFuncDecl) error {
 	return nil
 }
 
+func trailingErrorResult(results []*syntax.BashPPField) bool {
+	if len(results) == 0 {
+		return false
+	}
+	last := results[len(results)-1]
+	if last.FieldType != nil && last.FieldType.Value == "error" {
+		return true
+	}
+	named, ok := last.FieldTypeExpr.(*syntax.BashPPNamedType)
+	return ok && named.Name != nil && named.Name.Value == "error" && len(named.TypeArgs) == 0
+}
+
+func goErrorResultField() *syntax.BashPPField {
+	return &syntax.BashPPField{FieldType: &syntax.Lit{Value: "error"}}
+}
+
+func (e *emitter) publicResults(f *syntax.BashPPFuncDecl) []*syntax.BashPPField {
+	if f == nil || !e.goErrorFuncs[f] {
+		return f.Results
+	}
+	out := append([]*syntax.BashPPField(nil), f.Results...)
+	return append(out, goErrorResultField())
+}
+
 // checkDecoratorCycles refuses a decorator graph with a cycle among unit
 // functions: a decorator decorated, directly or through others, by a function
 // its own chain runs would re-enter itself on every call. The engine detects
@@ -187,6 +221,9 @@ func (e *emitter) checkDecoratorCycles() error {
 		state[name] = visiting
 		if f := e.functionDecls[name]; f != nil {
 			for _, d := range f.Decorators {
+				if d.Name.Value == goErrorDecoratorName {
+					continue
+				}
 				if e.functionDecls[d.Name.Value] == nil {
 					continue
 				}
@@ -275,8 +312,20 @@ func (e *emitter) decoratedBody(f *syntax.BashPPFuncDecl, signature, body string
 	if plan.NeedsFrame() {
 		return "", "", e.fail(f, CodeUnsupported, "decorated callable results need direct native carriers")
 	}
+	goError := e.goErrorFuncs[f]
 	resultTypes := e.returnTypes(f.Results)
-	storage, zeros, err := e.resultStorage(f.Results)
+	// The failure block runs when the decorator infrastructure itself fails —
+	// Decorate, DecoratedResults or DecoratedResult reporting false. It returns
+	// the declared zero values for the ENTIRE public signature, which for a
+	// @go.error callable includes a nil (zero) trailing error. The failure is
+	// reported by the chain through Program.Fail and settled through the
+	// result frame's absence (the caller reads MissingResults), exactly as the
+	// interpreter returns nil,false without minting any result. Synthesizing
+	// GoError(name, Status()) here would instead mint an ordinary
+	// (zero, "exit status N") pair — masking an infrastructure failure as a
+	// normal call outcome — so the trailing error stays its zero value like
+	// every other result.
+	storage, zeros, err := e.resultStorage(e.publicResults(f))
 	if err != nil {
 		return "", "", err
 	}
@@ -339,6 +388,9 @@ func (e *emitter) decoratedBody(f *syntax.BashPPFuncDecl, signature, body string
 	e.projections.projectionPush()
 	var rungErr error
 	for _, d := range f.Decorators {
+		if d.Name.Value == goErrorDecoratorName {
+			continue
+		}
 		rung, err := e.decoratorRung(f, d)
 		if err != nil {
 			rungErr = err
@@ -387,7 +439,12 @@ func (e *emitter) decoratedBody(f *syntax.BashPPFuncDecl, signature, body string
 	// filled so a rewritten or skipped result is what the caller reads.
 	fmt.Fprintf(&out, "if !%s.DecoratedResults(%s, %s, %d) %s", p, call, quoted, len(resultTypes), failure)
 	if len(resultTypes) == 0 {
-		out.WriteString("return\n")
+		if goError {
+			fmt.Fprintf(&out, "if %s != nil { %sMustResult(%sSetResult(%s, 0, %sGoError(%s, %s.Status()))) }\n", frame, rt, rt, frame, rt, quoted, p)
+			fmt.Fprintf(&out, "return %sGoError(%s, %s.Status())\n", rt, quoted, p)
+		} else {
+			out.WriteString("return\n")
+		}
 		return out.String(), builder.String(), nil
 	}
 	var finals []string
@@ -404,6 +461,9 @@ func (e *emitter) decoratedBody(f *syntax.BashPPFuncDecl, signature, body string
 		}
 		out.WriteString(record + "\n")
 	}
+	if goError {
+		fmt.Fprintf(&out, "%sMustResult(%sSetResult(%s, %d, %sGoError(%s, %s.Status())))\n", rt, rt, frame, len(finals), rt, quoted, p)
+	}
 	out.WriteString("}\n")
 	// Named results are the entry's own; the body closure's defers already
 	// ran against the closure's, so the settled values are final.
@@ -411,6 +471,9 @@ func (e *emitter) decoratedBody(f *syntax.BashPPFuncDecl, signature, body string
 		if name != "" {
 			fmt.Fprintf(&out, "%s = %s\n", name, finals[i])
 		}
+	}
+	if goError {
+		finals = append(finals, rt+"GoError("+quoted+", "+p+".Status())")
 	}
 	out.WriteString("return " + strings.Join(finals, ", ") + "\n")
 	return out.String(), builder.String(), nil

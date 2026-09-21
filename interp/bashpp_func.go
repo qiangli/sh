@@ -74,6 +74,9 @@ type bashPPFunc struct {
 	// advised holds the policy decorators [Advice] added at registration;
 	// they wrap the declaration's own, outermost first.
 	advised []DecoratorSpec
+	// goError marks @go.error(), which adapts the public result surface while
+	// leaving the body/decorator chain on the original results.
+	goError bool
 }
 
 // bashPPType is one script-local named type. Aliases intentionally cannot own
@@ -118,15 +121,29 @@ func (f *bashPPFunc) params() []*syntax.BashPPField {
 
 func (f *bashPPFunc) results() []*syntax.BashPPField {
 	if f.decl != nil {
+		results := f.decl.Results
 		if len(f.typeArgs) > 0 {
-			return bashPPSubstituteFields(f.decl.Results, f.typeArgs)
+			results = bashPPSubstituteFields(results, f.typeArgs)
 		}
-		return f.decl.Results
+		if f.goError {
+			results = append(append([]*syntax.BashPPField(nil), results...), bashPPGoErrorResultField())
+		}
+		return results
 	}
 	if len(f.typeArgs) > 0 {
 		return bashPPSubstituteFields(f.lit.Results, f.typeArgs)
 	}
 	return f.lit.Results
+}
+
+func (f *bashPPFunc) bodyResults() []*syntax.BashPPField {
+	if f.decl != nil {
+		if len(f.typeArgs) > 0 {
+			return bashPPSubstituteFields(f.decl.Results, f.typeArgs)
+		}
+		return f.decl.Results
+	}
+	return f.results()
 }
 
 func (f *bashPPFunc) typeParams() []*syntax.BashPPTypeParam {
@@ -309,6 +326,13 @@ func (r *Runner) bashPPFuncDecl(d *syntax.BashPPFuncDecl) {
 		r.bashPPMethodDecl(d)
 		return
 	}
+	if bashPPGoErrorDecorated(d) {
+		if len(d.TypeParams) > 0 || bashPPTrailingErrorResult(d.Results) {
+			r.errf("BASHPP-EDECO-GOERROR: @go.error requires a receiver-less non-generic function with no trailing error result\n")
+			r.exit.code = 2
+			return
+		}
+	}
 	if r.bashPPFuncs == nil {
 		r.bashPPFuncs = make(map[string]*bashPPFunc, 4)
 	}
@@ -329,7 +353,7 @@ func (r *Runner) bashPPFuncDecl(d *syntax.BashPPFuncDecl) {
 			captured = r.bashPPScope.snapshot()
 		}
 	}
-	r.bashPPFuncs[name] = &bashPPFunc{decl: d, scope: captured, advised: advised}
+	r.bashPPFuncs[name] = &bashPPFunc{decl: d, scope: captured, advised: advised, goError: bashPPGoErrorDecorated(d)}
 }
 
 func bashPPValidateTypeParamDecls(params []*syntax.BashPPTypeParam) error {
@@ -413,6 +437,11 @@ func (r *Runner) bashPPCheckEnumSwitches(d *syntax.BashPPFuncDecl) bool {
 }
 
 func (r *Runner) bashPPMethodDecl(d *syntax.BashPPFuncDecl) {
+	if bashPPGoErrorDecorated(d) {
+		r.errf("BASHPP-EDECO-GOERROR: @go.error requires a receiver-less function\n")
+		r.exit.code = 2
+		return
+	}
 	recv := d.Receiver
 	for _, field := range append(append([]*syntax.BashPPField(nil), d.Params...), d.Results...) {
 		for _, name := range field.Names {
@@ -2143,9 +2172,9 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 			}
 		}
 	}
-	resultNames := bashppResultNames(fn.results())
+	resultNames := bashppResultNames(fn.bodyResults())
 	if r.bashPPGoSource {
-		if !r.goSourceDeclareResults(ctx, fn.results()) {
+		if !r.goSourceDeclareResults(ctx, fn.bodyResults()) {
 			return nil
 		}
 	} else {
@@ -2479,7 +2508,7 @@ func (r *Runner) bashPPShortDeclCall(ctx context.Context, d *syntax.BashPPShortD
 // the result parameters are set" — expressed in the only two places that can
 // observe it.
 func (r *Runner) bashPPSettleResults(fn *bashPPFunc, resultNames []string) []string {
-	count := bashppResultCount(fn.results())
+	count := bashppResultCount(fn.bodyResults())
 	ret := r.bashPPReturn
 
 	// A result-less function keeps shell semantics for `return`: a bare return
@@ -2505,7 +2534,7 @@ func (r *Runner) bashPPSettleResults(fn *bashPPFunc, resultNames []string) []str
 			r.exit.code = 2
 			return nil
 		}
-		resultTypes := bashppResultTypeExprs(fn.results())
+		resultTypes := bashppResultTypeExprs(fn.bodyResults())
 		if r.bashPPGoSource {
 			for i, cell := range ret.cells {
 				if i >= len(resultTypes) || i >= len(ret.values) || cell == nil {

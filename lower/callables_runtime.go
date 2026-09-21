@@ -136,14 +136,22 @@ func (e *emitter) runtimeFunction(f *syntax.BashPPFuncDecl, signature, body, gen
 	if f.Receiver != nil {
 		return e.runtimeMethodFunction(f, signature, body, generics)
 	}
-	entry, err := e.programEntry(f.Name.Value, f.Agentic != nil, f.Results, len(f.Decorators) > 0)
+	publicResults := e.publicResults(f)
+	entry, err := e.programEntry(f.Name.Value, f.Agentic != nil, publicResults, len(f.Decorators) > 0)
 	if err != nil {
 		return "", err
 	}
 	entry += e.bindResultArguments(f.Params)
 	decorators := ""
 	if len(f.Decorators) > 0 {
-		if body, decorators, err = e.decoratedBody(f, signature, body); err != nil {
+		bodySignature := signature
+		if e.goErrorFuncs[f] {
+			bodySignature, err = e.signature(f.Params, f.Results, f.Body)
+			if err != nil {
+				return "", err
+			}
+		}
+		if body, decorators, err = e.decoratedBody(f, bodySignature, body); err != nil {
 			return "", err
 		}
 	}
@@ -175,7 +183,7 @@ func (e *emitter) runtimeFunction(f *syntax.BashPPFuncDecl, signature, body, gen
 	}
 	invocation += ")"
 	resultAllocation, resultValidation := "", ""
-	plan := e.functionResultPlan(f)
+	plan := e.functionResultPlan(&syntax.BashPPFuncDecl{Results: publicResults})
 	if plan.NeedsFrame() {
 		frame := e.prefix + "publicResults"
 		resultAllocation, err = e.richResultFrame(frame, e.runtimeScope(), plan)
@@ -188,7 +196,7 @@ func (e *emitter) runtimeFunction(f *syntax.BashPPFuncDecl, signature, body, gen
 			resultValidation += "if _, err := " + e.prefix + "rt.NativeResult[" + result.Declared + "](" + frame + "," + strconv.Itoa(i) + "," + e.checkedValueSite(f, "") + "); err != nil {panic(err)}\n"
 		}
 	}
-	storage, values, err := e.resultStorage(f.Results)
+	storage, values, err := e.resultStorage(publicResults)
 	if err != nil {
 		return "", err
 	}
