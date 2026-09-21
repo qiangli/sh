@@ -265,11 +265,25 @@ func (r *Runner) bashPPShortDeclDecode(ctx context.Context, d *syntax.BashPPShor
 // [Runner.bashPPExprValue]'s convention, but reads a bound name through
 // [expand.Variable.String] so an Object argument arrives as its JSON
 // coercion — the same string every other consumer of the variable sees.
+//
+// `run` also exposes its byte-exact stdout field as `result.Stdout`. That is
+// the documented structured-output boundary: select the already-separated
+// stdout channel, then explicitly decode it. It is deliberately narrow rather
+// than a general dotted-word evaluator; this call-shaped boundary must not
+// become implicit conversion for arbitrary object fields or pipes.
 func (r *Runner) bashPPDecodeArg(w *syntax.Word) string {
 	if len(w.Parts) == 1 {
-		if lit, ok := w.Parts[0].(*syntax.Lit); ok && syntax.BashPPValidIdent(lit.Value) {
-			if vr := r.lookupVar(lit.Value); vr.IsSet() {
+		if lit, ok := w.Parts[0].(*syntax.Lit); ok {
+			if vr := r.lookupVar(lit.Value); syntax.BashPPValidIdent(lit.Value) && vr.IsSet() {
 				return vr.String()
+			}
+			if base, field, found := strings.Cut(lit.Value, "."); found &&
+				syntax.BashPPValidIdent(base) && field == "Stdout" {
+				if obj, ok := r.lookupVar(base).Obj.(map[string]any); ok {
+					if stdout, ok := obj["Stdout"].(string); ok {
+						return stdout
+					}
+				}
 			}
 		}
 	}
