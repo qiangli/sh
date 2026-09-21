@@ -152,6 +152,12 @@ type Runner struct {
 	bashPPForeignFuncs   map[string]*bashPPFunc
 	bashPPForeignModules []*polyglot.Module
 	bashPPForeignImports map[string]*polyglot.Module
+	// bashPPSeededImports are direct imports an embedder handed the runner
+	// through [ForeignImports]: a lowered program's own import bindings, so a
+	// shell region it runs resolves `alias.fn` to the program's worker. They
+	// outlive every file run (a file's own imports shadow them) and the
+	// runner never closes them.
+	bashPPSeededImports map[string]*polyglot.Module
 	// bashPPTypes and bashPPMethods are the runner-local named-type namespace.
 	// They persist with the session and are cloned for subshell isolation.
 	bashPPTypes   map[string]bashPPType
@@ -1716,6 +1722,28 @@ type RunnerOption func(*Runner) error
 
 // TODO: enforce the rule above via didReset.
 
+// ForeignImports binds direct Python imports the embedder already owns, by
+// alias, for the Bash# dialect: `alias.fn(...)` calls and `alias.fn args`
+// commands in the source the runner executes resolve to these workers. It is
+// the seam through which a lowered program shares its own import bindings
+// with the shell regions it runs, so a command alias reaches the same worker
+// (and module state) as the program's typed calls. Imports declared by an
+// executed file shadow a seeded alias while that file runs. The runner does
+// not close seeded modules; their owner does.
+func ForeignImports(modules map[string]*polyglot.Module) RunnerOption {
+	return func(r *Runner) error {
+		if r.bashPPSeededImports == nil {
+			r.bashPPSeededImports = map[string]*polyglot.Module{}
+		}
+		for alias, module := range modules {
+			if module != nil {
+				r.bashPPSeededImports[alias] = module
+			}
+		}
+		return nil
+	}
+}
+
 // Env sets the interpreter's environment. If nil, a copy of the current
 // process's environment is used.
 func Env(env expand.Environ) RunnerOption {
@@ -2403,7 +2431,8 @@ func WithInheritedFds(fds []int) RunnerOption {
 // before the runner dispatches a simple command to either a shell
 // builtin or [ExecHandlerFunc].
 type AuditEvent struct {
-	// Kind is "builtin" or "exec".
+	// Kind is "builtin", "exec", or "island" (a Bash# island function run
+	// as a command word through its worker; see [ForeignImports]).
 	Kind string
 	// Args is the resolved command and its arguments, post expansion.
 	Args []string
@@ -3014,6 +3043,9 @@ func (r *Runner) Reset() {
 		standaloneDefaults: standaloneDefaults,
 
 		goSourceEnvironment: r.goSourceEnvironment,
+		// Seeded imports are construction-time configuration ([ForeignImports])
+		// owned by the embedder, not per-Run state.
+		bashPPSeededImports: r.bashPPSeededImports,
 
 		// The dialect is fixed at construction by [Lang]; a runtime `set -o
 		// bashpp` may have changed r.dialect since, so Reset restores the
@@ -3794,6 +3826,7 @@ func (r *Runner) subshell(background bool) *Runner {
 	r2.bashPPForeignFuncs = maps.Clone(r.bashPPForeignFuncs)
 	r2.bashPPForeignModules = append([]*polyglot.Module(nil), r.bashPPForeignModules...)
 	r2.bashPPForeignImports = maps.Clone(r.bashPPForeignImports)
+	r2.bashPPSeededImports = maps.Clone(r.bashPPSeededImports)
 	r2.bashPPTypes = maps.Clone(r.bashPPTypes)
 	// The bindings map is read-only once installed, but a subshell may enter
 	// its own frames, so it gets its own map rather than sharing this one.

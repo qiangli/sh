@@ -66,7 +66,14 @@ func bashppForeignImport(ce *CallExpr) *BashPPImport {
 		return nil
 	}
 	modulePath, err := strconv.Unquote(`"` + path.Parts[0].(*Lit).Value + `"`)
-	if err != nil || !validPythonImportPath(modulePath) {
+	if err != nil {
+		return nil
+	}
+	if BashPPPythonFileImport(modulePath) {
+		if !validPythonFilePath(modulePath) {
+			return nil
+		}
+	} else if !validPythonImportPath(modulePath) {
 		return nil
 	}
 	var as, alias *Lit
@@ -118,9 +125,40 @@ func bashppForeignLanguage(word *Word) (language, environment *Lit, lbrack, rbra
 	return language, environment, language.End(), posAddCol(word.Pos(), len(value)-1), true
 }
 
+// BashPPPythonFileImport reports whether a Python import operand names a
+// source file rather than a dotted module: it ends in `.py` (any case, as
+// CPython's Windows finder accepts `.PY`) or carries a path separator. The
+// polyglot package applies the same rule when planning; keep the two in step.
+func BashPPPythonFileImport(path string) bool {
+	return strings.HasSuffix(strings.ToLower(path), ".py") || strings.ContainsAny(path, `/\`)
+}
+
+// validPythonFilePath accepts a file operand that names a .py source. A path
+// without the suffix is refused here, as CPython's spec_from_file_location
+// yields no spec for it; `import python "./x"` is not a shorthand.
+func validPythonFilePath(path string) bool {
+	return strings.HasSuffix(strings.ToLower(path), ".py") && len(path) > len(".py")
+}
+
+// bashppPythonFileStem is the file import's module name: the base name
+// without its `.py` suffix, as SourceFileLoader names it.
+func bashppPythonFileStem(path string) string {
+	if i := strings.LastIndexAny(path, `/\`); i >= 0 {
+		path = path[i+1:]
+	}
+	return path[:len(path)-len(".py")]
+}
+
 // BashPPDerivedImportAlias returns the safe default binding for a Python
 // module path. Callers must require an explicit alias when ok is false.
 func BashPPDerivedImportAlias(modulePath string) (alias string, ok bool) {
+	if BashPPPythonFileImport(modulePath) {
+		if !validPythonFilePath(modulePath) {
+			return "", false
+		}
+		stem := bashppPythonFileStem(modulePath)
+		return stem, bashppIsIdent(stem)
+	}
 	if i := strings.LastIndexByte(modulePath, '.'); i >= 0 {
 		modulePath = modulePath[i+1:]
 	}

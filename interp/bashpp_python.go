@@ -22,6 +22,20 @@ func (r *Runner) bashPPPythonValue(expr syntax.BashPPExpr) (any, bool, error) {
 		handle, ok := cell.vr.Obj.(*polyglot.Handle)
 		return handle, ok, nil
 	case *syntax.BashPPSelectorExpr:
+		if id, ok := x.X.(*syntax.BashPPIdent); ok {
+			// `mod.attr` on a direct import reads the module attribute,
+			// unless a local value shadows the alias.
+			if module := r.bashPPImportModule(id.Name.Value); module != nil && (r.bashPPScope == nil || r.bashPPScope.lookup(id.Name.Value) == nil) {
+				result, err := module.Attr(r.ectx, x.Sel.Value)
+				if result.Stdout != "" {
+					fmt.Fprint(r.stdout, result.Stdout)
+				}
+				if result.Stderr != "" {
+					fmt.Fprint(r.stderr, result.Stderr)
+				}
+				return result.Value, true, err
+			}
+		}
 		base, handled, err := r.bashPPPythonValue(x.X)
 		if err != nil || !handled {
 			return nil, handled, err
