@@ -27,7 +27,8 @@ import (
 //     library/core/src/ops/function.rs doc examples `call_with_one` (Fn),
 //     `do_twice` (FnMut) and `consume_with_relish` (FnOnce) (closure/callback:
 //     a callback invoked once, twice, and one that cannot be invoked again).
-//   - serde-rs/json v1.0.151, "MIT OR Apache-2.0" (Cargo.toml `license`):
+//   - serde-rs/json v1.0.151, commit de8500740cdcabffb9734f503e4889def823cf10,
+//     "MIT OR Apache-2.0" (Cargo.toml `license`):
 //     tests/test.rs `test_write_newtype_struct` (serde handle: a newtype
 //     nested in an outer map crosses through to_value and back).
 //
@@ -506,6 +507,20 @@ func TestRustCallbacksCancellationAndOutput(t *testing.T) {
 	transcript.WriteString(result.Stdout)
 	if err != nil || transcript.String() != "before\nwarn\ncallback\nafter\n" || result.Stderr != "" {
 		t.Fatalf("noisy with sink = %#v, %v, transcript %q", result, err, transcript.String())
+	}
+}
+
+// Even a request rejected while encoding must expire callbacks registered
+// earlier in that argument list, rather than retaining their closures forever.
+func TestRustCallbacksEncodingFailureExpiresCallbacks(t *testing.T) {
+	module, _, _ := rustBridgeModule(t)
+	callback := Callback{Name: "unused", Invoke: func(context.Context, []any) (any, error) { return nil, nil }}
+	_, err := module.Call(context.Background(), "ping", callback, &Handle{})
+	if err == nil || !strings.Contains(err.Error(), "stale or foreign Rust handle") {
+		t.Fatalf("encoding error = %v", err)
+	}
+	if len(module.callbackTable) != 0 || len(module.pendingCallbacks) != 0 {
+		t.Fatalf("failed request retained callbacks: table=%d pending=%d", len(module.callbackTable), len(module.pendingCallbacks))
 	}
 }
 

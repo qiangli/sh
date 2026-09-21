@@ -730,12 +730,12 @@ func (m *Module) CallKeywords(ctx context.Context, name string, args []any, kwar
 	m.nextID++
 	encodedArgs, err := m.encodeValue(args)
 	if err != nil {
-		m.dropPendingCallbacks()
+		m.dropPendingCallbacks()()
 		return CallResult{}, err
 	}
 	encodedKwargs, err := m.encodeValue(kwargs)
 	if err != nil {
-		m.dropPendingCallbacks()
+		m.dropPendingCallbacks()()
 		return CallResult{}, err
 	}
 	defer m.dropPendingCallbacks()()
@@ -1008,8 +1008,9 @@ func (m *Module) exchangeContext(ctx context.Context, request any, response *wor
 	case <-ctx.Done():
 		// The worker dies now; a callback still running sees ctx done and
 		// its reply fails against the closed pipe, which ends the exchange.
-		_ = m.kill()
+		_ = m.killWorker()
 		<-done
+		m.pendingOut, m.pendingErr = "", ""
 		return ctx.Err()
 	case err := <-done:
 		return err
@@ -1173,6 +1174,15 @@ func (m *Module) Close() error {
 }
 
 func (m *Module) kill() error {
+	err := m.killWorker()
+	m.pendingOut, m.pendingErr = "", ""
+	return err
+}
+
+// killWorker may run alongside a cancelled exchange. It touches only process
+// state protected by procMu, not the callback/output state owned by that
+// exchange. Its caller must join the exchange before clearing pending output.
+func (m *Module) killWorker() error {
 	m.procMu.Lock()
 	defer m.procMu.Unlock()
 	if m.cmd == nil {
@@ -1189,7 +1199,6 @@ func (m *Module) kill() error {
 		_ = m.outFile.Close()
 	}
 	m.cmd, m.in, m.out, m.outFile = nil, nil, nil, nil
-	m.pendingOut, m.pendingErr = "", ""
 	if m.tempDir != "" {
 		_ = os.RemoveAll(m.tempDir)
 		m.tempDir = ""
