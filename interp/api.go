@@ -3370,6 +3370,11 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 		r.bashPPFileRun = true
 		defer func() { r.bashPPFileRun = false }()
 		if r.Dialect() == syntax.LangBashPP {
+			processes := r.bashPPProcessRegistry()
+			processes.mu.Lock()
+			first := processes.next
+			processes.mu.Unlock()
+			defer processes.cleanupSince(first)
 			// Persistent FIFO descriptors opened before the first task are
 			// still owned by this File and must be registered for snapshots.
 			r.bashPPConcurrency(ctx)

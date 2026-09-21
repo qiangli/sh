@@ -4,6 +4,7 @@
 package interp
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -16,6 +17,47 @@ import (
 	"testing"
 	"time"
 )
+
+func TestBashPPProcessOversizeLineReaps(t *testing.T) {
+	pr, pw := io.Pipe()
+	src := &fakeProcessSource{
+		stdout:  pr,
+		release: make(chan struct{}),
+		killFn:  func() { _ = pw.Close() },
+	}
+	p := bashPPStartLineProcess(context.Background(), src, 1)
+	written := make(chan struct{})
+	go func() {
+		defer close(written)
+		_, _ = io.WriteString(pw, strings.Repeat("x", 17*1024*1024))
+	}()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, err := p.Wait()
+		if !errors.Is(err, bufio.ErrTooLong) {
+			t.Errorf("Wait error = %v, want scanner token-too-long", err)
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		p.kill()
+		t.Fatal("scanner failure did not terminate and reap the blocked writer")
+	}
+	<-written
+	if !src.killed.Load() || src.waits.Load() != 1 {
+		t.Fatalf("killed=%v waits=%d", src.killed.Load(), src.waits.Load())
+	}
+}
+
+func TestBashPPRunLinesOversizeCapture(t *testing.T) {
+	line := strings.Repeat("x", 17*1024*1024)
+	got := bashPPSplitLines(line + "\nlast\n")
+	if len(got) != 2 || got[0] != line || got[1] != "last" {
+		t.Fatal("completed capture Lines silently truncated a long line")
+	}
+}
 
 // Tests for the one internal bounded Go-channel process line substrate
 // (bashPPLineProcess) that underpins B14's live `start(...)` surface.

@@ -137,6 +137,7 @@ type shell struct {
 
 	closeOnce sync.Once
 	closeErr  error
+	processes []interp.LineProcess
 }
 
 // initialParams seeds both the shell options and the positional parameters in
@@ -192,6 +193,12 @@ func (sh *shell) Clone(streams shellrt.Stdio) (shellrt.ShellRunner, error) {
 func (sh *shell) Close(ctx context.Context) error {
 	ctx = sh.taskPolicyContext(ctx)
 	sh.closeOnce.Do(func() {
+		defer func() {
+			for _, process := range sh.processes {
+				_ = process.Close()
+			}
+			sh.processes = nil
+		}()
 		ctx, cancel := context.WithTimeout(ctx, sh.cfg.shutdown)
 		defer cancel()
 		if sh.cfg.noTraps {

@@ -102,7 +102,7 @@ func TestBashPPRunLinesNonzeroStatus(t *testing.T) {
 	src := `func main() {
 	r, err := run("sh", "-c", "echo one; echo two; exit 7")
 	for line := range r.Lines() { printf '[%s]' "$line" }
-	echo " status=${r.Status} err=[$err]"
+	printf ' status=%s err=[%s]\n' r.Status "$err"
 }
 main()
 `
@@ -142,7 +142,7 @@ func TestBashPPRunLinesLarge(t *testing.T) {
 	r, err := run("sh", "-c", 'i=0; while [ $i -lt 20000 ]; do echo "out line $i"; echo "err line $i" >&2; i=$((i+1)); done')
 	n := 0
 	for line := range r.Lines() { n++ }
-	echo "n=$n status=${r.Status} err=[$err]"
+	printf 'n=%s status=%s err=[%s]\n' "$n" r.Status "$err"
 }
 main()
 `
@@ -264,7 +264,8 @@ main()
 func TestBashPPStartLinesCancel(t *testing.T) {
 	requireSh(t)
 	ctx, cancel := context.WithCancel(context.Background())
-	var outBuf, errBuf strings.Builder
+	var outBuf lockedBuffer
+	var errBuf strings.Builder
 	r := captureRunner(t, &errBuf, StdIO(nil, &outBuf, &errBuf))
 	src := `func main() {
 	p, err := start("sh", "-c", 'echo first; exec sleep 30')
@@ -346,7 +347,17 @@ main()
 	out, stderr, err := processSurfaceRun(t, src)
 	qt.Assert(t, qt.IsNil(err), qt.Commentf("stderr: %s", stderr))
 	qt.Assert(t, qt.Equals(out, "done\n"))
+	// The engine's exec handler escalates a cancelled child to SIGKILL after
+	// its 2s kill timeout on a goroutine of its own; allow that to elapse.
 	after := settle()
+	for deadline := time.Now().Add(5 * time.Second); after > before+3 && time.Now().Before(deadline); {
+		time.Sleep(100 * time.Millisecond)
+		after = settle()
+	}
+	if after > before+3 {
+		buf := make([]byte, 1<<20)
+		t.Logf("%s", buf[:runtime.Stack(buf, true)])
+	}
 	qt.Assert(t, qt.IsTrue(after <= before+3), qt.Commentf("goroutines grew from %d to %d", before, after))
 }
 
@@ -362,6 +373,23 @@ func TestBashPPStartCommandPositionAndArity(t *testing.T) {
 		qt.Assert(t, qt.IsNotNil(err), qt.Commentf("src: %s", tc.src))
 		qt.Assert(t, qt.StringContains(stderr, tc.want))
 	}
+}
+
+func TestBashPPStartFileCleanup(t *testing.T) {
+	requireSh(t)
+	var out, diagnostic strings.Builder
+	r := captureRunner(t, &diagnostic, StdIO(nil, &out, &diagnostic))
+	started := time.Now()
+	err := r.Run(context.Background(), parseBashPPInternal(t, `func main() {
+	p, err := start("sh", "-c", 'echo ready; exec sleep 30')
+	for line := range p.Lines() { echo "$line"; break }
+}
+main()
+`))
+	qt.Assert(t, qt.IsNil(err))
+	qt.Assert(t, qt.Equals(out.String(), "ready\n"))
+	qt.Assert(t, qt.IsTrue(time.Since(started) < 10*time.Second))
+	qt.Assert(t, qt.Equals(len(r.bashPPProcs.procs), 0))
 }
 
 // TestBashPPRunLinesParsesAndPrints: the spellings round-trip through the

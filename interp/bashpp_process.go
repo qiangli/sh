@@ -156,6 +156,11 @@ func (p *bashPPLineProcess) produce() {
 		p.mu.Lock()
 		p.scanErr = err
 		p.mu.Unlock()
+		// A failed scanner no longer drains stdout. Terminate the source now:
+		// otherwise a writer can remain blocked on its full pipe forever while
+		// Wait waits for stderr EOF or process exit. Do not cancel p.ctx here;
+		// the original scan error must remain distinct from cancellation.
+		p.kill()
 	}
 }
 

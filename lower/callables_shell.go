@@ -9,8 +9,19 @@ import (
 )
 
 func (e *emitter) needsShell(file *syntax.File) {
+	declared := map[string]bool{}
+	syntax.Walk(file, func(node syntax.Node) bool {
+		if f, ok := node.(*syntax.BashPPFuncDecl); ok && f.Name != nil {
+			declared[f.Name.Value] = true
+		}
+		return true
+	})
 	syntax.Walk(file, func(node syntax.Node) bool {
 		switch n := node.(type) {
+		case *syntax.BashPPCall:
+			if !file.GoSource && len(n.Fun) == 1 && !declared[n.Fun[0].Value] && (n.Fun[0].Value == "run" || n.Fun[0].Value == "start") {
+				e.mixedShell = true
+			}
 		case *syntax.FuncDecl, *syntax.IfClause, *syntax.BinaryCmd:
 			e.mixedShell = true
 		case *syntax.CallExpr:

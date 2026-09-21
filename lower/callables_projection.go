@@ -196,6 +196,16 @@ func (e *emitter) declarationProjection(n *syntax.BashPPDecl) projection {
 	return p
 }
 func (e *emitter) callProjection(c *syntax.BashPPCall, index int) projection {
+	if !e.goSource && c != nil && len(c.Fun) == 1 && e.functionDecls[c.Fun[0].Value] == nil && index == 0 {
+		if name := c.Fun[0].Value; name == "run" || name == "start" {
+			p := nativeAggregateProjection()
+			p.sourceType = e.prefix + "rt.ProcessResult"
+			if name == "start" {
+				p.sourceType = "*" + e.prefix + "rt.LiveProcess"
+			}
+			return p
+		}
+	}
 	if c == nil {
 		return scalarProjection()
 	}

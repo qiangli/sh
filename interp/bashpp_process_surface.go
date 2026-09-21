@@ -4,7 +4,6 @@
 package interp
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
@@ -73,6 +72,24 @@ func (t *bashPPProcessTable) get(id string) *bashPPLineProcess {
 	return t.procs[id]
 }
 
+// cleanupSince releases only handles created by this file execution. A nested
+// Run must not close handles owned by the outer execution or interactive caller.
+func (t *bashPPProcessTable) cleanupSince(first int) {
+	t.mu.Lock()
+	var procs []*bashPPLineProcess
+	for n := first + 1; n <= t.next; n++ {
+		id := "proc" + strconv.Itoa(n)
+		if p := t.procs[id]; p != nil {
+			procs = append(procs, p)
+			delete(t.procs, id)
+		}
+	}
+	t.mu.Unlock()
+	for _, p := range procs {
+		_ = p.Close()
+	}
+}
+
 // bashPPProcessHandle resolves a bound name to its live process, or nil when
 // the name is not a start(...) handle.
 func (r *Runner) bashPPProcessHandle(name string) *bashPPLineProcess {
@@ -118,11 +135,11 @@ func bashPPSplitLines(s string) []string {
 	if s == "" {
 		return nil
 	}
-	sc := bufio.NewScanner(strings.NewReader(s))
-	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
-	var lines []string
-	for sc.Scan() {
-		lines = append(lines, sc.Text())
+	// The capture is already in memory; imposing the live scanner's token
+	// limit here would silently truncate an otherwise successful capture.
+	lines := strings.Split(strings.TrimSuffix(s, "\n"), "\n")
+	for i := range lines {
+		lines[i] = strings.TrimSuffix(lines[i], "\r")
 	}
 	return lines
 }
@@ -228,10 +245,16 @@ func (e *bashPPStatusError) Error() string { return "exit status " + strconv.Ito
 // bashPPStartSubshell launches argv concurrently in a subshell of r and
 // returns the live line process over its stdout.
 func (r *Runner) bashPPStartSubshell(ctx context.Context, argv []string) *bashPPLineProcess {
+	// The child shares the established writer locks with foreground commands,
+	// including when an embedder starts a process outside a full File run.
+	r.bashPPConcurrency(ctx)
 	pr, pw := io.Pipe()
 	cctx, cancel := context.WithCancel(ctx)
 	src := &bashPPSubshellSource{stdout: pr, cancel: cancel, done: make(chan struct{})}
-	r2 := r.subshell(false)
+	// A background subshell: it runs concurrently with the caller, so its
+	// environment must be the snapshot a `&` job takes, not the live overlay
+	// a `$(...)` capture shares.
+	r2 := r.subshell(true)
 	r2.bgProcs = r.bgProcs
 	r2.jobsReadOnly = true
 	r2.stdout = pw

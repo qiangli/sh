@@ -110,9 +110,41 @@ permits — no general method evaluator, no second streaming abstraction:
   the sole blocking call. `p.Close()` abandons early (kill, drain, reap) and is
   a no-op after `Wait`. Both dispatch ahead of the selector lookup, only when
   the base name is a live handle.
-- **Lowering**: `run`/`capture`/`start` are the interpreter's process boundary
-  and are not lowered; a `range x.Lines()` reports itself interpreter-only
-  rather than emitting Go that could not compile (`lower/callables.go`).
+- **Lowering**: `run` and `start` lower through the optional
+  `shellrt.ProcessShellRunner` capability on the existing shell backend.
+  `shellexec` calls the public interpreter process API; live output uses the
+  identical bounded producer, never a second stream implementation. Generated
+  code ranges completed slices or live channels and uses typed Wait/Close
+  methods. `TestProcessLinesParity` compiles and executes five actual native
+  programs alongside the interpreter, including nonzero/command status and
+  exact-once Wait. Unrelated `capture` lowering is not added by this story.
+
+## Completion checkpoint (2026-09-21)
+
+- Fixed the surface tests to use the language's existing `r.Status` selector,
+  not invalid Bash `${r.Status}` parameter expansion.
+- A scanner error now kills the source before Wait: an oversized line cannot
+  strand a writer on a full stdout pipe. Completed captures split without a
+  token cap, so Lines never silently drops long captured output.
+- Full-file interpreter execution and the lowered backend close abandoned
+  live handles at their ownership boundary. Explicit Wait/Close stay idempotent.
+- Exact upstream `cmdPipeTest` protocol and `TestPipes` input strings are in
+  `interp/bashpp_process_upstream_test.go`, with portable executable-helper
+  cancellation and actual reaping assertions. Pinned Go source commit:
+  `862c888e612ac346c7c4d99c9392bdfd265f33b0` (`go1.27.1`),
+  `src/os/exec/exec_test.go`, BSD-3-Clause. These real-process tests do not
+  require a host POSIX shell and therefore also execute on Windows.
+- Final sprint-wide three-OS runtime and Bash-OFF gates remain manager-owned;
+  local cross-compilation is not represented as a runtime pass.
+
+Local checkpoint evidence: focused process/surface tests passed `-race`
+(5.737s); five interpreted/generated-native parity programs passed (8.312s);
+`go vet ./interp ./lower ./lower/shellrt ./lower/shellrt/shellexec` passed.
+The repository-mandated `TestRunnerRunConfirm` was attempted and failed
+(2.979s), including real-Bash diagnostic-prefix differences (`#1875` readonly
+OPTARG) and empty outputs on external-command fixtures (`#1497`, `#1447`).
+That broad oracle is **not green** and is not claimed fixed by this story;
+the manager owns baseline classification and the sprint-wide regression gate.
 
 Acceptance tests for the literal spellings (`interp/bashpp_process_surface_test.go`,
 `TestBashPPRunLines*` / `TestBashPPStart*`) carry the same os/exec go1.27.1
