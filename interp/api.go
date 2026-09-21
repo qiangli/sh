@@ -2459,6 +2459,42 @@ type ResolvedCommand struct {
 	// prints the bare name, as it does for a builtin or function, and
 	// `type -p` prints nothing.
 	Path string
+	// Schema, when non-nil, describes the registered command's accepted
+	// arguments. The runner validates and binds it before handing the
+	// command to ExecHandler, so a registered script body is not entered
+	// on bad input. A nil schema preserves the pre-schema resolver
+	// contract exactly.
+	Schema *CommandSchema
+}
+
+// CommandSchema describes the argument surface of a registered command.
+// It is intentionally small: positionals, named flags, scalar conversion,
+// defaults and enum validation. Embedders own persistence; the runner owns
+// the one bind/validate-input step before command execution.
+type CommandSchema struct {
+	Positionals []CommandParameter
+	Flags       []CommandFlag
+}
+
+// CommandParameter describes one positional argument.
+type CommandParameter struct {
+	Name     string
+	Type     string
+	Required bool
+	Default  string
+	Enum     []string
+}
+
+// CommandFlag describes one named argument. Name is used as --name, and
+// Shorthand, when non-empty, is used as -x. Bool flags may be supplied without
+// a value, which binds them to true.
+type CommandFlag struct {
+	Name      string
+	Shorthand string
+	Type      string
+	Required  bool
+	Default   string
+	Enum      []string
 }
 
 // CommandResolverFunc answers "does the embedder run this name itself, and

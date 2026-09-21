@@ -10980,10 +10980,25 @@ func (r *Runner) execStartError(ctx context.Context, name string) (string, uint8
 // An empty argv0 means no override.
 func (r *Runner) execAs(ctx context.Context, pos syntax.Pos, argv0 string, clearEnv bool, replace bool, args []string) {
 	hashed := false
+	registeredSchema := false
 	if len(args) > 0 {
 		name := args[0]
+		if r.commandResolver != nil && !strings.ContainsRune(name, '/') {
+			if rc, ok := r.commandResolver(name); ok && rc.Schema != nil {
+				bound, err := bindCommandSchema(name, rc.Schema, args)
+				if err != nil {
+					msg := fmt.Sprintf("%s%s\n", r.bashErrPrefix(pos), err)
+					r.errf("%s", msg)
+					r.reportError("exec", pos, name, msg, 2)
+					r.exit.code = 2
+					return
+				}
+				args = bound.args
+				registeredSchema = true
+			}
+		}
 		newlyHashed := false
-		if entry, ok := r.cmdHashTable[name]; ok {
+		if entry, ok := r.cmdHashTable[name]; ok && !registeredSchema {
 			// bash 5.3 findcmd.c search_for_command: a remembered path is
 			// re-checked when `posixly_correct || check_hashed_filenames`;
 			// if the file no longer exists or is not executable, the entry
@@ -11034,7 +11049,7 @@ func (r *Runner) execAs(ctx context.Context, pos syntax.Pos, argv0 string, clear
 		if enabled, ok := r.noOpSetState["hashall"]; ok {
 			hashall = enabled
 		}
-		if _, ok := r.cmdHashTable[name]; !ok && hashall && !strings.ContainsRune(name, '/') {
+		if _, ok := r.cmdHashTable[name]; !ok && !registeredSchema && hashall && !strings.ContainsRune(name, '/') {
 			if path, err := LookPathDir(r.Dir, r.writeEnv, name); err == nil {
 				if r.cmdHashTable == nil {
 					r.cmdHashTable = make(map[string]cmdHashEntry)
