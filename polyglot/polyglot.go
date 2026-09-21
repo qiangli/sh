@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"sort"
 	"strconv"
@@ -419,7 +420,16 @@ type Module struct {
 	plan       Plan
 	importPlan *ImportPlan
 	runtime    Runtime
-	mu         sync.Mutex
+	// sem serializes callers and honours their context, so a caller that
+	// would wait forever — a nested call from a callback that did not pass
+	// the callback's context — fails when its context ends instead. A shell
+	// callback re-enters through lock, which recognizes the callback's
+	// context and does not take sem again.
+	semOnce sync.Once
+	sem     chan struct{}
+	// procMu guards the worker process fields, which a cancellation may
+	// tear down while a callback's nested exchange still runs.
+	procMu     sync.Mutex
 	cmd        *exec.Cmd
 	in         io.WriteCloser
 	out        *bufio.Reader
@@ -429,6 +439,15 @@ type Module struct {
 	pendingOut string
 	pendingErr string
 	tempDir    string
+
+	callbacks Callbacks
+	// callbackTable holds the callbacks the in-flight calls passed, by wire
+	// id; pendingCallbacks are the ids the request being encoded registered,
+	// which that request removes when it completes.
+	callbackTable    map[uint64]Callback
+	pendingCallbacks []uint64
+	nextCallback     uint64
+	callbackDepth    int
 	// lastExit describes how the previous worker process ended, recorded by
 	// kill so a request that failed because the worker died on its own can
 	// report the signal or status instead of a bare transport error.
@@ -445,6 +464,133 @@ type workerExit struct {
 
 func Start(plan Plan, runtime Runtime) *Module { return &Module{plan: plan, runtime: runtime} }
 
+// MaxCallbackDepth bounds shell callback re-entry: a callback may call back
+// into the worker, whose function may call the shell again, until this many
+// callbacks are active on one module. The next callback is refused with an
+// error the worker's function receives, so a mutual recursion between a
+// fence and a shell function always terminates.
+const MaxCallbackDepth = 8
+
+// Callback is a host function a foreign worker may invoke while the call
+// that passed it is in flight. It crosses the boundary as the value adapter's
+// `{"$callback": id}` shape and expires when that call completes: a worker
+// that stores it and calls it later is refused.
+type Callback struct {
+	Name   string
+	Invoke func(ctx context.Context, args []any) (any, error)
+}
+
+// Callbacks configures how a module serves shell callbacks.
+type Callbacks struct {
+	// Resolve maps the name a call passed as a plain string for a callback
+	// parameter to the function it names. Nil refuses named callbacks.
+	Resolve func(name string) (Callback, bool)
+	// Output receives island stdout/stderr the worker produced before a
+	// callback runs, so it is shown before the callback's own output. Nil
+	// accumulates it into the call's result instead.
+	Output func(stdout, stderr string)
+	// Enter, when set, runs before every callback with the callback's
+	// context — the one a nested call must carry to re-enter the module —
+	// and the func it returns runs after. A host whose call sites cannot
+	// receive a context installs it there.
+	Enter func(ctx context.Context) func()
+}
+
+// SetCallbacks installs the module's shell callback configuration.
+func (m *Module) SetCallbacks(callbacks Callbacks) {
+	unlock, _ := m.lock(context.Background())
+	defer unlock()
+	m.callbacks = callbacks
+}
+
+// FuncCallback adapts a Go function to a Callback. Arguments are converted
+// from the boundary's JSON values to the parameter types; the results are
+// the single result, nil for none, or a list.
+func FuncCallback(name string, fn any) Callback {
+	value := reflect.ValueOf(fn)
+	if value.Kind() != reflect.Func {
+		return Callback{Name: name, Invoke: func(context.Context, []any) (any, error) {
+			return nil, fmt.Errorf("polyglot: callback %s is not a function", name)
+		}}
+	}
+	return Callback{Name: name, Invoke: func(ctx context.Context, args []any) (result any, err error) {
+		typ := value.Type()
+		if typ.IsVariadic() || len(args) != typ.NumIn() {
+			return nil, fmt.Errorf("polyglot: callback %s expects %d arguments, got %d", name, typ.NumIn(), len(args))
+		}
+		in := make([]reflect.Value, len(args))
+		for i, arg := range args {
+			converted, err := callbackArgument(arg, typ.In(i))
+			if err != nil {
+				return nil, fmt.Errorf("polyglot: callback %s argument %d: %w", name, i+1, err)
+			}
+			in[i] = converted
+		}
+		defer func() {
+			if failure := recover(); failure != nil {
+				result, err = nil, fmt.Errorf("polyglot: callback %s panicked: %v", name, failure)
+			}
+		}()
+		out := value.Call(in)
+		if len(out) > 0 && typ.Out(len(out)-1) == reflect.TypeFor[error]() {
+			if failure, _ := out[len(out)-1].Interface().(error); failure != nil {
+				return nil, failure
+			}
+			out = out[:len(out)-1]
+		}
+		switch len(out) {
+		case 0:
+			return nil, nil
+		case 1:
+			return out[0].Interface(), nil
+		}
+		values := make([]any, len(out))
+		for i := range out {
+			values[i] = out[i].Interface()
+		}
+		return values, nil
+	}}
+}
+
+func callbackArgument(arg any, want reflect.Type) (reflect.Value, error) {
+	if arg == nil {
+		return reflect.Zero(want), nil
+	}
+	value := reflect.ValueOf(arg)
+	if value.Type().AssignableTo(want) {
+		return value, nil
+	}
+	if value.Type().ConvertibleTo(want) && (want.Kind() != reflect.String || value.Kind() == reflect.String) {
+		return value.Convert(want), nil
+	}
+	if want.Kind() == reflect.String {
+		return reflect.ValueOf(fmt.Sprint(arg)), nil
+	}
+	return reflect.Value{}, fmt.Errorf("cannot use %T as %s", arg, want)
+}
+
+type reentrantKey struct{}
+
+// lock serializes callers, except a shell callback re-entering the module
+// whose call is in flight: its context carries the module, and its nested
+// request rides the same protocol stream last-in-first-out. Waiting ends
+// with the context.
+func (m *Module) lock(ctx context.Context) (func(), error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if owner, _ := ctx.Value(reentrantKey{}).(*Module); owner == m {
+		return func() {}, nil
+	}
+	m.semOnce.Do(func() { m.sem = make(chan struct{}, 1) })
+	select {
+	case m.sem <- struct{}{}:
+		return func() { <-m.sem }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
 // StartImport creates a lazy direct Python import. The process and module are
 // not loaded until the first operation.
 func StartImport(plan ImportPlan) *Module {
@@ -457,8 +603,14 @@ func StartImport(plan ImportPlan) *Module {
 
 func (m *Module) Plan() Plan { return m.plan }
 
+func (m *Module) alive() bool {
+	m.procMu.Lock()
+	defer m.procMu.Unlock()
+	return m.cmd != nil
+}
+
 func (m *Module) ensure(ctx context.Context) error {
-	if m.cmd != nil {
+	if m.alive() {
 		return nil
 	}
 	var name string
@@ -517,8 +669,10 @@ func (m *Module) ensure(ctx context.Context) error {
 	if protocolWrite != nil {
 		_ = protocolWrite.Close()
 	}
+	m.procMu.Lock()
 	m.generation++
 	m.cmd, m.in, m.out, m.outFile = cmd, in, bufio.NewReader(protocolRead), protocolRead
+	m.procMu.Unlock()
 	load := m.runtime.loadRequest(m.plan)
 	if typeScript {
 		m.tempDir, err = os.MkdirTemp("", "bashpp-typescript-")
@@ -557,16 +711,27 @@ func (m *Module) Call(ctx context.Context, name string, args ...any) (CallResult
 
 // CallKeywords invokes a source export or direct-module attribute.
 func (m *Module) CallKeywords(ctx context.Context, name string, args []any, kwargs map[string]any) (CallResult, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	unlock, err := m.lock(ctx)
+	if err != nil {
+		return CallResult{}, err
+	}
+	defer unlock()
 	if embedded, ok := m.runtime.(Embedded); ok {
 		return embedded.CallFunc(ctx, m.plan, name, args, kwargs)
 	}
 	if _, ok := m.runtime.(Go); ok {
 		return m.callGo(ctx, name, args, kwargs)
 	}
-	if _, ok := m.runtime.(Rust); ok && len(kwargs) != 0 {
-		return CallResult{}, errors.New("Rust functions do not accept named arguments")
+	if _, ok := m.runtime.(Rust); ok {
+		if len(kwargs) != 0 {
+			return CallResult{}, errors.New("Rust functions do not accept named arguments")
+		}
+		if name == RustReleaseExport && rustReleaseExport(m.plan) {
+			return m.releaseCall(ctx, args)
+		}
+		if args, err = m.resolveCallbacks(name, args); err != nil {
+			return CallResult{}, err
+		}
 	}
 	if _, ok := m.runtime.(C); ok {
 		return m.callNativeArtifact(ctx, "C", name, args, kwargs)
@@ -580,50 +745,149 @@ func (m *Module) CallKeywords(ctx context.Context, name string, args []any, kwar
 	m.nextID++
 	encodedArgs, err := m.encodeValue(args)
 	if err != nil {
+		m.dropPendingCallbacks()()
 		return CallResult{}, err
 	}
 	encodedKwargs, err := m.encodeValue(kwargs)
 	if err != nil {
+		m.dropPendingCallbacks()()
 		return CallResult{}, err
 	}
+	defer m.dropPendingCallbacks()()
 	request := map[string]any{"id": m.nextID, "op": "call", "name": name, "args": encodedArgs, "kwargs": encodedKwargs}
 	return m.request(ctx, request, name)
 }
 
-// Handle is an opaque value owned by one worker generation.
+// resolveCallbacks turns the plain string passed for each callback-typed
+// parameter of the export into the shell function it names, through the
+// module's Resolve hook; a Callback or Go function passes unchanged.
+func (m *Module) resolveCallbacks(name string, args []any) ([]any, error) {
+	var export *Export
+	for i := range m.plan.Exports {
+		if m.plan.Exports[i].Name == name {
+			export = &m.plan.Exports[i]
+			break
+		}
+	}
+	if export == nil {
+		return args, nil
+	}
+	resolved := args
+	for i, typ := range export.Signature.Params {
+		if typ != "callback" || i >= len(args) {
+			continue
+		}
+		text, ok := args[i].(string)
+		if !ok {
+			continue
+		}
+		if m.callbacks.Resolve == nil {
+			return nil, fmt.Errorf("polyglot: %s function %s argument %d: no shell callback resolver for %q", m.runtime.name(), name, i+1, text)
+		}
+		callback, ok := m.callbacks.Resolve(text)
+		if !ok {
+			return nil, fmt.Errorf("polyglot: %s function %s argument %d: unknown shell callback %q", m.runtime.name(), name, i+1, text)
+		}
+		if &resolved[0] == &args[0] {
+			resolved = append([]any(nil), args...)
+		}
+		resolved[i] = callback
+	}
+	return resolved, nil
+}
+
+// releaseCall is the synthetic Rust release export: it frees the one handle
+// argument on the worker.
+func (m *Module) releaseCall(ctx context.Context, args []any) (CallResult, error) {
+	if len(args) != 1 {
+		return CallResult{}, fmt.Errorf("Rust function %s expects 1 arguments, got %d", RustReleaseExport, len(args))
+	}
+	handle, ok := args[0].(*Handle)
+	if !ok {
+		return CallResult{}, fmt.Errorf("Rust function %s argument 1: expected a Rust handle, got %T", RustReleaseExport, args[0])
+	}
+	if handle == nil || handle.module != m {
+		return CallResult{}, errors.New("polyglot: stale or foreign Rust handle")
+	}
+	if !m.alive() || handle.generation != m.generation {
+		return CallResult{}, errors.New("polyglot: stale Rust handle: its worker is gone")
+	}
+	m.nextID++
+	return m.request(ctx, map[string]any{"id": m.nextID, "op": "release", "handle": handle.ID}, nil)
+}
+
+// dropPendingCallbacks scopes the callbacks the request being encoded
+// registered to that request: the returned func removes them.
+func (m *Module) dropPendingCallbacks() func() {
+	ids := m.pendingCallbacks
+	m.pendingCallbacks = nil
+	return func() {
+		for _, id := range ids {
+			delete(m.callbackTable, id)
+		}
+	}
+}
+
+func (m *Module) registerCallback(callback Callback) uint64 {
+	if m.callbackTable == nil {
+		m.callbackTable = map[uint64]Callback{}
+	}
+	m.nextCallback++
+	m.callbackTable[m.nextCallback] = callback
+	m.pendingCallbacks = append(m.pendingCallbacks, m.nextCallback)
+	return m.nextCallback
+}
+
+// Handle is an opaque value owned by one worker generation: a Python object
+// or a Rust bashpp::Handle<T>. It is valid until it is released or its worker
+// exits; a restarted worker refuses the handles of the generation before it.
+//
+// Its JSON form is its shell text (`{"id":1,"type":"Res"}`): the exported
+// fields are what expand.ObjectString shows for an Object variable holding a
+// handle. It deliberately has no String or MarshalJSON method, which the
+// Object model refuses.
 type Handle struct {
 	module     *Module
-	id         uint64
 	generation uint64
-	Type       string
-	Repr       string
-	Callable   bool
+	ID         uint64 `json:"id"`
+	Type       string `json:"type,omitempty"`
+	Repr       string `json:"repr,omitempty"`
+	Callable   bool   `json:"callable,omitempty"`
+}
+
+func (h *Handle) stale() error {
+	if h == nil || h.module == nil {
+		return errors.New("polyglot: stale or foreign handle")
+	}
+	return fmt.Errorf("polyglot: stale or foreign %s handle", h.module.runtime.name())
 }
 
 func (h *Handle) GetAttr(ctx context.Context, name string) (CallResult, error) {
 	if h == nil || h.module == nil {
-		return CallResult{}, errors.New("polyglot: stale or foreign Python handle")
+		return CallResult{}, h.stale()
 	}
 	return h.module.GetAttr(ctx, h, name)
 }
 
 func (h *Handle) Call(ctx context.Context, args []any, kwargs map[string]any) (CallResult, error) {
 	if h == nil || h.module == nil {
-		return CallResult{}, errors.New("polyglot: stale or foreign Python handle")
+		return CallResult{}, h.stale()
 	}
 	return h.module.CallHandle(ctx, h, args, kwargs)
 }
 
 func (h *Handle) CallAttr(ctx context.Context, name string, args []any, kwargs map[string]any) (CallResult, error) {
 	if h == nil || h.module == nil {
-		return CallResult{}, errors.New("polyglot: stale or foreign Python handle")
+		return CallResult{}, h.stale()
 	}
 	return h.module.CallAttr(ctx, h, name, args, kwargs)
 }
 
+// Release frees the worker-owned value exactly once; a second release is
+// refused as stale.
 func (h *Handle) Release(ctx context.Context) error {
 	if h == nil || h.module == nil {
-		return errors.New("polyglot: stale or foreign Python handle")
+		return h.stale()
 	}
 	return h.module.Release(ctx, h)
 }
@@ -659,6 +923,15 @@ func (m *Module) callHandle(ctx context.Context, handle *Handle, name string, ar
 }
 
 func (m *Module) Release(ctx context.Context, handle *Handle) error {
+	if _, ok := m.runtime.(Rust); ok {
+		unlock, err := m.lock(ctx)
+		if err != nil {
+			return err
+		}
+		defer unlock()
+		_, err = m.releaseCall(ctx, []any{handle})
+		return err
+	}
 	_, err := m.handleRequest(ctx, handle, map[string]any{"op": "release"})
 	return err
 }
@@ -679,8 +952,11 @@ func (m *Module) Attr(ctx context.Context, name string) (CallResult, error) {
 	if !publicPythonAttribute(name) {
 		return CallResult{}, fmt.Errorf("Python attribute %q is private", name)
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	unlock, err := m.lock(ctx)
+	if err != nil {
+		return CallResult{}, err
+	}
+	defer unlock()
 	if err := m.ensure(ctx); err != nil {
 		return CallResult{}, err
 	}
@@ -717,8 +993,11 @@ func (m *Module) Command(ctx context.Context, name string, argv []string) (Comma
 	if !publicPythonAttribute(name) {
 		return CommandResult{}, fmt.Errorf("%w: %s is private", ErrCommandNotFound, name)
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	unlock, err := m.lock(ctx)
+	if err != nil {
+		return CommandResult{}, err
+	}
+	defer unlock()
 	if err := m.ensure(ctx); err != nil {
 		return CommandResult{}, err
 	}
@@ -773,31 +1052,38 @@ func (e *WorkerExit) Error() string {
 func (e *WorkerExit) Unwrap() error { return e.Err }
 
 func (m *Module) handleRequest(ctx context.Context, handle *Handle, request map[string]any) (CallResult, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	unlock, err := m.lock(ctx)
+	if err != nil {
+		return CallResult{}, err
+	}
+	defer unlock()
 	if err := m.ensure(ctx); err != nil {
 		return CallResult{}, err
 	}
 	if handle == nil || handle.module != m || handle.generation != m.generation {
-		return CallResult{}, errors.New("polyglot: stale or foreign Python handle")
+		return CallResult{}, fmt.Errorf("polyglot: stale or foreign %s handle", m.runtime.name())
 	}
 	m.nextID++
-	request["id"], request["handle"] = m.nextID, handle.id
+	request["id"], request["handle"] = m.nextID, handle.ID
 	return m.request(ctx, request, request["name"])
 }
 
 func (m *Module) request(ctx context.Context, request map[string]any, annotation any) (CallResult, error) {
+	id, _ := request["id"].(uint64)
 	var response workerResponse
 	if err := m.exchangeContext(ctx, request, &response); err != nil {
 		m.kill()
-		if ctx.Err() == nil && m.lastExit.died {
-			return CallResult{}, &WorkerExit{Runtime: m.runtime.name(), Signal: m.lastExit.signal, Code: m.lastExit.code, Err: err}
+		m.procMu.Lock()
+		exit := m.lastExit
+		m.procMu.Unlock()
+		if ctx.Err() == nil && exit.died {
+			return CallResult{}, &WorkerExit{Runtime: m.runtime.name(), Signal: exit.signal, Code: exit.code, Err: err}
 		}
 		return CallResult{}, err
 	}
-	if response.ID != m.nextID {
+	if response.ID != id {
 		m.kill()
-		return CallResult{}, fmt.Errorf("%s worker response ID %d does not match request ID %d", m.runtime.name(), response.ID, m.nextID)
+		return CallResult{}, fmt.Errorf("%s worker response ID %d does not match request ID %d", m.runtime.name(), response.ID, id)
 	}
 	result := CallResult{Stdout: m.pendingOut + response.Stdout, Stderr: m.pendingErr + response.Stderr}
 	m.pendingOut, m.pendingErr = "", ""
@@ -830,21 +1116,117 @@ func (m *Module) request(ctx context.Context, request map[string]any, annotation
 
 func (m *Module) exchangeContext(ctx context.Context, request any, response *workerResponse) error {
 	done := make(chan error, 1)
+	m.procMu.Lock()
 	in, out := m.in, m.out
+	m.procMu.Unlock()
+	if in == nil || out == nil {
+		return errors.New("foreign worker is not running")
+	}
 	// On Windows the TypeScript and Rust workers share stdout with island
 	// output, so only marker-framed lines are protocol.
 	_, typeScript := m.runtime.(TypeScript)
 	_, rust := m.runtime.(Rust)
 	requireMarker := runtime.GOOS == "windows" && (typeScript || rust)
-	go func() { done <- exchange(in, out, request, response, requireMarker) }()
+	// The exchange goroutine also serves the shell callbacks the worker
+	// nests inside this request; a callback that calls the module again
+	// re-enters on this goroutine while the caller stays parked here, so
+	// the protocol stream is used strictly last-in-first-out.
+	go func() {
+		done <- exchange(in, out, request, response, requireMarker, func(callback callbackRequest) map[string]any {
+			return m.serveCallback(ctx, callback)
+		})
+	}()
 	select {
 	case <-ctx.Done():
-		_ = m.kill()
+		// The worker dies now; a callback still running sees ctx done and
+		// its reply fails against the closed pipe, which ends the exchange.
+		_ = m.killWorker()
 		<-done
+		m.pendingOut, m.pendingErr = "", ""
 		return ctx.Err()
 	case err := <-done:
 		return err
 	}
+}
+
+// invokeCallback runs the callback, turning a panic into its error: the
+// exchange goroutine must survive to answer the worker.
+func invokeCallback(ctx context.Context, callback Callback, args []any) (result any, err error) {
+	defer func() {
+		if failure := recover(); failure != nil {
+			result, err = nil, fmt.Errorf("polyglot: shell callback %s panicked: %v", callback.Name, failure)
+		}
+	}()
+	return callback.Invoke(ctx, args)
+}
+
+// callbackRequest is the worker's target-invocation request in reverse:
+// `{"call":"shell","op":"call","callback":id,"args":[…]}`, with the island
+// output produced before it.
+type callbackRequest struct {
+	ID             uint64 `json:"id"`
+	Call           string `json:"call"`
+	Callback       uint64 `json:"callback"`
+	Args           []any  `json:"args"`
+	Stdout, Stderr string
+}
+
+// serveCallback runs one shell callback and builds its reply. Island output
+// preceding it is delivered first so the shell sees it in order.
+func (m *Module) serveCallback(ctx context.Context, req callbackRequest) map[string]any {
+	reply := func(err error) map[string]any {
+		return map[string]any{"id": req.ID, "ok": false, "error": map[string]any{"code": "SHELL-ECALLBACK", "message": err.Error()}}
+	}
+	if m.callbacks.Output != nil {
+		if out, errText := m.pendingOut+req.Stdout, m.pendingErr+req.Stderr; out != "" || errText != "" {
+			m.callbacks.Output(out, errText)
+		}
+		m.pendingOut, m.pendingErr = "", ""
+	} else {
+		m.pendingOut += req.Stdout
+		m.pendingErr += req.Stderr
+	}
+	callback, ok := m.callbackTable[req.Callback]
+	if !ok {
+		return reply(fmt.Errorf("polyglot: shell callback %d expired: the call that passed it has completed", req.Callback))
+	}
+	if m.callbackDepth >= MaxCallbackDepth {
+		return reply(fmt.Errorf("polyglot: shell callback %s re-entry exceeds the bound of %d", callback.Name, MaxCallbackDepth))
+	}
+	args := make([]any, len(req.Args))
+	for i, arg := range req.Args {
+		decoded, err := m.decodeValue(arg)
+		if err != nil {
+			return reply(fmt.Errorf("polyglot: shell callback %s argument %d: %w", callback.Name, i+1, err))
+		}
+		args[i] = decoded
+	}
+	if callback.Invoke == nil {
+		return reply(fmt.Errorf("polyglot: shell callback %s has no implementation", callback.Name))
+	}
+	var result any
+	var err error
+	m.callbackDepth++
+	nested := context.WithValue(ctx, reentrantKey{}, m)
+	if m.callbacks.Enter != nil {
+		exit := m.callbacks.Enter(nested)
+		result, err = invokeCallback(nested, callback, args)
+		exit()
+	} else {
+		result, err = invokeCallback(nested, callback, args)
+	}
+	m.callbackDepth--
+	if err == nil {
+		err = ctx.Err()
+	}
+	if err != nil {
+		return reply(err)
+	}
+	encoded, err := m.encodeValue(result)
+	if err != nil {
+		return reply(err)
+	}
+	return map[string]any{"id": req.ID, "ok": true, "result": encoded}
 }
 
 func coerceResult(value any, want string) (any, error) {
@@ -880,13 +1262,17 @@ func coerceResult(value any, want string) (any, error) {
 		if _, ok := value.([]byte); ok {
 			return value, nil
 		}
+	case "handle":
+		if _, ok := value.(*Handle); ok {
+			return value, nil
+		}
 	}
 	return nil, fmt.Errorf("got %T", value)
 }
 
 func jsonObjectValue(value any) (any, error) {
 	switch value := value.(type) {
-	case nil, bool, string, int64, float64:
+	case nil, bool, string, int64, float64, *Handle:
 		return value, nil
 	case []any:
 		out := make([]any, len(value))
@@ -913,9 +1299,24 @@ func jsonObjectValue(value any) (any, error) {
 	}
 }
 
-func (m *Module) Close() error { m.mu.Lock(); defer m.mu.Unlock(); return m.kill() }
+func (m *Module) Close() error {
+	unlock, _ := m.lock(context.Background())
+	defer unlock()
+	return m.kill()
+}
 
 func (m *Module) kill() error {
+	err := m.killWorker()
+	m.pendingOut, m.pendingErr = "", ""
+	return err
+}
+
+// killWorker may run alongside a cancelled exchange. It touches only process
+// state protected by procMu, not the callback/output state owned by that
+// exchange. Its caller must join the exchange before clearing pending output.
+func (m *Module) killWorker() error {
+	m.procMu.Lock()
+	defer m.procMu.Unlock()
 	if m.cmd == nil {
 		if m.tempDir != "" {
 			_ = os.RemoveAll(m.tempDir)
@@ -936,7 +1337,6 @@ func (m *Module) kill() error {
 		_ = m.outFile.Close()
 	}
 	m.cmd, m.in, m.out, m.outFile = nil, nil, nil, nil
-	m.pendingOut, m.pendingErr = "", ""
 	if m.tempDir != "" {
 		_ = os.RemoveAll(m.tempDir)
 		m.tempDir = ""
@@ -972,7 +1372,7 @@ func (e workerErr) err() error {
 	return e.ErrorDetail.err()
 }
 
-func exchange(in io.Writer, out *bufio.Reader, request any, response *workerResponse, requireMarker bool) error {
+func exchange(in io.Writer, out *bufio.Reader, request any, response *workerResponse, requireMarker bool, serve func(callbackRequest) map[string]any) error {
 	data, err := json.Marshal(request)
 	if err != nil {
 		return err
@@ -991,6 +1391,33 @@ func exchange(in io.Writer, out *bufio.Reader, request any, response *workerResp
 		} else if requireMarker || len(bytes.TrimSpace(line)) == 0 || bytes.TrimSpace(line)[0] != '{' {
 			continue
 		}
+		var probe struct {
+			Call string `json:"call"`
+		}
+		if json.Unmarshal(line, &probe) == nil && probe.Call == "shell" {
+			// The worker asks for a shell function while this request is in
+			// flight; the reply goes back on stdin and the wait continues.
+			dec := json.NewDecoder(bytes.NewReader(line))
+			dec.UseNumber()
+			var callback callbackRequest
+			if err := dec.Decode(&callback); err != nil {
+				return fmt.Errorf("invalid worker callback request: %w", err)
+			}
+			var reply map[string]any
+			if serve == nil {
+				reply = map[string]any{"id": callback.ID, "ok": false, "error": map[string]any{"code": "SHELL-ECALLBACK", "message": "polyglot: shell callbacks are not served for this module"}}
+			} else {
+				reply = serve(callback)
+			}
+			data, err := json.Marshal(reply)
+			if err != nil {
+				return err
+			}
+			if _, err := in.Write(append(data, '\n')); err != nil {
+				return err
+			}
+			continue
+		}
 		dec := json.NewDecoder(bytes.NewReader(line))
 		dec.UseNumber()
 		if err := dec.Decode(&got); err != nil {
@@ -1007,10 +1434,20 @@ func exchange(in io.Writer, out *bufio.Reader, request any, response *workerResp
 func (m *Module) encodeValue(v any) (any, error) {
 	switch x := v.(type) {
 	case *Handle:
-		if x == nil || x.module != m || x.generation != m.generation {
-			return nil, errors.New("polyglot: stale or foreign Python handle")
+		if x == nil || x.module != m {
+			return nil, fmt.Errorf("polyglot: stale or foreign %s handle", m.runtime.name())
 		}
-		return map[string]any{"$handle": x.id}, nil
+		if x.generation != m.generation {
+			return nil, fmt.Errorf("polyglot: stale %s handle: its worker is gone", m.runtime.name())
+		}
+		return map[string]any{"$handle": x.ID}, nil
+	case Callback:
+		return map[string]any{"$callback": m.registerCallback(x)}, nil
+	case *Callback:
+		if x == nil {
+			return nil, nil
+		}
+		return map[string]any{"$callback": m.registerCallback(*x)}, nil
 	case []byte:
 		return map[string]any{"$bytes": base64.StdEncoding.EncodeToString(x)}, nil
 	case []any:
@@ -1034,6 +1471,9 @@ func (m *Module) encodeValue(v any) (any, error) {
 		}
 		return out, nil
 	default:
+		if v != nil && reflect.TypeOf(v).Kind() == reflect.Func {
+			return map[string]any{"$callback": m.registerCallback(FuncCallback(reflect.TypeOf(v).String(), v))}, nil
+		}
 		return v, nil
 	}
 }
@@ -1046,11 +1486,20 @@ func (m *Module) decodeValue(v any) (any, error) {
 			if err != nil {
 				return nil, err
 			}
-			h := &Handle{module: m, id: id, generation: m.generation}
+			h := &Handle{module: m, ID: id, generation: m.generation}
 			h.Type, _ = raw["type"].(string)
 			h.Repr, _ = raw["repr"].(string)
 			h.Callable, _ = raw["callable"].(bool)
 			return h, nil
+		}
+		if raw, ok := x["$handle"]; ok && len(x) == 1 {
+			// The host's own encoding, echoed back untyped: a handle a
+			// callback returned through a worker value.
+			id, err := numericID(raw)
+			if err != nil {
+				return nil, err
+			}
+			return &Handle{module: m, ID: id, generation: m.generation}, nil
 		}
 		if raw, ok := x["$bytes"].(string); ok {
 			return base64.StdEncoding.DecodeString(raw)
@@ -1091,7 +1540,7 @@ func numericID(v any) (uint64, error) {
 	case float64:
 		return uint64(n), nil
 	default:
-		return 0, fmt.Errorf("invalid Python handle id %v", v)
+		return 0, fmt.Errorf("invalid handle id %v", v)
 	}
 }
 

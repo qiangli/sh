@@ -186,6 +186,9 @@ func (r *Runner) bashPPPrepareSourceBlocks(ctx context.Context, file *syntax.Fil
 			runtime = shRuntime
 		}
 		module := polyglot.Start(plan, runtime)
+		if plan.Language == "rust" {
+			module.SetCallbacks(r.bashPPForeignCallbacks())
+		}
 		r.bashPPForeignModules = append(r.bashPPForeignModules, module)
 		if plan.Alias != "" {
 			if kind := reserved[plan.Alias]; kind != "" {
@@ -241,7 +244,8 @@ func foreignDecl(name string, sig polyglot.Signature) *syntax.BashPPFuncDecl {
 }
 
 func foreignShellType(typ string) string {
-	if typ == "object" {
+	switch typ {
+	case "object", "handle", "callback":
 		return "any"
 	}
 	return typ
@@ -315,6 +319,17 @@ func (r *Runner) bashPPForeignExchange(ctx context.Context, fn *bashPPForeignFun
 					typ = fn.export.Signature.Params[len(fn.export.Signature.Params)-1]
 				}
 			}
+			if typ == "handle" {
+				if i < len(fn.argCells) && fn.argCells[i] != nil && fn.argCells[i].vr.Kind == expand.Object {
+					if handle, ok := fn.argCells[i].vr.Obj.(*polyglot.Handle); ok {
+						values[i] = handle
+						continue
+					}
+				}
+				r.errf("bash++: %s argument %d: want a Rust handle, got %q\n", fn.qualified, i+1, arg)
+				r.exit.code = 2
+				return polyglot.CallResult{}, nil, false
+			}
 			value, convErr := foreignArgument(arg, typ)
 			if convErr != nil {
 				r.errf("bash++: %s argument %d: %v\n", fn.qualified, i+1, convErr)
@@ -356,7 +371,7 @@ func (r *Runner) bashPPInvokeForeign(ctx context.Context, fn *bashPPForeignFunc,
 		}
 	}
 	value := foreignResult(result.Value)
-	if len(fn.export.Signature.Results) == 1 && fn.export.Signature.Results[0] == "object" {
+	if len(fn.export.Signature.Results) == 1 && foreignObjectResult(fn.export.Signature.Results[0]) {
 		r.bashPPResultCells = []*bashPPCell{{vr: expand.NewObject(result.Value)}}
 	}
 	if fn.direct {
@@ -402,7 +417,7 @@ func (r *Runner) bashPPInvokeForeignErr(ctx context.Context, fn *bashPPForeignFu
 		if len(resultTypes) > 0 {
 			values[0] = foreignResult(result.Value)
 			cells[0].vr.Str = values[0]
-			if len(resultTypes) == 1 && resultTypes[0] == "object" {
+			if len(resultTypes) == 1 && foreignObjectResult(resultTypes[0]) {
 				cells[0] = &bashPPCell{vr: expand.NewObject(result.Value)}
 			}
 		}
@@ -440,6 +455,12 @@ func bashPPForeignErrorCell(err error) *bashPPCell {
 	}
 }
 
+// foreignObjectResult reports a result kind whose value is the Object itself
+// rather than its text: a structured value or an opaque handle.
+func foreignObjectResult(typ string) bool {
+	return typ == "object" || typ == "handle"
+}
+
 func foreignArgument(text, typ string) (any, error) {
 	switch typ {
 	case "int":
@@ -465,6 +486,8 @@ func foreignArgument(text, typ string) (any, error) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("want nil")
+	case "handle":
+		return nil, fmt.Errorf("want a Rust handle")
 	default:
 		return text, nil
 	}

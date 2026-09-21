@@ -25,9 +25,9 @@ func TestPythonCommandSignals(t *testing.T) {
 		t.Fatalf("state after sigint: bump = %#v", got)
 	}
 	// Idle worker: a terminal Ctrl-C between commands must not kill it.
-	m.mu.Lock()
+	m.procMu.Lock()
 	pid := m.cmd.Process.Pid
-	m.mu.Unlock()
+	m.procMu.Unlock()
 	if err := syscall.Kill(pid, syscall.SIGINT); err != nil {
 		t.Fatal(err)
 	}

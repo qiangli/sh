@@ -219,7 +219,7 @@ func TestWorkerEnvelopeErrorCompatibility(t *testing.T) {
 			input := bufio.NewReader(strings.NewReader(tt.frame + "\n"))
 			var written bytes.Buffer
 			var response workerResponse
-			if err := exchange(&written, input, map[string]any{"id": 1}, &response, false); err != nil {
+			if err := exchange(&written, input, map[string]any{"id": 1}, &response, false, nil); err != nil {
 				t.Fatal(err)
 			}
 			err := response.Error.err()
@@ -249,7 +249,7 @@ func TestWorkerEnvelopeErrorCompatibility(t *testing.T) {
 
 func TestWorkerEnvelopeTransportFailure(t *testing.T) {
 	var response workerResponse
-	err := exchange(&bytes.Buffer{}, bufio.NewReader(strings.NewReader("{not-json\n")), map[string]any{"id": 1}, &response, false)
+	err := exchange(&bytes.Buffer{}, bufio.NewReader(strings.NewReader("{not-json\n")), map[string]any{"id": 1}, &response, false, nil)
 	if err == nil || !strings.Contains(err.Error(), "invalid worker response") {
 		t.Fatalf("transport error = %v", err)
 	}

@@ -1787,6 +1787,9 @@ func (e *emitter) call(c *syntax.BashPPCall) (string, error) {
 		if foreign.alias == "go" {
 			name = fmt.Sprintf("%sforeignAlias%d.%s", e.prefix, foreign.plan, foreign.export.Name)
 		}
+		if e.execution {
+			args = append([]string{e.program()}, args...)
+		}
 		call := name + "(" + strings.Join(args, ",") + ")"
 		if want == len(foreign.export.Signature.Results)+1 && !foreign.export.Signature.Dynamic {
 			return e.framedForeignErrCall(c, foreign, frame)

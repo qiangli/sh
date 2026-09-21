@@ -292,7 +292,12 @@ func testPythonFenceInterpretedNativeParity(t *testing.T, source string) {
 	testPythonFenceInterpretedNativeParityAt(t, source, "input.bpp")
 }
 
-func testPythonFenceInterpretedNativeParityAt(t *testing.T, source, filename string) string {
+func testPythonFenceInterpretedNativeParityAt(t *testing.T, source, filename string, buildFlags ...string) string {
+	t.Helper()
+	return testForeignParityArtifactAt(t, source, filename, "", buildFlags...)
+}
+
+func testForeignParityArtifactAt(t *testing.T, source, filename, nativePostlude string, buildFlags ...string) string {
 	t.Helper()
 	file := parse(t, source, filename)
 	result, err := lower.Compile(file, lower.Options{})
@@ -316,7 +321,7 @@ func testPythonFenceInterpretedNativeParityAt(t *testing.T, source, filename str
 
 	dir := t.TempDir()
 	generated := filepath.Join(dir, "generated.go")
-	if err := os.WriteFile(generated, result.Source, 0600); err != nil {
+	if err := os.WriteFile(generated, append(result.Source, []byte(nativePostlude)...), 0600); err != nil {
 		t.Fatal(err)
 	}
 	_, this, _, _ := runtime.Caller(0)
@@ -326,7 +331,9 @@ func testPythonFenceInterpretedNativeParityAt(t *testing.T, source, filename str
 		t.Fatal(err)
 	}
 	binary := filepath.Join(dir, "program")
-	cmd := exec.CommandContext(ctx, filepath.Join(runtime.GOROOT(), "bin", "go"), "build", "-mod=mod", "-o", binary, "generated.go")
+	buildArgs := append([]string{"build", "-mod=mod"}, buildFlags...)
+	buildArgs = append(buildArgs, "-o", binary, "generated.go")
+	cmd := exec.CommandContext(ctx, filepath.Join(runtime.GOROOT(), "bin", "go"), buildArgs...)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "GOWORK=off", "GOTOOLCHAIN=local")
 	if output, err := cmd.CombinedOutput(); err != nil {

@@ -42,11 +42,38 @@ debug = false
 // each call and returned in the response, so the shell replays them and the
 // protocol stream stays clean. Unix uses dup/dup2 on fds 1 and 2; Windows
 // uses SetStdHandle, which Rust's std consults on every stdout/stderr write.
+//
+// Two boundary types are published to the fence as `bashpp::Handle<T>` and
+// `bashpp::Callback`. A Handle is an opaque token for a value the worker owns
+// for its lifetime: it crosses as the value adapter's `{"$handle": …}` shape,
+// it is validated (existence and type) when an argument deserializes, and it
+// is freed exactly once by the host's `release` operation or by `take`. A
+// Callback is a shell function the host passed with the call: `call` writes
+// the target-invocation request (`{"call":"shell","op":"call",…}`) on the
+// protocol stream and reads the reply from stdin, serving any request the
+// host nests in the meantime, so re-entry is strictly last-in-first-out on
+// the one existing channel pair and bounded by MAX_DEPTH.
 const rustWorkerRuntime = `
 // ---- Bash# Rust worker runtime (generated; do not edit) ----
+mod bashpp {
+    pub use crate::__bpp::{Callback, Handle};
+}
+
 mod __bpp {
     use serde_json::Value;
+    use std::any::{Any, TypeId};
+    use std::cell::{Cell, RefCell};
+    use std::collections::HashMap;
     use std::io::{Read, Seek, Write};
+    use std::marker::PhantomData;
+    use std::rc::Rc;
+
+    /// Nested call requests the worker serves while a callback reply is
+    /// pending. The host bounds callback re-entry first; this is the safety
+    /// net for a host that does not.
+    pub const MAX_DEPTH: usize = 16;
+
+    pub type Dispatch = fn(&str, &[Value]) -> Result<Value, String>;
 
     #[derive(serde::Deserialize)]
     pub struct Request {
@@ -57,6 +84,254 @@ mod __bpp {
         pub name: String,
         #[serde(default)]
         pub args: Vec<Value>,
+        #[serde(default)]
+        pub handle: u64,
+    }
+
+    struct Entry {
+        value: Rc<dyn Any>,
+        type_id: TypeId,
+        type_name: &'static str,
+    }
+
+    struct Capture {
+        out: std::fs::File,
+        out_path: std::path::PathBuf,
+        out_pos: u64,
+        err: std::fs::File,
+        err_path: std::path::PathBuf,
+        err_pos: u64,
+    }
+
+    thread_local! {
+        static HANDLES: RefCell<HashMap<u64, Entry>> = RefCell::new(HashMap::new());
+        static NEXT_HANDLE: Cell<u64> = const { Cell::new(0) };
+        static NEXT_CALLBACK: Cell<u64> = const { Cell::new(0) };
+        static DEPTH: Cell<usize> = const { Cell::new(0) };
+        static SEQ: Cell<u64> = const { Cell::new(0) };
+        static DISPATCH: Cell<Option<Dispatch>> = const { Cell::new(None) };
+        static PROTOCOL: RefCell<Option<std::fs::File>> = const { RefCell::new(None) };
+        static CAPTURES: RefCell<Vec<Capture>> = const { RefCell::new(Vec::new()) };
+    }
+
+    /// An opaque token for a value this worker owns. Copying the token never
+    /// copies the value; the value lives until the host releases it, the
+    /// fence takes it, or the worker exits.
+    pub struct Handle<T: 'static> {
+        id: u64,
+        _marker: PhantomData<fn() -> T>,
+    }
+    impl<T: 'static> Clone for Handle<T> {
+        fn clone(&self) -> Self { *self }
+    }
+    impl<T: 'static> Copy for Handle<T> {}
+    impl<T: 'static> std::fmt::Debug for Handle<T> {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "Handle<{}>({})", short_type(std::any::type_name::<T>()), self.id)
+        }
+    }
+
+    /// The type's spelling without module paths: "Counter", "Vec<String>".
+    fn short_type(name: &str) -> String {
+        let mut out = String::new();
+        let mut word = String::new();
+        let mut words: Vec<String> = Vec::new();
+        for c in name.chars() {
+            if c.is_alphanumeric() || c == '_' || c == ':' {
+                word.push(c);
+            } else {
+                if !word.is_empty() {
+                    words.push(std::mem::take(&mut word));
+                }
+                words.push(c.to_string());
+            }
+        }
+        if !word.is_empty() {
+            words.push(word);
+        }
+        for w in words {
+            match w.rsplit("::").next() {
+                Some(last) => out.push_str(last),
+                None => out.push_str(&w),
+            }
+        }
+        out
+    }
+
+    fn stale(id: u64) -> String {
+        format!("stale Rust handle {}: released or never created", id)
+    }
+
+    impl<T: 'static> Handle<T> {
+        /// Registers value with the worker and returns its token.
+        pub fn new(value: T) -> Handle<T> {
+            let id = NEXT_HANDLE.with(|next| {
+                next.set(next.get() + 1);
+                next.get()
+            });
+            HANDLES.with(|handles| {
+                handles.borrow_mut().insert(id, Entry {
+                    value: Rc::new(RefCell::new(value)),
+                    type_id: TypeId::of::<T>(),
+                    type_name: std::any::type_name::<T>(),
+                });
+            });
+            Handle { id, _marker: PhantomData }
+        }
+        pub fn id(&self) -> u64 { self.id }
+        fn cell(&self) -> Result<Rc<dyn Any>, String> {
+            HANDLES.with(|handles| {
+                let handles = handles.borrow();
+                let entry = handles.get(&self.id).ok_or_else(|| stale(self.id))?;
+                if entry.type_id != TypeId::of::<T>() {
+                    return Err(format!("Rust handle {} is a {}, not a {}", self.id, short_type(entry.type_name), short_type(std::any::type_name::<T>())));
+                }
+                Ok(entry.value.clone())
+            })
+        }
+        /// Borrows the value for the duration of f. Fails when a call still in
+        /// progress holds the value mutably (a callback that re-entered the
+        /// worker), never panics.
+        pub fn with<R>(&self, f: impl FnOnce(&T) -> R) -> Result<R, String> {
+            let rc = self.cell()?;
+            let cell = (&*rc as &dyn Any).downcast_ref::<RefCell<T>>().ok_or_else(|| stale(self.id))?;
+            let value = cell.try_borrow().map_err(|_| format!("Rust handle {} is mutably borrowed by a call still in progress", self.id))?;
+            Ok(f(&value))
+        }
+        /// Mutably borrows the value for the duration of f. Fails when a call
+        /// still in progress holds the value, never panics.
+        pub fn with_mut<R>(&self, f: impl FnOnce(&mut T) -> R) -> Result<R, String> {
+            let rc = self.cell()?;
+            let cell = (&*rc as &dyn Any).downcast_ref::<RefCell<T>>().ok_or_else(|| stale(self.id))?;
+            let mut value = cell.try_borrow_mut().map_err(|_| format!("Rust handle {} is borrowed by a call still in progress", self.id))?;
+            Ok(f(&mut value))
+        }
+        /// Releases the token and returns the value: the fence-side release.
+        /// Fails, leaving the value registered, when a call still in progress
+        /// borrows it.
+        pub fn take(self) -> Result<T, String> {
+            let entry = HANDLES.with(|handles| handles.borrow_mut().remove(&self.id)).ok_or_else(|| stale(self.id))?;
+            if entry.type_id != TypeId::of::<T>() {
+                let message = format!("Rust handle {} is a {}, not a {}", self.id, short_type(entry.type_name), short_type(std::any::type_name::<T>()));
+                HANDLES.with(|handles| handles.borrow_mut().insert(self.id, entry));
+                return Err(message);
+            }
+            let Entry { value, type_id, type_name } = entry;
+            let rc = match Rc::downcast::<RefCell<T>>(value) {
+                Ok(rc) => rc,
+                Err(value) => {
+                    HANDLES.with(|handles| handles.borrow_mut().insert(self.id, Entry { value, type_id, type_name }));
+                    return Err(stale(self.id));
+                }
+            };
+            match Rc::try_unwrap(rc) {
+                Ok(cell) => Ok(cell.into_inner()),
+                Err(rc) => {
+                    HANDLES.with(|handles| handles.borrow_mut().insert(self.id, Entry { value: rc, type_id, type_name }));
+                    Err(format!("Rust handle {} is borrowed by a call still in progress", self.id))
+                }
+            }
+        }
+        /// Releases the token and drops the value.
+        pub fn release(self) -> Result<(), String> {
+            self.take().map(drop)
+        }
+    }
+
+    fn handle_id(value: &Value) -> Option<u64> {
+        let map = value.as_object()?;
+        if map.len() != 1 {
+            return None;
+        }
+        match map.get("$handle")? {
+            Value::Number(id) => id.as_u64(),
+            Value::Object(inner) => inner.get("id")?.as_u64(),
+            _ => None,
+        }
+    }
+
+    impl<T: 'static> serde::Serialize for Handle<T> {
+        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            let name = HANDLES.with(|handles| handles.borrow().get(&self.id).map(|entry| short_type(entry.type_name)))
+                .unwrap_or_else(|| short_type(std::any::type_name::<T>()));
+            serde_json::json!({"$handle": {"id": self.id, "type": name}}).serialize(serializer)
+        }
+    }
+    impl<'de, T: 'static> serde::Deserialize<'de> for Handle<T> {
+        fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            let value = Value::deserialize(deserializer)?;
+            let id = handle_id(&value).ok_or_else(|| serde::de::Error::custom(format!("expected a Rust handle, got {}", value)))?;
+            let handle = Handle { id, _marker: PhantomData };
+            handle.cell().map_err(serde::de::Error::custom)?;
+            Ok(handle)
+        }
+    }
+
+    /// Releases a handle on the host's behalf; the value is dropped exactly
+    /// once, when the last borrow of a call still in progress ends.
+    pub fn release_id(id: u64) -> Result<(), String> {
+        HANDLES.with(|handles| handles.borrow_mut().remove(&id)).map(drop).ok_or_else(|| stale(id))
+    }
+
+    /// A shell function the host passed with the call that is in flight. It
+    /// expires with that call: the host refuses a token invoked later.
+    #[derive(Clone, Copy, Debug)]
+    pub struct Callback {
+        id: u64,
+    }
+    impl serde::Serialize for Callback {
+        fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            serde_json::json!({"$callback": self.id}).serialize(serializer)
+        }
+    }
+    impl<'de> serde::Deserialize<'de> for Callback {
+        fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            let value = Value::deserialize(deserializer)?;
+            let id = value.as_object().filter(|map| map.len() == 1).and_then(|map| map.get("$callback")).and_then(|id| id.as_u64());
+            match id {
+                Some(id) => Ok(Callback { id }),
+                None => Err(serde::de::Error::custom(format!("expected a shell callback, got {}", value))),
+            }
+        }
+    }
+    impl Callback {
+        /// Invokes the shell function synchronously and returns its result.
+        /// Island output written so far is delivered to the shell first, so
+        /// it appears before whatever the callback prints.
+        pub fn call(&self, args: Vec<Value>) -> Result<Value, String> {
+            let (out, err) = flush_capture();
+            let id = NEXT_CALLBACK.with(|next| {
+                next.set(next.get() + 1);
+                next.get()
+            });
+            write_frame(&serde_json::json!({"id": id, "call": "shell", "op": "call", "callback": self.id, "args": args, "stdout": out, "stderr": err}))?;
+            loop {
+                let line = read_line()?;
+                if line.trim().is_empty() {
+                    continue;
+                }
+                let value: Value = serde_json::from_str(&line).map_err(|error| format!("invalid shell callback reply: {}", error))?;
+                if value.get("op").is_some() {
+                    write_frame(&respond_line(&line))?;
+                    continue;
+                }
+                if value.get("id").and_then(|got| got.as_u64()) != Some(id) {
+                    return Err(format!("shell callback reply id {} does not match request id {}", value.get("id").cloned().unwrap_or(Value::Null), id));
+                }
+                if value.get("ok").and_then(|ok| ok.as_bool()) == Some(true) {
+                    return Ok(value.get("result").cloned().unwrap_or(Value::Null));
+                }
+                return Err(match value.get("error") {
+                    Some(Value::String(message)) => message.clone(),
+                    Some(Value::Object(detail)) => detail.get("message").and_then(|m| m.as_str()).unwrap_or("shell callback failed").to_string(),
+                    _ => "shell callback failed".to_string(),
+                });
+            }
+        }
+        /// Invokes the shell function and deserializes its result.
+        pub fn call_as<T: serde::de::DeserializeOwned>(&self, args: Vec<Value>) -> Result<T, String> {
+            serde_json::from_value(self.call(args)?).map_err(|error| format!("shell callback result: {}", error))
+        }
     }
 
     pub fn arity(func: &str, args: &[Value], want: usize) -> Result<(), String> {
@@ -155,13 +430,31 @@ mod __bpp {
         let file = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(true).open(&path)?;
         Ok((file, path))
     }
-    fn drain(mut file: std::fs::File, path: std::path::PathBuf) -> String {
+    /// Reads what fd 1/2 wrote since pos. The redirected fd and the file share
+    /// one offset, so reading to the end leaves writes continuing at the end.
+    fn since(file: &mut std::fs::File, pos: &mut u64) -> String {
         let mut buf = Vec::new();
-        let _ = file.seek(std::io::SeekFrom::Start(0));
+        let _ = file.seek(std::io::SeekFrom::Start(*pos));
         let _ = file.read_to_end(&mut buf);
+        *pos += buf.len() as u64;
+        String::from_utf8_lossy(&buf).into_owned()
+    }
+    fn drain(mut file: std::fs::File, path: std::path::PathBuf, mut pos: u64) -> String {
+        let text = since(&mut file, &mut pos);
         drop(file);
         let _ = std::fs::remove_file(path);
-        String::from_utf8_lossy(&buf).into_owned()
+        text
+    }
+    fn flush_capture() -> (String, String) {
+        let _ = std::io::stdout().flush();
+        let _ = std::io::stderr().flush();
+        CAPTURES.with(|captures| {
+            let mut captures = captures.borrow_mut();
+            match captures.last_mut() {
+                Some(capture) => (since(&mut capture.out, &mut capture.out_pos), since(&mut capture.err, &mut capture.err_pos)),
+                None => (String::new(), String::new()),
+            }
+        })
     }
     fn guarded<F: FnOnce() -> Result<Value, String>>(call: F) -> Result<Value, String> {
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(call)) {
@@ -186,52 +479,100 @@ mod __bpp {
         let _ = std::io::stdout().flush();
         let _ = std::io::stderr().flush();
         let saved = os::redirect(&out, &err);
+        CAPTURES.with(|captures| captures.borrow_mut().push(Capture { out, out_path, out_pos: 0, err, err_path, err_pos: 0 }));
         let result = guarded(call);
         let _ = std::io::stdout().flush();
         let _ = std::io::stderr().flush();
         os::restore(saved);
-        (result, drain(out, out_path), drain(err, err_path))
+        let capture = CAPTURES.with(|captures| captures.borrow_mut().pop());
+        match capture {
+            Some(capture) => (result, drain(capture.out, capture.out_path, capture.out_pos), drain(capture.err, capture.err_path, capture.err_pos)),
+            None => (result, String::new(), String::new()),
+        }
     }
 
-    pub fn serve(dispatch: fn(&str, &[Value]) -> Result<Value, String>) {
-        use std::io::BufRead;
+    fn read_line() -> Result<String, String> {
+        let mut line = String::new();
+        match std::io::stdin().read_line(&mut line) {
+            Ok(0) => Err("host closed the protocol".to_string()),
+            Ok(_) => Ok(line),
+            Err(error) => Err(format!("protocol read: {}", error)),
+        }
+    }
+    fn write_frame(value: &Value) -> Result<(), String> {
+        PROTOCOL.with(|protocol| {
+            let mut protocol = protocol.borrow_mut();
+            let file = protocol.as_mut().ok_or_else(|| "protocol not open".to_string())?;
+            let mut frame = String::new();
+            if os::MARKER {
+                frame.push_str("\u{1e}BASHPP");
+            }
+            frame.push_str(&value.to_string());
+            frame.push('\n');
+            file.write_all(frame.as_bytes()).and_then(|_| file.flush()).map_err(|error| format!("protocol write: {}", error))
+        })
+    }
+    fn respond_line(line: &str) -> Value {
+        match serde_json::from_str::<Request>(line) {
+            Err(error) => serde_json::json!({"id": 0, "ok": false, "error": envelope_error("RUST-EWORKER-REQUEST", format!("invalid request: {}", error)), "stdout": "", "stderr": ""}),
+            Ok(request) => respond(request),
+        }
+    }
+    fn respond(request: Request) -> Value {
+        match request.op.as_str() {
+            "load" => serde_json::json!({"id": request.id, "ok": true, "result": null, "stdout": "", "stderr": ""}),
+            "call" => {
+                let depth = DEPTH.with(|depth| depth.get());
+                if depth >= MAX_DEPTH {
+                    return serde_json::json!({"id": request.id, "ok": false, "error": envelope_error("RUST-EWORKER-DEPTH", format!("shell callback re-entry exceeds the worker bound of {}", MAX_DEPTH)), "stdout": "", "stderr": ""});
+                }
+                let dispatch = match DISPATCH.with(|dispatch| dispatch.get()) {
+                    Some(dispatch) => dispatch,
+                    None => return serde_json::json!({"id": request.id, "ok": false, "error": envelope_error("RUST-EWORKER-OP", "worker not serving".to_string()), "stdout": "", "stderr": ""}),
+                };
+                let seq = SEQ.with(|seq| {
+                    seq.set(seq.get() + 1);
+                    seq.get()
+                });
+                DEPTH.with(|d| d.set(depth + 1));
+                let (result, out, err) = capture(seq, || dispatch(&request.name, &request.args));
+                DEPTH.with(|d| d.set(depth));
+                match result {
+                    Ok(value) => serde_json::json!({"id": request.id, "ok": true, "result": value, "stdout": out, "stderr": err}),
+                    Err(message) => serde_json::json!({"id": request.id, "ok": false, "error": envelope_error("RUST-ECALL", message), "stdout": out, "stderr": err}),
+                }
+            }
+            "release" => match release_id(request.handle) {
+                Ok(()) => serde_json::json!({"id": request.id, "ok": true, "result": null, "stdout": "", "stderr": ""}),
+                Err(message) => serde_json::json!({"id": request.id, "ok": false, "error": envelope_error("RUST-EHANDLE", message), "stdout": "", "stderr": ""}),
+            },
+            other => serde_json::json!({"id": request.id, "ok": false, "error": envelope_error("RUST-EWORKER-OP", format!("unknown operation {}", other)), "stdout": "", "stderr": ""}),
+        }
+    }
+
+    pub fn serve(dispatch: Dispatch) {
         std::panic::set_hook(Box::new(|_| {}));
-        let mut protocol = std::mem::ManuallyDrop::new(os::protocol());
-        let stdin = std::io::stdin();
-        let mut seq = 0u64;
-        for line in stdin.lock().lines() {
-            let line = match line {
+        DISPATCH.with(|slot| slot.set(Some(dispatch)));
+        PROTOCOL.with(|protocol| *protocol.borrow_mut() = Some(os::protocol()));
+        loop {
+            let line = match read_line() {
                 Ok(line) => line,
                 Err(_) => break,
             };
             if line.trim().is_empty() {
                 continue;
             }
-            seq += 1;
-            let response = match serde_json::from_str::<Request>(&line) {
-                Err(error) => serde_json::json!({"id": 0, "ok": false, "error": envelope_error("RUST-EWORKER-REQUEST", format!("invalid request: {}", error)), "stdout": "", "stderr": ""}),
-                Ok(request) => match request.op.as_str() {
-                    "load" => serde_json::json!({"id": request.id, "ok": true, "result": null, "stdout": "", "stderr": ""}),
-                    "call" => {
-                        let (result, out, err) = capture(seq, || dispatch(&request.name, &request.args));
-                        match result {
-                            Ok(value) => serde_json::json!({"id": request.id, "ok": true, "result": value, "stdout": out, "stderr": err}),
-                            Err(message) => serde_json::json!({"id": request.id, "ok": false, "error": envelope_error("RUST-ECALL", message), "stdout": out, "stderr": err}),
-                        }
-                    }
-                    other => serde_json::json!({"id": request.id, "ok": false, "error": envelope_error("RUST-EWORKER-OP", format!("unknown operation {}", other)), "stdout": "", "stderr": ""}),
-                },
-            };
-            let mut frame = String::new();
-            if os::MARKER {
-                frame.push_str("\u{1e}BASHPP");
-            }
-            frame.push_str(&response.to_string());
-            frame.push('\n');
-            if protocol.write_all(frame.as_bytes()).and_then(|_| protocol.flush()).is_err() {
+            if write_frame(&respond_line(&line)).is_err() {
                 break;
             }
         }
+        // fd 3 (or the inherited stdout handle) belongs to the parent; never
+        // close it from a thread-local destructor.
+        PROTOCOL.with(|protocol| {
+            if let Some(file) = protocol.borrow_mut().take() {
+                std::mem::forget(file);
+            }
+        });
     }
 }
 

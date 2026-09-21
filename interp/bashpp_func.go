@@ -1812,6 +1812,11 @@ func (r *Runner) bashPPCallValues(c *syntax.BashPPCall, fn *bashPPFunc) (result 
 		cells = cells[fn.skipArgs:]
 		positional -= fn.skipArgs
 	}
+	if fn.foreign != nil {
+		// A typed foreign export reads Object arguments — a Rust handle —
+		// from the cells, as the direct Python form already does.
+		fn.foreign.argCells = cells
+	}
 	if len(names) > 0 || bashppHasDefaults(fn.params()) {
 		r.bashPPCallInterfaces = interfaces
 		return r.bashPPBindCall(fn, args, channels, cells, names, positional)
