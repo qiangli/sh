@@ -25,7 +25,11 @@ func (e *emitter) programEntrySourceNamed(body string, mixedShell bool, entryNam
 	// os.Args is only read; WithParams copies what it is given.
 	defaults = append(defaults, rt+"WithParams("+e.prefix+"os.Args[1:]...)")
 	if mixedShell {
-		defaults = append(defaults, rt+"WithShellFactory("+e.prefix+"shellexec.New("+e.prefix+"shellexec.BashPP()))")
+		factory := e.prefix + "shellexec.New(" + e.prefix + "shellexec.BashPP()"
+		if e.seedsForeignImports() {
+			factory += "," + e.foreignImportSeed()
+		}
+		defaults = append(defaults, rt+"WithShellFactory("+factory+"))")
 	}
 	return "// " + entryName + " runs a fresh runtime instance. Returned errors are not printed by the entry.\n" +
 		"func " + entryName + "(opts ..." + rt + "SessionOption) (status int, err error) {\n" +

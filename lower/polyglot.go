@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -25,7 +26,50 @@ func (e *emitter) hasEmbeddedShellRuntime() bool {
 			return true
 		}
 	}
-	return false
+	return e.seedsForeignImports()
+}
+
+// seedsForeignImports reports whether the program's shell regions must see
+// its direct Python imports: a mixed unit hands them to the region backend
+// through interp.ForeignImports so `alias.fn args` in a region reaches the
+// program's own worker (B8), not an external lookup.
+func (e *emitter) seedsForeignImports() bool {
+	return e.mixedShell && len(e.foreignImports) > 0
+}
+
+// isForeignWorkerVar reports whether a generated package-level name is one of
+// the direct-import worker variables emitted by foreignDeclarations.
+func (e *emitter) isForeignWorkerVar(name string) bool {
+	rest, ok := strings.CutPrefix(name, e.prefix+"python")
+	if !ok || rest == "" {
+		return false
+	}
+	for _, r := range rest {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// foreignImportSeed is the shellexec option that binds the program's import
+// aliases in the region backend.
+func (e *emitter) foreignImportSeed() string {
+	aliases := make([]string, 0, len(e.foreignImportAliases))
+	for alias := range e.foreignImportAliases {
+		aliases = append(aliases, alias)
+	}
+	sort.Strings(aliases)
+	var out strings.Builder
+	fmt.Fprintf(&out, "%sshellexec.RunnerOptions(%sinterp.ForeignImports(map[string]*%spolyglot.Module{", e.prefix, e.prefix, e.prefix)
+	for i, alias := range aliases {
+		if i > 0 {
+			out.WriteString(",")
+		}
+		fmt.Fprintf(&out, "%s:%spython%d", strconv.Quote(alias), e.prefix, e.foreignImportAliases[alias])
+	}
+	out.WriteString("}))")
+	return out.String()
 }
 
 func (e *emitter) prepareForeign(ctx context.Context, file *syntax.File) error {
@@ -102,8 +146,21 @@ func (e *emitter) prepareForeign(ctx context.Context, file *syntax.File) error {
 		if err != nil {
 			return e.fail(imp, CodeUnsupported, err.Error())
 		}
-		e.foreignImports = append(e.foreignImports, plan)
-		e.foreignImportAliases[alias] = len(e.foreignImports) - 1
+		// One module identity is one worker however many aliases name it,
+		// as the interpreter shares it (CPython: `import x as a; import x
+		// as b` is one module object).
+		index := -1
+		for i, existing := range e.foreignImports {
+			if existing.Identity() == plan.Identity() {
+				index = i
+				break
+			}
+		}
+		if index < 0 {
+			e.foreignImports = append(e.foreignImports, plan)
+			index = len(e.foreignImports) - 1
+		}
+		e.foreignImportAliases[alias] = index
 		reserved[alias] = "Python import"
 	}
 	pythonRuntime := polyglot.Python{}
@@ -226,9 +283,23 @@ func (e *emitter) pythonExpr(expr syntax.BashPPExpr) bool {
 	case *syntax.BashPPIdent:
 		return e.pythonValues[x.Name.Value]
 	case *syntax.BashPPSelectorExpr:
+		if e.pythonModuleSelector(x) {
+			return true
+		}
 		return e.pythonExpr(x.X)
 	}
 	return false
+}
+
+// pythonModuleSelector reports whether a selector reads a module attribute
+// of a direct import (`mod.attr`), as opposed to an attribute of a value.
+func (e *emitter) pythonModuleSelector(selector *syntax.BashPPSelectorExpr) bool {
+	id, ok := selector.X.(*syntax.BashPPIdent)
+	if !ok || e.pythonValues[id.Name.Value] || e.known(id.Name.Value) {
+		return false
+	}
+	_, ok = e.foreignImportAliases[id.Name.Value]
+	return ok
 }
 
 func (e *emitter) pythonCall(call *syntax.BashPPCall) (string, error) {
@@ -274,6 +345,10 @@ func (e *emitter) pythonCall(call *syntax.BashPPCall) (string, error) {
 }
 
 func (e *emitter) pythonAttr(selector *syntax.BashPPSelectorExpr) (string, error) {
+	if e.pythonModuleSelector(selector) {
+		index := e.foreignImportAliases[selector.X.(*syntax.BashPPIdent).Name.Value]
+		return fmt.Sprintf("%spythonValue(%spython%d.Attr(%scontext.Background(),%s))", e.prefix, e.prefix, index, e.prefix, strconv.Quote(selector.Sel.Value)), nil
+	}
 	receiver, err := e.expr(selector.X)
 	if err != nil {
 		return "", err
@@ -323,7 +398,7 @@ func (e *emitter) foreignDeclarations() string {
 	var out strings.Builder
 	for i, plan := range e.foreignImports {
 		e.foreignGlobals[fmt.Sprintf("%spython%d", e.prefix, i)] = true
-		fmt.Fprintf(&out, "var %spython%d = %spolyglot.StartImport(%spolyglot.ImportPlan{ID:%s,Language:%s,Module:%s,Alias:%s,Environment:*%s})\n", e.prefix, i, e.prefix, e.prefix, strconv.Quote(plan.ID), strconv.Quote(plan.Language), strconv.Quote(plan.Module), strconv.Quote(plan.Alias), e.environmentLiteral(&plan.Environment))
+		fmt.Fprintf(&out, "var %spython%d = %spolyglot.StartImport(%spolyglot.ImportPlan{ID:%s,Language:%s,Module:%s,Alias:%s,Path:%s,Environment:*%s})\n", e.prefix, i, e.prefix, e.prefix, strconv.Quote(plan.ID), strconv.Quote(plan.Language), strconv.Quote(plan.Module), strconv.Quote(plan.Alias), strconv.Quote(plan.Path), e.environmentLiteral(&plan.Environment))
 	}
 	if len(e.foreignImports) > 0 {
 		fmt.Fprintf(&out, "var _ = %scontext.Background\n", e.prefix)
