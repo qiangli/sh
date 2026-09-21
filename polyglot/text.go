@@ -323,6 +323,11 @@ func (m *Module) callText(ctx context.Context, text Text, name string, args []an
 	if cwd == "" {
 		cwd, _ = os.Getwd()
 	}
+	// A tool that walks its working directory (go) reads it as $PWD spells
+	// it and compares that spelling with overlay keys byte for byte: one
+	// cleaned spelling serves as the placeholder, the process directory and
+	// its PWD.
+	cwd = filepath.Clean(cwd)
 	if err := shadowEntries(dir, cwd, text.Shadow); err != nil {
 		return CallResult{}, fmt.Errorf("text fence %s: %w", text.Type, err)
 	}
@@ -362,7 +367,7 @@ func (m *Module) callText(ctx context.Context, text Text, name string, args []an
 	if text.WorkDir != "" {
 		cmd.Dir = expand(text.WorkDir)
 	}
-	cmd.Env = append(environOf(environ), "BASHPP_FENCE_TYPE="+text.Type, "BASHPP_FENCE_FILE="+file)
+	cmd.Env = append(environOf(environ), "BASHPP_FENCE_TYPE="+text.Type, "BASHPP_FENCE_FILE="+file, "PWD="+cmd.Dir)
 	for _, entry := range verb.Env {
 		cmd.Env = append(cmd.Env, expand(entry))
 	}

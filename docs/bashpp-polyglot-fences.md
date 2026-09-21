@@ -254,3 +254,14 @@ diagnostic that says so. The format is never inferred: an opener whose type
 is not in the table and carries no runner is rejected at prepare. The
 decision record and the row table are
 `bashsharp/docs/fenced-text-blocks-plan.md`.
+
+The manifest rows the host shell registers (`cargo`, `pyproject`, `gomod`,
+`cmake`, `makefile`, `package`) run their processor in the caller's
+directory with the manifest under the fence root: a row may **shadow**
+entries of the caller's directory beside the manifest (cargo's `src`), or
+present the manifest through a go-style **overlay** (`{overlay}`), and a
+manifest row may be the **module** of a code fence in the same unit
+(`gomod` → `~~~go`: the caller's directory is the Go module with no `go.mod`
+in it). A materialized manifest is left alone once written — the fence
+directory is keyed by content, and a processor's own edits to it (`go mod
+tidy`) belong to that fence.

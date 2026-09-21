@@ -88,6 +88,10 @@ func (g Go) AnalyzeArtifact(ctx context.Context, source string) ([]Export, strin
 			return nil, "", err
 		}
 	}
+	// The go command walks the working directory as $PWD spells it, and an
+	// overlay key must match that spelling byte for byte: one cleaned
+	// spelling serves as the root, the process directory and its PWD.
+	root = filepath.Clean(root)
 	hash := strconv.FormatInt(int64(len(source)), 10)
 	// Use a virtual subdirectory so a module whose root is a library package
 	// does not collide with the generated package main. Keeping it beneath the
@@ -132,6 +136,10 @@ func (g Go) AnalyzeArtifact(ctx context.Context, source string) ([]Export, strin
 	args = append(leadingArgs(g.Environment), args...)
 	cmd := exec.CommandContext(ctx, g.executable(), args...)
 	g.configure(cmd)
+	if g.Environment != nil && g.Environment.ModuleFile != "" {
+		cmd.Dir = root
+		cmd.Env = append(cmd.Env, "PWD="+root)
+	}
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
