@@ -103,6 +103,21 @@ Coverage required by the story → fixtures:
 
 ## Gates
 
+Exact upstream fixture ports added during manager review:
+
+- PowerShell `1393d167f54466ec60c547b56f0c4d8326da7dc8` (v7.4.0),
+  `test/powershell/Modules/Microsoft.PowerShell.Utility/Get-Member.Tests.ps1`,
+  the first two scalar/array type-inspection cases (MIT): exact six inputs,
+  adapted CLR type assertions to Bash# types in
+  `TestDescribeValuePowerShellOriginalInputs`.
+- CPython `0fb18b02c8ad56299d6a2910be0bab8ad601ef24` (v3.12.0),
+  `Lib/test/test_timeit.py`, `test_timeit_zero_iters` and
+  `test_timeit_few_iters` (PSF-2.0): counts 0 and 3 and increment side effect
+  in `TestBashPPTimedCPythonIterationCounts`. No fake-duration equality is
+  claimed: Bash# observes a real duration per decorator invocation.
+- Native security boundary: named pointer/channel fields are redacted just
+  like their underlying types (`TestDescribeValueNamedOpaqueFields`).
+
 - B27a: `go test ./interp -run TestBashPPTimed` (quick tier);
   `go test -tags full ./lower -run TestTimedDecorator` (parity);
   `go test -tags full ./lower -run TestDecoratedCallableExecution` and

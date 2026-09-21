@@ -38,6 +38,43 @@ func describeRunner(t *testing.T, src string) *interp.Runner {
 	return r
 }
 
+// Exact inputs from PowerShell Get-Member.Tests.ps1 at
+// 1393d167f54466ec60c547b56f0c4d8326da7dc8 (v7.4.0, MIT), cases
+// "Should be able to be called on string objects, ints, arrays, etc" and
+// "Should be able to extract a field from string objects, ints, arrays, etc".
+// The adapter asserts Bash# type names rather than CLR type names.
+func TestDescribeValuePowerShellOriginalInputs(t *testing.T) {
+	r := describeRunner(t, `a := 1
+b := 1.3
+c := false
+d := []int{1, 3}
+e := "anoeduntodeu"
+f := "asntoheusth"
+`)
+	for name, typ := range map[string]string{"a": "int", "b": "float64", "c": "bool", "d": "[]int", "e": "string", "f": "string"} {
+		d, ok := r.DescribeValue(name)
+		if !ok || d.Type != typ {
+			t.Errorf("%s: %+v found=%v", name, d, ok)
+		}
+	}
+}
+
+func TestDescribeValueNamedOpaqueFields(t *testing.T) {
+	r := describeRunner(t, `type Ptr *int
+type Secret struct { P Ptr }
+var s Secret
+`)
+	d, ok := r.DescribeValue("s")
+	if !ok || len(d.Fields) != 1 {
+		t.Fatalf("description: %+v", d)
+	}
+	for _, f := range d.Fields {
+		if !f.Redacted || f.Value != "" {
+			t.Errorf("opaque field: %+v", f)
+		}
+	}
+}
+
 const describeSessionSrc = `type Point struct { X int; Y int; secret string; Tags []string }
 n := 42
 s := "hello"

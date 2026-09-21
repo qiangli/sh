@@ -250,7 +250,7 @@ func (r *Runner) bashPPDescribeFields(cell *bashPPCell, underlying syntax.BashPP
 			}
 			value, ok := bashPPStorageGet(obj, name.Value)
 			switch {
-			case bashPPOpaqueField(field.FieldTypeExpr, child):
+			case bashPPOpaqueField(r.bashPPUnderlyingType(field.FieldTypeExpr), child):
 				f.Redacted = true
 			case !ok || value == nil:
 			case bashPPScalarStorage(value):

@@ -5,6 +5,7 @@ package interp_test
 
 import (
 	"context"
+	"fmt"
 	"regexp"
 	"strings"
 	"testing"
@@ -29,6 +30,30 @@ import (
 // bashPPTimedLine matches one stable attestation line and captures the
 // measured duration, the only run-to-run-variable part of the format.
 var bashPPTimedLine = regexp.MustCompile(`^@timed: ([^:]+): status=(\d+) duration=(\S+)\n$`)
+
+// CPython 0fb18b02c8ad56299d6a2910be0bab8ad601ef24 (v3.12.0),
+// Lib/test/test_timeit.py TestTimeit.test_timeit_zero_iters and
+// test_timeit_few_iters (PSF-2.0): exact iteration counts 0 and 3 and the
+// incrementing callable. Bash# times one invocation per decorator entry,
+// so preserve call counts and require one measurement per actual call;
+// elapsed time is real, not CPython's injected FakeTimer.
+func TestBashPPTimedCPythonIterationCounts(t *testing.T) {
+	for _, n := range []int{0, 3} {
+		src := fmt.Sprintf(`count := 0
+@timed()
+func inc() { count = count + 1 }
+		%s
+echo $count
+`, strings.Repeat("inc()\n", n))
+		out, stderr, err := runDecorated(t, src)
+		if err != nil || out != fmt.Sprintf("%d\n", n) {
+			t.Fatalf("n=%d out=%q err=%v", n, out, err)
+		}
+		if got := strings.Count(stderr, "@timed: inc: status=0 duration="); got != n {
+			t.Fatalf("n=%d stderr=%q", n, stderr)
+		}
+	}
+}
 
 func TestBashPPTimedDecorator(t *testing.T) {
 	t.Run("success", func(t *testing.T) {
