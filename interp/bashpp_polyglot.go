@@ -144,10 +144,10 @@ func (r *Runner) bashPPPrepareSourceBlocks(ctx context.Context, file *syntax.Fil
 			}
 			config.Environment = &environment
 		}
-		runtime := row.NewRuntime(config)
-		if _, text := runtime.(polyglot.Text); text && block.Alias == "" {
+		if row.Text && block.Alias == "" {
 			return restore, fmt.Errorf("%s: text fence %s needs an alias (as NAME)", file.Name, block.Language)
 		}
+		runtime := row.NewRuntime(config)
 		runtimes[language] = runtime
 		analyzers[language] = runtime
 	}

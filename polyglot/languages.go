@@ -46,6 +46,13 @@ type Language struct {
 	// Callbacks says the runtime may call back into shell functions and the
 	// module must be given the unit's callback table.
 	Callbacks bool
+	// Text says the row carries a text artifact, not source: its methods
+	// are known only at prepare, so the fence needs an alias.
+	Text bool
+	// InterpretedOnly says the row's processor is the running shell itself
+	// (a task file, a skill), so a lowered program cannot carry it and
+	// lowering refuses the fence by name.
+	InterpretedOnly bool
 	// NewRuntime constructs the runtime for one source unit.
 	NewRuntime func(RuntimeConfig) LanguageRuntime
 	// LoweredRuntime returns the Go expression a lowered program uses to

@@ -116,9 +116,14 @@ func TestParseMethods(t *testing.T) {
 }
 
 func TestMaterializeTextRejectsPaths(t *testing.T) {
-	for _, name := range []string{"", ".", "..", "a/b", `a\b`} {
+	for _, name := range []string{"", ".", "..", "../a", "/etc/x", "a/../../b"} {
 		if _, err := materializeText("k", name, "x"); err == nil {
 			t.Errorf("file name %q accepted", name)
 		}
+	}
+	// A row may nest its artifact inside the fence root.
+	file, err := materializeText("k-nested", "skill/SKILL.md", "---\nname: skill\n---\n")
+	if err != nil || filepath.Base(filepath.Dir(file)) != "skill" || filepath.Base(filepath.Dir(filepath.Dir(file))) != "k-nested" {
+		t.Fatalf("nested file name: %q, %v", file, err)
 	}
 }

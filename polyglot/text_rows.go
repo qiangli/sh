@@ -10,10 +10,13 @@ package polyglot
 // Verb arguments: `{file}` is the materialized artifact, `{dir}` its
 // directory; the call's own string arguments follow.
 
-func textRow(canonical string, aliases []string, text Text) Language {
+// TextRow is the Language row of a built-in text runtime; an embedder
+// registers its own rows with it.
+func TextRow(canonical string, aliases []string, text Text) Language {
 	return Language{
 		Canonical: canonical,
 		Aliases:   aliases,
+		Text:      true,
 		NewRuntime: func(cfg RuntimeConfig) LanguageRuntime {
 			t := text
 			t.Dir, t.Environ = cfg.Dir, cfg.Environ
@@ -44,6 +47,6 @@ var Tofu = Text{Type: "tf", FileName: "main.tf", Tool: "tofu", Verbs: []Verb{
 }}
 
 func init() {
-	RegisterLanguage(textRow("dockerfile", nil, Dockerfile))
-	RegisterLanguage(textRow("tf", []string{"tofu", "hcl"}, Tofu))
+	RegisterLanguage(TextRow("dockerfile", nil, Dockerfile))
+	RegisterLanguage(TextRow("tf", []string{"tofu", "hcl"}, Tofu))
 }

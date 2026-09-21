@@ -130,14 +130,8 @@ func TestBashPPTextRow(t *testing.T) {
 		}
 		return nil, "", nil
 	}
-	polyglot.RegisterLanguage(polyglot.Language{
-		Canonical: "fakecfg", Aliases: []string{"fc"},
-		NewRuntime: func(cfg polyglot.RuntimeConfig) polyglot.LanguageRuntime {
-			return polyglot.Text{Type: "fakecfg", FileName: "fake.cfg", Tool: "fake-tool", Dir: cfg.Dir, Environ: cfg.Environ,
-				Verbs: []polyglot.Verb{{Name: "show", Args: []string{"show", "{file}"}}, {Name: "apply", Args: []string{"apply", "{file}"}, Effects: []string{"world"}}}}
-		},
-		LoweredRuntime: func(prefix, _ string) string { return prefix + "polyglot.Text{}" },
-	})
+	polyglot.RegisterLanguage(polyglot.TextRow("fakecfg", []string{"fc"}, polyglot.Text{Type: "fakecfg", FileName: "fake.cfg", Tool: "fake-tool",
+		Verbs: []polyglot.Verb{{Name: "show", Args: []string{"show", "{file}"}}, {Name: "apply", Args: []string{"apply", "{file}"}, Effects: []string{"world"}}}}))
 	t.Cleanup(func() { polyglot.ToolResolver = saved })
 	src := `
 ~~~fc as cfg

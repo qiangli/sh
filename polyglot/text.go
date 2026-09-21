@@ -28,9 +28,16 @@ type Verb struct {
 	// Name is the method (`plan`, `apply`, `build`).
 	Name string
 	// Args are the processor's arguments for this verb. `{file}` is the
-	// materialized artifact, `{dir}` its directory; the call's own string
-	// arguments follow.
+	// materialized artifact, `{dir}` its directory, `{root}` the fence's
+	// materialization root and `{cwd}` the caller's directory; the call's
+	// own string arguments follow.
 	Args []string
+	// Tool, when set, is this verb's processor instead of the row's (a local
+	// `podman kube play` beside a row whose tool is kubectl).
+	Tool string
+	// Env are extra `KEY=value` entries for the processor, with the same
+	// placeholders as Args.
+	Env []string
 	// Effects are the effect atoms a world-changing verb carries, read by
 	// the contract layer; nil for a read-only verb.
 	Effects []string
@@ -48,8 +55,13 @@ type Text struct {
 	FileName string
 	Tool     string
 	Verbs    []Verb
-	Dir      string
-	Environ  []string
+	// WorkDir is where the processor runs: "" for the artifact's directory
+	// (a self-contained module), "{cwd}" for the caller's directory (a task
+	// file whose bodies address the checkout, a chart path beside a values
+	// file).
+	WorkDir string
+	Dir     string
+	Environ []string
 }
 
 // RunnerFence is the runtime of a fence whose opener named a runner
@@ -120,9 +132,9 @@ func (t Text) verb(name string) (Verb, bool) {
 // this runtime; prefix is the emitter's import prefix.
 func (t Text) LoweredLiteral(prefix string) string {
 	var out strings.Builder
-	fmt.Fprintf(&out, "%spolyglot.Text{Type:%q,FileName:%q,Tool:%q,Verbs:[]%spolyglot.Verb{", prefix, t.Type, t.FileName, t.Tool, prefix)
+	fmt.Fprintf(&out, "%spolyglot.Text{Type:%q,FileName:%q,Tool:%q,WorkDir:%q,Verbs:[]%spolyglot.Verb{", prefix, t.Type, t.FileName, t.Tool, t.WorkDir, prefix)
 	for _, verb := range t.Verbs {
-		fmt.Fprintf(&out, "{Name:%q,Args:%#v,Effects:%#v,Result:%q},", verb.Name, verb.Args, verb.Effects, verb.Result)
+		fmt.Fprintf(&out, "{Name:%q,Args:%#v,Tool:%q,Env:%#v,Effects:%#v,Result:%q},", verb.Name, verb.Args, verb.Tool, verb.Env, verb.Effects, verb.Result)
 	}
 	out.WriteString("}}")
 	return out.String()
@@ -230,16 +242,19 @@ func textRoot() string {
 
 // materializeText writes the body under the cache keyed by its content and
 // returns the file path. A body already materialized with the same bytes is
-// reused; a changed body is rewritten, never appended to.
+// reused; a changed body is rewritten, never appended to. The file name is
+// the row's (a row may nest it: `skill/SKILL.md`), never the script's, and
+// stays inside the fence's root.
 func materializeText(key, fileName, source string) (string, error) {
-	if strings.ContainsAny(fileName, `/\`) || fileName == "" || fileName == "." || fileName == ".." {
+	clean := filepath.ToSlash(filepath.Clean(fileName))
+	if fileName == "" || clean == "." || strings.HasPrefix(clean, "../") || clean == ".." || strings.HasPrefix(clean, "/") || filepath.IsAbs(fileName) {
 		return "", fmt.Errorf("text fence: invalid artifact file name %q", fileName)
 	}
-	dir := filepath.Join(textRoot(), key)
+	dir := filepath.Join(textRoot(), key, filepath.Dir(filepath.FromSlash(clean)))
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
-	file := filepath.Join(dir, fileName)
+	file := filepath.Join(textRoot(), key, filepath.FromSlash(clean))
 	if existing, err := os.ReadFile(file); err == nil && string(existing) == source {
 		return file, nil
 	}
@@ -270,24 +285,42 @@ func (m *Module) callText(ctx context.Context, text Text, name string, args []an
 		return CallResult{}, err
 	}
 	dir := filepath.Dir(file)
-	env := envMap(text.Environ)
-	tool, why, err := resolveTool(env, text.Tool)
-	if err != nil {
-		return CallResult{}, fmt.Errorf("text fence %s: %s: %w", text.Type, text.Tool, err)
+	root := filepath.Join(textRoot(), m.plan.ID)
+	cwd := text.Dir
+	if cwd == "" {
+		cwd, _ = os.Getwd()
 	}
-	_ = why
-	argv := append([]string(nil), tool...)
-	for _, arg := range verb.Args {
+	expand := func(arg string) string {
 		arg = strings.ReplaceAll(arg, "{file}", file)
 		arg = strings.ReplaceAll(arg, "{dir}", dir)
-		argv = append(argv, arg)
+		arg = strings.ReplaceAll(arg, "{root}", root)
+		return strings.ReplaceAll(arg, "{cwd}", cwd)
+	}
+	toolName := text.Tool
+	if verb.Tool != "" {
+		toolName = verb.Tool
+	}
+	env := envMap(text.Environ)
+	tool, _, err := resolveTool(env, toolName)
+	if err != nil {
+		return CallResult{}, fmt.Errorf("text fence %s: %s: %w", text.Type, toolName, err)
+	}
+	argv := append([]string(nil), tool...)
+	for _, arg := range verb.Args {
+		argv = append(argv, expand(arg))
 	}
 	for _, arg := range args {
 		argv = append(argv, foreignText(arg))
 	}
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = dir
+	if text.WorkDir != "" {
+		cmd.Dir = expand(text.WorkDir)
+	}
 	cmd.Env = append(environOf(text.Environ), "BASHPP_FENCE_TYPE="+text.Type, "BASHPP_FENCE_FILE="+file)
+	for _, entry := range verb.Env {
+		cmd.Env = append(cmd.Env, expand(entry))
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err = cmd.Run()
@@ -297,7 +330,7 @@ func (m *Module) callText(ctx context.Context, text Text, name string, args []an
 	if err != nil {
 		var exit *exec.ExitError
 		if errors.As(err, &exit) {
-			return result, fmt.Errorf("text fence %s.%s: %s exited %d", text.Type, name, text.Tool, exit.ExitCode())
+			return result, fmt.Errorf("text fence %s.%s: %s exited %d", text.Type, name, toolName, exit.ExitCode())
 		}
 		return result, fmt.Errorf("text fence %s.%s: %w", text.Type, name, err)
 	}

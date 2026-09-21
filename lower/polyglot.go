@@ -225,11 +225,13 @@ func (e *emitter) prepareForeign(ctx context.Context, file *syntax.File) error {
 			e.foreignEnvs[language] = &environment
 			config.Environment = &environment
 		}
-		runtime := row.NewRuntime(config)
-		if _, text := runtime.(polyglot.Text); text && block.Alias == "" {
+		if row.Text && block.Alias == "" {
 			return e.fail(first, CodeType, "text fence "+block.Language+" needs an alias (as NAME)")
 		}
-		analyzers[language] = runtime
+		if row.InterpretedOnly {
+			return e.fail(first, CodeUnsupported, "text fence ~~~"+block.Language+": its processor is the running shell; lowering it is not supported")
+		}
+		analyzers[language] = row.NewRuntime(config)
 	}
 	var plans []polyglot.Plan
 	if len(blocks) > 0 {
