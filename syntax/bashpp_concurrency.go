@@ -3,6 +3,8 @@
 
 package syntax
 
+import "strings"
+
 // bashppSelect recognizes the Class-R brace form.  It deliberately lives in
 // syntax: this commits a Go region for parsing only; it does not imply any
 // scheduling or channel runtime behaviour.
@@ -249,7 +251,12 @@ func (p *Parser) bashppRange(stmt *Stmt) bool {
 	}
 	ch := bashppJoinWords(operandWords)
 	rng.Chan = ch
-	if expr := bashppIndexExpr(ch); expr != nil {
+	if call := p.bashppRangeLinesCall(ch); call != nil {
+		// `range x.Lines()` — the sole chained call a range reads; every
+		// other `(` after the operand keeps rewinding to the shell.
+		rng.Call = call
+		rng.Chan = &Word{Parts: []WordPart{&Lit{ValuePos: ch.Pos(), ValueEnd: posAddCol(call.Rparen, 1), Value: bashppWordText(ch) + "()"}}}
+	} else if expr := bashppIndexExpr(ch); expr != nil {
 		rng.Expr = expr
 	} else if expr := bashppScalarExpr(ch); expr != nil {
 		rng.Expr = expr
@@ -277,4 +284,29 @@ func (p *Parser) bashppRange(stmt *Stmt) bool {
 		p.bashppValidateBranches(rng)
 	}
 	return true
+}
+
+// bashppRangeLinesCall reads the `()` of `range x.Lines()` when the operand
+// is exactly a two-part selector ending in Lines and the parenthesis follows
+// unspaced. It is deliberately the narrowest seam that admits the process
+// line-iteration spellings (`r.Lines()` over a completed run result,
+// `p.Lines()` over a live start handle): no arguments, no deeper chain. Any
+// other shape leaves the parser untouched so the caller's rewind decides.
+func (p *Parser) bashppRangeLinesCall(operand *Word) *BashPPCall {
+	lit := bashppBareLit(operand)
+	if lit == nil || p.tok != leftParen || p.spaced {
+		return nil
+	}
+	base, method, found := strings.Cut(lit.Value, ".")
+	if !found || method != "Lines" || !BashPPValidIdent(base) {
+		return nil
+	}
+	lparen := p.pos
+	p.next()
+	if p.tok != rightParen {
+		return nil
+	}
+	rparen := p.pos
+	p.next()
+	return &BashPPCall{Fun: bashppSelectorLits(lit), Lparen: lparen, Rparen: rparen}
 }

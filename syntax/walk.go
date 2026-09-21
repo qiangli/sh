@@ -520,6 +520,7 @@ func Walk(node Node, f func(Node) bool) {
 		walkList(node.Names, f)
 		walkNilable(node.Chan, f)
 		walkNilable(node.Expr, f)
+		walkNilable(node.Call, f)
 		walkNilable(node.Body, f)
 	default:
 		panic(fmt.Sprintf("syntax.Walk: unexpected node type %T", node))

@@ -603,6 +603,9 @@ func (e *emitter) constGroup(n *syntax.BashPPConstGroup) (string, error) {
 }
 
 func (e *emitter) rangeStmt(n *syntax.BashPPRange) (string, error) {
+	if n.Call != nil {
+		return e.processRange(n)
+	}
 	if e.execution && n.Chan != nil {
 		return e.runtimeChannelRange(n, e.runtimeScope(), e.runtimeStatements)
 	}

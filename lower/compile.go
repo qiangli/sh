@@ -1326,6 +1326,9 @@ func (e *emitter) command(c syntax.Command) (string, error) {
 			e.panicSupport = true
 			return "if " + e.prefix + "recovered := " + e.userRecover() + "; " + e.prefix + "recovered == nil { /*" + e.prefix + "status1*/ } else { " + e.prefix + "popPanic(); /*" + e.prefix + "status0*/ }", nil
 		}
+		if e.liveProcessMethod(n) && (n.Fun[1].Value == "Wait" || n.Fun[1].Value == "Close") {
+			return e.program() + "." + n.Fun[1].Value + "Process(" + e.goName(n.Fun[0].Value) + ")", nil
+		}
 		text, err := e.call(n)
 		if !e.inFunc && len(n.Fun) == 1 && !e.funcs[n.Fun[0].Value] && (n.Fun[0].Value == "print" || n.Fun[0].Value == "println") {
 			text += "\n/*" + e.prefix + "status0*/"
@@ -1686,6 +1689,9 @@ func (e *emitter) group(text string) string {
 	return "(" + text + ")"
 }
 func (e *emitter) call(c *syntax.BashPPCall) (string, error) {
+	if text, handled, err := e.processCall(c); handled {
+		return text, err
+	}
 	// The short declaration's binding count is this call's opt-in arity and
 	// nobody else's: a call nested in the arguments must not inherit it.
 	want := e.resultCallWant

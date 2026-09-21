@@ -250,8 +250,10 @@ type Runner struct {
 	bashPPDeferDepth int
 	// bashPPConcurrent is intentionally runner-session local.  It is shared
 	// only by Bash++ go tasks, never by shell copies such as subshells.
-	bashPPConcurrent     *bashPPConcurrent
-	bashPPIssuedHandles  *bashPPHandleProvenance
+	bashPPConcurrent    *bashPPConcurrent
+	bashPPIssuedHandles *bashPPHandleProvenance
+	// bashPPProcs registers live start(...) handles; shared with subshells.
+	bashPPProcs          *bashPPProcessTable
 	bashPPCallChannels   []*bashPPChannel
 	bashPPCallInterfaces []*bashPPInterfaceValue
 	bashPPCallCells      []*bashPPCell
@@ -3400,6 +3402,11 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 		r.bashPPFileRun = true
 		defer func() { r.bashPPFileRun = false }()
 		if r.Dialect() == syntax.LangBashPP {
+			processes := r.bashPPProcessRegistry()
+			processes.mu.Lock()
+			first := processes.next
+			processes.mu.Unlock()
+			defer processes.cleanupSince(first)
 			// Persistent FIFO descriptors opened before the first task are
 			// still owned by this File and must be registered for snapshots.
 			r.bashPPConcurrency(ctx)
@@ -3714,6 +3721,7 @@ func (r *Runner) subshell(background bool) *Runner {
 		openHandler:          r.openHandler,
 		dryRunOpenHandler:    r.dryRunOpenHandler,
 		bashPPCustomOpen:     r.bashPPCustomOpen,
+		bashPPProcs:          r.bashPPProcs,
 		readDirHandler:       r.readDirHandler,
 		statHandler:          r.statHandler,
 		stdin:                r.stdin,

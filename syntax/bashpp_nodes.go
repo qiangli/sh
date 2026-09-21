@@ -1542,7 +1542,12 @@ type BashPPRange struct {
 	Range  Pos
 	Chan   *Word
 	Expr   BashPPExpr
-	Body   *Block
+	// Call is the one chained method form a range admits: `x.Lines()`, the
+	// line iteration of a completed `run(...)` result or a live `start(...)`
+	// process. Chan still carries the spelled text so printing and walking
+	// need no new case; Expr is nil.
+	Call *BashPPCall
+	Body *Block
 }
 
 func (r *BashPPRange) Pos() Pos { return r.For }

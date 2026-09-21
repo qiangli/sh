@@ -6,6 +6,7 @@ package interp
 import (
 	"bufio"
 	"context"
+	"errors"
 	"io"
 	"sync"
 )
@@ -155,6 +156,11 @@ func (p *bashPPLineProcess) produce() {
 		p.mu.Lock()
 		p.scanErr = err
 		p.mu.Unlock()
+		// A failed scanner no longer drains stdout. Terminate the source now:
+		// otherwise a writer can remain blocked on its full pipe forever while
+		// Wait waits for stderr EOF or process exit. Do not cancel p.ctx here;
+		// the original scan error must remain distinct from cancellation.
+		p.kill()
 	}
 }
 
@@ -186,7 +192,7 @@ func (p *bashPPLineProcess) Wait() (int, error) {
 		<-p.stderrDone
 
 		werr := p.src.Wait()
-		p.status = bashPPProcessExitStatus(werr)
+		p.status = bashPPWaitStatus(werr)
 
 		p.mu.Lock()
 		scanErr := p.scanErr
@@ -226,4 +232,15 @@ func (p *bashPPLineProcess) Stderr() string {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return string(p.stderrBuf)
+}
+
+// bashPPWaitStatus maps a source's Wait error to a bash-style status: an
+// in-process subshell's bashPPStatusError carries its code directly; anything
+// else goes through the platform's process mapping (bashPPProcessExitStatus).
+func bashPPWaitStatus(err error) int {
+	var se *bashPPStatusError
+	if errors.As(err, &se) {
+		return se.code
+	}
+	return bashPPProcessExitStatus(err)
 }
