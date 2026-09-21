@@ -2,6 +2,7 @@ package polyglot
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -125,5 +126,105 @@ func TestMaterializeTextRejectsPaths(t *testing.T) {
 	file, err := materializeText("k-nested", "skill/SKILL.md", "---\nname: skill\n---\n")
 	if err != nil || filepath.Base(filepath.Dir(file)) != "skill" || filepath.Base(filepath.Dir(filepath.Dir(file))) != "k-nested" {
 		t.Fatalf("nested file name: %q, %v", file, err)
+	}
+}
+
+func TestTextShadowAndOverlay(t *testing.T) {
+	cwd := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(cwd, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cwd, "src", "main.rs"), []byte("fn main(){}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	saved := ToolResolver
+	var seen []string
+	ToolResolver = func(string) ([]string, string, error) {
+		return []string{"/bin/sh", "-c", `printf '%s\n' "$@"`, "argv0"}, "", nil
+	}
+	t.Cleanup(func() { ToolResolver = saved })
+	text := Text{Type: "shadowed", FileName: "Cargo.toml", Tool: "fake", Shadow: []string{"src", "tests"}, Overlay: []string{"go.sum"},
+		Dir: cwd, Verbs: []Verb{{Name: "build", Args: []string{"--manifest", "{file}", "--overlay", "{overlay}"}}}}
+	ctx := context.Background()
+	plans, err := Prepare(ctx, []Block{{Language: "shadowed", Alias: "s", Source: "[package]\n"}}, map[string]Analyzer{"shadowed": text})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := Start(plans[0], text).Call(ctx, "build")
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen = strings.Split(result.Value.(string), "\n")
+	dir := filepath.Join(textRoot(), plans[0].ID)
+	// The shadow: src linked, the absent tests skipped, the caller's tree untouched.
+	if link, err := os.Readlink(filepath.Join(dir, "src")); err != nil || link != filepath.Join(cwd, "src") {
+		t.Fatalf("src shadow = %q, %v", link, err)
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "tests")); err == nil {
+		t.Fatal("absent entry was shadowed")
+	}
+	if entries, _ := os.ReadDir(cwd); len(entries) != 1 {
+		t.Fatalf("caller's tree changed: %v", entries)
+	}
+	// The overlay: manifest and sibling mapped to the artifact dir, sibling created empty.
+	overlay := filepath.Join(dir, "overlay.json")
+	if seen[3] != overlay {
+		t.Fatalf("argv = %v", seen)
+	}
+	var parsed struct{ Replace map[string]string }
+	data, _ := os.ReadFile(overlay)
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Replace[filepath.Join(cwd, "Cargo.toml")] != filepath.Join(dir, "Cargo.toml") || parsed.Replace[filepath.Join(cwd, "go.sum")] != filepath.Join(dir, "go.sum") {
+		t.Fatalf("overlay = %v", parsed.Replace)
+	}
+	if info, err := os.Stat(filepath.Join(dir, "go.sum")); err != nil || info.Size() != 0 {
+		t.Fatalf("sibling not created empty: %v", err)
+	}
+}
+
+func TestManifestFilesAndGoModule(t *testing.T) {
+	RegisterLanguage(func() Language {
+		row := TextRow("fakemod", nil, Text{Type: "fakemod", FileName: "go.mod", Tool: "go", Verbs: []Verb{{Name: "tidy"}}})
+		row.ModuleFor = "go"
+		return row
+	}())
+	t.Cleanup(func() {
+		languagesMu.Lock()
+		delete(languages, "fakemod")
+		languagesMu.Unlock()
+	})
+	blocks := []Block{
+		{Language: "fakemod", Alias: "mod", Source: "module example.com/m\n\ngo 1.27\n"},
+		{Language: "go", Alias: "g", Source: "func F() int { return 1 }"},
+	}
+	files, err := ManifestFiles(blocks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := files["go"]
+	if filepath.Base(file) != "go.mod" {
+		t.Fatalf("manifest for go = %q", file)
+	}
+	// The same key Prepare computes for the block: one dir, one manifest.
+	plans, err := Prepare(context.Background(), blocks[:1], map[string]Analyzer{"fakemod": Text{Type: "fakemod", Verbs: []Verb{{Name: "tidy"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Base(filepath.Dir(file)) != plans[0].ID {
+		t.Fatalf("manifest dir %s is not the plan id %s", filepath.Dir(file), plans[0].ID)
+	}
+	// A directory without go.mod is a module once a manifest fence provides one.
+	cwd := t.TempDir()
+	plan, err := DiscoverEnvironment(EnvironmentRequest{Source: filepath.Join(cwd, "t.bsh"), Language: "go", ModuleFile: file})
+	if err != nil {
+		t.Fatalf("discover with a module file: %v", err)
+	}
+	if plan.Root != cwd || plan.ModuleFile != file || len(plan.Manifests) != 1 || plan.Manifests[0] != file {
+		t.Fatalf("plan = %+v", plan)
+	}
+	if _, err := DiscoverEnvironment(EnvironmentRequest{Source: filepath.Join(cwd, "t.bsh"), Language: "go"}); err == nil || !strings.Contains(err.Error(), "gomod fence") {
+		t.Fatalf("without a module: %v", err)
 	}
 }

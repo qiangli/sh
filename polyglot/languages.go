@@ -82,6 +82,10 @@ type Language struct {
 	// (a task file, a skill), so a lowered program cannot carry it and
 	// lowering refuses the fence by name.
 	InterpretedOnly bool
+	// ModuleFor names the source language whose code fence, in the same
+	// unit, builds against this row's manifest (`gomod` → `go`): the
+	// materialized manifest becomes that fence's module file.
+	ModuleFor string
 	// NewRuntime constructs the runtime for one source unit.
 	NewRuntime func(RuntimeConfig) LanguageRuntime
 	// LoweredRuntime returns the Go expression a lowered program uses to

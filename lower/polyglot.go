@@ -207,6 +207,10 @@ func (e *emitter) prepareForeign(ctx context.Context, file *syntax.File) error {
 	// kept so the lowered program can construct the same runtime.
 	e.foreignEnvs = map[string]*polyglot.EnvironmentPlan{}
 	analyzers := map[string]polyglot.Analyzer{}
+	manifests, err := polyglot.ManifestFiles(blocks)
+	if err != nil {
+		return e.fail(first, CodeUnsupported, err.Error())
+	}
 	for _, block := range blocks {
 		language := polyglot.CanonicalLanguage(block.Language)
 		if _, done := analyzers[language]; done {
@@ -218,7 +222,7 @@ func (e *emitter) prepareForeign(ctx context.Context, file *syntax.File) error {
 		}
 		config := polyglot.RuntimeConfig{Dir: e.options.Dir, Environ: os.Environ()}
 		if row.NeedsEnvironment {
-			environment, err := polyglot.DiscoverEnvironment(polyglot.EnvironmentRequest{Source: source, Language: language})
+			environment, err := polyglot.DiscoverEnvironment(polyglot.EnvironmentRequest{Source: source, Language: language, ModuleFile: manifests[language]})
 			if err != nil {
 				return e.fail(first, CodeUnsupported, err.Error())
 			}
@@ -542,8 +546,8 @@ func (e *emitter) environmentLiteral(p *polyglot.EnvironmentPlan) string {
 	if p == nil {
 		return "nil"
 	}
-	return fmt.Sprintf("&%spolyglot.EnvironmentPlan{Language:%s,Name:%s,Root:%s,Dir:%s,SourceDir:%s,Executable:%s,Manager:%s,RuntimeConstraint:%s,Runtime:%s,CompilerModule:%s,Manifests:%#v,Locks:%#v,PythonPath:%#v,Env:%#v,Explanation:%#v,ResolutionFiles:%#v,Fingerprint:%s}",
-		e.prefix, strconv.Quote(p.Language), strconv.Quote(p.Name), strconv.Quote(p.Root), strconv.Quote(p.Dir), strconv.Quote(p.SourceDir), strconv.Quote(p.Executable), strconv.Quote(p.Manager), strconv.Quote(p.RuntimeConstraint), strconv.Quote(p.Runtime), strconv.Quote(p.CompilerModule), p.Manifests, p.Locks, p.PythonPath, p.Env, p.Explanation, p.ResolutionFiles, strconv.Quote(p.Fingerprint))
+	return fmt.Sprintf("&%spolyglot.EnvironmentPlan{Language:%s,Name:%s,Root:%s,Dir:%s,SourceDir:%s,Executable:%s,Manager:%s,RuntimeConstraint:%s,Runtime:%s,CompilerModule:%s,Manifests:%#v,Locks:%#v,PythonPath:%#v,Env:%#v,Explanation:%#v,ResolutionFiles:%#v,Fingerprint:%s,ModuleFile:%s}",
+		e.prefix, strconv.Quote(p.Language), strconv.Quote(p.Name), strconv.Quote(p.Root), strconv.Quote(p.Dir), strconv.Quote(p.SourceDir), strconv.Quote(p.Executable), strconv.Quote(p.Manager), strconv.Quote(p.RuntimeConstraint), strconv.Quote(p.Runtime), strconv.Quote(p.CompilerModule), p.Manifests, p.Locks, p.PythonPath, p.Env, p.Explanation, p.ResolutionFiles, strconv.Quote(p.Fingerprint), strconv.Quote(p.ModuleFile))
 }
 
 func (e *emitter) foreignExports(exports []polyglot.Export) string {

@@ -10,6 +10,28 @@ package polyglot
 // Verb arguments: `{file}` is the materialized artifact, `{dir}` its
 // directory; the call's own string arguments follow.
 
+// ManifestFiles answers, for each source language a text block in blocks
+// provides a module for (a row's ModuleFor), the materialized manifest.
+func ManifestFiles(blocks []Block) (map[string]string, error) {
+	files := map[string]string{}
+	for _, block := range blocks {
+		row, ok := LookupLanguage(block.Language)
+		if !ok || row.ModuleFor == "" || block.Runner != "" {
+			continue
+		}
+		text, ok := row.NewRuntime(RuntimeConfig{}).(Text)
+		if !ok {
+			continue
+		}
+		file, err := ManifestPath(block.Language, block.Alias, text.FileName, block.Source)
+		if err != nil {
+			return nil, err
+		}
+		files[row.ModuleFor] = file
+	}
+	return files, nil
+}
+
 // TextRow is the Language row of a built-in text runtime; an embedder
 // registers its own rows with it.
 func TextRow(canonical string, aliases []string, text Text) Language {

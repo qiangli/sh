@@ -113,6 +113,10 @@ func (r *Runner) bashPPPrepareSourceBlocks(ctx context.Context, file *syntax.Fil
 	// refusal.
 	runtimes := map[string]polyglot.LanguageRuntime{}
 	analyzers := map[string]polyglot.Analyzer{}
+	manifests, err := polyglot.ManifestFiles(blocks)
+	if err != nil {
+		return restore, fmt.Errorf("%s: %w", file.Name, err)
+	}
 	for _, block := range blocks {
 		language := polyglot.CanonicalLanguage(block.Language)
 		if _, done := runtimes[language]; done {
@@ -138,7 +142,7 @@ func (r *Runner) bashPPPrepareSourceBlocks(ctx context.Context, file *syntax.Fil
 			Environ: execEnv(r.writeEnv), Env: func() []string { return execEnv(r.writeEnv) }}
 		if row.NeedsEnvironment {
 			environment, err := polyglot.DiscoverEnvironment(polyglot.EnvironmentRequest{
-				Source: source, Language: language, Environ: nativeExecEnv(execEnv(r.writeEnv)),
+				Source: source, Language: language, Environ: nativeExecEnv(execEnv(r.writeEnv)), ModuleFile: manifests[language],
 			})
 			if err != nil {
 				return restore, fmt.Errorf("%s: %w", file.Name, err)

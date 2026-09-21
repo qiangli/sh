@@ -60,6 +60,19 @@ type Text struct {
 	// file whose bodies address the checkout, a chart path beside a values
 	// file).
 	WorkDir string
+	// Shadow names entries of the caller's directory that are linked into
+	// the artifact's directory before a verb runs, for a processor that
+	// insists the manifest sit beside the sources (cargo: src, tests, …).
+	// An entry absent from the caller's directory is skipped; where a link
+	// cannot be made the entry is copied. Nothing is written into the
+	// caller's directory.
+	Shadow []string
+	// Overlay names sibling files that the `{overlay}` placeholder maps
+	// beside the manifest (go: go.sum): the generated overlay JSON tells a
+	// tool that `{cwd}/<FileName>` and each `{cwd}/<sibling>` are the fenced
+	// files under the artifact's directory, without a byte in the caller's
+	// tree; a sibling absent there is created empty.
+	Overlay []string
 	Dir     string
 	// CwdFunc, when set, answers the caller's directory at call time and
 	// wins over Dir; it is a host binding, never part of a lowered literal.
@@ -147,7 +160,7 @@ func (t Text) verb(name string) (Verb, bool) {
 // this runtime; prefix is the emitter's import prefix.
 func (t Text) LoweredLiteral(prefix string) string {
 	var out strings.Builder
-	fmt.Fprintf(&out, "%spolyglot.Text{Type:%q,FileName:%q,Tool:%q,WorkDir:%q,Verbs:[]%spolyglot.Verb{", prefix, t.Type, t.FileName, t.Tool, t.WorkDir, prefix)
+	fmt.Fprintf(&out, "%spolyglot.Text{Type:%q,FileName:%q,Tool:%q,WorkDir:%q,Shadow:%#v,Overlay:%#v,Verbs:[]%spolyglot.Verb{", prefix, t.Type, t.FileName, t.Tool, t.WorkDir, t.Shadow, t.Overlay, prefix)
 	for _, verb := range t.Verbs {
 		fmt.Fprintf(&out, "{Name:%q,Args:%#v,Tool:%q,Env:%#v,Effects:%#v,Result:%q},", verb.Name, verb.Args, verb.Tool, verb.Env, verb.Effects, verb.Result)
 	}
@@ -270,7 +283,7 @@ func materializeText(key, fileName, source string) (string, error) {
 		return "", err
 	}
 	file := filepath.Join(textRoot(), key, filepath.FromSlash(clean))
-	if existing, err := os.ReadFile(file); err == nil && string(existing) == source {
+	if _, err := os.Stat(file); err == nil {
 		return file, nil
 	}
 	if err := os.WriteFile(file, []byte(source), 0o644); err != nil {
@@ -310,10 +323,18 @@ func (m *Module) callText(ctx context.Context, text Text, name string, args []an
 	if cwd == "" {
 		cwd, _ = os.Getwd()
 	}
+	if err := shadowEntries(dir, cwd, text.Shadow); err != nil {
+		return CallResult{}, fmt.Errorf("text fence %s: %w", text.Type, err)
+	}
+	overlay := ""
 	expand := func(arg string) string {
+		if strings.Contains(arg, "{overlay}") && overlay == "" {
+			overlay, err = writeOverlay(dir, cwd, file, text.Overlay)
+		}
 		arg = strings.ReplaceAll(arg, "{file}", file)
 		arg = strings.ReplaceAll(arg, "{dir}", dir)
 		arg = strings.ReplaceAll(arg, "{root}", root)
+		arg = strings.ReplaceAll(arg, "{overlay}", overlay)
 		return strings.ReplaceAll(arg, "{cwd}", cwd)
 	}
 	toolName := text.Tool
@@ -329,6 +350,9 @@ func (m *Module) callText(ctx context.Context, text Text, name string, args []an
 	argv := append([]string(nil), tool...)
 	for _, arg := range verb.Args {
 		argv = append(argv, expand(arg))
+	}
+	if err != nil {
+		return CallResult{}, fmt.Errorf("text fence %s: overlay: %w", text.Type, err)
 	}
 	for _, arg := range args {
 		argv = append(argv, foreignText(arg))
@@ -407,4 +431,91 @@ func environOf(environ []string) []string {
 		return os.Environ()
 	}
 	return append([]string(nil), environ...)
+}
+
+// shadowEntries links each named entry of the caller's directory into the
+// artifact's directory, so a processor that wants the manifest beside the
+// sources finds them there. A stale link from an earlier caller is replaced;
+// an entry the caller lacks is skipped; where a link cannot be made the
+// entry is copied.
+func shadowEntries(dir, cwd string, entries []string) error {
+	for _, entry := range entries {
+		source := filepath.Join(cwd, entry)
+		if _, err := os.Stat(source); err != nil {
+			continue
+		}
+		target := filepath.Join(dir, entry)
+		if existing, err := os.Readlink(target); err == nil && existing == source {
+			continue
+		}
+		_ = os.RemoveAll(target)
+		if err := os.Symlink(source, target); err == nil {
+			continue
+		}
+		if err := copyTree(source, target); err != nil {
+			return fmt.Errorf("shadow %s: %w", entry, err)
+		}
+	}
+	return nil
+}
+
+func copyTree(source, target string) error {
+	info, err := os.Stat(source)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		data, err := os.ReadFile(source)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(target, data, info.Mode().Perm())
+	}
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir(source)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if err := copyTree(filepath.Join(source, entry.Name()), filepath.Join(target, entry.Name())); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// writeOverlay writes the go-style overlay JSON that presents the fenced
+// manifest and its named siblings at the caller's directory.
+func writeOverlay(dir, cwd, file string, siblings []string) (string, error) {
+	replace := map[string]string{filepath.Join(cwd, filepath.Base(file)): file}
+	for _, sibling := range siblings {
+		local := filepath.Join(dir, sibling)
+		if _, err := os.Stat(local); err != nil {
+			if err := os.WriteFile(local, nil, 0o644); err != nil {
+				return "", err
+			}
+		}
+		replace[filepath.Join(cwd, sibling)] = local
+	}
+	data, err := json.Marshal(map[string]any{"Replace": replace})
+	if err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, "overlay.json")
+	if existing, err := os.ReadFile(path); err == nil && bytes.Equal(existing, data) {
+		return path, nil
+	}
+	return path, os.WriteFile(path, data, 0o644)
+}
+
+// ManifestPath materializes a text row's body the way its first verb would
+// and returns the file, for a unit that hands the manifest to another
+// fence's environment before any verb has run. The key is the plan id
+// [Prepare] will compute for the same block.
+func ManifestPath(language, alias, fileName, source string) (string, error) {
+	lang := canonicalLanguage(language)
+	hash := sha256.Sum256([]byte(lang + "\x00" + alias + "\x00" + source + "\x00" + "" + "\x00" + ""))
+	return materializeText(hex.EncodeToString(hash[:]), fileName, source)
 }

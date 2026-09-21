@@ -24,7 +24,7 @@ func TestLowerTextRowAndRunnerFence(t *testing.T) {
 	generated := string(result.Source)
 	// The generated source is gofmt'd, so the literals carry gofmt's spacing.
 	for _, want := range []string{
-		`polyglot.Text{Type: "fakecfg2", FileName: "fake.cfg", Tool: "fake-tool", WorkDir: "", Verbs: []`,
+		`polyglot.Text{Type: "fakecfg2", FileName: "fake.cfg", Tool: "fake-tool", WorkDir: "", Shadow: []string(nil), Overlay: []string(nil), Verbs: []`,
 		`{Name: "apply", Args: []string{"apply", "{file}"}, Tool: "", Env: []string(nil), Effects: []string{"world"}, Result: ""}`,
 		`Source: "k = v\n"`,
 		`Effects: []string{"world"}}`,

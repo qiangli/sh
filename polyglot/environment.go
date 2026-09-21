@@ -92,6 +92,10 @@ type EnvironmentRequest struct {
 	Language string
 	Name     string
 	Environ  []string
+	// ModuleFile, for Go, is a manifest fence's materialized go.mod: the
+	// source's directory becomes the module root without a go.mod in it,
+	// the file being presented there through the worker build's overlay.
+	ModuleFile string
 }
 
 // EnvironmentPlan is the immutable, language-neutral resolution record. Its
@@ -119,6 +123,9 @@ type EnvironmentPlan struct {
 	// contents participate in Fingerprint. They are ordered by discovery.
 	ResolutionFiles []string
 	Fingerprint     string
+	// ModuleFile is the manifest fence's go.mod a Go fence builds against
+	// when the tree holds none; "" means the nearest go.mod of the tree.
+	ModuleFile string
 }
 
 // Clone returns an independently owned copy of p.
@@ -214,6 +221,11 @@ func DiscoverEnvironment(request EnvironmentRequest) (EnvironmentPlan, error) {
 	}
 
 	plan := EnvironmentPlan{Language: lang, Name: request.Name, Root: root, Dir: root, SourceDir: dir}
+	if lang == "go" && request.ModuleFile != "" {
+		// The manifest fence is the module: its root is the caller's
+		// directory, whatever go.mod the tree may hold further up.
+		plan.Root, plan.Dir, plan.ModuleFile = dir, dir, request.ModuleFile
+	}
 	for _, d := range dirs {
 		for _, name := range []string{"bashpp.yaml", "bashpp.json"} {
 			if file := canonicalExistingFile(filepath.Join(d, name)); file != "" {
@@ -433,10 +445,16 @@ var nativeProjectMetadata = []string{"CMakeLists.txt", "compile_commands.json", 
 var goProjectMetadata = []string{"go.mod", "go.sum", "go.work", "go.work.sum"}
 
 func discoverGoEnvironment(plan EnvironmentPlan, selected *environmentOverlay, env map[string]string) (EnvironmentPlan, error) {
-	if canonicalExistingFile(filepath.Join(plan.Root, "go.mod")) == "" {
-		return EnvironmentPlan{}, fmt.Errorf("polyglot: Go source fence requires a nearest go.mod")
+	if plan.ModuleFile != "" {
+		plan.Manifests = append(plan.Manifests, plan.ModuleFile)
+		plan.Explanation = append(plan.Explanation, "module from the gomod fence")
+	} else if canonicalExistingFile(filepath.Join(plan.Root, "go.mod")) == "" {
+		return EnvironmentPlan{}, fmt.Errorf("polyglot: Go source fence requires a nearest go.mod (or a ~~~gomod fence in the unit)")
 	}
 	for _, name := range goProjectMetadata {
+		if plan.ModuleFile != "" {
+			break
+		}
 		if file := canonicalExistingFile(filepath.Join(plan.Root, name)); file != "" {
 			if name == "go.sum" || name == "go.work.sum" {
 				plan.Locks = append(plan.Locks, file)

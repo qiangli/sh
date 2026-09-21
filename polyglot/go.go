@@ -100,17 +100,32 @@ func (g Go) AnalyzeArtifact(ctx context.Context, source string) ([]Export, strin
 			return nil, "", err
 		}
 	}
-	overlay, err := json.Marshal(map[string]any{"Replace": map[string]string{
+	replace := map[string]string{
 		moduleVirtual: moduleBacking,
 		workerVirtual: workerBacking,
-	}})
+	}
+	args := []string{"build", "-overlay=" + overlayFile, "-o", output, moduleVirtual, workerVirtual}
+	if g.Environment != nil && g.Environment.ModuleFile != "" {
+		// A gomod fence is the module: present it (and its go.sum) at the
+		// root and read/write the real files beside the fence.
+		modFile := g.Environment.ModuleFile
+		sumFile := strings.TrimSuffix(modFile, ".mod") + ".sum"
+		if _, err := os.Stat(sumFile); err != nil {
+			if err := os.WriteFile(sumFile, nil, 0o644); err != nil {
+				return nil, "", err
+			}
+		}
+		replace[filepath.Join(root, "go.mod")] = modFile
+		replace[filepath.Join(root, "go.sum")] = sumFile
+		args = append([]string{"build", "-overlay=" + overlayFile, "-modfile=" + modFile, "-o", output, moduleVirtual, workerVirtual}, args[len(args):]...)
+	}
+	overlay, err := json.Marshal(map[string]any{"Replace": replace})
 	if err != nil {
 		return nil, "", err
 	}
 	if err := os.WriteFile(overlayFile, overlay, 0o600); err != nil {
 		return nil, "", err
 	}
-	args := []string{"build", "-overlay=" + overlayFile, "-o", output, moduleVirtual, workerVirtual}
 	if g.Environment != nil && g.Environment.Manager == "bashy" {
 		args = append([]string{"go"}, args...)
 	}
