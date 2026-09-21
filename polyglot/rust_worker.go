@@ -175,6 +175,9 @@ mod __bpp {
             }),
         }
     }
+    fn envelope_error(code: &str, message: String) -> Value {
+        serde_json::json!({"code": code, "message": message})
+    }
     pub fn capture<F: FnOnce() -> Result<Value, String>>(seq: u64, call: F) -> (Result<Value, String>, String, String) {
         let (out, out_path, err, err_path) = match (temp(seq, "out"), temp(seq, "err")) {
             (Ok((out, out_path)), Ok((err, err_path))) => (out, out_path, err, err_path),
@@ -206,17 +209,17 @@ mod __bpp {
             }
             seq += 1;
             let response = match serde_json::from_str::<Request>(&line) {
-                Err(error) => serde_json::json!({"id": 0, "ok": false, "error": format!("invalid request: {}", error), "stdout": "", "stderr": ""}),
+                Err(error) => serde_json::json!({"id": 0, "ok": false, "error": envelope_error("RUST-EWORKER-REQUEST", format!("invalid request: {}", error)), "stdout": "", "stderr": ""}),
                 Ok(request) => match request.op.as_str() {
                     "load" => serde_json::json!({"id": request.id, "ok": true, "result": null, "stdout": "", "stderr": ""}),
                     "call" => {
                         let (result, out, err) = capture(seq, || dispatch(&request.name, &request.args));
                         match result {
                             Ok(value) => serde_json::json!({"id": request.id, "ok": true, "result": value, "stdout": out, "stderr": err}),
-                            Err(error) => serde_json::json!({"id": request.id, "ok": false, "error": error, "stdout": out, "stderr": err}),
+                            Err(message) => serde_json::json!({"id": request.id, "ok": false, "error": envelope_error("RUST-ECALL", message), "stdout": out, "stderr": err}),
                         }
                     }
-                    other => serde_json::json!({"id": request.id, "ok": false, "error": format!("unknown operation {}", other), "stdout": "", "stderr": ""}),
+                    other => serde_json::json!({"id": request.id, "ok": false, "error": envelope_error("RUST-EWORKER-OP", format!("unknown operation {}", other)), "stdout": "", "stderr": ""}),
                 },
             };
             let mut frame = String::new();

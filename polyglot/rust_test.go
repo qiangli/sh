@@ -61,6 +61,11 @@ pub fn checked(value: i64) -> Result<i64, String> {
 	}
 	if _, err := module.Call(context.Background(), "checked", int64(-1)); err == nil || !strings.Contains(err.Error(), "negative") {
 		t.Fatalf("checked error = %v", err)
+	} else {
+		detail, ok := ForeignErrorDetail(err)
+		if !ok || detail.Code != "RUST-ECALL" || detail.Message != "negative" {
+			t.Fatalf("structured Rust Result error = %#v, ok=%t", detail, ok)
+		}
 	}
 }
 
@@ -188,6 +193,11 @@ pub fn nap() { std::thread::sleep(std::time::Duration::from_secs(30)); }
 	}
 	if _, err := module.Call(ctx, "total", map[string]any{}); err == nil || !strings.Contains(err.Error(), "missing field `inner`") {
 		t.Fatalf("missing field error = %v", err)
+	} else {
+		detail, ok := ForeignErrorDetail(err)
+		if !ok || detail.Code != "RUST-ECALL" || !strings.Contains(detail.Message, "missing field `inner`") {
+			t.Fatalf("structured Rust serde error = %#v, ok=%t", detail, ok)
+		}
 	}
 	// Failure: Result errors, panics, and arity are call errors, never worker deaths.
 	if _, err := module.Call(ctx, "checked", int64(-1)); err == nil || !strings.Contains(err.Error(), "negative") {

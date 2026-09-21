@@ -204,6 +204,103 @@ type CallResult struct {
 	Stdout, Stderr string
 }
 
+// ErrorDetail is the neutral wire/detail shape for structured foreign worker
+// failures. It is deliberately not an error type and it is not tied to any
+// command-envelope package: callers that need a domain-specific envelope
+// should map this DTO at their own boundary. Workers may still send the legacy
+// plain string; decoding normalizes that form into Message while leaving Code
+// and Help empty.
+type ErrorDetail struct {
+	Code    string       `json:"code,omitempty"`
+	Message string       `json:"message,omitempty"`
+	Help    string       `json:"help,omitempty"`
+	Cause   *ErrorDetail `json:"cause,omitempty"`
+}
+
+// ForeignErrorDetail returns the structured detail carried by an error
+// returned from a foreign worker. This is the stable mapper seam for embedders:
+// a separate coreutils/weave run can convert the returned detail to its own
+// weavecli.EnvelopeError without making sh import coreutils or weave packages.
+func ForeignErrorDetail(err error) (*ErrorDetail, bool) {
+	var foreign *foreignError
+	if !errors.As(err, &foreign) {
+		return nil, false
+	}
+	detail := foreign.detail.clone()
+	return &detail, true
+}
+
+type foreignError struct {
+	detail ErrorDetail
+	cause  error
+}
+
+func (e *foreignError) Error() string {
+	if e == nil {
+		return ""
+	}
+	message := e.detail.Message
+	if message == "" {
+		message = e.detail.Code
+	}
+	if e.detail.Code != "" && e.detail.Message != "" {
+		message = e.detail.Code + ": " + e.detail.Message
+	}
+	if e.cause != nil {
+		cause := e.cause.Error()
+		if cause != "" {
+			message += ": " + cause
+		}
+	}
+	if message == "" {
+		return "foreign worker error"
+	}
+	return message
+}
+
+func (e *foreignError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.cause
+}
+
+func (d *ErrorDetail) UnmarshalJSON(data []byte) error {
+	if len(bytes.TrimSpace(data)) == 0 || bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+		*d = ErrorDetail{}
+		return nil
+	}
+	var legacy string
+	if err := json.Unmarshal(data, &legacy); err == nil {
+		*d = ErrorDetail{Message: legacy}
+		return nil
+	}
+	type errorDetail ErrorDetail
+	var structured errorDetail
+	if err := json.Unmarshal(data, &structured); err != nil {
+		return err
+	}
+	*d = ErrorDetail(structured)
+	return nil
+}
+
+func (d ErrorDetail) clone() ErrorDetail {
+	out := ErrorDetail{Code: d.Code, Message: d.Message, Help: d.Help}
+	if d.Cause != nil {
+		cause := d.Cause.clone()
+		out.Cause = &cause
+	}
+	return out
+}
+
+func (d ErrorDetail) err() error {
+	cause := error(nil)
+	if d.Cause != nil {
+		cause = d.Cause.err()
+	}
+	return &foreignError{detail: d.clone(), cause: cause}
+}
+
 // StringsToAny adapts a typed variadic shell boundary to Module.Call.
 func StringsToAny(values []string) []any {
 	result := make([]any, len(values))
@@ -429,7 +526,7 @@ func (m *Module) ensure(ctx context.Context) error {
 	}
 	if !response.OK {
 		m.kill()
-		return errors.New(response.Error)
+		return response.Error.err()
 	}
 	if response.ID != 0 {
 		m.kill()
@@ -582,7 +679,7 @@ func (m *Module) request(ctx context.Context, request map[string]any, annotation
 	result := CallResult{Stdout: m.pendingOut + response.Stdout, Stderr: m.pendingErr + response.Stderr}
 	m.pendingOut, m.pendingErr = "", ""
 	if !response.OK {
-		return result, errors.New(response.Error)
+		return result, response.Error.err()
 	}
 	decoded, decodeErr := m.decodeValue(response.Result)
 	if decodeErr != nil {
@@ -722,10 +819,28 @@ func (m *Module) kill() error {
 }
 
 type workerResponse struct {
-	ID                    uint64 `json:"id"`
-	OK                    bool   `json:"ok"`
-	Result                any    `json:"result"`
-	Error, Stdout, Stderr string
+	ID             uint64    `json:"id"`
+	OK             bool      `json:"ok"`
+	Result         any       `json:"result"`
+	Error          workerErr `json:"error"`
+	Stdout, Stderr string
+}
+
+type workerErr struct {
+	ErrorDetail
+	set bool
+}
+
+func (e *workerErr) UnmarshalJSON(data []byte) error {
+	e.set = !bytes.Equal(bytes.TrimSpace(data), []byte("null"))
+	return e.ErrorDetail.UnmarshalJSON(data)
+}
+
+func (e workerErr) err() error {
+	if !e.set {
+		return errors.New("foreign worker error")
+	}
+	return e.ErrorDetail.err()
 }
 
 func exchange(in io.Writer, out *bufio.Reader, request any, response *workerResponse, requireMarker bool) error {
@@ -931,8 +1046,22 @@ def enc(v):
 def attr(target,name):
     if name.startswith('_') and name!='__name__': raise AttributeError('private Python attribute: '+name)
     return getattr(target,name)
+def envelope_error(exc, trace=None, seen=None, depth=0):
+    if trace is None: trace=''.join(traceback.format_exception(type(exc),exc,exc.__traceback__))
+    if seen is None: seen=set()
+    if id(exc) in seen:
+        return {'code':type(exc).__name__,'message':'cycle in Python exception cause chain'}
+    if depth>=16:
+        return {'code':type(exc).__name__,'message':'Python exception cause chain truncated'}
+    seen.add(id(exc))
+    message=str(exc)
+    cause=getattr(exc,'__cause__',None) or (getattr(exc,'__context__',None) if not getattr(exc,'__suppress_context__',False) else None)
+    out={'code':type(exc).__name__,'message':message or type(exc).__name__,'help':trace}
+    if cause is not None: out['cause']=envelope_error(cause, None, seen, depth+1)
+    seen.remove(id(exc))
+    return out
 class CaptureFailure(Exception):
-    def __init__(self,trace,out,err): self.trace,self.out,self.err=trace,out,err
+    def __init__(self,error,out,err): self.error,self.out,self.err=error,out,err
 def capture(operation):
     sys.stdout.flush(); sys.stderr.flush()
     oldout,olderr=os.dup(1),os.dup(2)
@@ -941,8 +1070,8 @@ def capture(operation):
         try:
             os.dup2(out.fileno(),1); os.dup2(err.fileno(),2)
             value=operation()
-        except BaseException:
-            failure=traceback.format_exc()
+        except BaseException as exc:
+            failure=envelope_error(exc)
         finally:
             sys.stdout.flush(); sys.stderr.flush()
             os.dup2(oldout,1); os.dup2(olderr,2); os.close(oldout); os.close(olderr)
@@ -978,8 +1107,8 @@ for line in sys.stdin:
         else: raise ValueError('unknown operation')
         res={'id':rid,'ok':True,'result':enc(value),'stdout':captured_out,'stderr':captured_err}
     except CaptureFailure as failure:
-        res={'id':rid,'ok':False,'error':failure.trace,'stdout':failure.out,'stderr':failure.err}
-    except Exception:
-        res={'id':rid,'ok':False,'error':traceback.format_exc(),'stdout':captured_out,'stderr':captured_err}
+        res={'id':rid,'ok':False,'error':failure.error,'stdout':failure.out,'stderr':failure.err}
+    except Exception as exc:
+        res={'id':rid,'ok':False,'error':envelope_error(exc),'stdout':captured_out,'stderr':captured_err}
     protocol.write(json.dumps(res,separators=(',',':'))+'\n')
 `

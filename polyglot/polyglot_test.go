@@ -1,6 +1,8 @@
 package polyglot
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"os"
@@ -147,6 +149,11 @@ def hang():
 	}
 	if _, err := m.Call(context.Background(), "fail"); err == nil || !strings.Contains(err.Error(), "ValueError: boom") {
 		t.Fatalf("error = %v", err)
+	} else {
+		detail, ok := ForeignErrorDetail(err)
+		if !ok || detail.Code != "ValueError" || detail.Message != "boom" || !strings.Contains(detail.Help, "Traceback") {
+			t.Fatalf("structured Python error = %#v, ok=%t", detail, ok)
+		}
 	}
 	if _, err := m.Call(context.Background(), "lies"); err == nil || !strings.Contains(err.Error(), "violated its int result annotation") {
 		t.Fatalf("annotation error = %v", err)
@@ -159,6 +166,143 @@ def hang():
 	got, err = m.Call(context.Background(), "add", int64(4), int64(5))
 	if err != nil || got.Value != int64(9) {
 		t.Fatalf("restart = %#v, %v", got, err)
+	}
+}
+
+func TestWorkerEnvelopeErrorCompatibility(t *testing.T) {
+	// Source-derived contract fixture for Sprint 221 B4.
+	//
+	// CPython exception source: python/cpython
+	// 23116f998f6789d8c2fbe5ed5b8146854c8c2a4f, Lib/test/test_exceptions.py
+	// `testChainingAttrs` and Doc/library/exceptions.rst exception context,
+	// PSF-2.0.
+	//
+	// Rust source: serde-rs/json v1.0.151
+	// 8d25f3af9f94471a75a18f04da4ca4cdb3cb5f64, tests/test.rs
+	// `test_missing_nonoption_field` and Rust std Result documentation as
+	// shipped with rustc 1.93.1; MIT OR Apache-2.0 for serde_json, MIT OR
+	// Apache-2.0 for rust-lang/rust library docs.
+	tests := []struct {
+		name      string
+		frame     string
+		wantCode  string
+		wantText  string
+		wantHelp  string
+		wantCause string
+	}{
+		{
+			name:     "structured error",
+			frame:    `{"id":1,"ok":false,"error":{"code":"ValueError","message":"boom","help":"raise ValueError('boom')"},"stdout":"out\n","stderr":"err\n"}`,
+			wantCode: "ValueError", wantText: "ValueError: boom", wantHelp: "raise ValueError",
+		},
+		{
+			name:     "legacy string",
+			frame:    `{"id":1,"ok":false,"error":"plain boom"}`,
+			wantText: "plain boom",
+		},
+		{
+			name:     "missing fields",
+			frame:    `{"id":1,"ok":false,"error":{"code":"KeyError"}}`,
+			wantCode: "KeyError", wantText: "KeyError",
+		},
+		{
+			name:      "nested cause",
+			frame:     `{"id":1,"ok":false,"error":{"code":"RuntimeError","message":"outer","cause":{"code":"ValueError","message":"inner"}}}`,
+			wantCode:  "RuntimeError",
+			wantText:  "RuntimeError: outer: ValueError: inner",
+			wantCause: "ValueError",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input := bufio.NewReader(strings.NewReader(tt.frame + "\n"))
+			var written bytes.Buffer
+			var response workerResponse
+			if err := exchange(&written, input, map[string]any{"id": 1}, &response, false); err != nil {
+				t.Fatal(err)
+			}
+			err := response.Error.err()
+			if err == nil || err.Error() != tt.wantText {
+				t.Fatalf("error = %q, want %q", err, tt.wantText)
+			}
+			detail, ok := ForeignErrorDetail(err)
+			if !ok {
+				t.Fatalf("error does not expose structured detail: %T", err)
+			}
+			if detail.Code != tt.wantCode {
+				t.Fatalf("code = %q, want %q", detail.Code, tt.wantCode)
+			}
+			if tt.wantHelp != "" && !strings.Contains(detail.Help, tt.wantHelp) {
+				t.Fatalf("help = %q, want contains %q", detail.Help, tt.wantHelp)
+			}
+			if tt.wantCause != "" {
+				cause := errors.Unwrap(err)
+				causeDetail, ok := ForeignErrorDetail(cause)
+				if !ok || causeDetail.Code != tt.wantCause {
+					t.Fatalf("cause = %#v, ok=%t, want code %q", causeDetail, ok, tt.wantCause)
+				}
+			}
+		})
+	}
+}
+
+func TestWorkerEnvelopeTransportFailure(t *testing.T) {
+	var response workerResponse
+	err := exchange(&bytes.Buffer{}, bufio.NewReader(strings.NewReader("{not-json\n")), map[string]any{"id": 1}, &response, false)
+	if err == nil || !strings.Contains(err.Error(), "invalid worker response") {
+		t.Fatalf("transport error = %v", err)
+	}
+	if detail, ok := ForeignErrorDetail(err); ok {
+		t.Fatalf("transport failure became envelope error: %#v", detail)
+	}
+}
+
+func TestPythonNestedCauseStructuredError(t *testing.T) {
+	plan := pythonPlan(t, `
+def fail():
+    try:
+        raise ValueError("inner")
+    except ValueError as exc:
+        raise RuntimeError("outer") from exc
+`)
+	module := Start(plan, Python{})
+	defer module.Close()
+	_, err := module.Call(context.Background(), "fail")
+	detail, ok := ForeignErrorDetail(err)
+	if !ok || detail.Code != "RuntimeError" || detail.Cause == nil || detail.Cause.Code != "ValueError" {
+		t.Fatalf("nested Python error = %#v, ok=%t (%v)", detail, ok, err)
+	}
+}
+
+func TestPythonCauseSerializationIsBounded(t *testing.T) {
+	plan := pythonPlan(t, `
+def self_cycle():
+    err = ValueError("cycle")
+    err.__cause__ = err
+    raise err
+def deep_chain():
+    err = ValueError("root")
+    for i in range(40):
+        outer = RuntimeError("level %d" % i)
+        outer.__cause__ = err
+        err = outer
+    raise err
+`)
+	module := Start(plan, Python{})
+	defer module.Close()
+	for _, name := range []string{"self_cycle", "deep_chain"} {
+		_, err := module.Call(context.Background(), name)
+		detail, ok := ForeignErrorDetail(err)
+		if !ok {
+			t.Fatalf("%s detail = %#v, ok=%t, err=%v", name, detail, ok, err)
+		}
+		depth := 0
+		for d := detail; d != nil; d = d.Cause {
+			depth++
+			if depth > 18 {
+				t.Fatalf("%s cause chain was not bounded", name)
+			}
+		}
 	}
 }
 
