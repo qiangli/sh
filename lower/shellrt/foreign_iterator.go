@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"mvdan.cc/sh/v3/polyglot"
 	"sync"
 )
 
@@ -21,8 +20,11 @@ type ForeignIterator struct {
 	mu      sync.Mutex
 	Start   func(context.Context) (IteratorProcess, error)
 	Element string
-	Decode  func(context.Context, string, string) (polyglot.CallResult, error)
-	used    bool
+	// Decode is supplied by the shell backend. Keep these runtime declarations
+	// independent of foreign-worker packages so standalone transpilation never
+	// requires the user project to resolve the engine module.
+	Decode func(context.Context, string, string) (value any, stdout, stderr string, err error)
+	used   bool
 }
 
 // IteratorSequence owns the producer for exactly this range. A break invokes
@@ -52,13 +54,12 @@ func IteratorSequence(ctx context.Context, value any) func(func(any) bool) {
 			}
 		}()
 		for line := range process.Lines() {
-			frame, err := iterator.Decode(ctx, line, iterator.Element)
+			value, stdout, stderr, err := iterator.Decode(ctx, line, iterator.Element)
 			if err != nil {
 				panic(ValueAbort{Err: err})
 			}
-			fmt.Fprint(Stdout, frame.Stdout)
-			fmt.Fprint(Stderr, frame.Stderr)
-			value := frame.Value
+			fmt.Fprint(Stdout, stdout)
+			fmt.Fprint(Stderr, stderr)
 			if !yield(value) {
 				return
 			}
