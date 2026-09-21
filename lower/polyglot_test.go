@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"mvdan.cc/sh/v3/internal"
 	"mvdan.cc/sh/v3/interp"
 	"mvdan.cc/sh/v3/lower"
 	"mvdan.cc/sh/v3/syntax"
@@ -224,12 +225,8 @@ func TestPythonFenceUsesSourceEnvironmentPlan(t *testing.T) {
 		t.Skip("python3 unavailable")
 	}
 	root := t.TempDir()
-	launcher := filepath.Join(root, "planned-python")
-	body := "#!/bin/sh\nexport BASHPP_SELECTED_RUNTIME=yes\nexec " + strconv.Quote(python) + " \"$@\"\n"
-	if err := os.WriteFile(launcher, []byte(body), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "bashpp.yaml"), []byte("runtime: planned-python\n"), 0o644); err != nil {
+	launcher := internal.PythonTestLauncher(t, python, filepath.Join(root, "planned-python"), "yes")
+	if err := os.WriteFile(filepath.Join(root, "bashpp.yaml"), []byte("runtime: "+filepath.Base(launcher)+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	canonicalRoot, err := filepath.EvalSymlinks(root)
@@ -257,12 +254,8 @@ func TestPythonFenceEnvironmentUsesOrigin(t *testing.T) {
 		t.Skip("python3 unavailable")
 	}
 	root := t.TempDir()
-	launcher := filepath.Join(root, "origin-python")
-	body := "#!/bin/sh\nexec " + strconv.Quote(python) + " \"$@\"\n"
-	if err := os.WriteFile(launcher, []byte(body), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "bashpp.yaml"), []byte("runtime: origin-python\n"), 0o644); err != nil {
+	launcher := internal.PythonTestLauncher(t, python, filepath.Join(root, "origin-python"), "")
+	if err := os.WriteFile(filepath.Join(root, "bashpp.yaml"), []byte("runtime: "+filepath.Base(launcher)+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	origin := filepath.Join(root, "program.bpp")
@@ -331,6 +324,9 @@ func testForeignParityArtifactAt(t *testing.T, source, filename, nativePostlude 
 		t.Fatal(err)
 	}
 	binary := filepath.Join(dir, "program")
+	if runtime.GOOS == "windows" {
+		binary += ".exe"
+	}
 	buildArgs := append([]string{"build", "-mod=mod"}, buildFlags...)
 	buildArgs = append(buildArgs, "-o", binary, "generated.go")
 	cmd := exec.CommandContext(ctx, filepath.Join(runtime.GOROOT(), "bin", "go"), buildArgs...)

@@ -104,6 +104,9 @@ func executeBuildNormalized(t *testing.T, r compiledCase, normalize func(string)
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 	defer cancel()
 	binary := filepath.Join(dir, "program")
+	if runtime.GOOS == "windows" {
+		binary += ".exe"
+	}
 	args := append([]string{"build", "-mod=mod"}, flags...)
 	args = append(args, "-o", binary, "generated.go")
 	cmd := exec.CommandContext(ctx, filepath.Join(runtime.GOROOT(), "bin", "go"), args...)

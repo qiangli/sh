@@ -108,6 +108,9 @@ def kind(): return Thing
 		t.Fatal(err)
 	}
 	binary := filepath.Join(buildDir, "program")
+	if runtime.GOOS == "windows" {
+		binary += ".exe"
+	}
 	cmd := exec.Command(filepath.Join(runtime.GOROOT(), "bin", "go"), "build", "-mod=mod", "-o", binary, "generated.go")
 	cmd.Dir, cmd.Env = buildDir, append(os.Environ(), "GOWORK=off", "GOTOOLCHAIN=local")
 	if output, err := cmd.CombinedOutput(); err != nil {

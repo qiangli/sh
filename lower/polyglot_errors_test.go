@@ -67,6 +67,9 @@ func foreignOutcomes(t *testing.T, source string) (interpreted, native foreignOu
 		t.Fatal(err)
 	}
 	binary := filepath.Join(dir, "program")
+	if runtime.GOOS == "windows" {
+		binary += ".exe"
+	}
 	cmd := exec.CommandContext(ctx, filepath.Join(runtime.GOROOT(), "bin", "go"), "build", "-mod=mod", "-o", binary, "generated.go")
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "GOWORK=off", "GOTOOLCHAIN=local")
