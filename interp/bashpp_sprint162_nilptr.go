@@ -160,6 +160,13 @@ func (r *Runner) goSourceRangePointerArray(ctx context.Context, rng *syntax.Bash
 		}
 		return true
 	}
+	target, targetMeta, err = r.bashPPSliceArrayPointerValue(ptr, target, targetMeta)
+	if err != nil {
+		if err = r.goSourceRuntimeFault(err); !errors.Is(err, errBashPPScalarInterrupted) {
+			r.bashPPRangeError(rng, "%v", err)
+		}
+		return true
+	}
 	sequence, _ := target.([]any)
 	for i := 0; i < len(sequence); i++ {
 		var elemMeta *bashPPCollectionMeta

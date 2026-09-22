@@ -215,3 +215,31 @@ func main() { var buf []byte; p := Token(buf); p[0] = 1 }`
 	qt.Assert(t, qt.IsNotNil(err))
 	qt.Assert(t, qt.StringContains(stderr, "nil pointer dereference"))
 }
+
+// A slice-to-array pointer is an addressable view of the slice backing store,
+// not a detached array cell. Whole-array assignment must first snapshot the
+// right operand, then write through the view, including when the two views
+// overlap in either direction. Range over an array pointer likewise evaluates
+// the producing call once and reads the pointed-to elements.
+func TestS219ArrayPointerStorage(t *testing.T) {
+	src := `package main
+var calls int
+func array() *[5]int { calls++; return &[5]int{1, 2, 3, 4, 5} }
+func main() {
+	forward := []byte("0123456789")
+	*(*[6]byte)(forward[2:8]) = *(*[6]byte)(forward[0:6])
+	println(string(forward))
+
+	backward := []byte("0123456789")
+	*(*[6]byte)(backward[0:6]) = *(*[6]byte)(backward[2:8])
+	println(string(backward))
+
+	sum := 0
+	for _, value := range array() { sum += value }
+	println(sum, calls)
+}`
+	out, stderr, err := runGoSource(t, "s219-array-pointer-storage", src)
+	qt.Assert(t, qt.IsNil(err), qt.Commentf("stderr: %s", stderr))
+	qt.Assert(t, qt.Equals(out, ""))
+	qt.Assert(t, qt.Equals(stderr, "0101234589\n2345676789\n15 1\n"))
+}
