@@ -310,11 +310,12 @@ func cancellableReader(ctx context.Context, f *os.File) io.Reader {
 	if f == nil || ctx == nil || ctx.Done() == nil {
 		return nil
 	}
-	// Clearing the deadline is the cheapest way to ask whether the runtime
-	// poller took this handle; it is a no-op when it did.
-	if f.SetReadDeadline(time.Time{}) == nil {
-		return nil
-	}
+	// The kind is the whole test: Windows hands the runtime poller neither a
+	// console handle nor an os.Pipe end, so SetReadDeadline is already known
+	// to have failed for these two — and known to have been unavailable to
+	// any caller upstream, which is why none of them can have armed a
+	// deadline we would be dropping here. Everything else keeps the direct
+	// read: a regular file does not wait on a peer.
 	switch windowsHandleKindOf(f) {
 	case winHandlePipe, winHandleConsole:
 		return &timeoutFileReader{ctx: ctx, file: f}

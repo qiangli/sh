@@ -50,10 +50,6 @@ func TestWindowsTimeoutFileReaderHonoursDeadline(t *testing.T) {
 	defer pr.Close()
 	defer pw.Close()
 
-	if pr.SetReadDeadline(time.Now().Add(time.Second)) == nil {
-		t.Skip("this Go runtime polls anonymous pipes; the fallback is unused")
-	}
-
 	r := &timeoutFileReader{
 		ctx:      context.Background(),
 		file:     pr,
@@ -131,9 +127,6 @@ func TestWindowsCancellableReaderCoversPipes(t *testing.T) {
 	defer pr.Close()
 	defer pw.Close()
 
-	if pr.SetReadDeadline(time.Time{}) == nil {
-		t.Skip("this Go runtime polls anonymous pipes; the fallback is unused")
-	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	if cancellableReader(ctx, pr) == nil {
