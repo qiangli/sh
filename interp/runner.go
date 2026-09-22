@@ -396,6 +396,13 @@ func (r *Runner) updateExpandOpts() {
 			s = shellPathJoinAbs(r.Dir, s)
 			return r.access(r.ectx, s, access_X_OK) == nil
 		}
+		// `**` must stop at a symlinked directory. The globber only has
+		// the shell's spelling of the path, which os.Lstat cannot open on
+		// Windows, so the stat goes through the runner's handler like
+		// every other one.
+		r.ecfg.Lstat = func(s string) (fs.FileInfo, error) {
+			return r.lstat(r.ectx, s)
+		}
 	}
 	r.ecfg.GlobStar = r.opts[optGlobStar]
 	if opt, _ := r.bashOptByName("globskipdots"); opt != nil {

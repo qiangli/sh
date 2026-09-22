@@ -61,12 +61,16 @@ func TestLookPathDirWindowsMode(t *testing.T) {
 			wantExts: []string{".exe", ".bat"},
 		},
 		{
+			// Bash spells a hit through an empty (or ".") PATH element
+			// "./name" on every platform — type5.sub sets PATH= and wants
+			// `type -p e` to print "./e". filepath.Join would clean the
+			// "./" away and leave a bare, slashless name.
 			name:     "empty PATH entry searches dot",
 			env:      expand.ListEnviron("PATH=;C:\\bin"),
 			file:     `rpc-server`,
-			found:    `.\rpc-server.exe`,
-			want:     `.\rpc-server.exe`,
-			wantTry:  []string{`.\rpc-server`},
+			found:    `./rpc-server.exe`,
+			want:     `./rpc-server.exe`,
+			wantTry:  []string{`./rpc-server`},
 			wantExts: []string{".com", ".exe", ".bat", ".cmd"},
 		},
 	}
