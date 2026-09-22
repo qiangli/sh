@@ -184,9 +184,19 @@ func (r *Runner) goSourceStaticExprType(expr syntax.BashPPExpr) (syntax.BashPPTy
 		if x.CalleeExpr == nil && x.FuncLit == nil && len(x.Fun) == 1 && r.bashPPGoSourceFile != nil {
 			var result syntax.BashPPTypeExpr
 			syntax.Walk(r.bashPPGoSourceFile, func(node syntax.Node) bool {
+				// Package function declarations cannot occur inside function
+				// bodies or literals. In particular, walking a large aggregate
+				// initializer for every builtin call makes static lookup costly.
+				switch node.(type) {
+				case *syntax.BashPPCompositeLit, *syntax.BashPPFuncLit:
+					return false
+				}
 				decl, ok := node.(*syntax.BashPPFuncDecl)
-				if !ok || decl.Receiver != nil || decl.Name.Value != x.Fun[0].Value {
+				if !ok {
 					return result == nil
+				}
+				if decl.Receiver != nil || decl.Name.Value != x.Fun[0].Value {
+					return false
 				}
 				results := bashppResultTypeExprs(decl.Results)
 				if len(results) == 1 {
