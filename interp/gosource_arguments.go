@@ -111,7 +111,7 @@ func goSourceRoundedFloatArgText(value constant.Value, typ string) string {
 }
 
 func (r *Runner) goSourceBuiltinResult(call *syntax.BashPPCall) (*bashPPCell, bool, error) {
-	if !r.bashPPGoSource || call.CalleeExpr != nil {
+	if !r.bashPPEnabled() || r.PosixMode() || call.CalleeExpr != nil {
 		return nil, false, nil
 	}
 	if cell, handled, err := r.goSourceComplexBuiltinCell(call); handled {

@@ -401,7 +401,7 @@ func bashPPNativeReadValue(value bashPPBridgeValue) (any, error) {
 // Only reads whose base is dependency-owned are claimed here; method values
 // and interpreter collections keep their existing paths.
 func (r *Runner) bashPPNativeShortDecl(d *syntax.BashPPShortDecl) bool {
-	if !r.bashPPGoSource || d.Expr == nil || len(d.Lhs) != 1 || r.bashPPScope == nil {
+	if !r.bashPPEnabled() || r.PosixMode() || d.Expr == nil || len(d.Lhs) != 1 || r.bashPPScope == nil {
 		return false
 	}
 	switch x := d.Expr.(type) {

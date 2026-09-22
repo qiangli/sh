@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"go/constant"
 	"strconv"
 	"strings"
 
@@ -619,6 +620,12 @@ func (r *Runner) bashPPShortDeclImported(ctx context.Context, d *syntax.BashPPSh
 		r.exit = exitStatus{code: 2}
 		return true
 	}
+	// Mixed-mode imported calls run in a dependency session too. Besides
+	// avoiding source-level references to interpreter locals, this preserves
+	// the concrete Go type of structured results for a following selector.
+	if r.bashPPTools.bridge == nil {
+		r.bashPPTools.bridge = &bashPPNativeSession{}
+	}
 	req, err := r.bashPPEvalRequest()
 	if err == nil {
 		req.Results = len(d.Lhs)
@@ -628,7 +635,7 @@ func (r *Runner) bashPPShortDeclImported(ctx context.Context, d *syntax.BashPPSh
 		}
 		req.Args = make([]string, len(d.Call.Args))
 		for i, arg := range d.Call.Args {
-			req.Args[i] = bashPPWordSource(arg)
+			req.Args[i] = r.bashPPMixedImportArg(arg)
 		}
 		var values []any
 		values, err = evaluator.Values(ctx, req)
@@ -640,6 +647,9 @@ func (r *Runner) bashPPShortDeclImported(ctx context.Context, d *syntax.BashPPSh
 					if lhs.Value == "_" {
 						continue
 					}
+					if _, native := values[i].(bashPPBridgeValue); native {
+						continue
+					}
 					if validateErr := expand.ValidObject(values[i]); validateErr != nil {
 						err = validateErr
 						break
@@ -649,6 +659,10 @@ func (r *Runner) bashPPShortDeclImported(ctx context.Context, d *syntax.BashPPSh
 			if err == nil {
 				for i, lhs := range d.Lhs {
 					if lhs.Value == "_" {
+						continue
+					}
+					if native, ok := values[i].(bashPPBridgeValue); ok {
+						r.bashPPBindNativeValue(lhs.Value, native)
 						continue
 					}
 					r.bashPPDeclareName(lhs.Value, expand.NewObject(values[i]))
@@ -663,4 +677,22 @@ func (r *Runner) bashPPShortDeclImported(ctx context.Context, d *syntax.BashPPSh
 		r.exit = exitStatus{code: 2}
 	}
 	return true
+}
+
+// bashPPMixedImportArg turns a bare interpreter scalar into a Go literal for
+// the dependency helper. Other expressions retain their source spelling, so
+// unsupported or undefined operands still receive Go's ordinary diagnostic.
+func (r *Runner) bashPPMixedImportArg(arg *syntax.Word) string {
+	name := bashPPWordSource(arg)
+	if !syntax.BashPPValidIdent(name) || r.bashPPScope == nil {
+		return name
+	}
+	cell := r.bashPPScope.lookup(name)
+	if cell == nil || cell.vr.Kind != expand.String || cell.interfaceValue != nil || cell.pointer {
+		return name
+	}
+	if cell.scalarKind == constant.String {
+		return strconv.Quote(cell.vr.Str)
+	}
+	return cell.vr.Str
 }
