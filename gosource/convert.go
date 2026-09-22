@@ -1043,6 +1043,13 @@ func (c *converter) constAsWrittenIn(e ast.Expr, typ *types.Basic) bool {
 	if !evident {
 		return false
 	}
+	// The scalar carrier stores rune literals as constant.Int too. Their
+	// written syntax cannot preserve default int32 identity across a native
+	// argument boundary. Keep the checker's contextual conversion; inner
+	// untyped expressions still retain arbitrary-precision constant values.
+	if kind == types.UntypedRune {
+		return false
+	}
 	if types.Identical(types.Default(types.Typ[kind]), typ) {
 		return true
 	}

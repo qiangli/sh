@@ -79,6 +79,22 @@ const f1 = 1
 
 func main() { fmt.Println(p0, p1, p0 == 0, p1 == 0) }
 `,
+		"rune_constant_defaulting": `package main
+import "fmt"
+const (
+ a = 'a' + iota
+ b
+)
+const laterRune = forwardRune
+const forwardRune = '界'
+const hugeRune = 'a' + 1<<100
+const integer = 97
+func main() {
+ fmt.Printf("%T %T %T %T %T\n", '世', a, b, laterRune, hugeRune>>100)
+ fmt.Println(a, b, laterRune, hugeRune>>100)
+ fmt.Printf("%T %T\n", integer, 'a'+0.5)
+}
+`,
 		"negative_folded_typed_constants": `package main
 
 import "fmt"
