@@ -870,6 +870,18 @@ func (r *Runner) bashPPEvalElement(expr syntax.BashPPExpr, expected syntax.BashP
 	if err != nil {
 		return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-ELEMENT: %v", err)
 	}
+	// go/constant cannot represent NaN or infinity. They travel through scalar
+	// evaluation in the side carrier, so collection keys and elements must use
+	// that runtime value instead of the carrier's placeholder zero. In
+	// particular, each NaN map insertion is a distinct key and a NaN lookup
+	// never finds an existing entry.
+	if scalar.hasNonFinite {
+		value := r.bashPPContextualCollectionValue(scalar.nonFinite, expected)
+		if err := r.bashPPCheckCollectionValue(value, expected); err != nil {
+			return nil, nil, err
+		}
+		return value, nil, nil
+	}
 	value := bashPPScalarAny(r.bashPPRepresentableScalar(scalar, expected).value)
 	value = r.bashPPContextualCollectionValue(value, expected)
 	if err := r.bashPPCheckCollectionValue(value, expected); err != nil {
