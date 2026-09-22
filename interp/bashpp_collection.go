@@ -1076,12 +1076,19 @@ func bashPPCollectionIntegerText(typ, text string) bool {
 // integer type it is built on, following named-type declarations. It reports
 // false for any type whose underlying type is not an integer.
 func (r *Runner) bashPPUnderlyingIntegerName(name string) (string, bool) {
+	seen := make(map[string]bool)
 	for {
 		decl, found := r.bashPPTypes[name]
 		if !found {
 			break
 		}
-		name = strings.TrimPrefix(decl.underlying, "*")
+		if seen[name] {
+			return "", false
+		}
+		seen[name] = true
+		// A pointer to an integer is not an integer carrier. In particular,
+		// peeling * from the legal recursive type Peano *Peano loops forever.
+		name = decl.underlying
 	}
 	if bashPPIntegerType(name) {
 		return name, true
