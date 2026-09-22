@@ -7845,6 +7845,9 @@ func splitPathOperand(path string) []string {
 }
 
 func cdStatErrorReason(err error) string {
+	if msg, ok := posixErrorText(err); ok {
+		return msg
+	}
 	if errors.Is(err, fs.ErrNotExist) {
 		return "No such file or directory"
 	}

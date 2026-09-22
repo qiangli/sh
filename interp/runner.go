@@ -4471,6 +4471,7 @@ func (r *Runner) bashErrPrefixLine(line int) string {
 	if name == "" {
 		name = "bash"
 	}
+	name = diagnosticShellName(name)
 	// When executing a multi-stmt alias body the AST positions are
 	// from the alias-body parse (line N within the body), not from
 	// the call site in the script. r.aliasLineOverride is set by the
@@ -4497,6 +4498,9 @@ func bashOSError(err error) string {
 }
 
 func pathErrReason(err error) string {
+	if msg, ok := posixErrorText(err); ok {
+		return msg
+	}
 	var pe *os.PathError
 	msg := err.Error()
 	if errors.As(err, &pe) {
