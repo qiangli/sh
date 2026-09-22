@@ -20,7 +20,7 @@ func goSourceNativeValueCell(value bashPPBridgeValue) *bashPPCell {
 			cell.interfaceValue = &bashPPInterfaceValue{
 				nilIface: value.Kind == "nil",
 				cell:     payload,
-				dynamic:  &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.Type}},
+				dynamic:  bashPPBridgeDynamicType(value.Type),
 			}
 		}
 		return cell
@@ -28,12 +28,29 @@ func goSourceNativeValueCell(value bashPPBridgeValue) *bashPPCell {
 	cell := &bashPPCell{vr: expand.NewObject(&value), typeName: value.Type}
 	if value.Interface != "" {
 		cell.declType = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.Interface}}
-		payload := &bashPPCell{vr: expand.NewObject(&value), typeName: value.Type}
+		dynamic := bashPPBridgeDynamicType(value.Type)
+		payload := &bashPPCell{vr: expand.NewObject(&value), typeName: value.Type, declType: dynamic}
 		cell.interfaceValue = &bashPPInterfaceValue{
 			nilIface: value.Kind == "nil",
 			cell:     payload,
-			dynamic:  &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.Type}},
+			dynamic:  dynamic,
 		}
+	}
+	return cell
+}
+
+func (r *Runner) goSourceNativeValueCell(value bashPPBridgeValue) *bashPPCell {
+	cell := goSourceNativeValueCell(value)
+	if cell.interfaceValue == nil {
+		return cell
+	}
+	dynamic, ok := cell.interfaceValue.dynamic.(*syntax.BashPPCollectionType)
+	if !ok || dynamic.Kind != "array" {
+		return cell
+	}
+	inner, meta, materialized, err := r.goSourceNativeSequenceContents(&value, dynamic)
+	if materialized && err == nil {
+		bashPPStoreCellValue(cell.interfaceValue.cell, inner, meta)
 	}
 	return cell
 }
@@ -141,7 +158,7 @@ func (r *Runner) goSourceValueCells(expr syntax.BashPPExpr, spread bool) ([]*bas
 			}
 			cells := make([]*bashPPCell, len(values))
 			for i, value := range values {
-				cells[i] = goSourceNativeValueCell(value)
+				cells[i] = r.goSourceNativeValueCell(value)
 			}
 			return cells, nil
 		}
@@ -175,7 +192,7 @@ func (r *Runner) goSourceValueCells(expr syntax.BashPPExpr, spread bool) ([]*bas
 		if err != nil {
 			return nil, err
 		}
-		return one(goSourceNativeValueCell(value), nil)
+		return one(r.goSourceNativeValueCell(value), nil)
 	}
 	v, err := r.bashPPEvalScalarExpr(expr)
 	if err != nil {
@@ -323,7 +340,7 @@ func (r *Runner) goSourceInvokeNative(ctx context.Context, fn *bashPPFunc, args 
 	results := make([]string, len(values))
 	r.bashPPResultCells = make([]*bashPPCell, len(values))
 	for i, value := range values {
-		cell := goSourceNativeValueCell(value)
+		cell := r.goSourceNativeValueCell(value)
 		r.bashPPResultCells[i] = cell
 		results[i] = cell.vr.String()
 	}
