@@ -617,7 +617,7 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 						code = 0
 					case *exec.ExitError:
 						code = waitErr.ExitCode()
-						if status, ok := waitErr.Sys().(waitStatus); ok && status.Signaled() {
+						if status, ok := execWaitStatus(&cmd, waitErr); ok && status.Signaled() {
 							code = 128 + int(status.Signal())
 						}
 					}
@@ -638,10 +638,10 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 		}
 		switch err := err.(type) {
 		case *exec.ExitError:
-			// Windows and Plan9 do not have support for [syscall.WaitStatus]
-			// with methods like Signaled and Signal, so for those, [waitStatus] is a no-op.
-			// Note: [waitStatus] is an alias [syscall.WaitStatus]
-			if status, ok := err.Sys().(waitStatus); ok && status.Signaled() {
+			// execWaitStatus is the kernel wait status on Unix; on Windows it
+			// decodes the bashy signal marker (waitstatus_windows.go) and on
+			// Plan9 it never reports a signal.
+			if status, ok := execWaitStatus(&cmd, err); ok && status.Signaled() {
 				if proxyReplace {
 					if _, standalone := hc.runner.sigReset.(OSSignalResetter); standalone {
 						return relayExecReplacementSignal(status.Signal())
