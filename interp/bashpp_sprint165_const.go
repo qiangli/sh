@@ -146,13 +146,42 @@ func (r *Runner) goSourceStaticExprType(expr syntax.BashPPExpr) (syntax.BashPPTy
 	case *syntax.BashPPFuncLit:
 		return &syntax.BashPPFuncType{Params: x.Params, Results: x.Results}, true
 	case *syntax.BashPPCall:
-		if fn, ok := r.bashPPLookupFunc(x); ok {
-			results := bashppResultTypeExprs(fn.results())
-			if len(results) == 1 {
-				return results[0], true
+		// Static inspection must not resolve a receiver/computed callee: the
+		// invocation resolver may evaluate expressions or return native and
+		// builtin callables without a source declaration or literal.
+		var fields []*syntax.BashPPField
+		if x.FuncLit != nil {
+			fields = x.FuncLit.Results
+		} else if x.CalleeExpr != nil {
+			if typ, ok := r.goSourceStaticExprType(x.CalleeExpr); ok {
+				if signature, ok := r.bashPPUnderlyingType(typ).(*syntax.BashPPFuncType); ok {
+					fields = signature.Results
+				}
+			}
+		} else if len(x.Fun) == 1 {
+			var fn *bashPPFunc
+			if r.bashPPScope != nil {
+				if cell := r.bashPPScope.lookup(x.Fun[0].Value); cell != nil {
+					if signature, ok := r.bashPPUnderlyingType(cell.declType).(*syntax.BashPPFuncType); ok {
+						fields = signature.Results
+					} else {
+						fn, _ = r.bashPPClosure(cell.vr.Str)
+					}
+					if fields == nil && (fn == nil || fn.decl == nil && fn.lit == nil) {
+						return nil, false
+					}
+				} else {
+					fn = r.bashPPFuncs[x.Fun[0].Value]
+				}
+			}
+			if fn != nil && (fn.decl != nil || fn.lit != nil) {
+				fields = fn.results()
 			}
 		}
-		if len(x.Fun) == 1 && r.bashPPGoSourceFile != nil {
+		if results := bashppResultTypeExprs(fields); len(results) == 1 {
+			return results[0], true
+		}
+		if x.CalleeExpr == nil && x.FuncLit == nil && len(x.Fun) == 1 && r.bashPPGoSourceFile != nil {
 			var result syntax.BashPPTypeExpr
 			syntax.Walk(r.bashPPGoSourceFile, func(node syntax.Node) bool {
 				decl, ok := node.(*syntax.BashPPFuncDecl)
