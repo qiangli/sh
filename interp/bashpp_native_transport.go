@@ -297,7 +297,39 @@ func requestCallbackCapable(req bashPPEvalRequest, q bashPPBridgeRequest) bool {
 	if requestHasCallbacks(req, q) {
 		return true
 	}
+	if reflectValueCall(q) && localMethodsMirrored(req) {
+		return true
+	}
 	return req.Bridge != nil && req.Bridge.retainedCallbacks()
+}
+
+// reflectValueCall reports a reflect.Value.Call or CallSlice request. The
+// callee inside the Value is opaque to the transport — a Method(i).Func or
+// MethodByName result is a plain reflect.Value handle, and its []reflect.Value
+// arguments are handles too, so nothing in the request spells a local type.
+// When the program mirrors any local method, that callee may be one, and the
+// call re-enters the interpreter synchronously while this request is parked:
+// the request must own its callbacks, exactly as a bare call of a func(main.M)
+// handle does through synchronousFunctionCallback.
+func reflectValueCall(q bashPPBridgeRequest) bool {
+	if q.Op != "call" || q.Receiver == nil || q.Receiver.Kind != "handle" {
+		return false
+	}
+	if q.Selector != "Call" && q.Selector != "CallSlice" {
+		return false
+	}
+	return strings.TrimPrefix(q.Receiver.NativeType, "*") == "reflect.Value" || strings.TrimPrefix(q.Receiver.Type, "*") == "reflect.Value"
+}
+
+// localMethodsMirrored reports whether the helper mirrors any original method
+// at all; without one no dependency call can reach an original body.
+func localMethodsMirrored(req bashPPEvalRequest) bool {
+	for _, typ := range req.LocalTypes {
+		if len(typ.Methods) > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // Only requests carrying a local interface callback acquire the gate. Native

@@ -120,6 +120,70 @@ func nativeSliceRetainsStorage(name string) bool {
 // symbols; the generic slices.Sort is not a reflectable symbol, so it shares
 // this mutation writeback but has its reordering computed interpreter-side by
 // nativeSliceGenericHelper before the request would reach the dependency.
+// fmtReachesCallbacks reports whether a fmt formatting walk over the request's
+// transported values can invoke an original body: a value carrying retained
+// callbacks, or a local type mirroring one of the formatting protocol methods
+// fmt looks up. Every local type is consulted, not only the ones the argument
+// spellings name — an embedded local type's protocol method is promoted onto
+// its outer type in the helper exactly as in Go. A method the mirror omitted
+// counts too: fmt then formats the value raw, and refusing keeps that
+// divergence from silently printing.
+func fmtReachesCallbacks(req bashPPEvalRequest, q bashPPBridgeRequest) bool {
+	var retained func(bashPPBridgeValue) bool
+	retained = func(v bashPPBridgeValue) bool {
+		if v.Callbacks {
+			return true
+		}
+		for _, c := range v.Elements {
+			if retained(c) {
+				return true
+			}
+		}
+		for _, c := range v.Fields {
+			if retained(c) {
+				return true
+			}
+		}
+		for _, e := range v.Entries {
+			if retained(e.Key) || retained(e.Value) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, v := range q.Args {
+		if retained(v) {
+			return true
+		}
+	}
+	if q.Receiver != nil && retained(*q.Receiver) {
+		return true
+	}
+	for _, typ := range req.LocalTypes {
+		for _, m := range typ.Methods {
+			if fmtProtocolMethod(m.Name) {
+				return true
+			}
+		}
+		for _, name := range typ.OmittedMethods {
+			if fmtProtocolMethod(name) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// fmtProtocolMethod names the methods fmt's verbs look up on an operand:
+// fmt.Formatter, fmt.GoStringer, error and fmt.Stringer.
+func fmtProtocolMethod(name string) bool {
+	switch name {
+	case "Format", "GoString", "Error", "String":
+		return true
+	}
+	return false
+}
+
 func nativeSliceMutatingIndex(name string) int {
 	switch name {
 	case "sort.Ints", "sort.Strings", "sort.Float64s", "slices.Sort",
@@ -190,9 +254,18 @@ func prepareNativeSliceBuffers(req bashPPEvalRequest, q *bashPPBridgeRequest) er
 	// anywhere, and a read-only emitter, which walks the transported tree once
 	// and allocates its own output. The latter is the same footing fmt's
 	// formatting entries already stand on, and they are in that set.
+	//
+	// A direct original slice under fmt is the one read-only case that stays
+	// refused: a formatting protocol method the walk invokes could write the
+	// interpreter's storage while fmt is still reading its decoded copy, and
+	// the copy would then print stale. That hazard needs a callback fmt can
+	// actually reach — String, Error, Format or GoString. A local type whose
+	// mirrored methods all lie outside that protocol (a generic set type's
+	// Equal, say) never re-enters the interpreter from a format walk, so its
+	// slices print on the same footing as any other read-only emitter.
 	if callable := nativeSliceCallable(req, *q); requestHasCallbacks(req, *q) &&
 		!goSourceInterpretedCallable(callable) &&
-		(!nativeSliceReadOnly(callable) || hasDirectSlice && strings.HasPrefix(callable, "fmt.")) {
+		(!nativeSliceReadOnly(callable) || hasDirectSlice && strings.HasPrefix(callable, "fmt.") && fmtReachesCallbacks(req, *q)) {
 		return fmt.Errorf("gosource: original callback with copied slice references is unsupported")
 	}
 	if nativeSliceCallable(req, *q) == "*text/template.Template.Execute" {
