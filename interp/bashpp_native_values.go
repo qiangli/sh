@@ -167,6 +167,7 @@ func (r *Runner) bashPPPrepareNativeCall(ctx context.Context, call *syntax.BashP
 		if source, ok := r.bashPPGoSourceFile.SourceAt(call.Pos()); ok {
 			q.SourceFile = source.Name
 			q.SourceLine = int(call.Pos().Line())
+			q.sourceProgram = source.PackagePath == ""
 		}
 	}
 	if selector, ok := call.CalleeExpr.(*syntax.BashPPSelectorExpr); ok {
@@ -257,6 +258,8 @@ func (r *Runner) bashPPPrepareNativeCall(ctx context.Context, call *syntax.BashP
 		}
 		q.Args = append(q.Args, value)
 	}
+	q.argCells = r.bashPPNativeArgCells(call.ArgExprs, q.Args)
+	q.transferProof = call.ExclusiveSliceArgs
 	return q, nil
 }
 func (r *Runner) bashPPBridgeScalar(expr syntax.BashPPExpr) (bashPPScalar, bool, error) {

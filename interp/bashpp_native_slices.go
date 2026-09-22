@@ -263,9 +263,17 @@ func prepareNativeSliceBuffers(req bashPPEvalRequest, q *bashPPBridgeRequest) er
 	// mirrored methods all lie outside that protocol (a generic set type's
 	// Equal, say) never re-enters the interpreter from a format walk, so its
 	// slices print on the same footing as any other read-only emitter.
+	//
+	// A callee that may RETAIN the storage past the call is admitted only by
+	// an exclusive transfer (bashpp_native_transfer.go): the decoded slice
+	// then is the storage of record and the interpreter's binding is rebound
+	// to it, so nothing is copied for the callee to hold.
 	if callable := nativeSliceCallable(req, *q); requestHasCallbacks(req, *q) &&
 		!goSourceInterpretedCallable(callable) &&
 		(!nativeSliceReadOnly(callable) || hasDirectSlice && strings.HasPrefix(callable, "fmt.") && fmtReachesCallbacks(req, *q)) {
+		if !nativeSliceReadOnly(callable) && nativeSliceTransferable(req, q) {
+			return nil
+		}
 		return fmt.Errorf("gosource: original callback with copied slice references is unsupported")
 	}
 	if nativeSliceCallable(req, *q) == "*text/template.Template.Execute" {

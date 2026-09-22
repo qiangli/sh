@@ -230,6 +230,14 @@ func synchronousFunctionCallback(req bashPPEvalRequest, q bashPPBridgeRequest) b
 		if q.Selector == "Run" && (q.Receiver.NativeType == "testing.T" || q.Receiver.NativeType == "*testing.T") {
 			return true
 		}
+		// M.Run is the scheduler testing.Main already stands on: Main is
+		// MainStart(...).Run(), and Run returns its exit code only after every
+		// test, benchmark, fuzz target and example it scheduled has completed.
+		// The M handle itself is only ever minted by this session from a
+		// MainStart that carried the callbacks it retains.
+		if q.Selector == "Run" && (q.Receiver.NativeType == "testing.M" || q.Receiver.NativeType == "*testing.M") {
+			return true
+		}
 	}
 	if path == "" {
 		alias, name, ok := strings.Cut(q.Selector, ".")
