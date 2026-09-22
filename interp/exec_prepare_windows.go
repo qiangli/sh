@@ -10,12 +10,15 @@ import (
 )
 
 func preparePlatformExec(dir, execPath, diagnosticPath string, args []string) (string, []string, string) {
-	data, err := os.ReadFile(diagnosticPath)
+	data, err := readShebangProbe(diagnosticPath)
 	if err != nil {
 		return execPath, args, ""
 	}
 	interp, optarg, ok := parseShebang(data)
 	if !ok {
+		return execPath, args, ""
+	}
+	if strings.ContainsAny(interp, "\x00") {
 		return execPath, args, ""
 	}
 	resolved := interp

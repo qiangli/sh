@@ -779,7 +779,7 @@ func setExecEnvValue(env []string, name, value string) []string {
 }
 
 func missingShebangInterpreter(path string) (string, bool) {
-	data, err := os.ReadFile(path)
+	data, err := readShebangProbe(path)
 	if err != nil {
 		return "", false
 	}

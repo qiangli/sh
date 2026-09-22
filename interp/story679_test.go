@@ -17,12 +17,16 @@ func TestStory679ShebangParser(t *testing.T) {
 		{"#!/usr/bin/env bash\n", "/usr/bin/env", "bash"},
 		{"#!/d/a/bash.exe -x\n", "/d/a/bash.exe", "-x"},
 		{"#! /bin/sh\r\n", "/bin/sh", ""},
+		{"#!/usr/bin/env python -u  \n", "/usr/bin/env", "python -u"},
 	}
 	for _, tt := range tests {
 		interp, arg, ok := parseShebang([]byte(tt.line))
 		if !ok || interp != tt.interp || arg != tt.arg {
 			t.Errorf("parseShebang(%q) = %q, %q, %v", tt.line, interp, arg, ok)
 		}
+	}
+	if _, _, ok := parseShebang([]byte("#!\n")); ok {
+		t.Error("an empty shebang line names no interpreter")
 	}
 }
 
