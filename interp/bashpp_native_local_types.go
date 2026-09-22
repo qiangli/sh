@@ -108,10 +108,9 @@ type bashPPLocalTypeCache struct {
 // materialised type namespace is fixed for the life of that session.
 //
 // Package declarations, aliases, uniquely named local declarations, and
-// anonymous shapes retain their actual Go identity. A reused local spelling
-// is omitted: the current runtime has no lexical type namespace, so registering
-// either declaration would conflate distinct Go types. Shapes which cannot be
-// expressed faithfully remain unregistered.
+// anonymous shapes retain their actual Go identity. Reused local names are
+// registered by lexical declaration identity, including inside anonymous shapes.
+// Shapes which cannot be expressed faithfully remain unregistered.
 func (r *Runner) bashPPLocalTypeDescriptors() []bashPPLocalType {
 	if !r.bashPPGoSource || r.bashPPGoSourceFile == nil {
 		return nil
@@ -297,7 +296,9 @@ func (r *Runner) bashPPBuildLocalTypeDescriptors() ([]bashPPLocalType, map[strin
 	// defined types. Existing typed codecs provide legal private field access.
 	shapes := map[string]syntax.BashPPTypeExpr{}
 	for _, shape := range anonymous {
-		shapes[bashPPBridgeTypeText(shape)] = shape
+		// Use the same scoped spelling as value transport and descriptor source.
+		// Two identical-looking shapes may contain distinct local named types.
+		shapes[bashPPBridgeTypeTextIn(shape, resolveScoped)] = shape
 	}
 	keys := make([]string, 0, len(shapes))
 	for key := range shapes {

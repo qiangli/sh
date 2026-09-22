@@ -183,3 +183,42 @@ func main() {
 		t.Fatalf("an unmaterialised interface shape must still be refused, got %q", got)
 	}
 }
+
+// Anonymous registry keys must include the lexical identity of named types
+// inside fields and method signatures, matching transported wire type names.
+// The local types deliberately have identical underlying types: only their
+// declarations distinguish them, so shape-only deduplication is insufficient.
+func TestS243AnonymousShapesKeepScopedNamedIdentity(t *testing.T) {
+	differGoSource(t, `package main
+import (
+ "fmt"
+ "reflect"
+)
+func firstStruct() reflect.Type {
+ type s int
+ return reflect.TypeOf(struct { V s }{})
+}
+func secondStruct() reflect.Type {
+ type s int
+ return reflect.TypeOf(struct { V s }{})
+}
+func firstInterface() reflect.Type {
+ type s int
+ return reflect.TypeOf(new(interface { M(s) })).Elem()
+}
+func secondInterface() reflect.Type {
+ type s int
+ return reflect.TypeOf(new(interface { M(s) })).Elem()
+}
+func main() {
+ a, b := firstStruct(), secondStruct()
+ if a == b { panic("distinct anonymous struct identities collapsed") }
+ if a != firstStruct() { panic("anonymous struct identity is unstable") }
+ if a.Field(0).Type == b.Field(0).Type { panic("distinct local field identities collapsed") }
+ c, d := firstInterface(), secondInterface()
+ if c == d { panic("distinct anonymous interface identities collapsed") }
+ if c != firstInterface() { panic("anonymous interface identity is unstable") }
+ fmt.Println(a.NumField(), b.NumField(), c.NumMethod(), d.NumMethod())
+}
+`, nil, "")
+}
