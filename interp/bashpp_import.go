@@ -53,6 +53,10 @@ type bashPPEvalRequest struct {
 	// original Go root.
 	CompanionFiles []string
 	NativeFuncs    []bashPPNativeFuncDecl
+	// RootFiles are the original inputs of the interpreted program's own
+	// package. The companion build overlays each one away, so that a build of
+	// the package directory compiles no interpreted body.
+	RootFiles []string
 	// CompanionTrampolines are the original package functions a companion
 	// object calls. The helper declares each one; its body is the callback
 	// protocol, so the original body stays interpreted.
@@ -538,7 +542,7 @@ func (r *Runner) bashPPEvalRequest() (bashPPEvalRequest, error) {
 		return bashPPEvalRequest{}, err
 	}
 	return bashPPEvalRequest{CallbackOwner: r, CallbackDepth: r.bashPPTools.callbackDepth, LocalTypes: r.bashPPLocalTypeDescriptors(), Instances: r.bashPPImportedInstances(), RuntimeEnv: runtimeEnv, ModuleDir: moduleDir, ImportPath: importPath, TestMain: testMain, Argv: append([]string{r.filename}, r.Params...), Bridge: r.bashPPTools.bridge, Go: r.bashPPTools.goBinary, Dir: r.Dir, Env: env, Stdin: r.stdin,
-		Stdout: r.bashPPWriter(r.stdout), Stderr: r.bashPPWriter(r.stderr), Imports: r.bashPPImports, SourceDir: sourceDir, SourceFile: sourceFile, EmbedDecls: embedDecls, CompanionFiles: companionFiles, NativeFuncs: nativeFuncs, CompanionTrampolines: trampolines}, nil
+		Stdout: r.bashPPWriter(r.stdout), Stderr: r.bashPPWriter(r.stderr), Imports: r.bashPPImports, SourceDir: sourceDir, SourceFile: sourceFile, EmbedDecls: embedDecls, CompanionFiles: companionFiles, NativeFuncs: nativeFuncs, CompanionTrampolines: trampolines, RootFiles: r.bashPPGoSourceRootFiles()}, nil
 }
 
 func setEnvString(env []string, name, value string) []string {

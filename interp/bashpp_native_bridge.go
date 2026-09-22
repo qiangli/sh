@@ -291,12 +291,35 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 			cleanup()
 			return fmt.Errorf("gosource: native companions require an original source file")
 		}
-		if err = file.remap(req.SourceFile); err != nil {
+		// The companion build reads the original package directory, since that
+		// is where its assembly lives; every original Go file in it is overlaid
+		// away first, so the compiler sees only the generated helper.
+		stubs, err := bashPPCompanionRootStubs(req.SourceDir, req.RootFiles)
+		if err != nil {
+			cleanup()
+			return err
+		}
+		if err = file.overlayRoot(stubs); err != nil {
+			cleanup()
+			return err
+		}
+		if err = bashPPCompanionOverlayComplete(file.sourceDir, file.replace); err != nil {
+			cleanup()
+			return err
+		}
+		// The build runs in the directory the overlay is keyed by, and says so
+		// in its own environment: cmd/go matches overlay paths against the
+		// working directory it resolves, and it resolves that one through
+		// $PWD. A key spelled differently is not an error, it is simply not a
+		// key -- and the build would then quietly compile the original
+		// package. Hence both the explicit PWD and the check below.
+		companionEnv := setEnvString(buildEnv, "PWD", file.sourceDir)
+		if err = bashPPCompanionBuildIsolated(ctx, req.Go, file, companionEnv); err != nil {
 			cleanup()
 			return err
 		}
 		build := exec.CommandContext(ctx, req.Go, "build", "-p", "2", "-overlay="+file.overlay, "-o", binary, ".")
-		build.Dir, build.Env = req.SourceDir, buildEnv
+		build.Dir, build.Env = file.sourceDir, companionEnv
 		var diagnostics bytes.Buffer
 		build.Stdout, build.Stderr = &diagnostics, &diagnostics
 		if err = build.Run(); err != nil {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -12,12 +13,37 @@ type bashPPImportSource struct {
 	*os.File
 	buildPath string
 	overlay   string
+	// sourceDir is the caller's directory as cmd/go resolves it, and work the
+	// private scratch root. replace is the overlay currently on disk.
+	sourceDir string
+	work      string
+	replace   map[string]string
 	cleanup   func()
 }
 
-func (s *bashPPImportSource) remap(buildPath string) error {
-	s.buildPath = buildPath
-	data, err := json.Marshal(struct{ Replace map[string]string }{map[string]string{buildPath: s.Name()}})
+// overlayRoot adds one overlay entry per original Go file of the caller's
+// package, each pointing at a stub written into private scratch. The helper
+// keeps its own virtual path in that directory, so a build of the directory
+// compiles the generated file and none of the original bodies.
+func (s *bashPPImportSource) overlayRoot(stubs map[string]string) error {
+	if s.work == "" || s.sourceDir == "" {
+		return fmt.Errorf("bash++: helper overlay has no scratch root")
+	}
+	names := make([]string, 0, len(stubs))
+	for path := range stubs {
+		names = append(names, path)
+	}
+	sort.Strings(names)
+	for i, path := range names {
+		stub := filepath.Join(s.work, fmt.Sprintf("stub-%d-%s", i, filepath.Base(path)))
+		if err := os.WriteFile(stub, []byte(stubs[path]), 0600); err != nil {
+			return err
+		}
+		// Keys are read by cmd/go after it resolves its own directory through
+		// symlinks; the enumerated path need not have been resolved at all.
+		s.replace[filepath.Join(s.sourceDir, filepath.Base(path))] = stub
+	}
+	data, err := json.Marshal(struct{ Replace map[string]string }{s.replace})
 	if err != nil {
 		return err
 	}
@@ -126,5 +152,5 @@ func bashPPImportTempSource(dir, pattern string, env []string, policy bashPPScra
 		cleanup()
 		return nil, err
 	}
-	return &bashPPImportSource{File: f, buildPath: buildPath, overlay: overlay, cleanup: cleanup}, nil
+	return &bashPPImportSource{File: f, buildPath: buildPath, overlay: overlay, sourceDir: contextDir, work: work, replace: replace, cleanup: cleanup}, nil
 }

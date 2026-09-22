@@ -89,6 +89,24 @@ func (r *Runner) bashPPGoSourceSourceFile() string {
 	return name
 }
 
+// bashPPGoSourceRootFiles lists the original inputs of the interpreted
+// program's own package, as the loader recorded them. A linked package carries
+// a declared import path; the program package is the one that does not.
+func (r *Runner) bashPPGoSourceRootFiles() []string {
+	if r.bashPPGoSourceFile == nil {
+		return nil
+	}
+	var out []string
+	for _, source := range r.bashPPGoSourceFile.Sources {
+		if source.PackagePath != "" || source.Name == "" {
+			continue
+		}
+		out = append(out, source.Name)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // bashPPGoSourceNativeCompanions reports the same-package object companions
 // of the interpreted Go root, the no-body declarations they may satisfy, and
 // the original functions they call back into. An unsound reference — package
