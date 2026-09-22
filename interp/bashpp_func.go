@@ -1550,6 +1550,24 @@ func (r *Runner) bashPPBindInterfaceMethod(iv *bashPPInterfaceValue, method stri
 		}
 		return native, true
 	}
+	if receiver, ambiguous := r.bashPPPromotedNativeCellReceiver(iv.cell, iv.dynamic, method); ambiguous {
+		r.errf("BASHPP-ESELECTOR-AMBIGUOUS: ambiguous selector %s.%s\n", bashPPTypeText(iv.dynamic), method)
+		r.exit.code = 2
+		return nil, false
+	} else if receiver != nil {
+		bound, err := r.bashPPBindNativeMethod(r.ectx, *receiver, method)
+		if err != nil {
+			r.exit.fatal(err)
+			return nil, false
+		}
+		fn := &bashPPFunc{native: &bound}
+		if sig := syntax.BashPPTypeExprFromText(bound.Type); sig != nil {
+			if ft, ok := sig.(*syntax.BashPPFuncType); ok {
+				fn.lit = &syntax.BashPPFuncLit{Params: ft.Params, Results: ft.Results}
+			}
+		}
+		return fn, true
+	}
 	sel := r.bashPPResolveSelection(iv.dynamic, method, true, false)
 	if sel.ambiguous {
 		r.errf("BASHPP-ESELECTOR-AMBIGUOUS: ambiguous selector %s.%s\n", bashPPTypeText(iv.dynamic), method)

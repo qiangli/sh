@@ -22,8 +22,16 @@ import (
 // as it would in Go, and this helper reports nothing so the interpreted paths
 // keep ownership of the diagnostic.
 func (r *Runner) bashPPResolveNativeEmbedded(root syntax.BashPPTypeExpr, name string, addressable bool) ([]bashPPEmbedEdge, bool) {
+	edges, native, _ := r.bashPPResolveNativeEmbeddedSelection(root, name, addressable)
+	return edges, native
+}
+
+// bashPPResolveNativeEmbeddedSelection also reports ambiguity for callers
+// which must not fall through to the interpreter-only method set after the
+// combined selector walk has found multiple candidates at the winning depth.
+func (r *Runner) bashPPResolveNativeEmbeddedSelection(root syntax.BashPPTypeExpr, name string, addressable bool) ([]bashPPEmbedEdge, bool, bool) {
 	if !r.bashPPGoSource || root == nil || name == "" {
-		return nil, false
+		return nil, false, false
 	}
 	rootPointer := false
 	if pointer, ok := root.(*syntax.BashPPPointerType); ok {
@@ -100,15 +108,25 @@ func (r *Runner) bashPPResolveNativeEmbedded(root syntax.BashPPTypeExpr, name st
 			}
 		}
 		if matches := pending[depth]; len(matches) > 0 {
-			if len(matches) != 1 || !matches[0].native {
-				return nil, false
+			if len(matches) != 1 {
+				for _, match := range matches {
+					if match.native {
+						return nil, false, true
+					}
+				}
+				// An interpreter-only level is resolved by the package-aware
+				// selector walk, particularly for unexported promoted methods.
+				return nil, false, false
 			}
-			return matches[0].edges, true
+			if !matches[0].native {
+				return nil, false, false
+			}
+			return matches[0].edges, true, false
 		}
 		delete(pending, depth)
 		level = next
 	}
-	return nil, false
+	return nil, false, false
 }
 
 // bashPPPromotedNativeReceiver reads the embedded dependency-owned receiver
@@ -158,6 +176,55 @@ func (r *Runner) bashPPPromotedNativeReceiver(expr syntax.BashPPExpr, method str
 	}
 	native, _ := embedded.(*bashPPBridgeValue)
 	return native
+}
+
+// bashPPPromotedNativeCellReceiver is the interface-dispatch counterpart of
+// bashPPPromotedNativeReceiver. Interface values no longer have the source
+// expression used to find their storage, but their dynamic type still owns
+// selector resolution. Resolve that type with the same combined breadth-first
+// walk, then read the selected dependency receiver from the saved dynamic
+// value. A deeper original method or an ambiguous shallow level therefore
+// prevents native dispatch here just as it does for a direct selector.
+func (r *Runner) bashPPPromotedNativeCellReceiver(cell *bashPPCell, dynamic syntax.BashPPTypeExpr, method string) (*bashPPBridgeValue, bool) {
+	if !r.bashPPGoSource || cell == nil || dynamic == nil || method == "" {
+		return nil, false
+	}
+	edges, ok, ambiguous := r.bashPPResolveNativeEmbeddedSelection(dynamic, method, false)
+	if ambiguous {
+		return nil, true
+	}
+	if !ok || len(edges) == 0 {
+		return nil, false
+	}
+	var value any
+	meta := bashPPCellMeta(cell)
+	var err error
+	if cell.pointer {
+		if cell.pointerValue == nil {
+			return nil, false
+		}
+		value, meta, _, err = cell.pointerValue.read()
+	} else {
+		value = cell.vrValue()
+	}
+	if err != nil {
+		return nil, false
+	}
+	value, _, err = bashPPReadSelection(value, meta, edges)
+	if err != nil {
+		return nil, false
+	}
+	if pointer, ok := value.(*bashPPPointer); ok {
+		if pointer == nil {
+			return nil, false
+		}
+		value, _, _, err = pointer.read()
+		if err != nil {
+			return nil, false
+		}
+	}
+	native, _ := value.(*bashPPBridgeValue)
+	return native, false
 }
 
 // The name is resolved through this Runner's accepted import binding. The type
