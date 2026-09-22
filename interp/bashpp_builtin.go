@@ -278,8 +278,20 @@ func (r *Runner) bashPPRunValueBuiltin(name string, c *syntax.BashPPCall) (*bash
 		}
 	}
 
-	args := make([]bashPPBuiltinArg, len(c.Args))
+	args, expanded, err := r.goSourceBuiltinTupleArgs(c)
+	if err != nil {
+		if !errors.Is(err, errBashPPScalarInterrupted) {
+			r.exit.fatal(err)
+		}
+		return nil, false
+	}
+	if !expanded {
+		args = make([]bashPPBuiltinArg, len(c.Args))
+	}
 	for i := range c.Args {
+		if expanded {
+			break
+		}
 		if r.bashPPGoSource && (name == "print" || name == "println") && i < len(c.ArgExprs) && c.ArgExprs[i] != nil {
 			if r.goSourcePrintReferenceOperand(c.ArgExprs[i]) {
 				text, err := r.goSourcePrintReference(c.ArgExprs[i])

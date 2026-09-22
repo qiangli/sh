@@ -65,7 +65,11 @@ func (r *Runner) goSourceBuiltinArg(call *syntax.BashPPCall, index int) (bashPPB
 	if cell == nil {
 		return bashPPBuiltinArg{}, fmt.Errorf("Go builtin argument has no value")
 	}
-	arg := bashPPBuiltinArg{cell: cell, typ: cell.declType, channel: cell.channel, text: bashPPWordSource(call.Args[index])}
+	return r.goSourceBuiltinCellArg(cell, bashPPWordSource(call.Args[index])), nil
+}
+
+func (r *Runner) goSourceBuiltinCellArg(cell *bashPPCell, text string) bashPPBuiltinArg {
+	arg := bashPPBuiltinArg{cell: cell, typ: cell.declType, channel: cell.channel, text: text}
 	if cell.pointer {
 		arg.value, arg.meta = cell.pointerValue, bashPPPointerMeta(cell.declType)
 	} else if cell.vr.Kind == expand.Object {
@@ -78,7 +82,34 @@ func (r *Runner) goSourceBuiltinArg(call *syntax.BashPPCall, index int) (bashPPB
 		arg.value = bashPPBuiltinExactScalarValue(cell.vr.Str, arg.scalar)
 		arg.hasScalar = true
 	}
-	return arg, nil
+	return arg
+}
+
+// goSourceBuiltinTupleArgs implements Go's rule that a call returning multiple
+// values may be the sole argument to another call. Builtins do their own arity
+// and type checking, so expand the result cells before those checks while
+// evaluating the source call exactly once.
+func (r *Runner) goSourceBuiltinTupleArgs(call *syntax.BashPPCall) ([]bashPPBuiltinArg, bool, error) {
+	if !r.bashPPGoSource || len(call.ArgExprs) != 1 {
+		return nil, false, nil
+	}
+	inner, ok := call.ArgExprs[0].(*syntax.BashPPCall)
+	if !ok {
+		return nil, false, nil
+	}
+	fn, ok := r.bashPPLookupFunc(inner)
+	if !ok || bashppResultCount(fn.results()) < 2 {
+		return nil, false, nil
+	}
+	cells, err := r.goSourceCallResultCells(inner, fn)
+	if err != nil {
+		return nil, true, err
+	}
+	args := make([]bashPPBuiltinArg, len(cells))
+	for i, cell := range cells {
+		args[i] = r.goSourceBuiltinCellArg(cell, bashPPWordSource(call.Args[0]))
+	}
+	return args, true, nil
 }
 
 func (r *Runner) goSourceCollectionCallValue(expr syntax.BashPPExpr) (any, *bashPPCollectionMeta, bool, error) {
