@@ -156,10 +156,18 @@ func (r *Runner) bashPPBuiltinCollection(arg bashPPBuiltinArg, kinds ...string) 
 	if arg.meta == nil {
 		return nil, false
 	}
-	shape, ok := r.bashPPUnderlyingType(arg.meta.typ).(*syntax.BashPPCollectionType)
+	// A collection parameter in a generic body can retain the declaration's
+	// spelling in its metadata even though the running frame has instantiated
+	// it. Resolve that spelling at the builtin boundary: append needs the
+	// concrete element for assignability, and its result must not carry S/T
+	// into later indexed reads. This is deliberately frame-local; rewriting the
+	// shared metadata would leak the first instantiation into later calls.
+	typ := r.bashPPBindTypeExpr(arg.meta.typ)
+	shape, ok := r.bashPPUnderlyingType(typ).(*syntax.BashPPCollectionType)
 	if !ok {
 		return nil, false
 	}
+	shape, _ = r.bashPPBindTypeExpr(shape).(*syntax.BashPPCollectionType)
 	for _, kind := range kinds {
 		if arg.meta.kind == kind {
 			return shape, true
@@ -460,12 +468,13 @@ func (r *Runner) bashPPRunValueBuiltin(name string, c *syntax.BashPPCall) (*bash
 			}
 		}
 		seq, metas = r.bashPPAppendSlice(seq, metas, shape.Element, added, addedMetas)
-		meta := &bashPPCollectionMeta{kind: "slice", typ: args[0].meta.typ, sequence: metas}
+		resultType := r.bashPPBindTypeExpr(args[0].meta.typ)
+		meta := &bashPPCollectionMeta{kind: "slice", typ: resultType, sequence: metas}
 		identity := args[0].cell.object
 		if len(seq) > oldCap {
 			identity = &bashPPObjectIdentity{collection: meta}
 		}
-		return &bashPPCell{vr: bashPPCollectionVariable(seq), object: identity, valueMeta: meta, declType: args[0].meta.typ}, true
+		return &bashPPCell{vr: bashPPCollectionVariable(seq), object: identity, valueMeta: meta, declType: resultType}, true
 
 	case "copy":
 		if len(args) != 2 || c.Ellipsis.IsValid() {
