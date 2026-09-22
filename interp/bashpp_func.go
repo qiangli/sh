@@ -1034,6 +1034,12 @@ func (r *Runner) bashPPTypeSetSatisfied(arg, constraint syntax.BashPPTypeExpr) b
 		if iface, ok := r.bashPPInterfaceType(c); ok {
 			return r.bashPPConstraintSatisfied(arg, iface)
 		}
+		// A declared constraint such as `type C comparable` carries the type
+		// set of comparable. Do not generally unwrap named types here: a term
+		// `MyInt` admits MyInt only, not every type whose underlying type is int.
+		if r.bashPPNamedComparableConstraint(c, make(map[string]bool)) {
+			return r.bashPPComparableType(arg, make(map[string]bool))
+		}
 		return r.bashPPTypeAssignable(arg, c)
 	case *syntax.BashPPInterfaceType:
 		return r.bashPPConstraintSatisfied(arg, c)
@@ -1049,6 +1055,30 @@ func (r *Runner) bashPPTypeSetSatisfied(arg, constraint syntax.BashPPTypeExpr) b
 	default:
 		return r.bashPPTypeAssignable(arg, c)
 	}
+}
+
+// bashPPNamedComparableConstraint reports whether a declared named constraint
+// resolves specifically to the predeclared comparable constraint. General
+// named terms retain their identity and must not be unwrapped by the type-set
+// matcher.
+func (r *Runner) bashPPNamedComparableConstraint(named *syntax.BashPPNamedType, seen map[string]bool) bool {
+	if named == nil || named.Name == nil {
+		return false
+	}
+	name := named.Name.Value
+	if name == "comparable" {
+		return true
+	}
+	if seen[name] {
+		return false
+	}
+	seen[name] = true
+	decl, ok := r.bashPPTypes[name]
+	if !ok || decl.typeExpr == nil {
+		return false
+	}
+	next, ok := r.bashPPInstantiateNamedType(named).(*syntax.BashPPNamedType)
+	return ok && r.bashPPNamedComparableConstraint(next, seen)
 }
 
 func (r *Runner) bashPPComparableType(typ syntax.BashPPTypeExpr, seen map[string]bool) bool {
@@ -1241,6 +1271,9 @@ func (r *Runner) bashPPConstraintSatisfied(arg, constraint syntax.BashPPTypeExpr
 		default:
 			if iface, ok := r.bashPPInterfaceType(c); ok {
 				return r.bashPPImplements(arg, iface) == nil && r.bashPPInterfaceTypeSetSatisfied(arg, iface, make(map[*syntax.BashPPInterfaceType]bool))
+			}
+			if r.bashPPNamedComparableConstraint(c, make(map[string]bool)) {
+				return r.bashPPComparableType(arg, make(map[string]bool))
 			}
 			return r.bashPPTypeAssignable(arg, c)
 		}

@@ -371,13 +371,14 @@ func Load(sources []Source, options Options) (*Program, error) {
 					obj = lc.info.Implicits[spec]
 				}
 				if obj != nil && obj.Name() == "." && lc == c {
-					// A dot import binds the package's names bare IN THIS
-					// FILE; a type of it the converter spells there (an
-					// instantiation's arguments, an inferred declaration
-					// type) must stay bare too.
+					// Flattening erases the file block that gives a dot-imported
+					// name its package identity. Always give a live dot import an
+					// explicit alias and rewrite its members through that alias;
+					// this also lets checked, synthesized type expressions retain
+					// the same identity as source type expressions.
 					if pkgname, ok := obj.(*types.PkgName); ok {
 						path := pkgname.Imported().Path()
-						if liveImportPaths[path] && dotImportCollides(lc, f, spec, pkgname, liveImportPaths, mapped) {
+						if liveImportPaths[path] {
 							alias := fmt.Sprintf("%simport_%d_%d", c.prefix, fi, ii)
 							lc.renames[obj] = alias
 							importAliases[path] = alias
@@ -386,7 +387,7 @@ func Load(sources []Source, options Options) (*Program, error) {
 									lc.renames[member] = alias + "." + name
 								}
 							}
-						} else {
+						} else if !liveImportPaths[path] {
 							if c.dotImports[f] == nil {
 								c.dotImports[f] = map[string]bool{}
 							}
