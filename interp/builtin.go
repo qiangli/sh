@@ -7627,19 +7627,27 @@ func (r *Runner) readLineFrom(ctx context.Context, stdin io.Reader, raw bool, de
 	esc := false
 
 	if file, ok := stdin.(*os.File); ok {
-		stopc := make(chan struct{})
-		stop := context.AfterFunc(ctx, func() {
-			file.SetReadDeadline(time.Now())
-			close(stopc)
-		})
-		defer func() {
-			if !stop() {
-				// The AfterFunc was started.
-				// Wait for it to complete, and reset the file's deadline.
-				<-stopc
-				file.SetReadDeadline(time.Time{})
-			}
-		}()
+		if cancellable := cancellableReader(ctx, file); cancellable != nil {
+			// The handle rejects deadlines (a Windows pipe or console), so
+			// the AfterFunc below would silently do nothing and leave the
+			// read wedged past its cancellation. Poll for readability
+			// instead, which the context can interrupt.
+			stdin = cancellable
+		} else {
+			stopc := make(chan struct{})
+			stop := context.AfterFunc(ctx, func() {
+				file.SetReadDeadline(time.Now())
+				close(stopc)
+			})
+			defer func() {
+				if !stop() {
+					// The AfterFunc was started.
+					// Wait for it to complete, and reset the file's deadline.
+					<-stopc
+					file.SetReadDeadline(time.Time{})
+				}
+			}()
+		}
 	} else {
 		select {
 		case <-ctx.Done():

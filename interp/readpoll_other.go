@@ -38,3 +38,8 @@ type timeoutFileReader struct {
 func (r *timeoutFileReader) Read(p []byte) (int, error) {
 	return r.file.Read(p)
 }
+
+// cancellableReader has nothing to add here: every descriptor this shell
+// reads from is registered with the runtime poller, so the caller's
+// SetReadDeadline already calls a blocked read off.
+func cancellableReader(context.Context, *os.File) io.Reader { return nil }

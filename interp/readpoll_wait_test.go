@@ -184,3 +184,58 @@ func TestDeadlinePollerProbeError(t *testing.T) {
 		t.Fatalf("want %v, got %v", want, err)
 	}
 }
+
+// A read blocked on a pipe must end when the runner's context does, on every
+// host: unix calls it off with SetReadDeadline, Windows by polling the handle
+// the runtime poller refused.
+func TestReadLineFromEndsWithTheContext(t *testing.T) {
+	t.Parallel()
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pr.Close()
+	defer pw.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, readErr := (&Runner{}).readLineFrom(ctx, pr, false, '\n')
+		done <- readErr
+	}()
+	// Give the read time to block before taking it away.
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatalf("want the cancelled read to report an error")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatalf("the read outlived its context")
+	}
+}
+
+// Cancelling must not cost the bytes that were already there.
+func TestReadLineFromReadsBeforeCancel(t *testing.T) {
+	t.Parallel()
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pr.Close()
+	defer pw.Close()
+
+	if _, err := pw.WriteString("one\n"); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	line, err := (&Runner{}).readLineFrom(ctx, pr, false, '\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(line); got != "one" {
+		t.Fatalf("want %q, got %q", "one", got)
+	}
+}

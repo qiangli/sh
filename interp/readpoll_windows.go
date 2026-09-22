@@ -168,9 +168,14 @@ func fdReadableNow(f *os.File) bool { return windowsReadReadyNow(f) }
 
 func taskReadReadyNow(f *os.File) bool { return windowsReadReadyNow(f) }
 
-// pipePollInterval bounds how stale a pipe's readiness answer can be. A pipe
-// has no waitable object, so the only way to honour a deadline is to re-peek.
-const pipePollInterval = 2 * time.Millisecond
+// A pipe has no waitable object, so the only way to honour a deadline is to
+// re-peek. Start tight, so a short timeout is not rounded up to a long one,
+// then back off: an untimed read can sit here for as long as its peer is
+// quiet, and must not spin while it does.
+const (
+	pipePollMin = time.Millisecond
+	pipePollMax = 20 * time.Millisecond
+)
 
 // consoleSpinInterval keeps an already-signalled console handle (signalled by
 // records a read would skip) from spinning while its deadline runs down.
@@ -182,6 +187,7 @@ func waitReadyFor(f *os.File, kind windowsHandleKind, d time.Duration) (bool, er
 		d = 0
 	}
 	start := time.Now()
+	pause := pipePollMin
 	for {
 		switch kind {
 		case winHandlePipe:
@@ -225,7 +231,6 @@ func waitReadyFor(f *os.File, kind windowsHandleKind, d time.Duration) (bool, er
 		if elapsed >= d {
 			return false, nil
 		}
-		pause := pipePollInterval
 		if kind == winHandleConsole {
 			pause = consoleSpinInterval
 		}
@@ -233,6 +238,9 @@ func waitReadyFor(f *os.File, kind windowsHandleKind, d time.Duration) (bool, er
 			pause = rest
 		}
 		time.Sleep(pause)
+		if pause *= 2; pause > pipePollMax {
+			pause = pipePollMax
+		}
 	}
 }
 
@@ -289,5 +297,27 @@ func signalReader(context.Context, *os.File, <-chan struct{}) io.Reader { return
 // taskReadReader has no Windows implementation; a Bash++ task reports
 // blocking input as unavailable rather than stranding its group.
 func taskReadReader(context.Context, *os.File, time.Time, <-chan struct{}, func() bool) io.Reader {
+	return nil
+}
+
+// cancellableReader wraps a read whose blocking cannot be called off any other
+// way. An untimed read from a pipe or the console — `read LINE <&${COPROC[0]}`
+// waiting on a coprocess, a `read` on the far side of a pipeline — is issued
+// as a plain ReadFile that no SetReadDeadline reaches, so cancelling the
+// runner's context left the shell wedged in it for good. Returning nil means
+// the caller's own SetReadDeadline is enough.
+func cancellableReader(ctx context.Context, f *os.File) io.Reader {
+	if f == nil || ctx == nil || ctx.Done() == nil {
+		return nil
+	}
+	// Clearing the deadline is the cheapest way to ask whether the runtime
+	// poller took this handle; it is a no-op when it did.
+	if f.SetReadDeadline(time.Time{}) == nil {
+		return nil
+	}
+	switch windowsHandleKindOf(f) {
+	case winHandlePipe, winHandleConsole:
+		return &timeoutFileReader{ctx: ctx, file: f}
+	}
 	return nil
 }

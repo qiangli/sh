@@ -119,3 +119,45 @@ func TestWindowsTimeoutFileReaderCancels(t *testing.T) {
 		t.Fatalf("want context.Canceled, got %v", err)
 	}
 }
+
+// A pipe and the console are the two handles the runtime poller refuses, so
+// they are the two that need the poll to stay cancellable.
+func TestWindowsCancellableReaderCoversPipes(t *testing.T) {
+	t.Parallel()
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pr.Close()
+	defer pw.Close()
+
+	if pr.SetReadDeadline(time.Time{}) == nil {
+		t.Skip("this Go runtime polls anonymous pipes; the fallback is unused")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if cancellableReader(ctx, pr) == nil {
+		t.Fatalf("want a cancellable reader for a pipe")
+	}
+	// An uncancellable context has nothing to interrupt the read with, so
+	// the plain blocking read is kept.
+	if cancellableReader(context.Background(), pr) != nil {
+		t.Fatalf("want the plain read when the context cannot be cancelled")
+	}
+}
+
+// A regular file's read completes without waiting for a peer; polling it
+// would only add syscalls.
+func TestWindowsCancellableReaderSkipsRegularFiles(t *testing.T) {
+	t.Parallel()
+	f, err := os.CreateTemp(t.TempDir(), "readpoll")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if cancellableReader(ctx, f) != nil {
+		t.Fatalf("want the plain read for a regular file")
+	}
+}
