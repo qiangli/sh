@@ -17,8 +17,12 @@ func dropRecoveredCallUnused(out ErrorList, fset *token.FileSet, info *types.Inf
 	used := map[types.Object]bool{}
 	position := func(pos gcsyntax.Pos) token.Pos {
 		var found token.Pos
+		base := pos.FileBase()
+		if !pos.IsKnown() || base == nil || pos.Col() == 0 {
+			return token.NoPos
+		}
 		fset.Iterate(func(file *token.File) bool {
-			if file.Name() != pos.FileBase().Filename() || int(pos.Line()) > file.LineCount() {
+			if file.Name() != base.Filename() || int(pos.Line()) > file.LineCount() {
 				return true
 			}
 			found = file.LineStart(int(pos.Line())) + token.Pos(pos.Col()-1)
@@ -40,6 +44,9 @@ func dropRecoveredCallUnused(out ErrorList, fset *token.FileSet, info *types.Inf
 		return obj
 	}
 	for _, file := range files {
+		if file == nil {
+			continue
+		}
 		gcsyntax.Inspect(file, func(node gcsyntax.Node) bool {
 			stmt, ok := node.(*gcsyntax.CallStmt)
 			if !ok || stmt == nil || stmt.Call == nil {
@@ -48,14 +55,22 @@ func dropRecoveredCallUnused(out ErrorList, fset *token.FileSet, info *types.Inf
 			if _, ok := stmt.Call.(*gcsyntax.CallExpr); ok {
 				return false
 			}
-			gcsyntax.Inspect(stmt.Call, func(node gcsyntax.Node) bool {
+			var visit func(gcsyntax.Node) bool
+			visit = func(node gcsyntax.Node) bool {
+				// Sel names a field or package member, never a lexical use.
+				// Inspect only the receiver, including nested selectors.
+				if selector, ok := node.(*gcsyntax.SelectorExpr); ok {
+					gcsyntax.Inspect(selector.X, visit)
+					return false
+				}
 				if name, ok := node.(*gcsyntax.Name); ok && name != nil {
 					if obj := lookup(name.Value, position(name.Pos())); obj != nil {
 						used[obj] = true
 					}
 				}
 				return true
-			})
+			}
+			gcsyntax.Inspect(stmt.Call, visit)
 			return false
 		})
 	}

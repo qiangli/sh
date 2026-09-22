@@ -1,6 +1,7 @@
 package gosource_test
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -32,6 +33,41 @@ func f() {
 	got := sprint165Diagnostics(t, "recover.go", []byte(src), gosource.Options{})
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got: %q\nwant: %q", got, want)
+	}
+}
+
+func TestS243RecoveredSelectorPreservesUnusedDeclarations(t *testing.T) {
+	tests := []struct {
+		name, body string
+		unused     []string
+	}{
+		{"selector field", "x := struct{ y int }{}; y := 1; defer x.y", []string{"y := 1"}},
+		{"nested selector", "x := struct{ y struct{ z int } }{}; y := 1; z := 2; defer x.y.z", []string{"y := 1", "z := 2"}},
+		{"shadowed outer", "y := 1; { y := 2; defer y }", []string{"y := 1"}},
+		{"independent declaration", "{ y := 1; defer y\n }; { y := 2 }", []string{"y := 2"}},
+		{"lexical selector base", "x := struct{ y int }{}; defer x.y", nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := sprint165Diagnostics(t, "recover.go", []byte("package p\nfunc f() { "+tt.body+" }\n"), gosource.Options{})
+			var unused []string
+			for _, diagnostic := range got {
+				if strings.Contains(diagnostic, "declared and not used: ") {
+					unused = append(unused, diagnostic)
+				}
+			}
+			var want []string
+			for _, decl := range tt.unused {
+				name := strings.Fields(decl)[0]
+				prefix := "func f() { " + tt.body[:strings.Index(tt.body, decl)]
+				line := 2 + strings.Count(prefix, "\n")
+				col := len(prefix) - strings.LastIndex(prefix, "\n")
+				want = append(want, fmt.Sprintf("recover.go:%d:%d: declared and not used: %s", line, col, name))
+			}
+			if !reflect.DeepEqual(unused, want) {
+				t.Fatalf("unused = %q, want %q; diagnostics: %q", unused, want, got)
+			}
+		})
 	}
 }
 
