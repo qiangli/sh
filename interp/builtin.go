@@ -8054,50 +8054,21 @@ func (r *Runner) optStatusText(status bool) string {
 	return "off"
 }
 
-// signalNames maps signal numbers to names (POSIX + common).
-var signalNames = map[int]string{
-	0:  "EXIT",
-	1:  "HUP",
-	2:  "INT",
-	3:  "QUIT",
-	4:  "ILL",
-	5:  "TRAP",
-	6:  "ABRT",
-	7:  "BUS",
-	8:  "FPE",
-	9:  "KILL",
-	10: "USR1",
-	11: "SEGV",
-	12: "USR2",
-	13: "PIPE",
-	14: "ALRM",
-	15: "TERM",
-}
-
+// printSignalList prints `kill -l` / `trap -l` from the platform signal
+// table (sortedSignalEntries), so the listing, `kill -l N` and $BASH_TRAPSIG
+// all agree on one numbering — Linux, Darwin/BSD and the Cygwin/MSYS-numbered
+// Windows table alike.
 func (r *Runner) printSignalList(posix bool) {
-	if posix {
-		for i, e := range sortedSignalEntries() {
-			if i > 0 {
-				r.outf(" ")
-			}
-			r.outf("%s", e.Name)
+	sorted := sortedSignalEntries()
+	entries := make([]signalListEntry, 0, len(sorted))
+	for _, e := range sorted {
+		num, ok := signalNumber(e.Sig)
+		if !ok {
+			continue
 		}
-		r.outf("\n")
-		return
+		entries = append(entries, signalListEntry{Num: num, Name: e.Name})
 	}
-	col := 0
-	for i := 1; i <= 15; i++ {
-		if name, ok := signalNames[i]; ok {
-			col++
-			r.outf("%2d) SIG%-10s", i, name)
-			if col%5 == 0 {
-				r.outf("\n")
-			}
-		}
-	}
-	if col%5 != 0 {
-		r.outf("\n")
-	}
+	r.outf("%s", formatSignalList(entries, posix))
 }
 
 func signalByNamePosix(name string, posix bool) (killSig, bool) {

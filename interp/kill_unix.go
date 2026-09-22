@@ -76,55 +76,6 @@ func signalName(sig killSig) (string, bool) {
 	return name, ok
 }
 
-// signalDescriptions maps a canonical signal name (no "SIG" prefix, as used
-// by killSignals) to bash's human-readable description (j_strsignal /
-// siglist.c), e.g. "Segmentation fault". Note that bash 5.3 reports SIGFPE as
-// "Arithmetic exception" (not "Floating point exception"), which is what we
-// reproduce here.
-var signalDescriptions = map[string]string{
-	"HUP":    "Hangup",
-	"INT":    "Interrupt",
-	"QUIT":   "Quit",
-	"ILL":    "Illegal instruction",
-	"TRAP":   "Trace/breakpoint trap",
-	"ABRT":   "Aborted",
-	"BUS":    "Bus error",
-	"FPE":    "Arithmetic exception",
-	"KILL":   "Killed",
-	"USR1":   "User defined signal 1",
-	"SEGV":   "Segmentation fault",
-	"USR2":   "User defined signal 2",
-	"PIPE":   "Broken pipe",
-	"ALRM":   "Alarm clock",
-	"TERM":   "Terminated",
-	"CHLD":   "Child exited",
-	"CONT":   "Continued",
-	"STOP":   "Stopped (signal)",
-	"TSTP":   "Stopped",
-	"TTIN":   "Stopped (tty input)",
-	"TTOU":   "Stopped (tty output)",
-	"URG":    "Urgent I/O condition",
-	"XCPU":   "CPU time limit exceeded",
-	"XFSZ":   "File size limit exceeded",
-	"VTALRM": "Virtual timer expired",
-	"PROF":   "Profiling timer expired",
-	"WINCH":  "Window changed",
-	"IO":     "I/O possible",
-	"SYS":    "Bad system call",
-}
-
-// signalDescription returns bash's human-readable description for sig, e.g.
-// SIGSEGV -> "Segmentation fault". ok is false for signals with no known
-// description (in which case no death notification is printed).
-func signalDescription(sig killSig) (desc string, ok bool) {
-	name, ok := signalName(sig)
-	if !ok {
-		return "", false
-	}
-	desc, ok = signalDescriptions[name]
-	return desc, ok
-}
-
 // notifyForegroundSignalDeath prints bash's status line for a FOREGROUND
 // external command that was killed by a fatal signal (#25/#26), mirroring
 // jobs.c notify_of_job_status for a non-interactive shell:

@@ -177,6 +177,7 @@ func (OSSignalResetter) ResetDefault(num int, name string) {
 		return
 	}
 	restoreExecSignal(signalForOS(sig))
+	busReset(signalForOS(sig))
 }
 
 // IsIgnored reports whether name currently has an ignored disposition,
@@ -196,6 +197,7 @@ func (OSSignalResetter) IgnoreStartup(num int, name string) {
 		return
 	}
 	signal.Ignore(signalForOS(sig))
+	busIgnore(signalForOS(sig))
 }
 
 func (r *Runner) restoreBridgedStartupIgnores() {
@@ -657,6 +659,7 @@ func (r *Runner) enableSignalTrap(name string) {
 	// Synchronize the Go runtime before installing a new trap. This is
 	// needed after both the standalone startup reset and trap '' SIG.
 	signal.Reset(osSig)
+	busReset(osSig)
 	r.sigNotify[name] = osSig
 	r.startSignalSubscriptionLocked(name, osSig, r.trapCallbacks[name], false)
 	r.sigMu.Unlock()
@@ -686,6 +689,7 @@ func (r *Runner) startSignalSubscriptionLocked(name string, sig os.Signal, callb
 	sub := signalSubscription{ch: ch, done: done, finished: finished, callback: callback, defaultAction: defaultAction}
 	r.sigNotifyCh[name] = sub
 	signal.Notify(ch, sig)
+	busNotify(ch, sig)
 	go r.forwardSignalSubscription(name, sub)
 }
 
@@ -700,6 +704,7 @@ func (r *Runner) stopSignalSubscriptionLocked(name string) *signalSubscription {
 		return nil
 	}
 	signal.Stop(sub.ch)
+	busStop(sub.ch)
 	close(sub.done)
 	delete(r.sigNotifyCh, name)
 	return &sub
@@ -789,6 +794,7 @@ func (r *Runner) ignoreSignalTrap(name string) {
 	}
 	r.sigIgnored[name] = true
 	osSig := signalForOS(sig)
+	busIgnore(osSig)
 	if isRuntimeSignal(name) {
 		// Do not call signal.Ignore for a Go runtime-owned fault signal.
 		// signal.Ignore clears the runtime's internal delivery bit; a later
@@ -836,6 +842,7 @@ func (r *Runner) disableSignalTrap(name string) {
 		delete(r.sigNotify, name)
 		delete(r.sigIgnored, name)
 		signal.Reset(signalForOS(sig))
+		busReset(signalForOS(sig))
 	}
 	sigReset := r.sigReset
 	standaloneDefault := r.standaloneDefaults[name]

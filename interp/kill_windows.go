@@ -10,11 +10,14 @@ import (
 	"io"
 	"os"
 	"strconv"
-	"strings"
+	"syscall"
 
 	"mvdan.cc/sh/v3/syntax"
 )
 
+// killSig on Windows carries the Cygwin/MSYS signal number and the os.Signal
+// value used for os/signal bookkeeping and the in-process bus. Windows has
+// no kernel signals; see signal_wintable.go for the model.
 type killSig struct {
 	Name   string
 	Num    int
@@ -24,46 +27,63 @@ type killSig struct {
 func sigIsZero(s killSig) bool { return s.Num == 0 }
 func sigNum(s killSig) int     { return s.Num }
 
-const defaultTermSignalNum = 15
+const defaultTermSignalNum = windowsSigTERM
 
-var defaultTermSignal = killSig{Name: "TERM", Num: defaultTermSignalNum, Signal: os.Kill}
+var defaultTermSignal = killSig{Name: "TERM", Num: defaultTermSignalNum, Signal: syscall.Signal(defaultTermSignalNum)}
 
-// killSignals on non-Unix is the small set of signals the Go runtime can
-// actually deliver via os.Process.Signal — Interrupt and Kill. SIGTERM is
-// included because scripts portably use it; it's delivered as os.Kill where
-// Windows where there is no graceful equivalent.
-var killSignals = []struct {
+// killSignals is the full bash signal table under Cygwin/MSYS numbering, in
+// `kill -l` listing order. Every entry is a syscall.Signal(n): os/signal on
+// Windows accepts any n < 65 (its enable/disable/ignore hooks are empty
+// bookkeeping), which is what lets the trap machinery in signal.go work
+// unchanged, with delivery coming from processSignalBus instead of the kernel.
+var killSignals = windowsKillSignals()
+
+func windowsKillSignals() []struct {
 	Name string
 	Sig  killSig
-}{
-	{"INT", killSig{Name: "INT", Num: 2, Signal: os.Interrupt}},
-	{"KILL", killSig{Name: "KILL", Num: 9, Signal: os.Kill}},
-	{"TERM", defaultTermSignal},
-}
-
-func signalByName(name string) (killSig, bool) {
-	name = strings.ToUpper(name)
-	name = strings.TrimPrefix(name, "SIG")
-	for _, e := range killSignals {
-		if e.Name == name {
-			return e.Sig, true
+} {
+	table := windowsSignalTable()
+	sigs := make([]struct {
+		Name string
+		Sig  killSig
+	}, len(table))
+	for i, e := range table {
+		sig := os.Signal(syscall.Signal(e.Num))
+		if e.Num == windowsSigINT {
+			sig = os.Interrupt
 		}
+		sigs[i].Name = e.Name
+		sigs[i].Sig = killSig{Name: e.Name, Num: e.Num, Signal: sig}
 	}
-	return killSig{}, false
+	return sigs
 }
 
+// signalByName resolves a bash-style signal name to its table entry.
+// Case-insensitive; accepts both "TERM" and "SIGTERM".
+func signalByName(name string) (killSig, bool) {
+	e, ok := windowsSignalByName(name)
+	if !ok {
+		return killSig{}, false
+	}
+	return killSignals[e.Num-1].Sig, true
+}
+
+// signalByNumber resolves a numeric signal to a known entry. Signal 0 is the
+// POSIX "no-op probe" — returned as-is so `kill -0 PID` works for existence
+// checks even though 0 is not in the table.
 func signalByNumber(n int) (killSig, string, bool) {
 	if n == 0 {
 		return killSig{Name: "EXIT", Num: 0}, "EXIT", true
 	}
-	for _, e := range killSignals {
-		if e.Sig.Num == n {
-			return e.Sig, e.Name, true
-		}
+	e, ok := windowsSignalByNumber(n)
+	if !ok {
+		return killSig{}, "", false
 	}
-	return killSig{}, "", false
+	sig := killSignals[e.Num-1].Sig
+	return sig, sig.Name, true
 }
 
+// sortedSignalEntries returns the entries in numerical order for `kill -l`.
 func sortedSignalEntries() []struct {
 	Name string
 	Sig  killSig
@@ -89,48 +109,38 @@ func signalForOS(sig killSig) os.Signal {
 	return sig.Signal
 }
 
-// notifyForegroundSignalDeath is a no-op on non-Unix platforms: waitStatus
-// there cannot report Signaled()/Signal()/CoreDump(), so the foreground
-// signal-death notification (#25/#26) never applies.
+// notifyForegroundSignalDeath prints bash's status line for a FOREGROUND
+// external command that was killed by a fatal signal, as kill_unix.go does:
+// non-interactive shells only, silent in POSIX mode and for INT/PIPE. A
+// Windows wait status is decoded from the bashy signal marker
+// (waitstatus_windows.go), which never carries a core-dump flag, so only the
+// bare "<description> <cmd>" form applies.
 func (r *Runner) notifyForegroundSignalDeath(w io.Writer, pos syntax.Pos, pid int, status waitStatus, args []string) {
+	if r == nil || r.opts[optPosix] || r.interactiveShell {
+		return
+	}
+	if line, ok := windowsSignalDeathNotice(status.Signal(), args); ok {
+		fmt.Fprintln(w, line)
+	}
 }
 
-// continueIfStopped is a no-op on non-Unix: there is no SIGCONT analog,
-// and this runner cannot suspend jobs on this platform anyway.
+// continueIfStopped is a no-op on Windows: this runner cannot suspend a
+// process on this platform, so there is nothing to resume.
 func continueIfStopped(pid int) {}
 
 func jobSignalPid(bg *bgProc) int {
 	return int(bg.pid.Load())
 }
 
-func signalStopsJob(sig killSig) bool { return false }
+func signalStopsJob(sig killSig) bool { return windowsSignalStopsJob(sig.Num) }
 
-func signalContinuesJob(sig killSig) bool { return false }
+func signalContinuesJob(sig killSig) bool { return windowsSignalContinuesJob(sig.Num) }
 
-func signalDefaultDoesNotTerminate(sig killSig) bool { return false }
-
-// sendSignal on non-Unix uses os.Process.Signal which only supports
-// Interrupt and Kill. SIGTERM is mapped to Kill (no graceful equivalent
-// exists on Windows). Signal 0 does an existence probe via os.FindProcess.
-func sendSignal(pid int, sig killSig) error {
-	proc, err := os.FindProcess(pid)
-	if err != nil {
-		return err
-	}
-	switch sig.Num {
-	case 0:
-		// Best-effort existence probe; FindProcess on Windows almost
-		// always succeeds even for non-existent PIDs, so this is weak.
-		return nil
-	case 2:
-		return proc.Signal(sig.Signal)
-	case 9, defaultTermSignalNum:
-		return proc.Kill()
-	default:
-		return fmt.Errorf("signal %d not supported on this platform", sig.Num)
-	}
+func signalDefaultDoesNotTerminate(sig killSig) bool {
+	return windowsSignalDefaultDoesNotTerminate(sig.Num)
 }
 
+// parseSignalSpec parses the part after the leading `-` in `kill -SPEC pid…`.
 func parseSignalSpec(spec string) (killSig, bool) {
 	if n, err := strconv.Atoi(spec); err == nil {
 		sig, _, ok := signalByNumber(n)
