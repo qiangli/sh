@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
+	"strings"
 )
 
 // goSourceExpectedCell applies the assignment context without discarding the
@@ -32,6 +33,15 @@ func (r *Runner) goSourceExpectedCell(cell *bashPPCell, expected syntax.BashPPTy
 		// does. bashPPNativeType is Go-source only, so this stays inert in
 		// the classic/POSIX dialect.
 		if r.bashPPNativeType(expected) {
+			if r.goSourceUnsafePointerType(expected) {
+				value, err := r.bashPPNativeTypeRequest("new", expected)
+				if err != nil {
+					return nil, err
+				}
+				cell.declType = expected
+				cell.vr = expand.Variable{Set: true, Kind: expand.Object, Obj: &value}
+				return cell, nil
+			}
 			cell.declType = expected
 			return cell, nil
 		}
@@ -229,6 +239,13 @@ func (r *Runner) goSourceNilableType(typ syntax.BashPPTypeExpr) bool {
 	if _, iface := r.bashPPInterfaceType(typ); iface {
 		return true
 	}
+	// unsafe.Pointer is the one imported named scalar whose zero value is nil.
+	// Authenticate the package binding rather than treating an arbitrary type
+	// named "unsafe.Pointer" as special; its value and reflected identity stay
+	// owned by the dependency bridge.
+	if r.goSourceUnsafePointerType(typ) {
+		return true
+	}
 	switch shape := r.bashPPUnderlyingType(typ).(type) {
 	case *syntax.BashPPPointerType, *syntax.BashPPFuncType, *syntax.BashPPChanType:
 		return true
@@ -236,6 +253,15 @@ func (r *Runner) goSourceNilableType(typ syntax.BashPPTypeExpr) bool {
 		return shape.Kind == "slice" || shape.Kind == "map"
 	}
 	return false
+}
+
+func (r *Runner) goSourceUnsafePointerType(typ syntax.BashPPTypeExpr) bool {
+	named, ok := typ.(*syntax.BashPPNamedType)
+	if !ok || named.Name == nil {
+		return false
+	}
+	alias, name, ok := strings.Cut(named.Name.Value, ".")
+	return ok && name == "Pointer" && r.bashPPImports[alias] == "unsafe"
 }
 
 // goSourceNilElement materialises an untyped nil literal, or a typed nil

@@ -320,8 +320,8 @@ func (r *Runner) bashPPBridgeExpr(expr syntax.BashPPExpr) (bashPPBridgeValue, er
 			}
 		}
 	}
-	if value, ok := r.goSourceTypedNilBridgeValue(expr); ok {
-		return value, nil
+	if value, ok, err := r.goSourceTypedNilBridgeValue(expr); ok {
+		return value, err
 	}
 	if value, handled, err := r.goSourceRecoverBridgeValue(expr); handled {
 		return value, err
