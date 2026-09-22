@@ -1,7 +1,7 @@
 // Copyright (c) 2026, Daniel Martí <mvdan@mvdan.cc>
 // See LICENSE for licensing information
 
-//go:build !unix
+//go:build !unix && !windows
 
 package interp
 
