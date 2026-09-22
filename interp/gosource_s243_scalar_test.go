@@ -110,6 +110,26 @@ func main() {
 	fmt.Println(negativeInt+(1<<100) == 0)
 }
 `,
+		"complex_scalar_collection_and_zero_keys": `package main
+
+import (
+	"fmt"
+	"math"
+)
+
+func id128(z complex128) complex128 { return z }
+func id64(z complex64) complex64 { return z }
+
+func main() {
+	z128 := id128(complex(7, math.Copysign(0, -1)))
+	z64 := id64(complex(float32(5), math.Float32frombits(1<<31)))
+	values := []complex128{z128, complex128(z64)}
+	fmt.Printf("%T %v %T %v\n", z64, real(values[0]), values[0], real(values[1]))
+ fmt.Println(math.Signbit(imag(z128)),math.Signbit(float64(imag(z64))),math.Signbit(imag(values[0])),math.Signbit(imag(values[1])))
+	m := map[complex64]string{complex64(0): "zero"}
+	fmt.Println(m[z64-complex64(5)], len(m))
+}
+`,
 	}
 	for name, source := range cases {
 		t.Run(name, func(t *testing.T) { typedSendThreeModes(t, source) })

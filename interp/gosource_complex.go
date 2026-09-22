@@ -129,10 +129,9 @@ func (r *Runner) bashPPComplexRuntimeOp(op token.Token, left, right bashPPScalar
 			z = a / b
 		}
 	}
-	if math.IsInf(real(z), 0) || math.IsInf(imag(z), 0) || math.IsNaN(real(z)) || math.IsNaN(imag(z)) {
-		return bashPPNonFiniteComplexScalar(z, typ), true, nil
-	}
-	return bashPPScalar{value: bashPPComplexConstant(z), typ: typ, runtime: true}, true, nil
+	// Runtime complex values need an IEEE carrier even when finite: a
+	// go/constant complex cannot retain the sign bit of either zero component.
+	return bashPPNonFiniteComplexScalar(z, typ), true, nil
 }
 func bashPPParseComplex(text string) constant.Value {
 	z, err := strconv.ParseComplex(text, 128)
@@ -161,8 +160,8 @@ func (r *Runner) bashPPConvertComplex(typ string, x bashPPScalar) (bashPPScalar,
 		im, _ := constant.Float32Val(constant.Imag(x.value))
 		z = complex128(complex(re, im))
 	}
-	if math.IsInf(real(z), 0) || math.IsInf(imag(z), 0) || math.IsNaN(real(z)) || math.IsNaN(imag(z)) {
-		return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-CONVERT: non-finite %s is not supported by scalar carrier", typ)
+	if x.runtime || math.IsInf(real(z), 0) || math.IsInf(imag(z), 0) || math.IsNaN(real(z)) || math.IsNaN(imag(z)) {
+		return bashPPNonFiniteComplexScalar(z, typ), nil
 	}
 	return bashPPScalar{value: bashPPComplexConstant(z), typ: typ, runtime: x.runtime}, nil
 }
@@ -221,7 +220,7 @@ func (r *Runner) bashPPComplexBuiltinValues(name string, args []bashPPScalar) (b
 				}
 			}
 		}
-		if args[0].hasNonFinite || args[1].hasNonFinite {
+		if runtime {
 			re, reOK := bashPPScalarFloat64(args[0])
 			im, imOK := bashPPScalarFloat64(args[1])
 			if !reOK || !imOK {
@@ -267,7 +266,7 @@ func (r *Runner) bashPPComplexBuiltinValues(name string, args []bashPPScalar) (b
 		if math.IsInf(part, 0) || math.IsNaN(part) {
 			return bashPPNonFiniteScalar(part, typ), nil
 		}
-		return bashPPScalar{value: constant.MakeFloat64(part), typ: typ, runtime: true}, nil
+		return bashPPScalar{value: constant.MakeFloat64(part), typ: typ, runtime: true, negativeZero: part == 0 && math.Signbit(part)}, nil
 	}
 	v := constant.Real(a.value)
 	if name == "imag" {

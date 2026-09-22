@@ -1087,7 +1087,12 @@ func (r *Runner) bashPPCheckCollectionValue(value any, expected syntax.BashPPTyp
 			valid = bashPPCollectionFloatText(value.(string))
 		}
 	case typ == "complex64" || typ == "complex128":
-		valid = bashPPSprint162ComplexCollectionText(value)
+		switch value.(type) {
+		case complex64, complex128:
+			valid = true
+		default:
+			valid = bashPPSprint162ComplexCollectionText(value)
+		}
 	}
 	if !valid {
 		return fmt.Errorf("BASHPP-ECOLLECTION-ELEMENT: cannot use %T value as %s", value, name.Name.Value)

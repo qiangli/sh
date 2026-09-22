@@ -984,6 +984,12 @@ func (r *Runner) bashPPBridgeCollection(value any, meta *bashPPCollectionMeta, t
 	case float64:
 		result.Kind = "float"
 		result.Text = strconv.FormatFloat(value, 'g', -1, 64)
+	case complex64:
+		result.Kind = "complex"
+		result.Text = strconv.FormatComplex(complex128(value), 'g', -1, 64)
+	case complex128:
+		result.Kind = "complex"
+		result.Text = strconv.FormatComplex(value, 'g', -1, 128)
 	case nil:
 		// A nil slice or map keeps its declared type and zero state; see
 		// bashPPNilCollectionBridge in bashpp_collection_growth.go.

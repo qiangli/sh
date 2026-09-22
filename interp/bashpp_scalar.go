@@ -366,6 +366,13 @@ func (r *Runner) bashPPScalarPath(expr syntax.BashPPExpr) (bashPPScalar, error) 
 	switch value := value.(type) {
 	case string:
 		if r.bashPPGoSource && r.bashPPStringCarriesComplex(r.bashPPExprScalarType(expr), value) {
+			bits := 128
+			if underlying, ok := r.bashPPUnderlyingType(r.bashPPExprScalarType(expr)).(*syntax.BashPPNamedType); ok && underlying.Name.Value == "complex64" {
+				bits = 64
+			}
+			if z, err := strconv.ParseComplex(value, bits); err == nil {
+				return bashPPNonFiniteComplexScalar(z, typ), nil
+			}
 			return bashPPScalar{value: bashPPParseComplex(value), typ: typ, runtime: true}, nil
 		}
 		// A NaN or infinity reaches a float element only as its storage
@@ -385,6 +392,14 @@ func (r *Runner) bashPPScalarPath(expr syntax.BashPPExpr) (bashPPScalar, error) 
 			}
 		}
 		return bashPPScalar{value: constant.MakeString(value), typ: typ, runtime: true}, nil
+	case complex64:
+		if r.bashPPGoSource {
+			return bashPPNonFiniteComplexScalar(complex128(value), typ), nil
+		}
+	case complex128:
+		if r.bashPPGoSource {
+			return bashPPNonFiniteComplexScalar(value, typ), nil
+		}
 	case bool:
 		return bashPPScalar{value: constant.MakeBool(value), typ: typ, runtime: true}, nil
 	case int:
@@ -540,8 +555,12 @@ func (r *Runner) bashPPScalarFromCell(cell *bashPPCell) bashPPScalar {
 		}
 		if underlying, ok := r.bashPPUnderlyingType(&syntax.BashPPNamedType{Name: &syntax.Lit{Value: typ}}).(*syntax.BashPPNamedType); ok &&
 			underlying.Name != nil && (underlying.Name.Value == "complex64" || underlying.Name.Value == "complex128") {
-			if special, ok := bashPPNonFiniteComplexText(text); ok {
-				return bashPPNonFiniteComplexScalar(special, typ)
+			bits := 128
+			if underlying.Name.Value == "complex64" {
+				bits = 64
+			}
+			if runtimeValue, err := strconv.ParseComplex(text, bits); err == nil {
+				return bashPPNonFiniteComplexScalar(runtimeValue, typ)
 			}
 		}
 	}

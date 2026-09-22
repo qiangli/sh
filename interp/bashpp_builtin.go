@@ -110,6 +110,12 @@ func bashPPBuiltinExactScalarValue(text string, scalar bashPPScalar) any {
 	case constant.Float:
 		value, _ := constant.Float64Val(scalar.value)
 		return value
+	case constant.Complex:
+		value := bashPPComplexNumber(scalar.value)
+		if scalar.typ == "complex64" {
+			return complex64(value)
+		}
+		return value
 	}
 	return text
 }

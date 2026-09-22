@@ -143,10 +143,18 @@ func (r *Runner) bashPPSprint165MapKey(value any, meta *bashPPCollectionMeta, ty
 		case "complex64", "complex128":
 			var complexValue complex128
 			switch value := value.(type) {
+			case complex64:
+				complexValue = complex128(value)
 			case complex128:
 				complexValue = value
 			case string:
-				complexValue = bashPPComplexNumber(bashPPParseComplex(value))
+				// Runtime IEEE components must not pass through go/constant:
+				// it cannot represent NaN, infinity, or signed zero.
+				parsed, err := strconv.ParseComplex(value, 128)
+				if err != nil {
+					return bashPPMapKey{}, false, fmt.Errorf("BASHPP-ECOLLECTION-KEY: invalid %s: %w", typeName, err)
+				}
+				complexValue = parsed
 			default:
 				return bashPPMapKey{}, false, fmt.Errorf("BASHPP-ECOLLECTION-KEY: %T is not %s", value, typeName)
 			}

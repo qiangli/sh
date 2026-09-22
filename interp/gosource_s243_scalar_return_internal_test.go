@@ -24,6 +24,21 @@ func TestS243BuiltinExactSpecialScalarValue(t *testing.T) {
 	}
 }
 
+func TestS243BuiltinExactFiniteComplexValue(t *testing.T) {
+	for _, tc := range []struct {
+		typ  string
+		want any
+	}{
+		{"complex64", complex64(complex(5, -7))},
+		{"complex128", complex128(complex(5, -7))},
+	} {
+		scalar := bashPPScalar{value: bashPPComplexConstant(complex(5, -7)), typ: tc.typ, runtime: true}
+		if got := bashPPBuiltinExactScalarValue("(5-7i)", scalar); got != tc.want {
+			t.Fatalf("%s finite complex scalar became %#v (%T), want %#v (%T)", tc.typ, got, got, tc.want, tc.want)
+		}
+	}
+}
+
 func TestS243NonFiniteMethodScalarReturnTransport(t *testing.T) {
 	r := &Runner{bashPPGoSource: true}
 	complexValue := complex(math.Inf(1), math.NaN())

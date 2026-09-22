@@ -322,6 +322,14 @@ func (r *Runner) goSourceCollectionReadCell(expr syntax.BashPPExpr, value any, m
 			cell.scalarKind = constant.Int
 		case float64:
 			cell.scalarKind = constant.Float
+		case complex64:
+			cell.scalarKind = constant.Complex
+			cell.typeName = bashPPTypeText(cell.declType)
+			cell.nonFiniteComplex, cell.hasNonFiniteComplex = complex128(v), true
+		case complex128:
+			cell.scalarKind = constant.Complex
+			cell.typeName = bashPPTypeText(cell.declType)
+			cell.nonFiniteComplex, cell.hasNonFiniteComplex = v, true
 		}
 	}
 	return cell
