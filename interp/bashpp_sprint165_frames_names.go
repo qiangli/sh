@@ -2,6 +2,7 @@ package interp
 
 import (
 	"strconv"
+	"strings"
 
 	"mvdan.cc/sh/v3/syntax"
 )
@@ -33,7 +34,7 @@ func (r *Runner) goSourceLiteralNames() map[*syntax.BashPPFuncLit]string {
 	globals := 0
 	for _, stmt := range r.bashPPGoSourceFile.Stmts {
 		if decl, ok := stmt.Cmd.(*syntax.BashPPFuncDecl); ok {
-			goSourceIndexLiterals(decl.Body, goSourceDeclFrameName(decl), ".func", names)
+			goSourceIndexLiterals(decl.Body, r.goSourceDeclFrameName(decl), ".func", names)
 			continue
 		}
 		syntax.Walk(stmt, func(node syntax.Node) bool {
@@ -74,20 +75,51 @@ func goSourceIndexLiterals(body *syntax.Block, parent, suffix string, names map[
 // goSourceDeclFrameName is the qualified name of a declared function's
 // frame: `main.f`, `main.T.M`, `main.(*T).M`, and `[...]` for the type
 // arguments of a generic declaration or receiver.
-func goSourceDeclFrameName(decl *syntax.BashPPFuncDecl) string {
+func (r *Runner) goSourceDeclFrameName(decl *syntax.BashPPFuncDecl) string {
+	pkg, prefix := "main", ""
+	if r.bashPPGoSourceFile != nil {
+		if source, ok := r.bashPPGoSourceFile.SourceAt(decl.Pos()); ok && source.PackagePath != "" {
+			pkg = source.PackagePath
+			prefix = goSourceLinkedNamePrefix(decl.Name.Value)
+			if prefix == "" && decl.Receiver != nil && decl.Receiver.RecvType != nil {
+				prefix = goSourceLinkedNamePrefix(decl.Receiver.RecvType.Value)
+			}
+		}
+	}
+	declName := strings.TrimPrefix(decl.Name.Value, prefix)
 	if recv := decl.Receiver; recv != nil && recv.RecvType != nil {
-		owner := recv.RecvType.Value
+		owner := strings.TrimPrefix(recv.RecvType.Value, prefix)
 		if len(recv.TypeParams) > 0 {
 			owner += "[...]"
 		}
 		if recv.Pointer {
 			owner = "(*" + owner + ")"
 		}
-		return "main." + owner + "." + decl.Name.Value
+		return pkg + "." + owner + "." + declName
 	}
-	name := "main." + decl.Name.Value
+	name := pkg + "." + declName
 	if len(decl.TypeParams) > 0 {
 		name += "[...]"
 	}
 	return name
+}
+
+// goSourceLinkedNamePrefix returns the hygienic prefix applied while a mapped
+// package is flattened. The source position authenticates that the declaration
+// belongs to a linked package before callers use this result; an ordinary main
+// declaration with the same spelling is therefore left unchanged.
+func goSourceLinkedNamePrefix(name string) string {
+	const marker = "__gosource_pkg_"
+	if !strings.HasPrefix(name, marker) {
+		return ""
+	}
+	rest := name[len(marker):]
+	i := strings.IndexByte(rest, '_')
+	if i < 1 {
+		return ""
+	}
+	if _, err := strconv.Atoi(rest[:i]); err != nil {
+		return ""
+	}
+	return marker + rest[:i+1]
 }

@@ -1128,6 +1128,9 @@ type callFrame struct {
 	callPos  syntax.Pos
 	bashPPFn *bashPPFunc
 	seq      uint64
+	// goSourceName is set only on a synthetic package-initializer frame.
+	// Ordinary frames derive their identity from bashPPFn and source metadata.
+	goSourceName string
 	// lastCallPos is the position of the last call this frame made, and
 	// deferPos the position the frame is returning from once its deferred
 	// calls run; see bashpp_sprint165_frames_defer.go.

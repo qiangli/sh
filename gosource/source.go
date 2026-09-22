@@ -472,7 +472,7 @@ func Load(sources []Source, options Options) (*Program, error) {
 		// A checked package parsed every source, so files and sources align.
 		for i, src := range checked.sources {
 			tf := c.fset.File(checked.files[i].FileStart)
-			p.Sources = append(p.Sources, SourceInfo{Name: src.Name, SHA256: fmt.Sprintf("%x", sha256.Sum256(src.Data)), Base: uint(tf.Base() - 1), Size: uint(len(src.Data)), Package: checked.pkg.Name(), LineDirectives: lineDirectives(tf, checked.files[i])})
+			p.Sources = append(p.Sources, SourceInfo{Name: src.Name, SHA256: fmt.Sprintf("%x", sha256.Sum256(src.Data)), Base: uint(tf.Base() - 1), Size: uint(len(src.Data)), Package: checked.pkg.Name(), PackagePath: path, LineDirectives: lineDirectives(tf, checked.files[i])})
 		}
 	}
 	c.attachEmbedDirectives(p.File)
