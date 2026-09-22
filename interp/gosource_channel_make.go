@@ -88,6 +88,10 @@ func (r *Runner) goSourceMakeNativeChannel(typ *syntax.BashPPChanType, expr synt
 	}
 	values, err := r.bashPPNativeRequest(r.bashPPTaskContext(r.ectx), req, bashPPBridgeRequest{Op: "channel-make", Selector: selector, Args: []bashPPBridgeValue{{Kind: "int", Type: "int", Text: strconv.Itoa(capacity)}}})
 	if err != nil {
+		if message, ok := goSourceNativeMakeChannelPanic(err); ok {
+			r.goSourceRuntimePanic(message)
+			return nil, true, errBashPPScalarInterrupted
+		}
 		return nil, true, err
 	}
 	if len(values) != 1 {
@@ -96,6 +100,26 @@ func (r *Runner) goSourceMakeNativeChannel(typ *syntax.BashPPChanType, expr synt
 	cell := goSourceNativeValueCell(values[0])
 	cell.declType = typ
 	return cell, true, nil
+}
+
+// A panic reported by this request came from the worker's channel-make
+// dispatch. Preserve only panic values the Go runtime classifier recognizes;
+// bridge validation failures and arbitrary reflect panics remain ordinary
+// errors. Keeping this at the operation boundary avoids granting the same
+// authority to an error string returned by any other native request.
+func goSourceNativeMakeChannelPanic(err error) (string, bool) {
+	if err == nil {
+		return "", false
+	}
+	message, ok := strings.CutPrefix(err.Error(), "native dependency panic: ")
+	if !ok {
+		return "", false
+	}
+	_, ok = bashPPRuntimeErrorPayload(message)
+	if !ok {
+		return "", false
+	}
+	return message, true
 }
 func (r *Runner) goSourceCloseChannel(expr syntax.BashPPExpr) {
 	channel, ok := r.goSourceChannelOperand(expr, nil, "close")
