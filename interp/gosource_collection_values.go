@@ -70,7 +70,12 @@ func (r *Runner) goSourceBuiltinArg(call *syntax.BashPPCall, index int) (bashPPB
 
 func (r *Runner) goSourceBuiltinCellArg(cell *bashPPCell, text string) bashPPBuiltinArg {
 	arg := bashPPBuiltinArg{cell: cell, typ: cell.declType, channel: cell.channel, text: text}
-	if cell.pointer {
+	if cell.interfaceValue != nil {
+		arg.meta = &bashPPCollectionMeta{kind: "interface", typ: cell.declType, interfaceValue: cell.interfaceValue}
+		if source := cell.interfaceValue.cell; source != nil {
+			arg.value = source.vrValue()
+		}
+	} else if cell.pointer {
 		arg.value, arg.meta = cell.pointerValue, bashPPPointerMeta(cell.declType)
 	} else if cell.vr.Kind == expand.Object {
 		arg.value, arg.meta = cell.vr.Obj, bashPPCellMeta(cell)

@@ -32,6 +32,19 @@ func TestS243OriginalTypeparamAppendRoot(t *testing.T) {
 	}
 }
 
+func TestS243OriginalAppendRoot(t *testing.T) {
+	const path = "append.go"
+	const digest = "1b372f9acde600d171e9b0db13801b964f2d58be20e43238ec6ddc891f614160"
+	source, err := os.ReadFile(filepath.Join(runtime.GOROOT(), "test", path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprintf("%x", sha256.Sum256(source)) != digest {
+		t.Fatalf("original %s bytes changed", path)
+	}
+	differGoSource(t, string(source), nil, "")
+}
+
 func TestS243AppendGenericBindingPerInstantiation(t *testing.T) {
 	typedSendThreeModes(t, `package main
 import "fmt"
@@ -48,5 +61,27 @@ func main() {
  ch := make(Recv)
  cs := add(Slice[Recv]{ch}, once(ch))
  fmt.Println(is, ss, len(cs), cs[0] == ch, cs[1] == ch, calls)
+}`)
+}
+
+func TestS243AppendInterfaceCellsKeepDynamicValue(t *testing.T) {
+	typedSendThreeModes(t, `package main
+import "fmt"
+type Box struct{ N int }
+var calls int
+func next() any { calls++; return &Box{N: calls} }
+func main() {
+ p := &Box{N: 1}
+ src := []any{p}
+ dst := append([]any{}, src[0], next())
+ fmt.Println(dst[0].(*Box) == p, dst[1].(*Box).N, calls)
+
+ spread := append([]any{}, src...)
+ src[0] = &Box{N: 4}
+ fmt.Println(spread[0].(*Box).N, src[0].(*Box).N)
+
+ var nilValue any
+ dst = append(dst, nilValue)
+ fmt.Println(dst[2] == nil)
 }`)
 }

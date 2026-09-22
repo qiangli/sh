@@ -225,12 +225,16 @@ func (r *Runner) bashPPUnderlyingType(typ syntax.BashPPTypeExpr) syntax.BashPPTy
 		if !ok {
 			return typ
 		}
-		decl, found := r.bashPPTypes[name.Name.Value]
-		if !found || decl.typeExpr == nil || seen[bashPPTypeText(name)] {
+		key := bashPPTypeText(name)
+		if scope, known := r.goSourceLocalTypeScope(name); known {
+			key += "@" + scope
+		}
+		decl, found := r.bashPPTypeDeclarationForReference(name)
+		if !found || decl.typeExpr == nil || seen[key] {
 			return typ
 		}
-		seen[bashPPTypeText(name)] = true
-		typ = r.bashPPInstantiateNamedType(name)
+		seen[key] = true
+		typ = bashPPInstantiateTypeDeclaration(name, decl)
 	}
 }
 

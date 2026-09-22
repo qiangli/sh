@@ -57,7 +57,12 @@ func (r *Runner) bashPPBuiltinArg(w *syntax.Word) bashPPBuiltinArg {
 		if arg.typ == nil && cell.typeName != "" {
 			arg.typ = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: cell.typeName}}
 		}
-		if cell.pointer {
+		if cell.interfaceValue != nil {
+			arg.meta = &bashPPCollectionMeta{kind: "interface", typ: arg.typ, interfaceValue: cell.interfaceValue}
+			if source := cell.interfaceValue.cell; source != nil {
+				arg.value = source.vrValue()
+			}
+		} else if cell.pointer {
 			arg.value, arg.meta = cell.pointerValue, bashPPPointerMeta(cell.declType)
 		} else if cell.vr.Kind == expand.Object {
 			arg.value, arg.meta = cell.vr.Obj, bashPPCellMeta(cell)
@@ -247,6 +252,22 @@ func (r *Runner) bashPPBuiltinElement(arg bashPPBuiltinArg, expected syntax.Bash
 	// its dynamic type and callable/channel/structured side channels for later
 	// assertions and dispatch.
 	if _, ok := r.bashPPInterfaceType(expected); ok && arg.cell != nil {
+		// Assigning an interface value to another interface stores its dynamic
+		// value, not a second interface wrapper. An indexed interface element
+		// arrives with that value in interfaceValue; bashPPCopyInterfaceCell
+		// intentionally removes the wrapper, so copy it explicitly before the
+		// ordinary concrete-to-interface path below.
+		if source := arg.cell.interfaceValue; source != nil {
+			stored := *source
+			if source.cell != nil {
+				stored.cell = bashPPCopyInterfaceCell(source.cell)
+			}
+			meta := &bashPPCollectionMeta{kind: "interface", typ: expected, interfaceValue: &stored}
+			if stored.nilIface || stored.cell == nil {
+				return "", meta, true
+			}
+			return stored.cell.vrValue(), meta, true
+		}
 		stored := bashPPCopyInterfaceCell(arg.cell)
 		if err := r.bashPPBindInterfaceParam(stored, expected); err != nil {
 			r.bashPPBuiltinError("TYPE", "%v", err)
