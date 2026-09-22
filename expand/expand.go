@@ -5718,13 +5718,32 @@ func pathJoin2Mode(elem1, elem2 string, windows bool) string {
 	return elem1 + "/" + elem2
 }
 
-// pathSplit splits a file path into its elements, retaining empty ones. Before
-// splitting, slashes are replaced with [filepath.Separator], so that splitting
-// Unix paths on Windows works as well.
+// globPathAbs reports whether a glob path element is absolute in the shell's
+// spelling: a leading `/` on every platform (Windows too — /c/x and /tmp/x
+// are converted by the directory reader), or a native volume path.
+func globPathAbs(p string) bool {
+	return strings.HasPrefix(p, "/") || filepath.IsAbs(p)
+}
+
+// globPathJoin joins a glob path element onto base unless it is absolute.
+func globPathJoin(base, p string) string {
+	if globPathAbs(p) {
+		return p
+	}
+	return filepath.Join(base, p)
+}
+
+// pathSplit splits a glob pattern into its path elements, retaining empty
+// ones. A pattern is shell text, so `/` is its only separator on every
+// platform: in bash a backslash is the pattern's escape character
+// (`"*"*` reaches the globber as `\**`, a literal star followed by a
+// wildcard — exp.tests), never a separator, and treating it as one on
+// Windows turned that escape into a bare `**`. Native `C:\x\*` spellings
+// therefore do not glob, exactly as in bash on Windows; scripts write
+// `C:/x/*` or `/c/x/*`.
 func pathSplit(path string) []string {
 	path = unescapeGlobLiteralPathSeparators(path)
-	path = filepath.FromSlash(path)
-	return strings.Split(path, string(filepath.Separator))
+	return strings.Split(path, "/")
 }
 
 func unescapeGlobLiteralPathSeparators(path string) string {
@@ -5777,13 +5796,14 @@ func unescapeGlobLiteral(path string) string {
 func (cfg *Config) glob(base, pat string) ([]string, error) {
 	parts := pathSplit(pat)
 	matches := []string{""}
-	if filepath.IsAbs(pat) {
+	if globPathAbs(pat) {
 		if parts[0] == "" {
-			// unix-like
+			// unix-like (on Windows too: /c/x and /tmp/x are absolute in the
+			// shell's spelling and the directory walk converts them)
 			matches[0] = "/"
 		} else {
-			// windows: the volume needs its trailing separator to name the
-			// root directory rather than the drive-relative cwd.
+			// windows C:/x: the volume needs its trailing separator to name
+			// the root directory rather than the drive-relative cwd.
 			matches[0] = parts[0] + "/"
 		}
 		parts = parts[1:]
@@ -5812,10 +5832,7 @@ func (cfg *Config) glob(base, pat string) ([]string, error) {
 			litPart := unescapeGlobLiteral(part)
 			var newMatches []string
 			for _, dir := range matches {
-				match := dir
-				if !filepath.IsAbs(match) {
-					match = filepath.Join(base, match)
-				}
+				match := globPathJoin(base, dir)
 				match = pathJoin2(match, litPart)
 				// We can't use [Config.ReadDir2] on the parent and match the directory
 				// entry by name, because short paths on Windows break that.
@@ -5886,10 +5903,7 @@ func (cfg *Config) glob(base, pat string) ([]string, error) {
 				// Bash: `**` does not follow symlinks during recursion
 				// (to avoid cycles and unbounded expansion). Include the
 				// symlink entry itself but do not descend into it.
-				dirPath := dir
-				if !filepath.IsAbs(dirPath) {
-					dirPath = filepath.Join(base, dirPath)
-				}
+				dirPath := globPathJoin(base, dir)
 				if info, err := os.Lstat(dirPath); err == nil && info.Mode()&os.ModeSymlink != 0 {
 					continue
 				}
@@ -5919,10 +5933,7 @@ func (cfg *Config) glob(base, pat string) ([]string, error) {
 				if needsDescent {
 					filtered := matches[:0]
 					for _, m := range matches {
-						mPath := m
-						if !filepath.IsAbs(mPath) {
-							mPath = filepath.Join(base, mPath)
-						}
+						mPath := globPathJoin(base, m)
 						if info, err := os.Lstat(mPath); err == nil && info.Mode()&os.ModeSymlink != 0 {
 							continue
 						}
@@ -6031,10 +6042,7 @@ func (cfg *Config) sortGlobMatches(base string, matches []string) {
 		}
 		statMatches := make([]statMatch, len(matches))
 		for i, match := range matches {
-			path := match
-			if !filepath.IsAbs(path) {
-				path = filepath.Join(base, path)
-			}
+			path := globPathJoin(base, match)
 			info, _ := os.Stat(path)
 			statMatches[i] = statMatch{name: match, info: info}
 		}
@@ -6264,10 +6272,7 @@ func globIgnorePathnameBlocked(pat string) bool {
 }
 
 func (cfg *Config) globDir(base, dir string, matcher func(string) bool, wantDir, needSearch bool, matches []string) ([]string, error) {
-	fullDir := dir
-	if !filepath.IsAbs(dir) {
-		fullDir = filepath.Join(base, dir)
-	}
+	fullDir := globPathJoin(base, dir)
 	infos, err := cfg.ReadDir2(fullDir)
 	if err != nil {
 		// We still want to return matches, for the sake of reusing slices.

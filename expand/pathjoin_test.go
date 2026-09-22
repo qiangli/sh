@@ -24,3 +24,32 @@ func TestPathJoin2KeepsSlash(t *testing.T) {
 		}
 	}
 }
+
+// A glob pattern splits on `/` only: a backslash is the pattern's escape
+// (`"*"*` reaches the globber as `\**`), never a separator, on Windows too.
+func TestPathSplitKeepsBackslashEscapes(t *testing.T) {
+	cases := []struct {
+		in   string
+		want []string
+	}{
+		{`\**`, []string{`\**`}},
+		{"foo/bar", []string{"foo", "bar"}},
+		{"/c/Users/*", []string{"", "c", "Users", "*"}},
+	}
+	for _, c := range cases {
+		got := pathSplit(c.in)
+		if len(got) != len(c.want) {
+			t.Errorf("pathSplit(%q) = %q, want %q", c.in, got, c.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != c.want[i] {
+				t.Errorf("pathSplit(%q) = %q, want %q", c.in, got, c.want)
+				break
+			}
+		}
+	}
+	if !globPathAbs("/tmp/x") || !globPathAbs("/c/x") || globPathAbs("rel/x") {
+		t.Error("globPathAbs: a leading slash is absolute in the shell's spelling; a relative element is not")
+	}
+}
