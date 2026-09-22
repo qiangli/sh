@@ -40,6 +40,9 @@ func (r *Runner) goSourceSliceBoundsPanic(expr *syntax.BashPPSliceExpr, low, hig
 			message = fmt.Sprintf("[%s:%s]", low.text, high.text)
 		}
 	}
+	saved := r.curStmtPos
+	r.curStmtPos = expr.Lbrack
 	r.goSourceRuntimePanic("runtime error: slice bounds out of range " + message)
+	r.curStmtPos = saved
 	return errBashPPScalarInterrupted
 }

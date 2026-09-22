@@ -755,8 +755,10 @@ func (e *emitter) fail(n syntax.Node, code, msg string) error {
 	return ErrorList{{Code: code, Msg: msg, Node: nodeName(n), Pos: pos, Source: source.Name}}
 }
 func (e *emitter) mark(n syntax.Node) string {
+	return e.markAt(n, n.Pos())
+}
+func (e *emitter) markAt(n syntax.Node, pos syntax.Pos) string {
 	id := len(e.marks)
-	pos := n.Pos()
 	if d, ok := n.(*syntax.BashPPDecl); ok && e.goSource && d.Name != nil && d.Name.Pos().Line() > pos.Line() {
 		// A spec of a grouped `var (` / `type (` declaration carries the
 		// group's keyword position; it is emitted as its own declaration,
@@ -884,7 +886,11 @@ func (e *emitter) statement(s *syntax.Stmt) (string, error) {
 		failure := e.prefix + "expansionError"
 		text = "if " + failure + " := " + e.prefix + "rt.TryShellStatement(func(){\n" + text + "\n}); " + failure + " != nil {" + e.operationFailure(failure) + "}"
 	}
-	return e.mark(s.Cmd) + reset + text + "\n", nil
+	pos := s.Cmd.Pos()
+	if e.goSource {
+		pos = goSourceInstructionPos(s.Cmd)
+	}
+	return e.markAt(s.Cmd, pos) + reset + text + "\n", nil
 }
 func (e *emitter) block(b *syntax.Block) (string, error) {
 	parts, err := e.blockParts(b)

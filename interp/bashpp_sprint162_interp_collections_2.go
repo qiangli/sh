@@ -30,15 +30,33 @@ func bashPPSprint162ComplexCollectionText(value any) bool {
 // responsibility and never reach this evaluator path.
 func (r *Runner) bashPPSprint162CollectionBoundsPanic(expr syntax.BashPPExpr, index bashPPCollectionIndexValue, length int) error {
 	message := fmt.Sprintf("runtime error: index out of range [%s] with length %d", index.text, length)
+	pos := syntax.Pos{}
 	if expr != nil {
+		pos = expr.Pos()
+		switch x := expr.(type) {
+		case *syntax.BashPPIndexExpr:
+			pos = x.Lbrack
+		case *syntax.BashPPSliceExpr:
+			pos = x.Lbrack
+		}
 		r.bashPPPanic.traceSource = r.filename
-		r.bashPPPanic.traceLine = expr.Pos().Line()
+		if r.bashPPGoSourceFile != nil {
+			if source, ok := r.bashPPGoSourceFile.SourceAt(pos); ok {
+				r.bashPPPanic.traceSource = source.Name
+			}
+		}
+		r.bashPPPanic.traceLine = pos.Line()
 		r.bashPPPanic.traceFrames = r.bashPPPanic.traceFrames[:0]
 		for _, frame := range r.callStack {
 			r.bashPPPanic.traceFrames = append(r.bashPPPanic.traceFrames, frame.funcName)
 		}
 	}
+	saved := r.curStmtPos
+	if pos.IsValid() {
+		r.curStmtPos = pos
+	}
 	r.bashPPRaise(message)
+	r.curStmtPos = saved
 	return errBashPPScalarInterrupted
 }
 
