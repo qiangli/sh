@@ -1044,6 +1044,11 @@ func (r *Runner) bashPPBindNativeValue(name string, value bashPPBridgeValue) {
 	copy := value
 	r.bashPPDeclareName(name, expand.NewObject(&copy))
 	cell := r.bashPPScope.lookup(name)
+	// A dependency handle is reference storage just as much as a local map or
+	// pointer is. Give it an identity at the binding boundary so readonly can
+	// freeze the handle (and every alias of it) before a native field-set is
+	// dispatched back to the dependency.
+	cell.object = &bashPPObjectIdentity{owner: name}
 	cell.typeName = value.Type
 	if value.Interface != "" {
 		cell.declType = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.Interface}}

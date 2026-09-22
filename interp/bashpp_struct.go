@@ -922,6 +922,21 @@ func (r *Runner) bashPPStructuredAssign(target, rhs syntax.BashPPExpr) {
 		return
 	}
 	if selector, ok := target.(*syntax.BashPPSelectorExpr); ok && r.bashPPNativeExpr(selector.X) {
+		// Native handles bypass interpreter-side structured storage and would
+		// otherwise dispatch this write directly to the dependency. Their
+		// binding identity is still the authority for readonly, including an
+		// alias which shares the same dependency-owned pointer.
+		if root, rooted := bashPPCollectionRoot(target); rooted && r.bashPPScope != nil {
+			if cell := r.bashPPScope.lookup(root); cell != nil && cell.object != nil && cell.object.readonly {
+				if root != cell.object.owner {
+					r.errf("BASHPP-EREADONLY-MUTATION: cannot mutate readonly value %q through alias %q and path %s\n", cell.object.owner, root, strings.TrimPrefix(bashPPExprText(target), root))
+				} else {
+					r.errf("BASHPP-EREADONLY-MUTATION: cannot mutate readonly value %q through field .%s\n", cell.object.owner, selector.Sel.Value)
+				}
+				r.exit = exitStatus{code: 2}
+				return
+			}
+		}
 		base, err := r.bashPPNativeReceiver(selector.X)
 		if err == nil {
 			value, valueErr := r.bashPPBridgeExpr(rhs)

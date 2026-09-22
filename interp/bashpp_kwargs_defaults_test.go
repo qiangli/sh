@@ -52,6 +52,10 @@ readonly cfg
 alias := cfg
 printf '%s:%d:%s\n' alias.Meta.Name alias.Ports[1] alias.Labels["tier"]
 `, "prod:443:edge\n"},
+		{"mutable imported pointer", `import "net/url"
+endpoint, _ := url.Parse("https://example.test/original")
+endpoint.Host = "changed.test"
+`, ""},
 	}
 	for _, tc := range positives {
 		t.Run(tc.name, func(t *testing.T) {
