@@ -8,6 +8,7 @@ import (
 	"os"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -70,13 +71,58 @@ func isProcSubstPipePathMode(path string, windows bool) bool {
 	return false
 }
 
+// procSubstPipeLive records the names of the process-substitution pipes
+// this process is currently serving. A Windows named pipe is not a
+// filesystem node, so the shell answers its own stat of the path from this
+// registry rather than from the filesystem (see [procSubstPipeStat]); the
+// registry is what makes that answer track the pipe's life the way a FIFO's
+// does on Unix, where [procSubstFIFO.cleanup] unlinks the path and a later
+// `test -e` of it is false.
+//
+// Keyed by the pipe's basename, which is unique to one substitution; the
+// count only guards the release of a name a new pipe has already taken.
+var procSubstPipeLive struct {
+	mu    sync.Mutex
+	names map[string]int
+}
+
+// procSubstPipeRegister marks name as a live process-substitution pipe.
+func procSubstPipeRegister(name string) {
+	procSubstPipeLive.mu.Lock()
+	defer procSubstPipeLive.mu.Unlock()
+	if procSubstPipeLive.names == nil {
+		procSubstPipeLive.names = make(map[string]int)
+	}
+	procSubstPipeLive.names[name]++
+}
+
+// procSubstPipeRelease undoes one [procSubstPipeRegister]. Once the last
+// registration of a name is released, the shell reports the path as gone,
+// as the unlinked FIFO of the same substitution is on Unix.
+func procSubstPipeRelease(name string) {
+	procSubstPipeLive.mu.Lock()
+	defer procSubstPipeLive.mu.Unlock()
+	if n := procSubstPipeLive.names[name]; n > 1 {
+		procSubstPipeLive.names[name] = n - 1
+	} else {
+		delete(procSubstPipeLive.names, name)
+	}
+}
+
+// procSubstPipeIsLive reports whether name is a pipe the shell still serves.
+func procSubstPipeIsLive(name string) bool {
+	procSubstPipeLive.mu.Lock()
+	defer procSubstPipeLive.mu.Unlock()
+	return procSubstPipeLive.names[name] > 0
+}
+
 // procSubstPipeInfo is the synthetic stat result for a Windows
 // process-substitution pipe. A named pipe has no filesystem node: every
 // CreateFile on \\.\pipe\<name> — os.Stat's included — connects a client to
-// the single server instance, which would consume the rendezvous meant for
-// the real consumer and make its open fail. The shell therefore answers
-// its own `test -e`/`-p`/`[[ -e ]]` of the path without touching the pipe,
-// the way stat() of a FIFO on Unix does not open it.
+// a server instance, which for the live stream would consume the rendezvous
+// meant for the real consumer. The shell therefore answers its own
+// `test -e`/`-p`/`[[ -e ]]` of the path without touching the pipe, the way
+// stat() of a FIFO on Unix does not open it.
 type procSubstPipeInfo struct{ name string }
 
 func (i procSubstPipeInfo) Name() string     { return i.name }
@@ -86,8 +132,15 @@ func (procSubstPipeInfo) ModTime() time.Time { return time.Time{} }
 func (procSubstPipeInfo) IsDir() bool        { return false }
 func (procSubstPipeInfo) Sys() any           { return nil }
 
-// procSubstPipeStat reports the synthetic stat of a process-substitution
-// pipe path when path names one.
+// procSubstPipeStat reports how the shell answers a stat of path itself.
+//
+// ok is false when path is not one of this shell's process-substitution
+// pipes; the caller goes to the filesystem. ok is true with a nil info when
+// path is shaped like one but the shell no longer serves it: the answer is
+// then "no such file", exactly what a stat of the FIFO of a finished
+// substitution gives on Unix, where cleanup unlinked it. That is what lets
+// a script tell a live substitution from a spent one — `[ -e "$1" ]` of a
+// //./pipe/sh-np-* path is true only while there is something to read.
 func procSubstPipeStat(path string) (fs.FileInfo, bool) {
 	return procSubstPipeStatMode(path, runtime.GOOS == "windows")
 }
@@ -97,9 +150,31 @@ func procSubstPipeStatMode(path string, windows bool) (fs.FileInfo, bool) {
 	if !isProcSubstPipePathMode(path, windows) {
 		return nil, false
 	}
-	name := path
-	if i := strings.LastIndexAny(path, `/\`); i >= 0 {
-		name = path[i+1:]
+	name := procSubstPipeName(path)
+	if !procSubstPipeIsLive(name) {
+		return nil, true
 	}
 	return procSubstPipeInfo{name: name}, true
+}
+
+// procSubstPipeName is the basename of a pipe path in either spelling, which
+// is the key the live registry uses.
+func procSubstPipeName(path string) string {
+	if i := strings.LastIndexAny(path, `/\`); i >= 0 {
+		return path[i+1:]
+	}
+	return path
+}
+
+// procSubstPipeStatErr is [procSubstPipeStat] for callers that want the
+// "no such file" answer as an error.
+func procSubstPipeStatErr(op, path string) (fs.FileInfo, error, bool) {
+	info, ok := procSubstPipeStat(path)
+	if !ok {
+		return nil, nil, false
+	}
+	if info == nil {
+		return nil, &fs.PathError{Op: op, Path: path, Err: fs.ErrNotExist}, true
+	}
+	return info, nil, true
 }

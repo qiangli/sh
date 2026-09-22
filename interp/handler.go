@@ -947,7 +947,12 @@ func checkStat(dir, file string, checkExec bool) (string, error) {
 	// server instance, so `. <(cmd)`, which looks the path up here before
 	// opening it, would eat its own rendezvous and then find the pipe
 	// busy. r.stat sidesteps it the same way.
-	info, ok := procSubstPipeStat(target)
+	info, statErr, ok := procSubstPipeStatErr("stat", target)
+	if ok && statErr != nil {
+		// A pipe the shell has already released is gone, like the unlinked
+		// FIFO of a finished substitution on Unix.
+		return "", statErr
+	}
 	if !ok {
 		var err error
 		info, err = os.Stat(target)

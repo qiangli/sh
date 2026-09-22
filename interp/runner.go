@@ -11533,9 +11533,11 @@ func (r *Runner) stat(ctx context.Context, name string) (fs.FileInfo, error) {
 		return info, err
 	}
 	// A Windows process-substitution pipe is stat'ed without opening it:
-	// a CreateFile on the name would take the consumer's one connection.
-	if info, ok := procSubstPipeStat(name); ok {
-		return info, nil
+	// a CreateFile on the name would take a connection the consumer wants.
+	// Once the shell has released the pipe the answer is "no such file",
+	// as it is for the unlinked FIFO on Unix.
+	if info, err, ok := procSubstPipeStatErr("stat", name); ok {
+		return info, err
 	}
 	path := absPath(r.Dir, name)
 	return r.statHandler(ctx, path, true)
@@ -11545,8 +11547,8 @@ func (r *Runner) lstat(ctx context.Context, name string) (fs.FileInfo, error) {
 	if info, ok, err := r.statVirtualFd(name); ok {
 		return info, err
 	}
-	if info, ok := procSubstPipeStat(name); ok {
-		return info, nil
+	if info, err, ok := procSubstPipeStatErr("lstat", name); ok {
+		return info, err
 	}
 	path := absPath(r.Dir, name)
 	return r.statHandler(ctx, path, false)
