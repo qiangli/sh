@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go/constant"
 	"strconv"
 	"strings"
 
@@ -480,6 +481,17 @@ func bashPPBridgeScalarValue(v bashPPBridgeValue) (any, *bashPPCollectionMeta, e
 			return nil, nil, fmt.Errorf("float %q from the dependency: %w", v.Text, err)
 		}
 		return n, nil, nil
+	case "complex":
+		// Collections use the exact Go spelling as their complex carrier. The
+		// declared destination type reconstructs the scalar on read, including
+		// defined complex types and non-finite runtime values.
+		if z, special := bashPPNonFiniteComplexText(v.Text); special {
+			return strconv.FormatComplex(z, 'g', -1, 128), nil, nil
+		}
+		if bashPPParseComplex(v.Text).Kind() != constant.Complex {
+			return nil, nil, fmt.Errorf("complex %q from the dependency is invalid", v.Text)
+		}
+		return v.Text, nil, nil
 	}
 	return nil, nil, fmt.Errorf("%s (%s) has no interpreter representation", v.Kind, v.Type)
 }

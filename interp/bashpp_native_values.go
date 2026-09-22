@@ -955,16 +955,23 @@ func (r *Runner) bashPPBridgeCollection(value any, meta *bashPPCollectionMeta, t
 			return result, fmt.Errorf("gosource: missing mapping type schema")
 		}
 	case string:
-		// A large unsigned integer element is carried as its decimal spelling
-		// because it exceeds the interpreter's signed int carrier. Transport it
-		// with the numeric wire kind its declared type needs; an ordinary
-		// string element still crosses as a string.
-		if kind, ok := r.bashPPBridgeIntegerCarrier(typ, value); ok {
+		// Scalar collection storage is text-shaped. Recover its wire kind from
+		// the declared element type before transport; otherwise complex and
+		// defined numeric elements become Go strings at the native boundary.
+		underlying := bashPPTypeText(r.bashPPUnderlyingType(typ))
+		if (underlying == "complex64" || underlying == "complex128") && bashPPSprint162ComplexCollectionText(value) {
+			result.Kind = "complex"
+		} else if kind, ok := r.bashPPBridgeIntegerCarrier(typ, value); ok {
 			result.Kind = kind
 		} else {
 			result.Kind = "string"
 		}
 		result.Text = value
+		var err error
+		result, err = r.bashPPBridgeDefinedScalar(result)
+		if err != nil {
+			return result, err
+		}
 	case bool:
 		result.Kind = "bool"
 		result.Text = strconv.FormatBool(value)

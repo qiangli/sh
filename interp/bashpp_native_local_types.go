@@ -86,6 +86,7 @@ var bashPPLocalScalarTypes = map[string]bool{
 	"int": true, "int8": true, "int16": true, "int32": true, "int64": true,
 	"uint": true, "uint8": true, "uint16": true, "uint32": true, "uint64": true,
 	"uintptr": true, "float32": true, "float64": true, "rune": true, "byte": true,
+	"complex64": true, "complex128": true,
 }
 
 // Immutable descriptors are shared with copied toolchains. Both the syntax

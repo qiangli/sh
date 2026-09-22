@@ -54,6 +54,10 @@ func (r *Runner) bashPPValueBuiltinBridge(expr syntax.BashPPExpr) (bashPPBridgeV
 		bridged, err := r.bashPPBridgeCollection(cell.vr.Obj, cell.valueMeta, cell.valueMeta.typ)
 		return bridged, true, err
 	}
-	bridged, err := bridgeScalar(bashPPScalarFromString(cell.vr.Str))
+	// Keep the result cell's declared scalar identity. Re-parsing its storage
+	// string loses both complex kind and defined scalar types, so append results
+	// used as dependency arguments would expose complex128 as string and Recv as
+	// its underlying string.
+	bridged, err := r.bashPPBridgeCell(cell)
 	return bridged, true, err
 }
