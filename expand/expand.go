@@ -1663,30 +1663,47 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 				wArg := args[0]
 				args = args[1:]
 				isPrecision := len(fmts) > 0 && fmts[len(fmts)-1] == '.'
-				width, err := strconv.ParseInt(strings.TrimSpace(wArg), 10, 64)
-				if err != nil {
-					if warn != nil {
-						warn(fmt.Sprintf("printf: %s: numerical result out of range", wArg))
+				// Bash reads the number as getint does: strtoimax with
+				// base 0 (so 0x10 and 010 count), a leading quote as
+				// the character's code, trailing junk as "invalid
+				// number" keeping the converted prefix (12abc is 12,
+				// abc is 0) with exit status 1, and a value outside
+				// int as ERANGE: the diagnostic and, since such a
+				// width cannot be honoured, no width at all.
+				var width int64
+				var wmsg string
+				if wArg != "" && (wArg[0] == '\'' || wArg[0] == '"') {
+					if len(wArg) > 1 {
+						r, _ := utf8.DecodeRuneInString(wArg[1:])
+						width = int64(r)
 					}
-					if isPrecision {
-						fmts = fmts[:len(fmts)-1]
-					}
-					break
+				} else {
+					width, wmsg = bashPrintfInt(wArg)
 				}
 				const maxPrintfWidth = int64(1<<31 - 1)
-				if width > maxPrintfWidth || width < -maxPrintfWidth {
+				switch {
+				case strings.HasSuffix(wmsg, ": invalid number"):
 					if warn != nil {
-						warn(fmt.Sprintf("printf: %s: numerical result out of range", wArg))
+						warn("printf: " + wmsg)
+					}
+				case wmsg != "", width > maxPrintfWidth, width < -maxPrintfWidth-1:
+					if warn != nil {
+						warn(fmt.Sprintf("printf: %s: Numerical result out of range", wArg))
 					}
 					if isPrecision {
 						fmts = fmts[:len(fmts)-1]
 					}
-					break
+					continue
+				}
+				if isPrecision && width < 0 {
+					// C: a negative precision is taken as if omitted.
+					fmts = fmts[:len(fmts)-1]
+					continue
 				}
 				fmts = append(fmts, []byte(strconv.FormatInt(width, 10))...)
 			case 'q', 'Q':
 				if precisionOverflow && c == 'Q' && warn != nil {
-					warn("printf: numerical result out of range")
+					warn("printf: Numerical result out of range")
 				}
 				// bash printf %q outputs the argument quoted so it can
 				// be reused as shell input. Empty → '', strings with
