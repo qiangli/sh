@@ -5259,7 +5259,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			return failf(1, "fg: %v\n", err)
 		}
 		sigCont, _ := signalByName("CONT")
-		if err := sendSignal(-pgrp, sigCont); err != nil {
+		if err := sendSignal(foregroundContinuePid(bg), sigCont); err != nil {
 			_ = tty.restore()
 			if jobDone(bg) {
 				exit = *bg.exit

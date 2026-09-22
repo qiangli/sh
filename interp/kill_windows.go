@@ -135,6 +135,14 @@ func jobSignalPid(bg *bgProc) int {
 	return int(bg.pid.Load())
 }
 
+// foregroundContinuePid is the kill target `fg` resumes a job with. Windows
+// has no process groups in the POSIX sense and never records one for a job
+// (recordBackgroundProcessGroup is a no-op there), so `fg` resumes the job's
+// own process, which NtResumeProcess restarts in full.
+func foregroundContinuePid(bg *bgProc) int {
+	return jobSignalPid(bg)
+}
+
 func signalStopsJob(sig killSig) bool { return windowsSignalStopsJob(sig.Num) }
 
 func signalContinuesJob(sig killSig) bool { return windowsSignalContinuesJob(sig.Num) }

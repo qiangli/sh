@@ -189,8 +189,16 @@ func prepareForegroundJobCmd(ctx context.Context, r *Runner, cmd *exec.Cmd) *for
 	return nil
 }
 
+// foregroundExistingJob has no terminal to hand over, and needs none. A
+// Windows console is not a controlling tty, this runner never creates a
+// process group for a job, and there is no tcsetpgrp to call — so `fg` here
+// is exactly "resume the job and wait for it", which is all jobs.tests:219
+// observes. The zero foregroundJobTTY's giveTo and restore below are no-ops,
+// so the shared `fg` path runs unchanged; what genuinely needs a terminal
+// (SIGTTIN/SIGTTOU arbitration between a foreground and a background group)
+// has no Windows analogue to refuse on behalf of.
 func foregroundExistingJob(r *Runner, pgrp int) (*foregroundJobTTY, error) {
-	return nil, fmt.Errorf("foreground job control is unsupported on this platform")
+	return &foregroundJobTTY{}, nil
 }
 
 func (*foregroundJobTTY) giveTo(int) error { return nil }

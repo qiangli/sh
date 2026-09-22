@@ -103,6 +103,13 @@ func jobSignalPid(bg *bgProc) int {
 	return int(bg.pid.Load())
 }
 
+// foregroundContinuePid is the kill target `fg` resumes a job with. There
+// are no process groups to resume off unix, so it names the process itself;
+// foregroundExistingJob refuses here anyway.
+func foregroundContinuePid(bg *bgProc) int {
+	return jobSignalPid(bg)
+}
+
 func signalStopsJob(sig killSig) bool { return false }
 
 func signalContinuesJob(sig killSig) bool { return false }

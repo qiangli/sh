@@ -142,6 +142,15 @@ func jobSignalPid(bg *bgProc) int {
 	return pid
 }
 
+// foregroundContinuePid is the kill target `fg` resumes a job with. On unix
+// that is the job's whole process group, so every member of a stopped
+// pipeline runs again — and, unlike jobSignalPid, it is taken verbatim even
+// when the group is unrecorded, preserving the historical behaviour of a
+// job foregrounded without one.
+func foregroundContinuePid(bg *bgProc) int {
+	return -int(bg.pgrp.Load())
+}
+
 func signalStopsJob(sig killSig) bool {
 	return sig == unix.SIGSTOP || sig == unix.SIGTSTP || sig == unix.SIGTTIN || sig == unix.SIGTTOU
 }
