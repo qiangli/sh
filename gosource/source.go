@@ -342,6 +342,7 @@ func Load(sources []Source, options Options) (*Program, error) {
 	var lowered []*loweredPackage
 	for pi, lc := range linked {
 		lc.importAliases = importAliases
+		lc.dotImports = map[*ast.File]map[string]bool{}
 		lc.resolveImport = imp.resolve
 		if lc != c {
 			if err := refuseEmbedDirectives(lc); err != nil {
@@ -370,7 +371,7 @@ func Load(sources []Source, options Options) (*Program, error) {
 				} else {
 					obj = lc.info.Implicits[spec]
 				}
-				if obj != nil && obj.Name() == "." && lc == c {
+				if obj != nil && obj.Name() == "." {
 					// Flattening erases the file block that gives a dot-imported
 					// name its package identity. Always give a live dot import an
 					// explicit alias and rewrite its members through that alias;
@@ -380,6 +381,9 @@ func Load(sources []Source, options Options) (*Program, error) {
 						path := pkgname.Imported().Path()
 						if liveImportPaths[path] {
 							alias := fmt.Sprintf("%simport_%d_%d", c.prefix, fi, ii)
+							if lc != c {
+								alias = fmt.Sprintf("%simport_%d_%d_%d", c.prefix, pi, fi, ii)
+							}
 							lc.renames[obj] = alias
 							importAliases[path] = alias
 							for _, name := range pkgname.Imported().Scope().Names() {
@@ -388,10 +392,10 @@ func Load(sources []Source, options Options) (*Program, error) {
 								}
 							}
 						} else if !liveImportPaths[path] {
-							if c.dotImports[f] == nil {
-								c.dotImports[f] = map[string]bool{}
+							if lc.dotImports[f] == nil {
+								lc.dotImports[f] = map[string]bool{}
 							}
-							c.dotImports[f][path] = true
+							lc.dotImports[f][path] = true
 						}
 					}
 				}

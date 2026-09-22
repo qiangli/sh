@@ -603,6 +603,14 @@ func bashPPNamedTypeBase(typ syntax.BashPPTypeExpr) string {
 // diagnostic instead of silently reading a shell zero value. Source-ordered
 // dependencies retain their ordinary runtime behavior.
 func (r *Runner) bashPPValidatePackageInitOrder(file *syntax.File) bool {
+	// Go-source trees have already passed go/types dependency and cycle checks,
+	// and gosource emits their initializers in Info.InitOrder. This spelling-only
+	// guard belongs to mixed shell execution: walking nested Go function bodies
+	// here confuses shadowing locals with package initializer dependencies.
+	if file.GoSource {
+		return true
+	}
+
 	type topDecl struct {
 		index    int
 		constant bool

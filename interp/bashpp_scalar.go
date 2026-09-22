@@ -1189,6 +1189,25 @@ func (r *Runner) bashPPCompareExpr(left syntax.BashPPExpr, op token.Token, right
 
 func (r *Runner) bashPPComparableExpr(expr syntax.BashPPExpr) (bashPPComparableValue, error) {
 	switch x := expr.(type) {
+	case *syntax.BashPPUnaryExpr:
+		if r.bashPPGoSource && x.Op != nil && x.Op.Value == "<-" {
+			// Receive once, preserving the element's pointer/interface metadata.
+			// Scalar fallback would discard that metadata and retry a consuming read.
+			cell, _ := r.bashPPReceiveCell(r.ectx, &syntax.BashPPReceive{Arrow: x.Pos(), ChanExpr: x.X}, nil)
+			if cell == nil {
+				return bashPPComparableValue{}, errBashPPScalarInterrupted
+			}
+			if _, ok := r.bashPPUnderlyingType(cell.declType).(*syntax.BashPPChanType); ok {
+				var value any = cell.vr.Str
+				if cell.vr.Str == "" || cell.vr.Str == "nil" {
+					value = nil
+				}
+				return bashPPComparableValue{value: value, meta: &bashPPCollectionMeta{kind: "channel", typ: cell.declType, channel: cell.channel, channelOwner: cell.channelOwner}}, nil
+			}
+			value, meta, err := r.bashPPReadCellValue(cell)
+			return bashPPComparableValue{value: value, meta: meta}, err
+		}
+
 	case *syntax.BashPPParenExpr:
 		return r.bashPPComparableExpr(x.X)
 	case *syntax.BashPPBasicLit:
