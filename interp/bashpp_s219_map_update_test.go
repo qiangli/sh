@@ -34,15 +34,18 @@ func main() {
 	t.Run("nil map update panics", func(t *testing.T) {
 		src := `package main
 import "fmt"
+var keyCalls, rhsCalls int
+func key() string { keyCalls++; return "missing" }
+func rhs() int { rhsCalls++; return 1 }
 func main() {
-	defer func() { fmt.Println(recover()) }()
+	defer func() { fmt.Println(keyCalls, rhsCalls, recover()) }()
 	var m map[string]int
-	m["missing"]++
+	m[key()] += rhs()
 }`
 		out, stderr, err := runGoSource(t, "s219_nil_map_update", src)
 		qt.Assert(t, qt.IsNil(err), qt.Commentf("stderr: %s", stderr))
 		qt.Assert(t, qt.Equals(stderr, ""))
-		qt.Assert(t, qt.Equals(out, "assignment to entry in nil map\n"))
+		qt.Assert(t, qt.Equals(out, "1 1 assignment to entry in nil map\n"))
 	})
 
 	t.Run("instantiated generic struct key", func(t *testing.T) {

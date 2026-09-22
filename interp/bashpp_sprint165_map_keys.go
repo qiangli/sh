@@ -269,6 +269,13 @@ func (r *Runner) bashPPSprint165MapDelete(mapping map[string]any, meta *bashPPCo
 }
 
 func (r *Runner) bashPPSprint165MapStore(mapping map[string]any, meta *bashPPCollectionMeta, value any, valueMeta *bashPPCollectionMeta, typ syntax.BashPPTypeExpr, element any, child *bashPPCollectionMeta) (string, error) {
+	if mapping == nil {
+		if r.bashPPGoSource {
+			r.goSourceRuntimePanic("assignment to entry in nil map")
+			return "", errBashPPScalarInterrupted
+		}
+		return "", fmt.Errorf("BASHPP-ENIL-MAP: assignment to nil map")
+	}
 	key, nonreflexive, err := r.bashPPSprint165MapKey(value, valueMeta, typ)
 	if err != nil {
 		return "", err
