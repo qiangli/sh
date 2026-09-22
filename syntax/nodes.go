@@ -37,6 +37,10 @@ type File struct {
 type SourceFile struct {
 	Name, SHA256 string
 	Base, Size   uint
+	// Package is the Go package name which declared this source. It is kept
+	// alongside positioned source identity so runtime diagnostics can spell a
+	// linked package type as Go does, rather than exposing linker hygiene.
+	Package string
 
 	// LineDirectives records, in offset order, where a Go line directive in
 	// this input changes the reported filename. Node positions already carry

@@ -275,6 +275,30 @@ func main() { b(); println("unreached") }`
 	qt.Assert(t, qt.StringContains(stderr, "(types from different scopes)"))
 }
 
+// Linked packages are flattened under hygiene names, but runtime errors must
+// keep the original package/type spelling. This is the assertion shape used
+// by test/interface/embed3.go: the method name exists but its signature does
+// not, so the runtime names the missing method rather than its linker name.
+func TestStory674LinkedPackageRuntimeTypeText(t *testing.T) {
+	mainSrc := `package main
+import (
+	"fmt"
+	"./p"
+)
+func main() {
+	defer func() { fmt.Println(recover()) }()
+	var v interface{} = p.T{}
+	_ = v.(p.I)
+}`
+	depSrc := `package p
+type T struct{}
+func (T) Foo() {}
+type I interface { Foo(int) }`
+	out, stderr := runGoSourceMultiPackage(t, "story674typetext", mainSrc, "test/p", "p.go", depSrc)
+	qt.Assert(t, qt.Equals(stderr, ""))
+	qt.Assert(t, qt.Equals(out, "interface conversion: p.T is not p.I: missing method Foo\n"))
+}
+
 // runGoSourceMultiPackage loads a main source that relatively imports one
 // helper package and runs main, returning stdout and stderr.
 func runGoSourceMultiPackage(t *testing.T, name, mainSrc, importPath, depName, depSrc string) (string, string) {

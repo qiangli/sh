@@ -77,7 +77,7 @@ func (r *Runner) bashPPSprint165MapKey(value any, meta *bashPPCollectionMeta, ty
 		}
 		dynamic := iface.dynamic
 		if !r.bashPPMapKeyType(dynamic) {
-			r.bashPPRaise("runtime error: hash of unhashable type " + bashPPTypeText(dynamic))
+			r.bashPPRaise("runtime error: hash of unhashable type " + r.goSourceRuntimeTypeName(dynamic))
 			return bashPPMapKey{}, false, errBashPPScalarInterrupted
 		}
 		cell := iface.cell

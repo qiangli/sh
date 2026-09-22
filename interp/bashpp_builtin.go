@@ -489,7 +489,7 @@ func (r *Runner) bashPPRunValueBuiltin(name string, c *syntax.BashPPCall) (*bash
 				// run time, so an unhashable one is Go's recoverable panic,
 				// not a static type error.
 				if r.bashPPGoSource && !r.bashPPMapKeyType(args[1].typ) {
-					r.bashPPRaise("runtime error: hash of unhashable type " + bashPPTypeText(args[1].typ))
+					r.bashPPRaise("runtime error: hash of unhashable type " + r.goSourceRuntimeTypeName(args[1].typ))
 					return nil, false
 				}
 				keyType = args[1].typ

@@ -219,6 +219,14 @@ func (r *Runner) goSourceRuntimeTypeText(typ syntax.BashPPTypeExpr) string {
 		if strings.Contains(name, ".") || bashPPBuiltinType(name) {
 			return name
 		}
+		// Linked source packages flatten their declarations under a hygiene
+		// name. That name is an identity key, not a Go spelling: recoverable
+		// runtime errors must retain the package that declared the type.
+		if tag := goSourceLinkedPackage(name); tag != "" {
+			if pkg := r.goSourceLinkedPackageName(tag); pkg != "" {
+				return pkg + "." + goSourceDeclaredName(name)
+			}
+		}
 		if _, declared := r.bashPPTypes[name]; declared {
 			if pkg := r.goSourcePackageAt(x.Pos()); pkg != "" {
 				return pkg + "." + name
@@ -246,6 +254,43 @@ func (r *Runner) goSourceRuntimeTypeText(typ syntax.BashPPTypeExpr) string {
 		return bashPPGoCanonicalTypeText(typ)
 	case *syntax.BashPPStructType:
 		return goSourceReflectTypeText(typ)
+	}
+	return bashPPTypeText(typ)
+}
+
+// goSourceLinkedPackageName resolves a flattened package tag through the
+// declaration that carries it. A type use may be positioned in its caller,
+// so its position alone cannot identify the declaring source file.
+func (r *Runner) goSourceLinkedPackageName(tag string) string {
+	if r.bashPPGoSourceFile == nil || tag == "" {
+		return ""
+	}
+	for _, stmt := range r.bashPPGoSourceFile.Stmts {
+		var name *syntax.Lit
+		switch d := stmt.Cmd.(type) {
+		case *syntax.BashPPDecl:
+			name = d.Name
+		case *syntax.BashPPFuncDecl:
+			name = d.Name
+			if d.Receiver != nil && d.Receiver.RecvType != nil {
+				name = d.Receiver.RecvType
+			}
+		}
+		if name == nil || goSourceLinkedPackage(name.Value) != tag {
+			continue
+		}
+		if source, ok := r.bashPPGoSourceFile.SourceAt(stmt.Pos()); ok {
+			return source.Package
+		}
+	}
+	return ""
+}
+
+// goSourceRuntimeTypeName is the type spelling used inside Go runtime
+// messages. Classic Bash++ deliberately keeps its existing diagnostic text.
+func (r *Runner) goSourceRuntimeTypeName(typ syntax.BashPPTypeExpr) string {
+	if r.bashPPGoSource {
+		return r.goSourceRuntimeTypeText(typ)
 	}
 	return bashPPTypeText(typ)
 }
@@ -349,6 +394,11 @@ func (r *Runner) goSourceTypeAssertionFailure(static syntax.BashPPTypeExpr, iv *
 			text := err.Error()
 			if i := strings.LastIndex(text, "missing method "); i >= 0 {
 				missing = strings.TrimSuffix(text[i+len("missing method "):], ")")
+			}
+		}
+		if missing == "" {
+			if methods, err := r.bashPPInterfaceMethodSet("interface", assertIface, make(map[string]bool)); err == nil && len(methods.order) > 0 {
+				missing = methods.order[0]
 			}
 		}
 	}

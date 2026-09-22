@@ -216,7 +216,7 @@ func Load(sources []Source, options Options) (*Program, error) {
 			p.Package = f.Name.Name
 		}
 		tf := c.fset.File(f.FileStart)
-		p.Sources = append(p.Sources, SourceInfo{Name: s.Name, SHA256: fmt.Sprintf("%x", sha256.Sum256(s.Data)), Base: uint(tf.Base() - 1), Size: uint(len(s.Data)), LineDirectives: lineDirectives(tf, f)})
+		p.Sources = append(p.Sources, SourceInfo{Name: s.Name, SHA256: fmt.Sprintf("%x", sha256.Sum256(s.Data)), Base: uint(tf.Base() - 1), Size: uint(len(s.Data)), Package: f.Name.Name, LineDirectives: lineDirectives(tf, f)})
 		c.files = append(c.files, f)
 		c.sources = append(c.sources, s)
 	}
@@ -467,7 +467,7 @@ func Load(sources []Source, options Options) (*Program, error) {
 		// A checked package parsed every source, so files and sources align.
 		for i, src := range checked.sources {
 			tf := c.fset.File(checked.files[i].FileStart)
-			p.Sources = append(p.Sources, SourceInfo{Name: src.Name, SHA256: fmt.Sprintf("%x", sha256.Sum256(src.Data)), Base: uint(tf.Base() - 1), Size: uint(len(src.Data)), LineDirectives: lineDirectives(tf, checked.files[i])})
+			p.Sources = append(p.Sources, SourceInfo{Name: src.Name, SHA256: fmt.Sprintf("%x", sha256.Sum256(src.Data)), Base: uint(tf.Base() - 1), Size: uint(len(src.Data)), Package: checked.pkg.Name(), LineDirectives: lineDirectives(tf, checked.files[i])})
 		}
 	}
 	c.attachEmbedDirectives(p.File)
