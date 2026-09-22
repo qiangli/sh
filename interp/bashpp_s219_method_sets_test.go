@@ -271,6 +271,62 @@ func main() {
 	qt.Assert(t, qt.StringContains(stderr, "ok\nok"))
 }
 
+// The controls keep interface dispatch on the same selector rules as direct
+// dispatch: a shallow original method beats a deeper native one, while two
+// candidates at the winning depth leave the method ambiguous.
+func TestS219ShallowestPromotedMethodWinsControls(t *testing.T) {
+	src := `package main
+import (
+	"bytes"
+	"fmt"
+)
+type local struct{}
+func (local) String() string { return "local" }
+type deepNative struct{ *bytes.Buffer }
+type shallowOriginal struct {
+	local
+	deepNative
+}
+type ambiguous struct {
+	local
+	*bytes.Buffer
+}
+func main() {
+	s := shallowOriginal{local{}, deepNative{bytes.NewBufferString("wrong")}}
+	var i fmt.Stringer = s
+	println(s.String())
+	println(i.String())
+}
+`
+	_, stderr, err := runS219(t, src)
+	qt.Assert(t, qt.IsNil(err), qt.Commentf("stderr=%q", stderr))
+	qt.Assert(t, qt.StringContains(stderr, "local\nlocal"))
+
+	ambiguousSrc := `package main
+import (
+	"bytes"
+	"fmt"
+)
+type local struct{}
+func (local) String() string { return "local" }
+type ambiguous struct {
+	local
+	*bytes.Buffer
+}
+func main() {
+	var x any = ambiguous{local{}, bytes.NewBufferString("wrong")}
+	i, ok := x.(fmt.Stringer)
+	println(ok)
+	if ok {
+		println(i.String())
+	}
+}
+`
+	_, stderr, err = runS219(t, ambiguousSrc)
+	qt.Assert(t, qt.IsNotNil(err))
+	qt.Assert(t, qt.StringContains(stderr, "BASHPP-ESELECTOR-AMBIGUOUS"))
+}
+
 func TestS219PointerFieldLocalSelectorPath(t *testing.T) {
 	src := `package main
 type Item interface{ Print() string }
