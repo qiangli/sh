@@ -205,6 +205,15 @@ func (r *Runner) goSourceValueCells(expr syntax.BashPPExpr, spread bool) ([]*bas
 	if v.typ != "" {
 		cell.declType, cell.typeName = bashPPScalarNamedType(v.typ)
 	}
+	// Scalar evaluation keeps the short type name in bashPPScalar for
+	// arithmetic, but an instantiated conversion carries more identity than
+	// that spelling. Preserve its structured target on the value cell so an
+	// interface observes T[int] from the correct local declaration.
+	if conversion, ok := expr.(*syntax.BashPPConvertExpr); ok {
+		if target := r.bashPPConvertTarget(conversion); target != nil {
+			cell.declType = target
+		}
+	}
 	return one(cell, nil)
 }
 

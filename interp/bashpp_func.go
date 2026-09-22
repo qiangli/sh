@@ -2909,6 +2909,11 @@ func (r *Runner) bashPPReturnScalarExpr(expr syntax.BashPPExpr) {
 	if value.typ != "" {
 		cell.declType, cell.typeName = bashPPScalarNamedType(value.typ)
 	}
+	if conversion, ok := expr.(*syntax.BashPPConvertExpr); ok {
+		if target := r.bashPPConvertTarget(conversion); target != nil {
+			cell.declType = target
+		}
+	}
 	r.bashPPReturn = bashPPReturnState{active: true, values: []string{text}, cells: []*bashPPCell{cell}}
 	r.exit.returning = true
 }

@@ -1409,7 +1409,11 @@ func bashPPCompareValuesWithRunner(r *Runner, left any, leftMeta *bashPPCollecti
 	if leftMeta == nil || rightMeta == nil {
 		return false, fmt.Errorf("BASHPP-ECOMPARE-TYPE: mismatched comparison")
 	}
-	if leftMeta.kind != rightMeta.kind || bashPPTypeText(leftMeta.typ) != bashPPTypeText(rightMeta.typ) {
+	sameType := bashPPTypeText(leftMeta.typ) == bashPPTypeText(rightMeta.typ)
+	if !sameType && r != nil && r.bashPPGoSource {
+		sameType = r.bashPPTypeAssignable(leftMeta.typ, rightMeta.typ) && r.bashPPTypeAssignable(rightMeta.typ, leftMeta.typ)
+	}
+	if leftMeta.kind != rightMeta.kind || !sameType {
 		return false, fmt.Errorf("BASHPP-ECOMPARE-TYPE: mismatched comparison")
 	}
 	switch leftMeta.kind {
