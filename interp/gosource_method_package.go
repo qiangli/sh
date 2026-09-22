@@ -63,6 +63,9 @@ func (r *Runner) goSourceInterfacePackage(iface *syntax.BashPPInterfaceType) str
 	if !r.bashPPGoSource || iface == nil {
 		return ""
 	}
+	if pkg := r.bashPPImportedInterfacePackages[iface]; pkg != "" {
+		return pkg
+	}
 	for name, decl := range r.bashPPTypes {
 		if original, ok := decl.typeExpr.(*syntax.BashPPInterfaceType); ok &&
 			(original == iface || original.Interface != nil && original.Interface == iface.Interface) {

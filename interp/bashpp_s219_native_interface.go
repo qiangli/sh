@@ -114,13 +114,15 @@ func (r *Runner) goSourceNativeMethodSetMismatch(value bashPPBridgeValue, spelle
 	for _, key := range expected.order {
 		method := expected.byName[key]
 		name := method.name
-		// reflect never reports an unexported method, and a dependency type
-		// cannot declare one in the interface's package anyway.
-		if goSourceUnexportedName(name) {
-			return fmt.Errorf("BASHPP-EINTERFACE-MISSING: %s does not implement interface (missing method %s)", spelled, name)
-		}
+		// A native type can expose an unexported method when it belongs to the
+		// same package as the interface (reflect.Type is the standard-library
+		// example). Ask the dependency for that member as well; inaccessible
+		// methods still take the missing-method path below.
 		member, err := r.bashPPNativeAccess(r.ectx, "method-type", value, name)
 		if err != nil || member.Kind != "string" || !strings.HasPrefix(member.Text, "func(") {
+			if goSourceUnexportedName(name) && method.pkg != "" && method.pkg == nativeTypePackage(value.NativeType) {
+				continue
+			}
 			return fmt.Errorf("BASHPP-EINTERFACE-MISSING: %s does not implement interface (missing method %s)", spelled, name)
 		}
 		if !r.goSourceNativeSignatureMatches(member.Text, method) {
@@ -128,6 +130,14 @@ func (r *Runner) goSourceNativeMethodSetMismatch(value bashPPBridgeValue, spelle
 		}
 	}
 	return nil
+}
+
+func nativeTypePackage(spelled string) string {
+	spelled = strings.TrimPrefix(spelled, "*")
+	if dot := strings.IndexByte(spelled, '.'); dot > 0 {
+		return spelled[:dot]
+	}
+	return ""
 }
 
 // goSourceNativeSignatureMatches compares a method type the dependency

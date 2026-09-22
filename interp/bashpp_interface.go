@@ -116,6 +116,14 @@ func (r *Runner) bashPPImportedInterfaceType(named *syntax.BashPPNamedType) (*sy
 	}
 	iface.Complete()
 	out := &syntax.BashPPInterfaceType{Interface: &syntax.Lit{Value: "interface"}}
+	if r.bashPPImportedInterfacePackages == nil {
+		r.bashPPImportedInterfacePackages = make(map[*syntax.BashPPInterfaceType]string)
+	}
+	if dot := strings.IndexByte(named.Name.Value, '.'); dot > 0 {
+		if path := r.bashPPImports[named.Name.Value[:dot]]; path != "" {
+			r.bashPPImportedInterfacePackages[out] = path
+		}
+	}
 	for i := 0; i < iface.NumMethods(); i++ {
 		method := iface.Method(i)
 		sig, ok := method.Type().(*types.Signature)

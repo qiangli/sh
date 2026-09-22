@@ -230,16 +230,31 @@ func bashppConvertType(e goast.Expr, pos func(gotoken.Pos) Pos, lit func(gotoken
 		return out
 	case *goast.Ident:
 		return &BashPPNamedType{Name: lit(x.Pos(), x.End(), x.Name)}
+	case *goast.SelectorExpr:
+		if _, ok := x.X.(*goast.Ident); !ok {
+			return nil
+		}
+		return &BashPPNamedType{Name: lit(x.Pos(), x.End(), bashppGoTypeText(x))}
 	case *goast.IndexExpr:
 		name, ok := x.X.(*goast.Ident)
 		if !ok {
-			return nil
+			if _, selector := x.X.(*goast.SelectorExpr); !selector {
+				return nil
+			}
+			return &BashPPNamedType{Name: lit(x.X.Pos(), x.X.End(), bashppGoTypeText(x.X)), TypeArgs: []*BashPPTypeArg{{ArgType: bashppConvertType(x.Index, pos, lit)}}}
 		}
 		return &BashPPNamedType{Name: lit(name.Pos(), name.End(), name.Name), TypeArgs: []*BashPPTypeArg{{ArgType: bashppConvertType(x.Index, pos, lit)}}}
 	case *goast.IndexListExpr:
 		name, ok := x.X.(*goast.Ident)
 		if !ok {
-			return nil
+			if _, selector := x.X.(*goast.SelectorExpr); !selector {
+				return nil
+			}
+			out := &BashPPNamedType{Name: lit(x.X.Pos(), x.X.End(), bashppGoTypeText(x.X))}
+			for _, index := range x.Indices {
+				out.TypeArgs = append(out.TypeArgs, &BashPPTypeArg{ArgType: bashppConvertType(index, pos, lit)})
+			}
+			return out
 		}
 		out := &BashPPNamedType{Name: lit(name.Pos(), name.End(), name.Name)}
 		for _, index := range x.Indices {
@@ -710,13 +725,25 @@ func bashppSupportedTypeAST(expr goast.Expr) bool {
 		return x.TypeParams == nil && bashppSupportedFieldListTypes(x.Params) && bashppSupportedFieldListTypes(x.Results)
 	case *goast.Ident:
 		return bashppIsIdent(x.Name)
+	case *goast.SelectorExpr:
+		_, ok := x.X.(*goast.Ident)
+		return ok && bashppIsIdent(x.Sel.Name)
 	case *goast.IndexExpr:
 		name, ok := x.X.(*goast.Ident)
-		return ok && bashppIsIdent(name.Name) && bashppSupportedTypeAST(x.Index)
+		if ok {
+			return bashppIsIdent(name.Name) && bashppSupportedTypeAST(x.Index)
+		}
+		_, selector := x.X.(*goast.SelectorExpr)
+		return selector && bashppSupportedTypeAST(x.X) && bashppSupportedTypeAST(x.Index)
 	case *goast.IndexListExpr:
 		name, ok := x.X.(*goast.Ident)
-		if !ok || !bashppIsIdent(name.Name) || len(x.Indices) == 0 {
+		if ok && (!bashppIsIdent(name.Name) || len(x.Indices) == 0) {
 			return false
+		}
+		if !ok {
+			if _, selector := x.X.(*goast.SelectorExpr); !selector || len(x.Indices) == 0 || !bashppSupportedTypeAST(x.X) {
+				return false
+			}
 		}
 		for _, index := range x.Indices {
 			if !bashppSupportedTypeAST(index) {
@@ -818,6 +845,8 @@ func bashppGoTypeText(expr goast.Expr) string {
 		return out.String()
 	case *goast.Ident:
 		return x.Name
+	case *goast.SelectorExpr:
+		return bashppGoTypeText(x.X) + "." + x.Sel.Name
 	case *goast.IndexExpr:
 		return bashppGoTypeText(x.X) + "[" + bashppGoTypeText(x.Index) + "]"
 	case *goast.IndexListExpr:

@@ -156,8 +156,9 @@ type Runner struct {
 	// bashPPImports is the import namespace for this runner session. The
 	// evaluator is deliberately package-private and replaceable in tests and
 	// alternate toolchain adapters without exposing an evaluator ABI.
-	bashPPImports map[string]string
-	bashPPTools   bashPPToolchain
+	bashPPImports                   map[string]string
+	bashPPImportedInterfacePackages map[*syntax.BashPPInterfaceType]string
+	bashPPTools                     bashPPToolchain
 
 	// bashPPFuncs holds the Go-form (typed) functions declared with `func`,
 	// each paired with the lexical scope captured where it was defined so the
@@ -3915,6 +3916,7 @@ func (r *Runner) subshell(background bool) *Runner {
 	r2.bashPPDecoratorStack = append([]string(nil), r.bashPPDecoratorStack...)
 	r2.funcSources = maps.Clone(r.funcSources)
 	r2.bashPPImports = maps.Clone(r.bashPPImports)
+	r2.bashPPImportedInterfacePackages = maps.Clone(r.bashPPImportedInterfacePackages)
 	r2.bashPPForeignFuncs = maps.Clone(r.bashPPForeignFuncs)
 	r2.bashPPForeignModules = append([]*polyglot.Module(nil), r.bashPPForeignModules...)
 	r2.bashPPForeignImports = maps.Clone(r.bashPPForeignImports)
