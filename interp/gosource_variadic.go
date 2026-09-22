@@ -40,7 +40,7 @@ func (r *Runner) goSourceBindVariadic(param bashPPParam, args []string, cells []
 				return false
 			}
 		}
-		sequence[i], metas[i] = r.goSourceVariadicElement(args[i], cell)
+		sequence[i], metas[i] = r.goSourceVariadicElement(args[i], cell, param.typ)
 	}
 	meta := &bashPPCollectionMeta{kind: "slice", typ: typ, sequence: metas}
 	r.bashPPScope.entries[param.name] = &bashPPCell{
@@ -75,7 +75,7 @@ func (r *Runner) goSourceBindSpreadVariadic(param bashPPParam, cells []*bashPPCe
 // goSourceVariadicElement renders one trailing argument as a slice element.
 // The cell is what carries pointer, interface and aggregate identity; the
 // string is only the fallback for an argument that never produced one.
-func (r *Runner) goSourceVariadicElement(arg string, cell *bashPPCell) (any, *bashPPCollectionMeta) {
+func (r *Runner) goSourceVariadicElement(arg string, cell *bashPPCell, expected syntax.BashPPTypeExpr) (any, *bashPPCollectionMeta) {
 	switch {
 	case cell == nil:
 		return arg, nil
@@ -85,6 +85,16 @@ func (r *Runner) goSourceVariadicElement(arg string, cell *bashPPCell) (any, *ba
 		}
 	case cell.pointer:
 		return cell.pointerValue, bashPPPointerMeta(cell.declType)
+	case func() bool { _, ok := r.goSourceChannelType(expected); return ok }():
+		meta := &bashPPCollectionMeta{kind: "channel", typ: expected}
+		value, err := r.goSourceChannelCellValue(cell, expected, meta)
+		if err == nil {
+			return value, meta
+		}
+		// Argument checking already authenticated this cell against the
+		// variadic parameter. Keep an impossible carrier on the ordinary path
+		// so its existing diagnostic remains authoritative.
+		return arg, nil
 	case cell.vr.Kind == expand.Object:
 		return bashPPCopyArrayValue(cell.vr.Obj, bashPPCellMeta(cell))
 	}
