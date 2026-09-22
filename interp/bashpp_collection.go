@@ -126,8 +126,8 @@ func bashPPCloneCollectionMeta(meta *bashPPCollectionMeta, seen map[*bashPPColle
 	// capacity as its payload. Preserve that capacity across snapshots so a
 	// later legal re-slice does not outrun its element metadata.
 	out.sequence = make([]*bashPPCollectionMeta, len(meta.sequence), cap(meta.sequence))
-	for i, child := range meta.sequence {
-		out.sequence[i] = bashPPCloneCollectionMeta(child, seen, cloneCell)
+	for i, child := range meta.sequence[:cap(meta.sequence)] {
+		out.sequence[:cap(out.sequence)][i] = bashPPCloneCollectionMeta(child, seen, cloneCell)
 	}
 	if meta.mapping != nil {
 		layout := bashPPLayoutSnapshot(meta.mapping)

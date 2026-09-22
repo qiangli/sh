@@ -1426,11 +1426,13 @@ func bashPPNilComparableZero(value any, meta *bashPPCollectionMeta) bool {
 	if meta != nil {
 		switch meta.kind {
 		case "slice":
-			sequence, ok := value.([]any)
-			return ok && sequence == nil
+			if sequence, ok := value.([]any); ok {
+				return sequence == nil
+			}
 		case "map":
-			mapping, ok := value.(map[string]any)
-			return ok && mapping == nil
+			if mapping, ok := value.(map[string]any); ok {
+				return mapping == nil
+			}
 		}
 	}
 	if native, ok := value.(*bashPPBridgeValue); ok && native != nil && native.Kind == "nil" {
