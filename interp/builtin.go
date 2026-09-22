@@ -8012,10 +8012,40 @@ func (r *Runner) cdpath(ctx context.Context, path string) (string, bool, bool) {
 			if !r.opts[optPosix] && elem == "." {
 				printPath = false
 			}
-			return candidate, printPath, true
+			return r.cdpathLogical(base, path, candidate), printPath, true
 		}
 	}
 	return "", false, false
+}
+
+// cdpathLogical is the spelling a CDPATH hit hands to cd. The search itself
+// runs on native paths (r.absPath resolves a mounted element like /tmp to
+// the directory it lives in), but cd must receive the shell's own spelling:
+// both the path `cd` echoes for a CDPATH hit and the PWD it records come
+// from this operand, and builtins1.sub wants /tmp/bash-dir-a rather than the
+// native temp directory the /tmp mount points at. On Unix, where the two
+// spellings coincide, the resolved path is returned unchanged.
+func (r *Runner) cdpathLogical(base, path, candidate string) string {
+	if runtime.GOOS != "windows" {
+		return candidate
+	}
+	return cdpathLogicalMode(pathconv.CurrentMounts(), r.logicalDir(), base, path, candidate, true)
+}
+
+func cdpathLogicalMode(m *pathconv.Mounts, cur, base, path, candidate string, windows bool) string {
+	if !windows {
+		return candidate
+	}
+	switch {
+	case posixSpelled(base):
+		// /tmp + bash-dir-a -> /tmp/bash-dir-a.
+		return canonPosixPath(base + "/" + path)
+	case !nativeSpelled(base) && cur != "" && posixSpelled(cur):
+		// A relative element (".", "sub") resolves against the logical dir.
+		return canonPosixPath(cur + "/" + base + "/" + path)
+	}
+	// A natively spelled CDPATH element (C:\tmp) maps back through the mounts.
+	return pathconv.FromOSMountsMode(m, candidate, true)
 }
 
 func absPath(dir, path string) string {

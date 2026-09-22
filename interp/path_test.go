@@ -166,29 +166,36 @@ func TestNativeExecEnvWindows(t *testing.T) {
 		want []string
 	}{
 		{
-			name: "temp on the C drive",
+			// Sprint 245, story 682: values are the script's, not the
+			// host's — no name is converted by default any more.
+			name: "temp keeps the shell's spelling",
 			env:  []string{"TEMP=/c/Users/x/AppData/Local/Temp"},
-			want: []string{`TEMP=C:\Users\x\AppData\Local\Temp`},
+			want: []string{"TEMP=/c/Users/x/AppData/Local/Temp"},
 		},
 		{
 			name: "other drive letters",
 			env:  []string{"TMP=/d/w/a", "GOCACHE=/e/cache"},
-			want: []string{`TMP=D:\w\a`, `GOCACHE=E:\cache`},
+			want: []string{"TMP=/d/w/a", "GOCACHE=/e/cache"},
 		},
 		{
 			name: "drive root",
 			env:  []string{"HOME=/c", "USERPROFILE=/c/"},
-			want: []string{`HOME=C:\`, `USERPROFILE=C:\`},
+			want: []string{"HOME=/c", "USERPROFILE=/c/"},
 		},
 		{
-			name: "names match case-insensitively",
-			env:  []string{"ProgramData=/c/ProgramData", "SystemRoot=/c/Windows", "windir=/c/Windows"},
-			want: []string{`ProgramData=C:\ProgramData`, `SystemRoot=C:\Windows`, `windir=C:\Windows`},
+			name: "a bare posix path reaches the child intact",
+			env:  []string{"HOME=/a/b/c"},
+			want: []string{"HOME=/a/b/c"},
 		},
 		{
 			name: "PATH elements",
 			env:  []string{`PATH=/c/Go/bin;C:\Windows\System32;/d/tools/bin;.;`},
 			want: []string{`PATH=C:\Go\bin;C:\Windows\System32;D:\tools\bin;.;`},
+		},
+		{
+			name: "PATH matches case-insensitively",
+			env:  []string{"Path=/c/Go/bin:/d/tools/bin"},
+			want: []string{`Path=C:\Go\bin;D:\tools\bin`},
 		},
 		{
 			name: "native values unchanged",
@@ -207,8 +214,8 @@ func TestNativeExecEnvWindows(t *testing.T) {
 		},
 		{
 			name: "malformed entries kept",
-			env:  []string{"", "NOEQUALS", "TEMP=/c/t"},
-			want: []string{"", "NOEQUALS", `TEMP=C:\t`},
+			env:  []string{"", "NOEQUALS", "PATH=/c/t"},
+			want: []string{"", "NOEQUALS", `PATH=C:\t`},
 		},
 		{
 			name: "empty",

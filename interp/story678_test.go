@@ -352,10 +352,12 @@ func TestNativeExecEnvMounts(t *testing.T) {
 		"HOME=/c/Users/me",
 		"OTHER=/bin",
 	}
+	// Story 682: only PATH is converted; every other value reaches the
+	// child in the spelling the script gave it.
 	want := []string{
 		`PATH=D:\w\root\usr\bin;D:\w\root\usr\bin;C:\Go\bin`,
-		`TMPDIR=C:\Temp`,
-		`HOME=C:\Users\me`,
+		"TMPDIR=/tmp",
+		"HOME=/c/Users/me",
 		"OTHER=/bin",
 	}
 	if got := nativeExecEnvMountsMode(m, slices.Clone(env), true); !slices.Equal(got, want) {

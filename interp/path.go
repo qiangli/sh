@@ -56,20 +56,25 @@ func shellPathFromOSMode(path string, windows bool) string {
 	return pathconv.FromOSMode(path, windows)
 }
 
-// windowsPathEnvNames are the variables a native Windows child reads as a
-// filesystem path. bashy hands scripts these in the MSYS drive spelling
-// (/c/Users/…) so scripts stay portable, but CreateFile has no idea what /c
-// is: go.exe dies with "creating work dir … D:\c\Users\…" when the current
-// drive is D:, and rustc's temp dir the same way. Matched case-insensitively,
-// as Windows environment names are.
-var windowsPathEnvNames = map[string]bool{
-	"TEMP": true, "TMP": true, "TMPDIR": true,
-	"HOME": true, "USERPROFILE": true,
-	"GOPATH": true, "GOCACHE": true, "GOMODCACHE": true, "GOROOT": true,
-	"CARGO_HOME": true, "RUSTUP_HOME": true,
-	"LOCALAPPDATA": true, "APPDATA": true, "PROGRAMDATA": true,
-	"SYSTEMROOT": true, "WINDIR": true,
-}
+// Why no default list of path-valued variable names: earlier sprints
+// converted TEMP, HOME, GOPATH and friends to the native spelling for every
+// child, because a native toolchain (go.exe, rustc) cannot make sense of
+// /c/Users/… and dies with "creating work dir … D:\c\Users\…". That cure is
+// worse than the disease now that the userland a script actually calls is
+// bashy's own: its applets go through pathconv and understand the shell's
+// spelling, so converting the value only corrupts it — `HOME=/a/b/c
+// /bin/echo $HOME` (varenv.tests) printed the mounted D:\w\root\a\b\c
+// instead of the /a/b/c bash prints, and any variable holding a path that is
+// not a filesystem path at all was rewritten behind the script's back.
+//
+// So the default is to hand a child its values byte-identical. Two
+// exceptions remain, both deliberate:
+//
+//   - PATH, because the exec lookup itself walks those entries and needs
+//     native directories (see [nativeExecPathListMounts]).
+//   - the names listed in BASHYENV (VAR/p:VAR2/l), the explicit per-variable
+//     opt-in a script uses when it does invoke a native tool that needs the
+//     Windows spelling. See [parseBashyEnv].
 
 // parseBashyEnv parses the BASHYENV variable, a WSLENV-style opt-in list of
 // variables to path-convert at the child-process boundary:
@@ -103,14 +108,14 @@ func parseBashyEnv(spec string) map[string]byte {
 	return m
 }
 
-// nativeExecEnv rewrites the path-valued variables of a child's environment
-// into the host's native spelling on Windows: an absolute MSYS drive path
-// (/c/Users/x) becomes C:\Users\x, and each such element of PATH is converted
-// in place. Variables named in BASHYENV (VAR/p:VAR2/l) are converted per
-// their flag, overriding the built-in name list. Every other value — a
-// native path, a relative one, a bare /foo, the empty string — stays
-// byte-identical, and the shell's own variables are untouched, so scripts
-// keep seeing the MSYS form. On every other host env is returned as is.
+// nativeExecEnv prepares a child's environment on Windows. Only PATH is
+// converted by default — each element becomes a native directory, because
+// the exec lookup walks them — plus whatever variables BASHYENV
+// (VAR/p:VAR2/l) opts in, per their flag. Every other value is handed to the
+// child byte-identical, in the shell's own spelling, so `HOME=/a/b/c cmd`
+// gives cmd /a/b/c; see the note above [parseBashyEnv] for why there is no
+// built-in list of path-valued names. The shell's own variables are
+// untouched either way. On every other host env is returned as is.
 func nativeExecEnv(env []string) []string {
 	return nativeExecEnvMode(env, runtime.GOOS == "windows")
 }
@@ -145,17 +150,10 @@ func nativeExecEnvMountsMode(m *pathconv.Mounts, env []string, windows bool) []s
 			} else {
 				conv = pathconv.NativePath(value)
 			}
+		} else if strings.EqualFold(name, "PATH") {
+			conv = nativeExecPathListMounts(m, value)
 		} else {
-			switch {
-			case strings.EqualFold(name, "PATH"):
-				conv = nativeExecPathListMounts(m, value)
-			case windowsPathEnvNames[strings.ToUpper(name)]:
-				// Through the mounts so TMPDIR=/tmp reaches a native
-				// child as %TEMP%.
-				conv = pathconv.NativePathMounts(m, value)
-			default:
-				continue
-			}
+			continue
 		}
 		if conv == value {
 			continue
