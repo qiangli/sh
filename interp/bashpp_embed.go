@@ -148,8 +148,26 @@ func (r *Runner) bashPPMethodOwner(typ syntax.BashPPTypeExpr) (string, syntax.Ba
 	}
 }
 
-// bashPPResolveSelection implements breadth-first Go selector lookup.
+// bashPPResolveSelection implements breadth-first Go selector lookup, as
+// written in the package of the statement being run.
 func (r *Runner) bashPPResolveSelection(root syntax.BashPPTypeExpr, name string, methods, addressable bool) bashPPSelection {
+	pkg := ""
+	if r.bashPPGoSource && methods && goSourceUnexportedName(name) {
+		pkg = r.goSourcePackageAt(r.curStmtPos)
+	}
+	return r.bashPPResolveSelectionIn(root, name, methods, addressable, pkg)
+}
+
+// bashPPResolveSelectionIn is bashPPResolveSelection for a selector spelled
+// in a given linked package ("" is the program's own). An unexported method
+// name is an identifier of its package: when the shallowest depth holds
+// that name from several packages — `struct{ localT; lib.T }` where both
+// declare `m()` — only the selecting package's method is the one named,
+// and the others do not make the selector ambiguous. A level whose
+// candidates all belong to other packages is left as it was: an interface
+// literal that is not a declaration carries no package of its own, so the
+// filter never removes the only candidate a package could see.
+func (r *Runner) bashPPResolveSelectionIn(root syntax.BashPPTypeExpr, name string, methods, addressable bool, pkg string) bashPPSelection {
 	rootPointer := false
 	if pointer, ok := root.(*syntax.BashPPPointerType); ok {
 		rootPointer, root = true, pointer.Element
@@ -221,6 +239,17 @@ func (r *Runner) bashPPResolveSelection(root syntax.BashPPTypeExpr, name string,
 				ancestors[childKey] = true
 				edges := append(append([]bashPPEmbedEdge(nil), node.edges...), bashPPEmbedEdge{name: fieldName, pointer: pointer})
 				next = append(next, bashPPSelectionNode{typ: child, edges: edges, indirect: node.indirect || pointer, ancestors: ancestors})
+			}
+		}
+		if len(matches) > 1 && methods && r.bashPPGoSource && goSourceUnexportedName(name) {
+			var own []bashPPSelection
+			for _, match := range matches {
+				if match.method == nil && match.interfaceSpec == nil || r.goSourceMethodPackage(match) == pkg {
+					own = append(own, match)
+				}
+			}
+			if len(own) > 0 {
+				matches = own
 			}
 		}
 		if len(matches) > 0 {

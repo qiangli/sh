@@ -301,8 +301,16 @@ func bridgeScalar(value bashPPScalar) (bashPPBridgeValue, error) {
 	return out, nil
 }
 func (r *Runner) bashPPBridgeExpr(expr syntax.BashPPExpr) (bashPPBridgeValue, error) {
-	switch expr.(type) {
+	callable := false
+	switch x := expr.(type) {
 	case *syntax.BashPPFuncLit, *syntax.BashPPIdent:
+		callable = true
+	case *syntax.BashPPSelectorExpr:
+		// A method value the program owns — `t.M` handed to sync.Once.Do —
+		// crosses as the bound closure it denotes, not as a field read.
+		callable = x.MethodValue && !r.bashPPNativeExpr(x.X)
+	}
+	if callable {
 		if cell, handled, err := r.goSourceCallableCell(expr); handled {
 			if err != nil {
 				return bashPPBridgeValue{}, err
