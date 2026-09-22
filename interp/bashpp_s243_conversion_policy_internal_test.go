@@ -1,0 +1,50 @@
+//go:build full
+
+package interp
+
+import (
+	"go/constant"
+	"math"
+	"testing"
+)
+
+func TestS243ConversionPolicyIsRunnerScoped(t *testing.T) {
+	value := bashPPScalar{value: constant.MakeFloat64(math.Ldexp(1, 63)), typ: "float64", runtime: true}
+	ordinary := &Runner{bashPPGoSource: true}
+	qy := &Runner{bashPPGoSource: true, bashPPConvertHashQY: true}
+
+	gotOrdinary, err := ordinary.bashPPConvertScalar("int64", value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotQY, err := qy.bashPPConvertScalar("int64", value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotOrdinary.value.ExactString() != "-9223372036854775808" {
+		t.Fatalf("ordinary conversion = %s", gotOrdinary.value.ExactString())
+	}
+	if gotQY.value.ExactString() != "9223372036854775807" {
+		t.Fatalf("qy conversion = %s", gotQY.value.ExactString())
+	}
+	if ordinary.bashPPConvertHashQY {
+		t.Fatal("qy policy leaked to ordinary runner")
+	}
+}
+
+func TestS243ConversionPolicyFlagAuthentication(t *testing.T) {
+	for _, test := range []struct {
+		flags string
+		want  bool
+	}{
+		{"-p=2", false},
+		{"-d=converthash=qy", false},
+		{"-gcflags=-d=converthash=qy", true},
+		{"-p=2 -gcflags=all=-d=converthash=qy", true},
+		{"-gcflags=-d=converthash=xx", false},
+	} {
+		if got := bashPPGoFlagsConvertHashQY(test.flags); got != test.want {
+			t.Errorf("%q: got %v, want %v", test.flags, got, test.want)
+		}
+	}
+}

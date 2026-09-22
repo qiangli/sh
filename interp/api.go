@@ -133,7 +133,12 @@ type Runner struct {
 	// runner is not in the bash++ dialect. Nil is the fast path every other
 	// dialect takes: the read/write hooks in vars.go are one nil check.
 	// bashPPGoSource selects ordinary Go package scope semantics for gosource trees.
-	bashPPGoSource      bool
+	bashPPGoSource bool
+	// bashPPConvertHashQY is runner-local compiler policy. It is selected from
+	// the runner's own GOFLAGS snapshot for a Go-source run, never process-global
+	// state, so concurrent runners may faithfully use different conversion
+	// implementations.
+	bashPPConvertHashQY bool
 	bashPPGoSourceDecls map[string]bool
 	// bashPPGoSourcePending holds the package-level type names installed by
 	// the pre-registration pass but not yet reached by their own statement.
@@ -3448,10 +3453,15 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 		defer func() { r.bashPPGoSourceFile = savedGoFile }()
 		savedGoSource := r.bashPPGoSource
 		r.bashPPGoSource = node.GoSource
+		savedConvertHashQY := r.bashPPConvertHashQY
+		r.bashPPConvertHashQY = node.GoSource && bashPPGoFlagsConvertHashQY(r.Env.Get("GOFLAGS").String())
 		if node.GoSource && r.goSourceTesting == nil {
 			defer r.closeGoSourceBridge()
 		}
-		defer func() { r.bashPPGoSource = savedGoSource }()
+		defer func() {
+			r.bashPPGoSource = savedGoSource
+			r.bashPPConvertHashQY = savedConvertHashQY
+		}()
 		savedAgentic := r.bashPPAgentic
 		r.bashPPAgentic = false
 		defer func() { r.bashPPAgentic = savedAgentic }()
@@ -3807,6 +3817,7 @@ func (r *Runner) subshell(background bool) *Runner {
 		dialect:              r.dialect,
 		bashPPTools:          r.bashPPTools,
 		bashPPGoSource:       r.bashPPGoSource,
+		bashPPConvertHashQY:  r.bashPPConvertHashQY,
 		bashPPGoSourceFile:   r.bashPPGoSourceFile,
 		bashPPGoSourceDecls:  maps.Clone(r.bashPPGoSourceDecls),
 		origDialect:          r.origDialect,

@@ -1797,6 +1797,10 @@ func (r *Runner) bashPPConvertScalar(typ string, x bashPPScalar) (bashPPScalar, 
 			return converted, err
 		}
 		if bashPPIntegerType(typ) && (x.value.Kind() == constant.Int || x.value.Kind() == constant.Float) {
+			if r.bashPPGoSource && r.bashPPConvertHashQY && x.runtime && x.value.Kind() == constant.Float {
+				integer := r.bashPPRuntimeFloatToIntegerQY(typ, x)
+				return bashPPScalar{value: integer, typ: typ, runtime: true}, nil
+			}
 			integer := constant.ToInt(x.value)
 			if r.bashPPGoSource && x.runtime {
 				if x.value.Kind() == constant.Float {
@@ -1817,6 +1821,68 @@ func (r *Runner) bashPPConvertScalar(typ string, x bashPPScalar) (bashPPScalar, 
 		}
 	}
 	return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-CONVERT: cannot convert %s to %s", x.value.Kind(), typ)
+}
+
+func bashPPGoFlagsConvertHashQY(flags string) bool {
+	for _, field := range strings.Fields(flags) {
+		if strings.HasPrefix(field, "-gcflags=") && strings.Contains(strings.TrimPrefix(field, "-gcflags="), "-d=converthash=qy") {
+			return true
+		}
+	}
+	return false
+}
+
+// bashPPRuntimeFloatToIntegerQY implements only the conversion implementation
+// selected by cmd/compile's -d=converthash=qy policy. The ordinary path above
+// remains unchanged when that runner-local policy is absent.
+func (r *Runner) bashPPRuntimeFloatToIntegerQY(typ string, x bashPPScalar) constant.Value {
+	bits, signed := bashPPIntegerWidth(typ)
+	boundBits, boundSigned := bits, signed
+	if bits < 32 {
+		boundBits, boundSigned = 64, true
+		source := x.typ
+		if shape, ok := r.bashPPUnderlyingType(&syntax.BashPPNamedType{Name: &syntax.Lit{Value: source}}).(*syntax.BashPPNamedType); ok && shape.Name != nil {
+			source = shape.Name.Value
+		}
+		if source == "float32" {
+			boundBits = 32
+		}
+	}
+	minimum, maximum := bashPPIntegerBounds(boundBits, boundSigned)
+	var integer constant.Value
+	if x.hasNonFinite {
+		switch {
+		case math.IsNaN(x.nonFinite):
+			integer = maximum
+		case math.Signbit(x.nonFinite):
+			integer = minimum
+		default:
+			integer = maximum
+		}
+	} else {
+		integer = constant.BinaryOp(constant.Num(x.value), token.QUO_ASSIGN, constant.Denom(x.value))
+		if constant.Compare(integer, token.LSS, minimum) {
+			integer = minimum
+		} else if constant.Compare(integer, token.GTR, maximum) {
+			integer = maximum
+		}
+	}
+	return bashPPWrapInteger(typ, integer)
+}
+
+func bashPPIntegerBounds(bits int, signed bool) (constant.Value, constant.Value) {
+	limit := new(big.Int).Lsh(big.NewInt(1), uint(bits))
+	minimum := new(big.Int)
+	maximum := new(big.Int).Sub(new(big.Int).Set(limit), big.NewInt(1))
+	if signed {
+		limit.Rsh(limit, 1)
+		minimum.Neg(new(big.Int).Set(limit))
+		maximum.Sub(new(big.Int).Set(limit), big.NewInt(1))
+	}
+	makeValue := func(value *big.Int) constant.Value {
+		return constant.MakeFromLiteral(value.String(), token.INT, 0)
+	}
+	return makeValue(minimum), makeValue(maximum)
 }
 
 func (r *Runner) bashPPConvertGoSourceStringToUint64(typ string, x bashPPScalar) (bashPPScalar, bool, error) {
