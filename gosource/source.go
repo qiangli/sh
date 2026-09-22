@@ -372,14 +372,15 @@ func Load(sources []Source, options Options) (*Program, error) {
 					obj = lc.info.Implicits[spec]
 				}
 				if obj != nil && obj.Name() == "." {
-					// Native units retain file-scoped dot imports. Flattened
-					// execution needs an explicit alias when linking erases a
-					// package boundary, when file imports collide, or when a
-					// checked type must retain its native package identity.
+					// Native units retain dot imports unless their exports collide
+					// across files: lower still validates a combined package tree
+					// before emitting separate files. Flattened execution also
+					// qualifies linked packages and checked native type identities.
 					if pkgname, ok := obj.(*types.PkgName); ok {
 						path := pkgname.Imported().Path()
-						if liveImportPaths[path] && !options.PreserveNativeInit &&
-							(lc != c || dotImportCollides(lc, f, spec, pkgname, liveImportPaths, mapped) || dotImportNeedsQualifiedTypes(lc, path)) {
+						if liveImportPaths[path] &&
+							(dotImportCollides(lc, f, spec, pkgname, liveImportPaths, mapped) ||
+								!options.PreserveNativeInit && (lc != c || dotImportNeedsQualifiedTypes(lc, path))) {
 							alias := fmt.Sprintf("%simport_%d_%d", c.prefix, fi, ii)
 							if lc != c {
 								alias = fmt.Sprintf("%simport_%d_%d_%d", c.prefix, pi, fi, ii)
