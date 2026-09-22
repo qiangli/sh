@@ -232,6 +232,17 @@ func (r *Runner) bashPPBuiltinElement(arg bashPPBuiltinArg, expected syntax.Bash
 		value, meta := bashPPCopyArrayValue(arg.value, arg.meta)
 		return value, meta, true
 	}
+	// A function value — a closure returned by a call, a func-typed parameter
+	// that arrived through an interface method, a named function — is its
+	// handle in the scalar slot. `append(c.calls, fn)` binds it to the
+	// element signature the way a composite literal element does.
+	if stored, claimed, err := r.bashPPCollectionFuncElement(arg.value, expected); claimed {
+		if err != nil {
+			r.bashPPBuiltinError("TYPE", "%v", err)
+			return nil, nil, false
+		}
+		return stored, nil, true
+	}
 	if err := r.bashPPCheckCollectionValue(arg.value, expected); err != nil {
 		// A builtin argument can arrive as a dependency carrier without cell
 		// metadata (`append(frames, frame)` with a native element type).
