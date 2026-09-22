@@ -1757,6 +1757,13 @@ func (r *Runner) bashPPValidateReusedShortValue(target, candidate *bashPPCell) e
 	case constant.Float:
 		value.value = constant.MakeFromLiteral(candidate.vr.Str, token.FLOAT, 0)
 	}
+	// A constant cell owns an exact go/constant value independently of its
+	// shell storage spelling. The kind selects the parser only for text-only
+	// temporaries: grouped float constants can use a rational spelling such as
+	// 3/2 which MakeFromLiteral deliberately cannot consume.
+	if r.bashPPGoSource && candidate.constant && candidate.exactScalar != nil {
+		value.value = candidate.exactScalar
+	}
 	if !bashPPUntypedScalarAssignable(shape.Name.Value, value.value) {
 		return fmt.Errorf("BASHPP-EASSIGN-TYPE: cannot assign %s to %s", value.value.Kind(), bashPPTypeText(target.declType))
 	}
@@ -1907,7 +1914,7 @@ func (r *Runner) bashPPSwitch(ctx context.Context, sw *syntax.BashPPSwitch) {
 			continue
 		}
 		for _, candidate := range cases[armIndex] {
-			match, compareErr := bashPPSwitchEqual(tag, candidate)
+			match, compareErr := r.bashPPSwitchEqual(tag, candidate)
 			if compareErr != nil {
 				r.errf("%v\n", compareErr)
 				r.exit = exitStatus{code: 2}
@@ -1970,12 +1977,12 @@ func (r *Runner) bashPPValidateSwitchCases(sw *syntax.BashPPSwitch, tag bashPPSc
 			if sw.Tag == nil && candidate.value.Kind() != constant.Bool {
 				return nil, fmt.Errorf("BASHPP-ESWITCH-TYPE: tagless switch case must be boolean, got %s", candidate.value.Kind())
 			}
-			if err := bashPPSwitchComparable(tag, candidate); err != nil {
+			if err := r.bashPPSwitchComparable(tag, candidate); err != nil {
 				return nil, err
 			}
 			if r.bashPPSwitchConstantExpr(tag, expr) {
 				for _, previous := range constants {
-					equal, err := bashPPSwitchEqual(previous, candidate)
+					equal, err := r.bashPPSwitchEqual(previous, candidate)
 					if err == nil && equal {
 						return nil, fmt.Errorf("BASHPP-ESWITCH-DUPLICATE: duplicate case constant %s", bashPPSwitchConstantText(candidate))
 					}
@@ -2041,9 +2048,20 @@ func (r *Runner) bashPPSwitchCaseScalar(tag bashPPScalar, expr syntax.BashPPExpr
 	return candidate, err
 }
 
-func bashPPSwitchComparable(tag, candidate bashPPScalar) error {
+func (r *Runner) bashPPSwitchComparable(tag, candidate bashPPScalar) error {
 	if tag.typ != "" && candidate.typ != "" && tag.typ != candidate.typ {
-		return fmt.Errorf("BASHPP-ESWITCH-TYPE: case expression type %s does not match switch tag type %s", candidate.typ, tag.typ)
+		tagType, _ := bashPPScalarNamedType(tag.typ)
+		candidateType, _ := bashPPScalarNamedType(candidate.typ)
+		compatible := r.bashPPTypeAssignable(tagType, candidateType) || r.bashPPTypeAssignable(candidateType, tagType)
+		if iface, ok := r.bashPPInterfaceType(tagType); ok {
+			compatible = compatible || r.bashPPImplements(candidateType, iface) == nil
+		}
+		if iface, ok := r.bashPPInterfaceType(candidateType); ok {
+			compatible = compatible || r.bashPPImplements(tagType, iface) == nil
+		}
+		if !compatible {
+			return fmt.Errorf("BASHPP-ESWITCH-TYPE: case expression type %s does not match switch tag type %s", candidate.typ, tag.typ)
+		}
 	}
 	tagKind, candidateKind := tag.value.Kind(), candidate.value.Kind()
 	numeric := func(kind constant.Kind) bool { return kind == constant.Int || kind == constant.Float }
@@ -2053,8 +2071,8 @@ func bashPPSwitchComparable(tag, candidate bashPPScalar) error {
 	return nil
 }
 
-func bashPPSwitchEqual(tag, candidate bashPPScalar) (bool, error) {
-	if err := bashPPSwitchComparable(tag, candidate); err != nil {
+func (r *Runner) bashPPSwitchEqual(tag, candidate bashPPScalar) (bool, error) {
+	if err := r.bashPPSwitchComparable(tag, candidate); err != nil {
 		return false, err
 	}
 	return bashPPCompareScalar(tag.value, token.EQL, candidate.value)

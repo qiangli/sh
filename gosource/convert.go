@@ -905,6 +905,23 @@ func (c *converter) expr(e ast.Expr) s.BashPPExpr {
 	// interpreter's exact scalar evaluation reproduces the kind from the
 	// form, and the generated Go stays the source.
 	if tv := c.info.Types[e]; tv.Value != nil {
+		if named, ok := tv.Type.(*types.Named); ok {
+			if basic, scalar := named.Underlying().(*types.Basic); scalar && basic.Info()&(types.IsBoolean|types.IsInteger|types.IsFloat|types.IsComplex|types.IsString) != 0 {
+				// Context can convert an untyped constant directly to a defined
+				// scalar type without an explicit conversion in the source, as in
+				// time.Sleep(1e7). Preserve that checked boundary so the bridge
+				// sends an integer time.Duration rather than the literal's float
+				// spelling and lets reflect reject it at the dependency boundary.
+				name := c.typeString(named)
+				return &s.BashPPConvertExpr{
+					ConvType:     c.lit(e.Pos(), name),
+					ConvTypeExpr: c.checkedType(named, e, "constant conversion type"),
+					Lparen:       c.pos(e.Pos()),
+					Rparen:       c.pos(e.End() - 1),
+					X:            result,
+				}
+			}
+		}
 		if basic, ok := tv.Type.(*types.Basic); ok && basic.Info()&types.IsUntyped == 0 {
 			// A package that redeclares this predeclared type name as a
 			// non-type has no usable `basic.Name()` conversion; emitting one
