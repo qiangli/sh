@@ -888,7 +888,7 @@ func (e *emitter) statement(s *syntax.Stmt) (string, error) {
 	}
 	pos := s.Cmd.Pos()
 	if e.goSource {
-		pos = goSourceInstructionPos(s.Cmd)
+		pos = e.goSourceInstructionPos(s.Cmd)
 	}
 	return e.markAt(s.Cmd, pos) + reset + text + "\n", nil
 }
