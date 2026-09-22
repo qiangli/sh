@@ -83,9 +83,16 @@ type bashPPToolchain struct {
 	eval          bashPPEvaluator
 	bridge        *bashPPNativeSession
 	callbackDepth int
-	moduleDir     string
-	importPath    string
-	testMain      bool
+
+	// callbackReturnDepth is the exact Go-form function depth of a mirrored
+	// method body. It lets return-expression evaluation carry a native
+	// composite structurally to the worker without changing ordinary locals or
+	// nested helper returns executed while the callback is active.
+	callbackReturnDepth int
+
+	moduleDir  string
+	importPath string
+	testMain   bool
 	// instantiations is the per-file closure of reached generic
 	// instantiations; see bashpp_sprint165_runtime_instantiations.go.
 	instantiations *bashPPInstantiationIndex

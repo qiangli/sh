@@ -2860,6 +2860,32 @@ func (r *Runner) bashPPReturnStmt(ctx context.Context, ret *syntax.BashPPReturn)
 // bashPPReturnScalarExpr settles a single scalar result, retaining the value's
 // type so a defined type reaches the caller as itself.
 func (r *Runner) bashPPReturnScalarExpr(expr syntax.BashPPExpr) {
+	// Only the mirrored method frame's own returned expression may defer an
+	// imported composite to the callback worker's declared reflect result type.
+	// Locals and nested helper returns inside the callback still materialise in
+	// the dependency immediately, preserving their methods and mutations.
+	if r.bashPPGoSource && r.bashPPTools.callbackReturnDepth == r.bashPPFuncActive {
+		boundary := expr
+		for {
+			paren, ok := boundary.(*syntax.BashPPParenExpr)
+			if !ok {
+				break
+			}
+			boundary = paren.X
+		}
+		if lit, ok := boundary.(*syntax.BashPPCompositeLit); ok && r.bashPPNativeType(lit.LitType) {
+			value, err := r.bashPPNativeCompositeAtBoundary(lit, false, true)
+			if err != nil {
+				r.exit.fatal(&goSourceError{prefix: r.bashErrPrefix(expr.Pos()), err: err})
+				r.bashPPShortFailureSeq++
+				return
+			}
+			cell := goSourceNativeValueCell(value)
+			r.bashPPReturn = bashPPReturnState{active: true, values: []string{cell.vr.String()}, cells: []*bashPPCell{cell}}
+			r.exit.returning = true
+			return
+		}
+	}
 	if cell, handled, err := r.goSourceNilValueCell(expr); handled {
 		if err != nil {
 			r.exit.fatal(err)

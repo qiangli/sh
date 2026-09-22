@@ -194,6 +194,9 @@ func (r *Runner) bashPPNativeCallback(ctx context.Context, selector string, recv
 	if !ok {
 		return nil, fmt.Errorf("gosource: cannot bind original method %s", selector)
 	}
+	previousReturnDepth := r.bashPPTools.callbackReturnDepth
+	r.bashPPTools.callbackReturnDepth = r.bashPPFuncActive + 1
+	defer func() { r.bashPPTools.callbackReturnDepth = previousReturnDepth }()
 	var arguments []string
 	var readerBuffer []any
 	if method == "Read" {
