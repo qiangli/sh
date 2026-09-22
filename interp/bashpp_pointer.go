@@ -137,6 +137,11 @@ func (r *Runner) bashPPSliceToArrayPointer(conv *syntax.BashPPConvertExpr, targe
 		}
 		operand = paren.X
 	}
+	// Keep non-collection call and pointer-conversion operands on their existing path.
+	root, rooted := bashPPCollectionRoot(operand)
+	if !rooted || r.bashPPScope.lookup(root) == nil {
+		return nil, false, nil
+	}
 	if ident, direct := operand.(*syntax.BashPPIdent); direct {
 		cell := r.bashPPScope.lookup(ident.Name.Value)
 		if cell != nil && cell.pointer {
