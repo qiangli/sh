@@ -128,6 +128,9 @@ func (r *Runner) goSourceStaticExprType(expr syntax.BashPPExpr) (syntax.BashPPTy
 		return x.ConvTypeExpr, x.ConvTypeExpr != nil
 	case *syntax.BashPPCompositeLit:
 		return x.LitType, x.LitType != nil
+	case *syntax.BashPPNewExpr:
+		// Inspect the allocated type without allocating or evaluating new(v).
+		return &syntax.BashPPPointerType{Element: x.AllocType}, x.AllocType != nil
 	case *syntax.BashPPAddressExpr:
 		typ, ok := r.goSourceStaticExprType(x.X)
 		return &syntax.BashPPPointerType{Element: typ}, ok
@@ -135,8 +138,7 @@ func (r *Runner) goSourceStaticExprType(expr syntax.BashPPExpr) (syntax.BashPPTy
 		typ, ok := r.goSourceStaticExprType(x.X)
 		pointer, pointerOK := r.bashPPUnderlyingType(typ).(*syntax.BashPPPointerType)
 		if !ok || !pointerOK {
-			// `*new(T)` under a type parameter has no static pointee here;
-			// an honest refusal, not a nil dereference.
+			// Unknown pointer shapes cannot provide a static pointee.
 			return nil, false
 		}
 		return pointer.Element, true

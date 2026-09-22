@@ -310,7 +310,11 @@ func (r *Runner) bashPPAddress(expr syntax.BashPPExpr) (result *bashPPPointer, e
 		expr = paren.X
 	}
 	if deref, ok := expr.(*syntax.BashPPDerefExpr); ok {
-		return r.bashPPPointerExprValue(deref.X)
+		ptr, err := r.bashPPPointerExprValue(deref.X)
+		if err == nil && ptr == nil {
+			err = errBashPPNilDereference
+		}
+		return ptr, err
 	}
 	// Go's `&T{…}` is addressable even though it names no variable: the
 	// literal is a fresh allocation whose address the expression yields. It

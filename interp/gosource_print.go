@@ -130,6 +130,8 @@ func (r *Runner) goSourcePrintReferenceOperand(expr syntax.BashPPExpr) bool {
 	switch x := expr.(type) {
 	case *syntax.BashPPParenExpr:
 		return r.goSourcePrintReferenceOperand(x.X)
+	case *syntax.BashPPAddressExpr, *syntax.BashPPNewExpr:
+		return true
 	case *syntax.BashPPIdent:
 		if x.Name.Value == "nil" || r.bashPPScope == nil {
 			return false
