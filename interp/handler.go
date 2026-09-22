@@ -1149,6 +1149,9 @@ func DefaultOpenHandler() OpenHandlerFunc {
 			}
 		}
 		mc := HandlerCtx(ctx)
+		if console, ok := devTTYConsolePath(path, flag); ok {
+			return openPath(ctx, console, flag&^(os.O_CREATE|os.O_TRUNC|os.O_EXCL), perm)
+		}
 		if runtime.GOOS == "windows" && path == "/dev/null" {
 			path = "NUL"
 			// Note that even though https://go.dev/issue/71752 was resolved for Windows,
@@ -1284,6 +1287,9 @@ type StatHandlerFunc func(ctx context.Context, name string, followSymlinks bool)
 func DefaultStatHandler() StatHandlerFunc {
 	windows := runtime.GOOS == "windows"
 	return func(ctx context.Context, path string, followSymlinks bool) (fs.FileInfo, error) {
+		if info, ok := devTTYStat(path); ok {
+			return info, nil
+		}
 		path = shellPathJoinAbs(handlerDir(ctx), path)
 		if !followSymlinks {
 			info, err := os.Lstat(path)

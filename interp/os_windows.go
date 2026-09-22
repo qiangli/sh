@@ -95,8 +95,15 @@ func (r *Runner) unTestOwnOrGrp(ctx context.Context, op syntax.UnTestOperator, x
 	return false
 }
 
+// userGroups is bash's $GROUPS. Windows has no numeric gid (os.Getgid is
+// -1), and bash always lists at least the primary group, so report a
+// single group 0 rather than -1 — dynvar.tests assigns GROUPS[0]=-1 and
+// expects the read-only variable NOT to read back as -1.
 func userGroups() []string {
-	return []string{strconv.Itoa(os.Getgid())}
+	if gid := os.Getgid(); gid >= 0 {
+		return []string{strconv.Itoa(gid)}
+	}
+	return []string{"0"}
 }
 
 // openPath opens regular files through CreateFile with FILE_SHARE_DELETE
