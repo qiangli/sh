@@ -1,5 +1,12 @@
 # Bash# compiler-artifact contracts
 
+**Ratified by the operator, 2026-09-22 (Sprint 249).** This page applies the
+language-level policy in the `bashsharp` repository,
+`docs/bashpp-go-implementation-claim.md`, section "Language, not
+implementation: what Bash# does not mimic". Bash# is a language. It matches
+Go's program semantics and does not mimic every feature or artifact of the gc
+toolchain.
+
 ## Product decision
 
 Bash# executes the typed source program in its interpreter, or compiles the
