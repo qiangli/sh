@@ -350,7 +350,7 @@ func NativePathMounts(m *Mounts, value string) string {
 // mountNative spells the remainder of a mounted path natively under the
 // mount's directory, encoding the characters NTFS refuses.
 func mountNative(native, rest string) string {
-	return nativeJoin(native, EncodeSpecialMode(strings.ReplaceAll(rest, "/", `\`), true))
+	return nativeJoin(native, strings.ReplaceAll(EncodeShellRelativeMode(rest, true), "/", `\`))
 }
 
 // NativePathListMounts converts a path list into native form the way

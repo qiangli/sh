@@ -342,6 +342,27 @@ func TestSpecialCharsRoundTrip(t *testing.T) {
 	}
 }
 
+func TestShellRelativeBackslashIsFilenameCharacter(t *testing.T) {
+	got := EncodeShellRelativeMode(`a\*b`, true)
+	want := "a\uf05c\uf02ab"
+	if got != want {
+		t.Fatalf("EncodeShellRelativeMode = %q, want %q", got, want)
+	}
+	if back := DecodeSpecialMode(got, true); back != `a\*b` {
+		t.Fatalf("DecodeSpecialMode = %q", back)
+	}
+	if got := JoinAbsMode(`C:\work`, `a\*b`, true); got != "C:\\work\\a\uf05c\uf02ab" {
+		t.Fatalf("JoinAbsMode = %q", got)
+	}
+	m := NewMounts(`C:\root`, nil, `C:\Temp`)
+	if got := ToOSMountsMode(m, `C:\work`, `/tmp/a\*b`, true); got != "C:\\Temp\\a\uf05c\uf02ab" {
+		t.Fatalf("ToOSMountsMode /tmp = %q", got)
+	}
+	if got := ToOSMountsMode(m, `C:\work`, `/dir/a\*b`, true); got != "C:\\root\\dir\\a\uf05c\uf02ab" {
+		t.Fatalf("ToOSMountsMode mounted = %q", got)
+	}
+}
+
 func TestToOSModeEncodesSpecialChars(t *testing.T) {
 	// Not parallel: pins the TempDir hook.
 	oldTempDir := TempDir

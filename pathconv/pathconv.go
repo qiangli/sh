@@ -93,13 +93,13 @@ func ToOSMountsMode(m *Mounts, dir, path string, windows bool) string {
 		return p
 	}
 	if drive, rest, ok := DrivePath(path); ok {
-		return clean(string(drive) + ":" + EncodeSpecialMode(rest, true))
+		return clean(string(drive) + ":" + EncodeShellRelativeMode(rest, true))
 	}
 	if native, rest, ok := m.lookupPosix(path, true); ok {
 		return clean(mountNative(native, rest))
 	}
 	if !strings.HasPrefix(path, "/") && !strings.HasPrefix(path, `\`) {
-		return EncodeSpecialMode(path, true)
+		return EncodeShellRelativeMode(path, true)
 	}
 	vol := volumeName(dir)
 	if vol == "" {
@@ -193,6 +193,17 @@ func EncodeSpecialMode(path string, windows bool) string {
 	return b.String()
 }
 
+// EncodeShellRelativeMode converts a relative pathname from the shell's
+// POSIX spelling. A backslash in such an operand is a filename character,
+// not a Windows path separator. Keep native absolute paths on the existing
+// EncodeSpecialMode path, where backslashes delimit components.
+func EncodeShellRelativeMode(path string, windows bool) string {
+	if !windows {
+		return path
+	}
+	return EncodeSpecialMode(strings.ReplaceAll(path, `\`, "\uf05c"), true)
+}
+
 // DecodeSpecialMode reverses [EncodeSpecialMode]: every rune in
 // U+F000..U+F0FF becomes the character it stands for. Off Windows the path
 // is returned unchanged.
@@ -241,7 +252,7 @@ func JoinAbsMode(dir, path string, windows bool) string {
 	if windows {
 		// Encode before joining: filepath.Clean must never see a colon that
 		// is not the drive's.
-		path = EncodeSpecialMode(path, true)
+		path = EncodeShellRelativeMode(path, true)
 	}
 	if !windows || runtime.GOOS == "windows" {
 		return filepath.Join(dir, path)
@@ -330,7 +341,7 @@ func normalizeOperand(path string) (string, bool) {
 		if rest == "" {
 			return clean(TempDir()), true
 		}
-		return clean(TempDir() + EncodeSpecialMode(rest, true)), true
+		return clean(TempDir() + EncodeShellRelativeMode(rest, true)), true
 	}
 	return "", false
 }
