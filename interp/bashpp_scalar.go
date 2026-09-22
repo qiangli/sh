@@ -22,6 +22,10 @@ type bashPPScalar struct {
 	typ          string
 	runtime      bool
 	negativeZero bool
+	// interfaceValue preserves the dynamic type and storage of a scalar held
+	// by an interface. Its rendered scalar payload alone is not enough for Go
+	// equality: distinct defined types may have equal underlying values.
+	interfaceValue *bashPPInterfaceValue
 	// nonFinite carries the runtime IEEE values that go/constant deliberately
 	// cannot represent. It is only set for Go-source runtime float operations.
 	nonFinite           float64
@@ -533,6 +537,12 @@ func (r *Runner) bashPPIdentScalar(name string) (bashPPScalar, error) {
 // considering its rendered shell text. Quoted "2" and "true" values must not
 // become numbers or booleans merely because their storage is textual.
 func (r *Runner) bashPPScalarFromCell(cell *bashPPCell) bashPPScalar {
+	if cell.interfaceValue != nil {
+		value := r.bashPPScalarFromCell(cell.interfaceValue.cell)
+		value.interfaceValue = cell.interfaceValue
+		value.typ = bashPPTypeText(cell.declType)
+		return value
+	}
 	if cell.hasNonFiniteComplex {
 		return bashPPNonFiniteComplexScalar(cell.nonFiniteComplex, cell.typeName)
 	}
