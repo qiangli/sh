@@ -11,6 +11,16 @@ func goSourceInstructionPos(command syntax.Command) syntax.Pos {
 	if command == nil {
 		return syntax.Pos{}
 	}
+	// Same-line instructions already inherit the correct generated column
+	// from the statement anchor. Moving that anchor to a selector or bracket
+	// adds its source-column offset twice. Only a distinct fault line needs
+	// a new directive; retain the original anchor for ordinary calls.
+	faultLine := func(pos syntax.Pos) syntax.Pos {
+		if pos.Line() == command.Pos().Line() {
+			return command.Pos()
+		}
+		return pos
+	}
 	exprPos := func(expr syntax.BashPPExpr) syntax.Pos {
 		switch x := expr.(type) {
 		case *syntax.BashPPIndexExpr:
@@ -25,21 +35,21 @@ func goSourceInstructionPos(command syntax.Command) syntax.Pos {
 	switch x := command.(type) {
 	case *syntax.BashPPCall:
 		if pos := exprPos(x.CalleeExpr); pos.IsValid() {
-			return pos
+			return faultLine(pos)
 		}
 		if len(x.Fun) > 1 {
-			return x.Fun[len(x.Fun)-1].Pos()
+			return faultLine(x.Fun[len(x.Fun)-1].Pos())
 		}
 	case *syntax.BashPPAssign:
 		if pos := exprPos(x.TargetExpr); pos.IsValid() {
-			return pos
+			return faultLine(pos)
 		}
 		if pos := exprPos(x.ValueExpr); pos.IsValid() {
-			return pos
+			return faultLine(pos)
 		}
 	case *syntax.BashPPShortDecl:
 		if pos := exprPos(x.Expr); pos.IsValid() {
-			return pos
+			return faultLine(pos)
 		}
 	}
 	return command.Pos()
