@@ -4,6 +4,7 @@
 package interp_test
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -221,6 +222,16 @@ func TestMain(m *testing.M) {
 			}()
 			fmt.Print("R")
 			io.Copy(io.Discard, os.Stdin)
+			os.Exit(0)
+		case "reflect":
+			scanner := bufio.NewScanner(os.Stdin)
+			for scanner.Scan() {
+				fmt.Println(scanner.Text())
+			}
+			if err := scanner.Err(); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
 			os.Exit(0)
 		case "fd8_is_terminal":
 			if term.IsTerminal(8) {
@@ -5619,6 +5630,10 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 		"got=hi\n",
 	},
 	{
+		"coproc { :; }; echo ${COPROC[0]} ${COPROC[1]}; wait $COPROC_PID",
+		"63 60\n",
+	},
+	{
 		"coproc CO { /bin/sleep 2; }; { sleep 0.05; kill $CO_PID; } & wait $CO_PID; echo status:$?",
 		"status:143\n",
 	},
@@ -5872,6 +5887,10 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	},
 	{
 		"a=4; read -t 0.000001 a <<< abcde; status=$?; echo ${a:-unset} $status",
+		"abcde 0\n",
+	},
+	{
+		"a=4; read -t 0.000001 a <<<abcde; status=$?; echo ${a:-unset} $status",
 		"abcde 0\n",
 	},
 	{
@@ -6678,6 +6697,47 @@ func TestRunnerRun(t *testing.T) {
 					c.in, want, got)
 			}
 		})
+	}
+}
+
+func TestCoprocExternalReflectorTerminatesBySyntheticPid(t *testing.T) {
+	t.Parallel()
+
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := `
+coproc REFLECT { "$GOSH_PROG"; }
+echo ${REFLECT[@]}
+echo flop >&${REFLECT[1]}
+read LINE <&${REFLECT[0]}
+echo "$LINE"
+{ sleep 0.05; kill $REFLECT_PID; } &
+wait $REFLECT_PID >/dev/null 2>&1 || { status=$?; echo "status:$status"; }
+`
+	file := parse(t, nil, src)
+	var stdout, stderr concBuffer
+	r, err := interp.New(
+		interp.StdIO(nil, &stdout, &stderr),
+		interp.Env(expand.ListEnviron(append(os.Environ(),
+			"GOSH_PROG="+exe,
+			"GOSH_CMD=reflect",
+		)...)),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), runnerRunTimeout)
+	defer cancel()
+	if err := r.Run(ctx, file); err != nil {
+		t.Fatalf("run: %v; stdout=%q stderr=%q", err, stdout.String(), stderr.String())
+	}
+	if got, want := stdout.String(), "63 60\nflop\nstatus:143\n"; got != want {
+		t.Fatalf("stdout = %q, want %q; stderr=%q", got, want, stderr.String())
+	}
+	if got := stderr.String(); got != "" {
+		t.Fatalf("stderr = %q, want empty", got)
 	}
 }
 
