@@ -41,7 +41,11 @@ func TestGlobSortUsesShellStatAndAccessTime(t *testing.T) {
 		{"z", base, base.Add(2 * time.Hour)},
 	} {
 		path := filepath.Join(dir, file.name)
-		if err := os.WriteFile(path, nil, 0o600); err != nil {
+		var contents []byte
+		if file.name == "z" {
+			contents = []byte("longer")
+		}
+		if err := os.WriteFile(path, contents, 0o600); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.Chtimes(path, file.access, file.mod); err != nil {
@@ -54,6 +58,7 @@ func TestGlobSortUsesShellStatAndAccessTime(t *testing.T) {
 	}{
 		{"+atime", "z,a"},
 		{"+mtime", "a,z"},
+		{"-size", "z,a"},
 	} {
 		cfg := &Config{Env: ListEnviron("GLOBSORT=" + tc.key)}
 		cfg.Stat = func(p string) (fs.FileInfo, error) {
