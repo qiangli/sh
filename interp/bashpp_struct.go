@@ -662,6 +662,21 @@ func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (value any, meta *bashPP
 			return nil, nil, err
 		}
 		return r.bashPPReadCellValue(cell)
+	case *syntax.BashPPUnaryExpr:
+		// `(<-c).(struct{})`, `m[(<-c).(T)]`: a receive in structured
+		// position is the one receive the concurrency runtime performs,
+		// and its value is the received cell — an interface value keeps
+		// its dynamic type, a struct its layout. The scalar evaluator owns
+		// every other unary operator; a receive that the runtime cancels
+		// or deadlocks has already been reported, so it is the interrupt.
+		if !r.bashPPGoSource || x.Op == nil || x.Op.Value != "<-" {
+			break
+		}
+		cell, _ := r.bashPPReceiveCell(r.ectx, &syntax.BashPPReceive{Arrow: x.Pos(), ChanExpr: x.X}, nil)
+		if cell == nil {
+			return nil, nil, errBashPPScalarInterrupted
+		}
+		return r.bashPPReadCellValue(cell)
 	case *syntax.BashPPIdent:
 		cell := r.bashPPScope.lookup(x.Name.Value)
 		if cell != nil && cell.pointer {

@@ -1108,7 +1108,9 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 				return
 			}
 			name := d.Lhs[0].Value
-			if meta != nil {
+			if meta != nil && meta.kind == "pointer" {
+				r.bashPPDeclarePointerRead(name, value, meta)
+			} else if meta != nil {
 				value, meta = bashPPCopyArrayValue(value, meta)
 				r.bashPPDeclareName(name, expand.NewObject(value))
 				cell := r.bashPPScope.lookup(name)
@@ -1152,6 +1154,8 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 					cell := r.bashPPScope.lookup(name)
 					bashPPStoreCellValue(cell, value, meta)
 					cell.declType = meta.typ
+				} else if meta != nil && meta.kind == "pointer" {
+					r.bashPPDeclarePointerRead(name, value, meta)
 				} else if meta != nil {
 					value, meta = bashPPCopyArrayValue(value, meta)
 					r.bashPPDeclareName(name, expand.NewObject(value))
@@ -2089,6 +2093,30 @@ func (r *Runner) bashPPDeclareName(name string, vr expand.Variable) {
 		r.errf("%v\n", err)
 		r.exit = exitStatus{code: 2}
 	}
+}
+
+// bashPPDeclarePointerRead binds `i := list.head` / `p := ptrs[0]`: a pointer
+// read out of a struct field or collection element. The pointer travels in
+// the cell's pointerValue side channel, exactly as `p := &x` and `q := p`
+// bind one (see bashPPBindPointerExpr), and the field's static type becomes
+// the local's declared type. Storing the pointer as an object payload
+// instead left the local without a declared type, so the first assignment
+// `i = i.next` — which keeps the target's declared type by design — dropped
+// the only type the local had and a later `i.item.Print()` found no typed
+// selector path.
+func (r *Runner) bashPPDeclarePointerRead(name string, value any, meta *bashPPCollectionMeta) {
+	r.bashPPDeclareName(name, expand.Variable{Set: true, Kind: expand.String})
+	cell := r.bashPPScope.lookup(name)
+	if cell == nil {
+		return
+	}
+	cell.declType = meta.typ
+	if ptrType, ok := meta.typ.(*syntax.BashPPPointerType); ok {
+		if named, ok := ptrType.Element.(*syntax.BashPPNamedType); ok && named.Name != nil {
+			cell.typeName = named.Name.Value
+		}
+	}
+	bashPPStoreCellValue(cell, value, meta)
 }
 
 // bashPPValue turns an unevaluated right-hand side into a variable.

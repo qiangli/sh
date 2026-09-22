@@ -309,6 +309,31 @@ func main() {
 	qt.Assert(t, qt.StringContains(stderr, "3210"))
 }
 
+// The negative: the local keeps the pointer's identity as well as its type,
+// so a nil head bound to `i` compares equal to nil and the selector call
+// through it is Go's nil dereference, not a typed-path refusal.
+func TestS219PointerFieldLocalSelectorPathNegative(t *testing.T) {
+	src := `package main
+type Item interface{ Print() string }
+type ListItem struct {
+	item Item
+	next *ListItem
+}
+type List struct{ head *ListItem }
+func main() {
+	list := new(List)
+	i := list.head
+	println(i == nil)
+	println(i.item.Print())
+}
+`
+	_, stderr, err := runS219(t, src)
+	qt.Assert(t, qt.IsNotNil(err))
+	qt.Assert(t, qt.StringContains(stderr, "true\n"))
+	qt.Assert(t, qt.StringContains(stderr, "invalid memory address or nil pointer dereference"))
+	qt.Assert(t, qt.IsFalse(strings.Contains(stderr, "BASHPP-ESELECTOR")), qt.Commentf("stderr=%q", stderr))
+}
+
 func TestS219ZeroSizeStructAssertion(t *testing.T) {
 	src := `package main
 func recv(c chan interface{}) struct{} {
@@ -348,6 +373,36 @@ func main() {
 	_, stderr, err := runS219(t, src)
 	qt.Assert(t, qt.IsNotNil(err))
 	qt.Assert(t, qt.IsTrue(strings.Contains(stderr, "interface conversion")), qt.Commentf("stderr=%q", stderr))
+}
+
+// The negatives for the receive-assert form: a failed `(<-c).(T)` panics
+// with Go's own text, a guard's bare `recover()` swallows it without turning
+// the guarded frame into a failure, and the unguarded one still terminates.
+func TestS219ReceiveAssertionMismatch(t *testing.T) {
+	src := `package main
+func recv(c chan interface{}) {
+	defer rec()
+	_ = (<-c).(int)
+	println("unreached")
+}
+func rec() { recover() }
+func boom(c chan interface{}) {
+	_ = (<-c).(int)
+}
+func main() {
+	c := make(chan interface{}, 2)
+	c <- "s"
+	c <- "t"
+	recv(c)
+	println("guarded")
+	boom(c)
+	println("unreached")
+}
+`
+	_, stderr, err := runS219(t, src)
+	qt.Assert(t, qt.IsNotNil(err))
+	qt.Assert(t, qt.StringContains(stderr, "guarded\npanic: interface conversion: interface {} is string, not int"))
+	qt.Assert(t, qt.IsFalse(strings.Contains(stderr, "unreached")), qt.Commentf("stderr=%q", stderr))
 }
 
 var _ = gosource.Options{}
