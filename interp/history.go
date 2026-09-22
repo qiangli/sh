@@ -2488,7 +2488,15 @@ parseOpts:
 			}
 		}
 	}
-	if st := r.histRunString(ctx, editor+" "+tmpName); st.code != 0 {
+	// The editor command is shell text (bash runs `$editor $tmpfile` through
+	// the parser), so the temp file goes in the shell's own spelling
+	// (/c/Users/… on Windows, where the native C:\… would lose its
+	// backslashes) and quoted, so a temp directory with a space survives.
+	editorOperand := shellPathFromOS(tmpName)
+	if quoted, err := syntax.Quote(editorOperand, syntax.LangBash); err == nil {
+		editorOperand = quoted
+	}
+	if st := r.histRunString(ctx, editor+" "+editorOperand); st.code != 0 {
 		exit.code = 1
 		return exit
 	}
