@@ -492,9 +492,10 @@ func (r *Runner) goSourceIndexedPointee(value any, meta *bashPPCollectionMeta) (
 }
 
 // goSourceCompositeComparable is the comparable form of a composite literal
-// used as an operand: the struct or array value it builds, compared field
-// by field as Go compares it. Slice and map literals are not comparable and
-// are left to the scalar path's refusal.
+// used as an operand. Structs and arrays are compared field by field as Go
+// compares them. Slice and map literals also cross this boundary so their
+// one legal comparison, against nil, can be decided by the shared aggregate
+// comparator; comparisons with any other value remain rejected there.
 func (r *Runner) goSourceCompositeComparable(lit *syntax.BashPPCompositeLit) (bashPPComparableValue, bool, error) {
 	if !r.bashPPGoSource || lit.LitType == nil {
 		return bashPPComparableValue{}, false, nil
@@ -506,7 +507,7 @@ func (r *Runner) goSourceCompositeComparable(lit *syntax.BashPPCompositeLit) (ba
 	if err != nil {
 		return bashPPComparableValue{}, true, err
 	}
-	if meta == nil || (meta.kind != "struct" && meta.kind != "array" && meta.kind != "inferred-array") {
+	if meta == nil || (meta.kind != "struct" && meta.kind != "array" && meta.kind != "inferred-array" && meta.kind != "slice" && meta.kind != "map") {
 		return bashPPComparableValue{}, false, nil
 	}
 	return bashPPComparableValue{value: value, meta: meta}, true, nil

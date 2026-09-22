@@ -1123,7 +1123,18 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 				return
 			}
 		}
-		if lit, ok := d.Expr.(*syntax.BashPPCompositeLit); ok {
+		// Parentheses do not change the value category of a composite literal.
+		// Keep it on the structured declaration path instead of falling through
+		// to scalar evaluation (`x := (T{})`).
+		structuredExpr := d.Expr
+		for {
+			paren, ok := structuredExpr.(*syntax.BashPPParenExpr)
+			if !ok {
+				break
+			}
+			structuredExpr = paren.X
+		}
+		if lit, ok := structuredExpr.(*syntax.BashPPCompositeLit); ok {
 			if len(d.Lhs) != 1 {
 				r.errf("assignment mismatch: %d variable(s) but 1 value(s)\n", len(d.Lhs))
 				r.exit = exitStatus{code: 2}
