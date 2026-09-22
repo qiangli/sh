@@ -21,20 +21,20 @@ import (
 
 func TestGoSourceUnifiedChannelsThreeModes(t *testing.T) {
 	for name, source := range map[string]string{
-		"capacity_once":             `package main;import "fmt";func capacity()int{fmt.Println("capacity");return 2};func main(){c:=make(chan int,capacity()+1);c<-7;fmt.Println(len(c),cap(c),<-c)}`,
-		"negative_capacity_panic":   `package main;import "fmt";func main(){n:=-1;defer func(){fmt.Println(recover())}();_ = make(chan int,n)}`,
-		"beyond_legacy_cap":         `package main;import "fmt";func main(){c:=make(chan int,1000001);fmt.Println(cap(c),len(c))}`,
-		"constructor_result":        `package main;import "fmt";func newChannel(n int)chan int{return make(chan int,n)};func main(){c:=newChannel(1);c<-9;fmt.Println(<-c)}`,
-		"close_operand_once":        `package main;import "fmt";func pick(c chan int)chan int{fmt.Println("pick");return c};func main(){c:=make(chan int,1);c<-8;close(pick(c));v,ok:=<-c;fmt.Println(v,ok);v,ok=<-c;fmt.Println(v,ok)}`,
-		"close_nil":                 `package main;import "fmt";func main(){var c chan int;fmt.Println(len(c),cap(c));defer func(){fmt.Println(recover())}();close(c)}`,
-		"close_twice":               `package main;import "fmt";func main(){c:=make(chan int);close(c);defer func(){fmt.Println(recover())}();close(c)}`,
-		"native_and_created_atomic": `package main;import("fmt";"time");func main(){c:=make(chan int,1);c<-7;var n chan int;select{case v:=<-c:fmt.Println(v);case <-time.After(time.Hour):panic("timer");case <-n:panic("nil")}}`,
-		"range_and_direction":       `package main;import "fmt";func fill(c chan<- int){c<-4;c<-5;close(c)};func sum(c <-chan int)int{total:=0;for v:=range c{total+=v};return total};func main(){c:=make(chan int,2);fill(c);fmt.Println(sum(c))}`,
-		"worker_pool_result":        `package main;import "fmt";func worker(jobs <-chan int,out chan<- int){for j:=range jobs{out<-j*2}};func main(){jobs:=make(chan int,5);out:=make(chan int,5);for i:=0;i<3;i++{go worker(jobs,out)};for j:=1;j<=5;j++{jobs<-j};close(jobs);sum:=0;for i:=0;i<5;i++{sum+=<-out};fmt.Println(sum)}`,
-		"native_owned_type":         `package main;import("fmt";"time");func main(){c:=make(chan time.Time,1);t:=time.Date(2020,1,2,3,4,5,0,time.UTC);c<-t;got:=<-c;fmt.Println(got.Equal(t),got.Year())}`,
-		"empty_struct_select":       `package main;import("fmt";"time");func main(){done:=make(chan struct{});close(done);select{case <-done:fmt.Println("done");case <-time.After(time.Hour):panic("timer")}}`,
-		"no_imports":                `package main;func main(){c:=make(chan int,1);c<-7;println(<-c);close(c)}`,
-		"nil_select_default":        `package main;import("fmt";"time");func main(){var c chan int;select{case <-c:panic("nil");case <-time.After(time.Hour):panic("timer");default:fmt.Println("default")}}`,
+		"capacity_once":              `package main;import "fmt";func capacity()int{fmt.Println("capacity");return 2};func main(){c:=make(chan int,capacity()+1);c<-7;fmt.Println(len(c),cap(c),<-c)}`,
+		"negative_capacity_panic":    `package main;import "fmt";func main(){n:=-1;defer func(){fmt.Println(recover())}();_ = make(chan int,n)}`,
+		"beyond_legacy_cap":          `package main;import "fmt";func main(){c:=make(chan int,1000001);fmt.Println(cap(c),len(c))}`,
+		"constructor_result":         `package main;import "fmt";func newChannel(n int)chan int{return make(chan int,n)};func main(){c:=newChannel(1);c<-9;fmt.Println(<-c)}`,
+		"close_operand_once":         `package main;import "fmt";func pick(c chan int)chan int{fmt.Println("pick");return c};func main(){c:=make(chan int,1);c<-8;close(pick(c));v,ok:=<-c;fmt.Println(v,ok);v,ok=<-c;fmt.Println(v,ok)}`,
+		"close_nil":                  `package main;import "fmt";func main(){var c chan int;fmt.Println(len(c),cap(c));defer func(){fmt.Println(recover())}();close(c)}`,
+		"close_twice":                `package main;import "fmt";func main(){c:=make(chan int);close(c);defer func(){fmt.Println(recover())}();close(c)}`,
+		"native_and_created_atomic":  `package main;import("fmt";"time");func main(){c:=make(chan int,1);c<-7;var n chan int;select{case v:=<-c:fmt.Println(v);case <-time.After(time.Hour):panic("timer");case <-n:panic("nil")}}`,
+		"range_and_direction":        `package main;import "fmt";func fill(c chan<- int){c<-4;c<-5;close(c)};func sum(c <-chan int)int{total:=0;for v:=range c{total+=v};return total};func main(){c:=make(chan int,2);fill(c);fmt.Println(sum(c))}`,
+		"worker_pool_result":         `package main;import "fmt";func worker(jobs <-chan int,out chan<- int){for j:=range jobs{out<-j*2}};func main(){jobs:=make(chan int,5);out:=make(chan int,5);for i:=0;i<3;i++{go worker(jobs,out)};for j:=1;j<=5;j++{jobs<-j};close(jobs);sum:=0;for i:=0;i<5;i++{sum+=<-out};fmt.Println(sum)}`,
+		"native_owned_type":          `package main;import("fmt";"time");func main(){c:=make(chan time.Time,1);t:=time.Date(2020,1,2,3,4,5,0,time.UTC);c<-t;got:=<-c;fmt.Println(got.Equal(t),got.Year())}`,
+		"empty_struct_select":        `package main;import("fmt";"time");func main(){done:=make(chan struct{});close(done);select{case <-done:fmt.Println("done");case <-time.After(time.Hour):panic("timer")}}`,
+		"no_imports":                 `package main;func main(){c:=make(chan int,1);c<-7;println(<-c);close(c)}`,
+		"nil_select_default":         `package main;import("fmt";"time");func main(){var c chan int;select{case <-c:panic("nil");case <-time.After(time.Hour):panic("timer");default:fmt.Println("default")}}`,
 	} {
 		t.Run(name, func(t *testing.T) { typedSendThreeModes(t, source) })
 	}
