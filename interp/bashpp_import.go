@@ -61,6 +61,9 @@ type bashPPEvalRequest struct {
 	// object calls. The helper declares each one; its body is the callback
 	// protocol, so the original body stays interpreted.
 	CompanionTrampolines []bashPPCompanionTrampoline
+	// CgoPackages are the cgo pseudo-package bindings the interpreted
+	// program's packages reference; each is built natively with cgo.
+	CgoPackages []syntax.CgoPackage
 	// LocalTypes materialises the original program's own named types inside
 	// the dependency helper. Sprint #118 Story #54 (c3a60493cde9).
 	LocalTypes []bashPPLocalType
@@ -542,7 +545,14 @@ func (r *Runner) bashPPEvalRequest() (bashPPEvalRequest, error) {
 		return bashPPEvalRequest{}, err
 	}
 	return bashPPEvalRequest{CallbackOwner: r, CallbackDepth: r.bashPPTools.callbackDepth, LocalTypes: r.bashPPLocalTypeDescriptors(), Instances: r.bashPPImportedInstances(), RuntimeEnv: runtimeEnv, ModuleDir: moduleDir, ImportPath: importPath, TestMain: testMain, Argv: append([]string{r.filename}, r.Params...), Bridge: r.bashPPTools.bridge, Go: r.bashPPTools.goBinary, Dir: r.Dir, Env: env, Stdin: r.stdin,
-		Stdout: r.bashPPWriter(r.stdout), Stderr: r.bashPPWriter(r.stderr), Imports: r.bashPPImports, SourceDir: sourceDir, SourceFile: sourceFile, EmbedDecls: embedDecls, CompanionFiles: companionFiles, NativeFuncs: nativeFuncs, CompanionTrampolines: trampolines, RootFiles: r.bashPPGoSourceRootFiles()}, nil
+		Stdout: r.bashPPWriter(r.stdout), Stderr: r.bashPPWriter(r.stderr), Imports: r.bashPPImports, SourceDir: sourceDir, SourceFile: sourceFile, EmbedDecls: embedDecls, CompanionFiles: companionFiles, NativeFuncs: nativeFuncs, CompanionTrampolines: trampolines, RootFiles: r.bashPPGoSourceRootFiles(), CgoPackages: r.bashPPGoSourceCgoPackages()}, nil
+}
+
+func (r *Runner) bashPPGoSourceCgoPackages() []syntax.CgoPackage {
+	if r.bashPPGoSourceFile == nil {
+		return nil
+	}
+	return r.bashPPGoSourceFile.CgoPackages
 }
 
 func setEnvString(env []string, name, value string) []string {
@@ -838,15 +848,29 @@ func (r *Runner) bashPPImport(ctx context.Context, imp *syntax.BashPPImport) {
 			r.exit.fatal(fmt.Errorf("bash++ import %q: path traversal or absolute paths are not allowed", path))
 			return
 		}
-		name, err := r.bashPPTools.eval.Resolve(ctx, req, path)
-		if err != nil {
-			r.exit.fatal(err)
-			return
+		name := ""
+		if path == "C" {
+			for _, pkg := range req.CgoPackages {
+				if spec.Alias != nil && pkg.Alias == spec.Alias.Value || spec.Alias == nil && pkg.Alias == "C" {
+					name = pkg.Alias
+					break
+				}
+			}
+			if name == "" {
+				r.exit.fatal(fmt.Errorf("bash++ import %q: no authenticated package-scoped cgo metadata", path))
+				return
+			}
+		} else {
+			name, err = r.bashPPTools.eval.Resolve(ctx, req, path)
+			if err != nil {
+				r.exit.fatal(err)
+				return
+			}
 		}
 		if spec.Alias != nil {
 			name = spec.Alias.Value
 		}
-		if r.bashPPGoSource {
+		if r.bashPPGoSource && path != "C" {
 			if err := r.bashPPBridgeRegisterScalarTypes(ctx, req, path, name); err != nil {
 				r.exit.fatal(err)
 				return

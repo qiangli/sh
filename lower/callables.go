@@ -439,6 +439,28 @@ func (e *emitter) importDecl(n *syntax.BashPPImport) error {
 			path.WriteString(lit.Value)
 		}
 		p := path.String()
+		if p == "C" {
+			alias := "C"
+			if spec.Alias != nil {
+				alias = spec.Alias.Value
+			}
+			matched := false
+			if e.sourceFile != nil {
+				for _, pkg := range e.sourceFile.CgoPackages {
+					if pkg.Alias == alias {
+						matched = true
+						break
+					}
+				}
+			}
+			if !matched {
+				return e.fail(spec, CodeType, "import C has no package-scoped cgo metadata")
+			}
+			e.imports[alias] = p
+			e.cgoAliases[alias] = true
+			e.bind(alias)
+			continue
+		}
 		pkg, err := e.moduleImporter.Import(p)
 		if err != nil {
 			return e.fail(spec, CodeType, err.Error())
@@ -653,6 +675,13 @@ func (e *emitter) importLines() string {
 	sort.Strings(aliases)
 	var out strings.Builder
 	for _, key := range aliases {
+		if e.cgoAliases[key] {
+			if e.sourceFile != nil && len(e.sourceFile.CgoPackages) == 1 {
+				out.WriteString(e.sourceFile.CgoPackages[0].Preamble)
+			}
+			out.WriteString("import \"C\"\n")
+			continue
+		}
 		if e.goSource && !e.importAliased[key] {
 			// The input bound the package under its own name (C8).
 			fmt.Fprintf(&out, "import %s\n", strconv.Quote(e.imports[key]))

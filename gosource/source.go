@@ -433,6 +433,7 @@ func Load(sources []Source, options Options) (*Program, error) {
 		p.InitFunctions = append(p.InitFunctions, lp.initFunctions...)
 		lowered = append(lowered, lp)
 	}
+	p.File.CgoPackages = cgoPackages(linked)
 	// Imports first: the interpreter starts the native dependency bridge once,
 	// at the first statement that is not an import.
 	for _, lp := range lowered {

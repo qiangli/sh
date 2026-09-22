@@ -43,11 +43,34 @@ func (s *bashPPImportSource) overlayRoot(stubs map[string]string) error {
 		// symlinks; the enumerated path need not have been resolved at all.
 		s.replace[filepath.Join(s.sourceDir, filepath.Base(path))] = stub
 	}
+	return s.writeOverlay()
+}
+
+func (s *bashPPImportSource) remap(buildPath string) error {
+	s.buildPath = buildPath
+	s.replace = map[string]string{buildPath: s.Name()}
+	return s.writeOverlay()
+}
+
+func (s *bashPPImportSource) writeOverlay() error {
 	data, err := json.Marshal(struct{ Replace map[string]string }{s.replace})
 	if err != nil {
 		return err
 	}
 	return os.WriteFile(s.overlay, data, 0600)
+}
+
+func (s *bashPPImportSource) addSource(name, source string) (string, error) {
+	physical := filepath.Join(filepath.Dir(s.Name()), name)
+	if err := os.WriteFile(physical, []byte(source), 0600); err != nil {
+		return "", err
+	}
+	virtual := filepath.Join(filepath.Dir(s.buildPath), name)
+	if s.replace == nil {
+		s.replace = map[string]string{}
+	}
+	s.replace[virtual] = physical
+	return virtual, s.writeOverlay()
 }
 
 // bashPPScratchPolicy decides whether private helper scratch may be placed

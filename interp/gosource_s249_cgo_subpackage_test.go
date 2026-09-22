@@ -19,8 +19,6 @@ import (
 
 // Sprint: #249; Story: #715; Story-ID: 90f96d4f4dae
 func TestGoSourceS249LocalCgoSubpackage(t *testing.T) {
-	t.Skip("blocked: the flattened package map does not retain cgo preambles or package-scoped C bindings, and the native worker forces CGO_ENABLED=0")
-
 	dir := t.TempDir()
 	mainSource := []byte(`package main
 

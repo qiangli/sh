@@ -161,6 +161,7 @@ type bashPPNativeSession struct {
 	locals              string
 	embeds              string
 	companions          string
+	cgo                 string
 	instances           string
 	id                  string
 }
@@ -237,6 +238,9 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 		if s.companions != bashPPNativeCompanionIdentity(req.CompanionFiles, req.NativeFuncs, req.CompanionTrampolines) {
 			return errors.New("gosource: native companions changed after native dependency initialization")
 		}
+		if s.cgo != bashPPCgoIdentity(req.CgoPackages) {
+			return errors.New("gosource: cgo packages changed after native dependency initialization")
+		}
 		if s.instances != bashPPImportedInstanceIdentity(req.Instances) {
 			return errors.New("gosource: imported instantiations changed after native dependency initialization")
 		}
@@ -286,7 +290,46 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 	}
 	binary := file.Name() + ".bin"
 	buildEnv := setEnvString(req.Env, "CGO_ENABLED", "0")
-	if len(req.CompanionFiles) > 0 {
+	if len(req.CgoPackages) > 0 {
+		buildEnv = setEnvString(req.Env, "CGO_ENABLED", "1")
+	}
+	if len(req.CgoPackages) > 0 {
+		// cmd/cgo changes into the logical source directory. Give the overlay
+		// files unique names in the existing module directory so that directory
+		// exists, while all bytes and build artifacts remain in private scratch.
+		cgoMain := filepath.Join(bashPPModuleRequest(req).Dir, filepath.Base(file.buildPath))
+		if _, statErr := os.Lstat(cgoMain); !os.IsNotExist(statErr) {
+			cleanup()
+			return fmt.Errorf("gosource: cgo helper overlay would mask an existing source path")
+		}
+		if err = file.remap(cgoMain); err != nil {
+			cleanup()
+			return err
+		}
+		wrappers, wrapperErr := bashPPCgoWrapperSources(ctx, req)
+		if wrapperErr != nil {
+			cleanup()
+			return wrapperErr
+		}
+		paths := []string{file.buildPath}
+		for i, wrapper := range wrappers {
+			path, addErr := file.addSource(fmt.Sprintf("bashpp-cgo-%d.go", i), wrapper)
+			if addErr != nil {
+				cleanup()
+				return addErr
+			}
+			paths = append(paths, path)
+		}
+		args := append([]string{"build", "-p", "2", "-overlay=" + file.overlay, "-o", binary}, paths...)
+		build := exec.CommandContext(ctx, req.Go, args...)
+		build.Dir, build.Env = bashPPModuleRequest(req).Dir, buildEnv
+		var diagnostics bytes.Buffer
+		build.Stdout, build.Stderr = &diagnostics, &diagnostics
+		if err = build.Run(); err != nil {
+			cleanup()
+			return fmt.Errorf("gosource: build cgo dependency bridge: %w: %s", err, diagnostics.String())
+		}
+	} else if len(req.CompanionFiles) > 0 {
 		if req.SourceFile == "" {
 			cleanup()
 			return fmt.Errorf("gosource: native companions require an original source file")
@@ -448,6 +491,7 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 	s.locals = bashPPLocalTypeIdentity(req.LocalTypes)
 	s.embeds = bashPPEmbedIdentity(req.EmbedDecls)
 	s.companions = bashPPNativeCompanionIdentity(req.CompanionFiles, req.NativeFuncs, req.CompanionTrampolines)
+	s.cgo = bashPPCgoIdentity(req.CgoPackages)
 	s.instances = bashPPImportedInstanceIdentity(req.Instances)
 	go func() {
 		for {
@@ -707,6 +751,9 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 	// packages come in.
 	blankOnly := map[string]bool{}
 	for i, path := range ordered {
+		if path == "C" {
+			continue
+		}
 		blankOnly[path] = true
 		for _, alias := range paths[path] {
 			if !strings.HasPrefix(alias, "_:") {
@@ -721,6 +768,9 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 		}
 	}
 	for i, path := range ordered {
+		if path == "C" {
+			continue
+		}
 		if blankOnly[path] {
 			fmt.Fprintf(&imports, "_ %q\n", path)
 			continue
@@ -948,6 +998,14 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 		}
 		locals.WriteString(bashPPCompanionTrampolineGo(fn.Name, params, results))
 	}
+	for pi, pkg := range req.CgoPackages {
+		for _, symbol := range pkg.Symbols {
+			if symbol.Kind != "func" {
+				return "", fmt.Errorf("gosource: cgo package %q selector C.%s has unsupported kind %q", pkg.Path, symbol.Name, symbol.Kind)
+			}
+			fmt.Fprintf(&symbols, "%q: reflect.ValueOf(__bashpp_cgo_%d_%s),\n", pkg.Alias+"."+symbol.Name, pi, symbol.Name)
+		}
+	}
 	codecs, err := bashPPLocalCodecsGo(localTypes)
 	if err != nil {
 		return "", err
@@ -987,6 +1045,12 @@ func bashPPNativeTypeTexts(texts []string, aliases map[string]string) ([]string,
 		out[i] = mapped
 	}
 	return out, nil
+
+}
+
+func bashPPCgoIdentity(packages []syntax.CgoPackage) string {
+	data, _ := json.Marshal(packages)
+	return string(data)
 }
 
 func bashPPNativeFuncSignatureImports(params, results string, aliases map[string]string) (string, string, error) {
