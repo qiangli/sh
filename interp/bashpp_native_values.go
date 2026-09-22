@@ -1087,12 +1087,13 @@ func bashPPBridgeTypeText(typ syntax.BashPPTypeExpr) string {
 		if len(t.Methods) == 0 && len(t.Elems) == 0 {
 			return "interface{}"
 		}
-		members := make([]string, 0, len(t.Methods)+len(t.Elems))
-		for _, method := range t.Methods {
-			members = append(members, method.Name.Value+"("+bashPPBridgeFieldsText(method.Params)+")("+bashPPBridgeFieldsText(method.Results)+")")
-		}
-		for _, elem := range t.Elems {
-			if elem.Method == nil && elem.Embedded != nil {
+		elems := bashPPInterfaceElems(t)
+		members := make([]string, 0, len(elems))
+		for _, elem := range elems {
+			if elem.Method != nil {
+				method := elem.Method
+				members = append(members, method.Name.Value+"("+bashPPBridgeFieldsText(method.Params)+")("+bashPPBridgeFieldsText(method.Results)+")")
+			} else if elem.Embedded != nil {
 				members = append(members, bashPPBridgeTypeText(elem.Embedded))
 			}
 		}
@@ -1156,7 +1157,7 @@ func (r *Runner) bashPPBridgeCell(cell *bashPPCell) (bashPPBridgeValue, error) {
 	if cell.pointer {
 		value, err := r.bashPPBridgePointerValue(cell.pointerValue)
 		if value.Type == "" {
-			value.Type = bashPPTypeText(cell.declType)
+			value.Type = bashPPBridgeTypeText(cell.declType)
 		}
 		return value, err
 	}

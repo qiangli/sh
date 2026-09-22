@@ -32,6 +32,24 @@ func TestS219BridgeTypeSpelling(t *testing.T) {
 		{FieldTypeExpr: &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "any"}}, Ellipsis: syntax.NewPos(1, 1, 1)},
 	}}
 	qt.Assert(t, qt.Equals(bashPPBridgeTypeText(variadic), "func(string,...any)()"))
+	nestedVariadic := &syntax.BashPPFuncType{Params: []*syntax.BashPPField{{FieldTypeExpr: &syntax.BashPPFuncType{
+		Params: []*syntax.BashPPField{{
+			FieldTypeExpr: &syntax.BashPPPointerType{Element: &syntax.BashPPInterfaceType{}},
+			Ellipsis:      syntax.NewPos(1, 1, 1),
+		}},
+		Results: []*syntax.BashPPField{{FieldTypeExpr: &syntax.BashPPFuncType{
+			Params:  []*syntax.BashPPField{{FieldTypeExpr: &syntax.BashPPInterfaceType{}, Ellipsis: syntax.NewPos(1, 1, 1)}},
+			Results: []*syntax.BashPPField{{FieldTypeExpr: &syntax.BashPPPointerType{Element: &syntax.BashPPInterfaceType{}}}},
+		}}},
+	}}}}
+	qt.Assert(t, qt.Equals(bashPPBridgeTypeText(nestedVariadic), "func(func(...*interface{})(func(...interface{})(*interface{})))()"))
+
+	elemsOnly := &syntax.BashPPInterfaceType{Elems: []*syntax.BashPPInterfaceElem{{Method: &syntax.BashPPMethodSpec{
+		Name:    &syntax.Lit{Value: "Apply"},
+		Params:  []*syntax.BashPPField{{FieldTypeExpr: &syntax.BashPPPointerType{Element: &syntax.BashPPInterfaceType{}}}},
+		Results: []*syntax.BashPPField{{FieldTypeExpr: &syntax.BashPPFuncType{Results: []*syntax.BashPPField{{FieldTypeExpr: &syntax.BashPPInterfaceType{}}}}}},
+	}}}}
+	qt.Assert(t, qt.Equals(bashPPBridgeTypeText(elemsOnly), "interface{Apply(*interface{})(func()(interface{}))}"))
 
 	// An absent type still follows the old invalid-spelling path, so helper
 	// registration rejects it instead of silently authenticating a type guess.
