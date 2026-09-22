@@ -7988,9 +7988,7 @@ func cdStatErrorReason(err error) string {
 }
 
 func (r *Runner) cdpath(ctx context.Context, path string) (string, bool, bool) {
-	if path == "" || filepath.IsAbs(path) || path == "." || path == ".." ||
-		strings.HasPrefix(path, "."+string(filepath.Separator)) ||
-		strings.HasPrefix(path, ".."+string(filepath.Separator)) {
+	if cdpathSkipMode(path, runtime.GOOS == "windows") {
 		return "", false, false
 	}
 	cdpath := r.envGet("CDPATH")
@@ -8013,6 +8011,28 @@ func (r *Runner) cdpath(ctx context.Context, path string) (string, bool, bool) {
 		}
 	}
 	return "", false, false
+}
+
+// cdpathSkipMode reports whether an operand bypasses the CDPATH search,
+// which is bash's absolute_pathname: an absolute path, "." or "..", or one
+// beginning with "./" or "../". The test must use the shell's own notion of
+// absolute, not [filepath.IsAbs]: on Windows the latter is false for "/",
+// so `cd /` under a CDPATH of ".:/tmp" matched the "." element and silently
+// became `cd .` — builtins1.sub then saw the wrong $OLDPWD and `cd -`
+// printed the tests directory instead of "/".
+func cdpathSkipMode(path string, windows bool) bool {
+	if path == "" || shellPathAbsMode(path, windows) {
+		return true
+	}
+	rest, ok := strings.CutPrefix(path, "..")
+	if !ok {
+		rest, ok = strings.CutPrefix(path, ".")
+	}
+	if !ok {
+		return false
+	}
+	// "." and ".." themselves, and anything below them.
+	return rest == "" || rest[0] == '/' || (windows && rest[0] == '\\')
 }
 
 // cdpathLogical is the spelling a CDPATH hit hands to cd. The search itself
