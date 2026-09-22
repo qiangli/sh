@@ -10979,7 +10979,22 @@ func (r *Runner) exec(ctx context.Context, pos syntax.Pos, args []string) {
 // NAME: cannot execute: Is a directory`) and the shell_execve errno cases
 // for slash names (`NAME: No such file or directory` etc.). The bool is
 // false when NAME can be started, in which case execve takes over.
+//
+// This pre-check is what keeps a refused exec from destroying the shell.
+// On Unix a failed execve returns into an untouched process, but Windows
+// has no execve: `exec CMD` starts CMD and exits the shell in its place,
+// and that exit runs the EXIT trap and discards every trap and inherited
+// ignore. The shell must therefore learn of a refusal here, before
+// committing to the replacement (builtin.go sets exit.exiting ahead of
+// execAs), so `shopt -s execfail` keeps the same shell — same traps, same
+// `trap '' TERM` — alive afterwards (exec3.sub).
 func (r *Runner) execStartError(ctx context.Context, name string) (string, uint8, bool) {
+	return r.execStartErrorMode(ctx, name, runtime.GOOS == "windows")
+}
+
+// execStartErrorMode is execStartError with the platform rule under the
+// caller's control, so the Windows half is testable from any host.
+func (r *Runner) execStartErrorMode(ctx context.Context, name string, windows bool) (string, uint8, bool) {
 	if strings.ContainsRune(name, '/') {
 		info, err := r.stat(ctx, name)
 		if err != nil {
@@ -10991,7 +11006,17 @@ func (r *Runner) execStartError(ctx context.Context, name string) (string, uint8
 		if info.IsDir() {
 			return name + ": Is a directory", 126, true
 		}
-		if runtime.GOOS != "windows" && info.Mode()&0o111 == 0 {
+		if windows {
+			// Windows has no execute bit for the 0o111 test below. Apply
+			// the same executable-file rule the default handler's lookup
+			// applies (a recorded ACL mode when chmod set one, else the
+			// Cygwin name rule — findExecutable/windowsExecutableFile), so
+			// this pre-check refuses exactly what the handler would refuse
+			// after the shell had already committed to being replaced.
+			if _, lerr := lookPathDirMode(r.Dir, r.writeEnv, name, findExecutable, true); lerr != nil {
+				return name + ": Permission denied", 126, true
+			}
+		} else if info.Mode()&0o111 == 0 {
 			return name + ": Permission denied", 126, true
 		}
 		return "", 0, false
