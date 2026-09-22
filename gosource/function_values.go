@@ -31,3 +31,19 @@ func (c *converter) functionValueType(expr ast.Expr) *syntax.BashPPFuncType {
 	signature, _ := c.typ(parsed).(*syntax.BashPPFuncType)
 	return signature
 }
+
+func (c *converter) callResultTypes(call *ast.CallExpr) []syntax.BashPPTypeExpr {
+	typ := c.info.TypeOf(call.Fun)
+	if typ == nil {
+		return nil
+	}
+	signature, ok := typ.Underlying().(*types.Signature)
+	if !ok || signature.Results() == nil {
+		return nil
+	}
+	results := make([]syntax.BashPPTypeExpr, signature.Results().Len())
+	for i := range results {
+		results[i] = c.checkedType(signature.Results().At(i).Type(), call, "call result type")
+	}
+	return results
+}

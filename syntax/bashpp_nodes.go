@@ -855,6 +855,11 @@ type BashPPCall struct {
 	// returns a function value. Range-over-function needs the signature even
 	// when the declared result is a named type such as iter.Seq[T].
 	ResultFuncType *BashPPFuncType
+	// ResultTypes preserves the checked result types of the called signature.
+	// Native calls need this when their concrete transport value is assigned by
+	// a short declaration: an interface result has a static interface type
+	// independent of the dynamic value returned by the dependency.
+	ResultTypes []BashPPTypeExpr
 
 	// TypeArgs are the explicit instantiation arguments in f[T, *U](...).
 	// They are nil for ordinary inferred calls.

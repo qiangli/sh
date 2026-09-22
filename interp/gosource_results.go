@@ -52,18 +52,22 @@ func (r *Runner) goSourceNativeAssignCall(ctx context.Context, assign *syntax.Ba
 	cells := make([]*bashPPCell, len(values))
 	for i, value := range values {
 		cells[i] = r.goSourceNativeValueCell(value)
+		var expected syntax.BashPPTypeExpr
 		if target := r.bashPPScope.lookup(assign.Names[i].Value); target != nil {
-			if _, iface := r.bashPPInterfaceType(target.declType); iface {
-				// The source was typechecked, and the dependency returned its
-				// actual dynamic value. Keep nil-interface vs typed-nil identity
-				// while retaining the destination's static interface type.
-				value.Interface = r.bashPPBridgeTypeIdentity(target.declType)
-				cells[i] = r.goSourceNativeValueCell(value)
-				payload := bashPPCopyAssignmentCell(cells[i])
-				cells[i].interfaceValue = &bashPPInterfaceValue{nilIface: value.Kind == "nil", cell: payload, dynamic: bashPPBridgeDynamicType(value.Type)}
-				cells[i].declType = target.declType
-				cells[i].typeName = target.typeName
-			}
+			expected = target.declType
+		} else if i < len(assign.Call.ResultTypes) {
+			expected = assign.Call.ResultTypes[i]
+		}
+		if _, iface := r.bashPPInterfaceType(expected); iface {
+			// The source was typechecked, and the dependency returned its actual
+			// dynamic value. Preserve the static interface type even for :=,
+			// whose LHS has not been declared yet.
+			value.Interface = r.bashPPBridgeTypeIdentity(expected)
+			cells[i] = r.goSourceNativeValueCell(value)
+			payload := bashPPCopyAssignmentCell(cells[i])
+			cells[i].interfaceValue = &bashPPInterfaceValue{nilIface: value.Kind == "nil", cell: payload, dynamic: bashPPBridgeDynamicType(value.Type)}
+			cells[i].declType = expected
+			cells[i].typeName = bashPPNamedTypeBase(expected)
 		}
 	}
 	r.bashPPCommitTupleAssign(assign, cells)
