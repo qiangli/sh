@@ -4008,12 +4008,12 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				fdReader = timeoutReader(readCtx, f, deadline)
 			}
 			if fdReader != nil {
-				cancelGrace()
 				input = fdReader
 				if !r.bashPPArmBeforeBlock(ctx) {
 					return r.exit
 				}
 				line, err = readThroughSignals()
+				cancelGrace()
 			} else if input == stdin && stdin != nil && stdin.SetReadDeadline(deadline) == nil {
 				if !r.bashPPArmBeforeBlock(ctx) {
 					return r.exit
@@ -4022,7 +4022,6 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				stdin.SetReadDeadline(time.Time{})
 				cancelGrace()
 			} else {
-				cancelGrace()
 				if input == stdin && stdin != nil {
 					input = &timeoutFileReader{ctx: readCtx, file: stdin, deadline: deadline}
 				}
@@ -4030,6 +4029,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					return r.exit
 				}
 				line, err = readThroughSignals()
+				cancelGrace()
 			}
 		} else {
 			if input == stdin && stdin != nil {

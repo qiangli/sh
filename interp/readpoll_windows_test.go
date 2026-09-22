@@ -11,9 +11,48 @@ import (
 	"errors"
 	"io"
 	"os"
+	"strings"
 	"testing"
 	"time"
+
+	"mvdan.cc/sh/v3/syntax"
 )
+
+// A ready stdin gets a short grace context so the runtime poller can win over
+// an already-expired read timeout. The grace context must remain live through
+// the actual read: timeoutFileReader checks it before calling ReadFile.
+func TestWindowsReadyInputGraceRead(t *testing.T) {
+	t.Parallel()
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pr.Close()
+	defer pw.Close()
+	if _, err := pw.WriteString("ready\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	file, err := syntax.NewParser().Parse(strings.NewReader(
+		"read -t 0.000001 value; printf 'status=%s value=%s\\n' \"$?\" \"$value\"\n",
+	), "ready-grace.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	r, err := New(StdIO(pr, &out, &out))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := r.Run(ctx, file); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := out.String(), "status=0 value=ready\n"; got != want {
+		t.Fatalf("output = %q, want %q", got, want)
+	}
+}
 
 // Here-input is a materialised, delete-pending file before hdocServe returns.
 // This is the ordering Bash 5.3 tests/read2.sub:56,
