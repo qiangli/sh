@@ -83,13 +83,13 @@ func TestExecStartErrorWindowsRule(t *testing.T) {
 
 // TestExecRefusedKeepsTraps is exec3.sub distilled: with `shopt -s
 // execfail`, a refused exec must leave the shell's signal state intact —
-// the EXIT trap, the USR1 trap, and the `trap '' TERM` ignore must all
+// the EXIT trap, the USR1 trap, and the ignored TERM (trap "" TERM) must all
 // survive, and the refusal must still report `Permission denied` with
 // status 126. On Unix the execute bit refuses x.sh; on Windows the name
 // rule does; either way the refusal happens before the shell commits to
 // being replaced.
 func TestExecRefusedKeepsTraps(t *testing.T) {
-	// Not parallel: `trap '' TERM` and the USR1 trap install process-wide
+	// Not parallel: the ignored TERM (trap "" TERM) and the USR1 trap install process-wide
 	// dispositions (signal.Ignore/Notify) that the carrier tests would
 	// observe. The script restores them with `trap - TERM USR1` after the
 	// listing, but the ignore must not be live while those tests run.

@@ -10987,7 +10987,7 @@ func (r *Runner) exec(ctx context.Context, pos syntax.Pos, args []string) {
 // ignore. The shell must therefore learn of a refusal here, before
 // committing to the replacement (builtin.go sets exit.exiting ahead of
 // execAs), so `shopt -s execfail` keeps the same shell — same traps, same
-// `trap '' TERM` — alive afterwards (exec3.sub).
+// the ignored TERM — alive afterwards (exec3.sub).
 func (r *Runner) execStartError(ctx context.Context, name string) (string, uint8, bool) {
 	return r.execStartErrorMode(ctx, name, runtime.GOOS == "windows")
 }
