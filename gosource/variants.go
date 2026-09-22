@@ -3,6 +3,7 @@ package gosource
 import (
 	"fmt"
 	"go/ast"
+	"go/build"
 	"go/parser"
 	"go/token"
 	"go/types"
@@ -10,6 +11,31 @@ import (
 	"path/filepath"
 	"sort"
 )
+
+// defaultSourceImporter adds the source-listing half needed to rebuild an
+// export-data dependency against an explicitly supplied package variant. In
+// particular, go/importer's API mentions go/types objects; when a caller maps
+// go/types from source, go/importer must be checked against that same package
+// object rather than the distinct object embedded in its export data.
+type defaultSourceImporter struct {
+	types.Importer
+}
+
+func (defaultSourceImporter) SourcePackageFiles(path, srcDir string) (string, []string, error) {
+	pkg, err := build.Default.Import(path, srcDir, 0)
+	if err != nil {
+		return "", nil, err
+	}
+	files := append([]string(nil), pkg.GoFiles...)
+	return pkg.Dir, files, nil
+}
+
+func (d defaultSourceImporter) ImportFrom(path, srcDir string, mode types.ImportMode) (*types.Package, error) {
+	if from, ok := d.Importer.(types.ImporterFrom); ok {
+		return from.ImportFrom(path, srcDir, mode)
+	}
+	return d.Import(path)
+}
 
 // SourcePackageLister is what an importer may offer beyond export data: the
 // on-disk Go source files of a package (build-constrained, no cgo, no test
