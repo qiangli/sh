@@ -509,6 +509,15 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 			// The reply crossed the control channel after the dependency's own
 			// writes; the barrier keeps the next interpreted statement behind them.
 			s.drainOutputs()
+			// A written-back element may nest native values this session
+			// still owns — a reflect.Type inside a reflect.StructField, a
+			// reflect.Value the worker re-minted a handle for. They arrived
+			// on its own authenticated connection, so they carry its
+			// identity, exactly as a pointer writeback's pointee does; a
+			// handle from any other session still fails closed downstream.
+			for i := range reply.SliceUpdates {
+				s.bashPPAuthenticateCallbackValue(&reply.SliceUpdates[i].Value)
+			}
 			if err := applyNativeSliceBuffers(req.CallbackOwner, q, reply); err != nil {
 				return nil, err
 			}
