@@ -340,6 +340,9 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 				hc.runner.filename, args[0], missingInterp)
 			return ExitStatus(126)
 		}
+		// Windows spells argv bytes that are not UTF-8 as lone surrogates on
+		// the UTF-16 command line (argv_wtf8.go); the identity elsewhere.
+		cmdArgs = execArgsForOS(cmdArgs)
 		// What the child sees beyond stdio is platform-shaped: ExtraFiles
 		// plus BASHY_INHERITED_FDS on Unix; on Windows no ExtraFiles at
 		// all, and inheritable handles only for a child that is this
@@ -530,7 +533,7 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 		if err != nil && isExecFormatError(err) {
 			selfBin, lookupErr := os.Executable()
 			if lookupErr == nil {
-				newArgs := append([]string{selfBin, scriptPath}, args[1:]...)
+				newArgs := append([]string{selfBin, scriptPath}, execArgsForOS(args[1:])...)
 				// Re-exec'ing our own shell on a no-shebang script: carry the
 				// parent's hard-ignored signals across so the child shell
 				// treats them as ignored-on-entry, matching how bash inherits
