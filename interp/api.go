@@ -210,6 +210,17 @@ type Runner struct {
 	// remembers the stack length it entered at and runs everything pushed above
 	// that mark, in reverse, as it unwinds.
 	bashPPDeferStack []bashPPDeferred
+	// bashPPRangeDefer, when non-nil, is the sink that a defer statement executed
+	// directly inside a range-over-function body appends to instead of the live
+	// stack. Go binds such a defer to the ENCLOSING function, not to the yield
+	// callback or the iterator: the iterator sits on top of the enclosing frame
+	// on [Runner.bashPPDeferStack], so leaving it there would run — or discard —
+	// the cleanup when the iterator returns rather than when the enclosing
+	// function does. The buffer is held on the range's yield state and spliced
+	// onto the enclosing frame's region once the iterator has finished; see
+	// [Runner.goSourceRangeFunction]. A frame entered for an ordinary call made
+	// from the body clears this so that callee's own defers are unaffected.
+	bashPPRangeDefer *[]bashPPDeferred
 	// bashPPReturn carries a Go-form return across the body's statement loop:
 	// active is set by a [syntax.BashPPReturn] and consumed by the invoker.
 	bashPPReturn bashPPReturnState
