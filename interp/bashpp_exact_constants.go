@@ -11,47 +11,49 @@ import (
 )
 
 // bashPPPreparePackageConstants evaluates Go package constants in dependency
-// order. Constant expressions have no runtime side effects, so unlike var
-// initializers they may safely move ahead of intervening shell statements.
-// The returned set tells the ordinary source-order loop which declarations
-// have already been installed.
+// order after imports are installed. The returned set tells the source-order
+// loop which declarations have already been installed.
 func (r *Runner) bashPPPreparePackageConstants(ctx context.Context, file *syntax.File) (map[syntax.Command]bool, error) {
 	if file == nil || !file.GoSource {
 		return nil, nil
 	}
 	type constantDecl struct {
-		cmd   syntax.Command
-		pos   syntax.Pos
-		names []string
-		exprs []syntax.BashPPExpr
+		cmd  syntax.Command
+		pos  syntax.Pos
+		name string
+		expr syntax.BashPPExpr
+		spec *syntax.BashPPConstSpec
 	}
 	var decls []*constantDecl
 	byName := make(map[string]*constantDecl)
 	for _, stmt := range file.Stmts {
-		var decl *constantDecl
 		switch cmd := stmt.Cmd.(type) {
 		case *syntax.BashPPDecl:
-			if cmd.Site == syntax.StartConst {
-				decl = &constantDecl{cmd: cmd, pos: cmd.Pos(), names: []string{cmd.Name.Value}, exprs: []syntax.BashPPExpr{cmd.InitExpr}}
+			if cmd.Site != syntax.StartConst {
+				continue
+			}
+			decl := &constantDecl{cmd: cmd, pos: cmd.Pos(), name: cmd.Name.Value, expr: cmd.InitExpr}
+			decls = append(decls, decl)
+			if decl.name != "_" {
+				byName[decl.name] = decl
 			}
 		case *syntax.BashPPConstGroup:
-			decl = &constantDecl{cmd: cmd, pos: cmd.Pos()}
-			var previous syntax.BashPPExpr
+			var previous *syntax.BashPPConstSpec
 			for _, spec := range cmd.Specs {
-				if spec.InitExpr != nil {
-					previous = spec.InitExpr
+				effective := spec
+				if spec.InitExpr == nil {
+					copySpec := *spec
+					copySpec.DeclType, copySpec.DeclTypeExpr = previous.DeclType, previous.DeclTypeExpr
+					copySpec.Init, copySpec.InitExpr = previous.Init, previous.InitExpr
+					effective = &copySpec
+				} else {
+					previous = spec
 				}
-				decl.names = append(decl.names, spec.Name.Value)
-				decl.exprs = append(decl.exprs, previous)
-			}
-		}
-		if decl == nil {
-			continue
-		}
-		decls = append(decls, decl)
-		for _, name := range decl.names {
-			if name != "_" {
-				byName[name] = decl
+				decl := &constantDecl{cmd: cmd, pos: spec.Pos(), name: spec.Name.Value, expr: effective.InitExpr, spec: effective}
+				decls = append(decls, decl)
+				if decl.name != "_" {
+					byName[decl.name] = decl
+				}
 			}
 		}
 	}
@@ -66,18 +68,15 @@ func (r *Runner) bashPPPreparePackageConstants(ctx context.Context, file *syntax
 			return nil
 		}
 		state[decl] = 1
-		for _, expr := range decl.exprs {
-			if expr == nil {
-				continue
-			}
+		if decl.expr != nil {
 			var dependencyErr error
-			syntax.Walk(expr, func(node syntax.Node) bool {
+			syntax.Walk(decl.expr, func(node syntax.Node) bool {
 				ident, ok := node.(*syntax.BashPPIdent)
 				if !ok {
 					return true
 				}
 				dependency := byName[ident.Name.Value]
-				if dependency == nil || dependency == decl {
+				if dependency == nil {
 					return true
 				}
 				if err := visit(dependency); err != nil {
@@ -94,7 +93,9 @@ func (r *Runner) bashPPPreparePackageConstants(ctx context.Context, file *syntax
 		case *syntax.BashPPDecl:
 			r.bashPPDeclare(ctx, r.bashPPBindDecl(cmd))
 		case *syntax.BashPPConstGroup:
-			r.bashPPConstGroup(ctx, r.bashPPBindConstGroup(cmd))
+			one := *cmd
+			one.Specs = []*syntax.BashPPConstSpec{decl.spec}
+			r.bashPPConstGroup(ctx, r.bashPPBindConstGroup(&one))
 		}
 		if r.exit.code != 0 {
 			return ExitStatus(r.exit.code)

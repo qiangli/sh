@@ -128,9 +128,14 @@ func (r *Runner) bashPPConstGroup(ctx context.Context, group *syntax.BashPPConst
 			cell.exactScalar = scalar.value
 		} else if value, evalErr := r.bashPPEvalScalarExpr(expr); evalErr == nil {
 			// Typed grouped constants travel through the declaration conversion
-			// path above, but their constant identity is still the exact value of
-			// the source expression. Keep it beside the rendered shell spelling;
-			// a rational ExactString such as 3/2 is not a Go literal.
+			// path above. Preserve the converted constant, including its required
+			// rounding, rather than the untyped source expression.
+			shape := r.bashPPUnderlyingType(effective.DeclTypeExpr)
+			if named, ok := shape.(*syntax.BashPPNamedType); ok {
+				if converted, convertErr := r.bashPPConvertScalar(named.Name.Value, value); convertErr == nil {
+					value = converted
+				}
+			}
 			cell.exactScalar = value.value
 		}
 		if effective.DeclTypeExpr != nil {

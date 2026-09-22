@@ -3434,11 +3434,7 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 		savedPending := r.bashPPGoSourcePending
 		r.bashPPGoSourceRegisterTypes(node)
 		defer func() { r.bashPPGoSourcePending = savedPending }()
-		preparedConstants, err := r.bashPPPreparePackageConstants(ctx, node)
-		if err != nil {
-			r.exit.fatal(err)
-			break
-		}
+		var preparedConstants map[syntax.Command]bool
 		if r.stdinSourceEligible() && node.Name == "" && len(r.bashSource) > 0 {
 			r.stdinSourceActive = true
 		}
@@ -3446,9 +3442,6 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 		goImportsStarted := false
 		for stmtIndex := 0; stmtIndex < len(node.Stmts); stmtIndex++ {
 			stmt := node.Stmts[stmtIndex]
-			if preparedConstants[stmt.Cmd] {
-				continue
-			}
 			if r.stdinSourceActive && int(stmt.Pos().Offset()) < r.stdinSourceOffset {
 				continue
 			}
@@ -3475,6 +3468,14 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 						r.exit.fatal(err)
 						break
 					}
+					preparedConstants, err = r.bashPPPreparePackageConstants(ctx, node)
+					if err != nil {
+						r.exit.fatal(err)
+						break
+					}
+				}
+				if preparedConstants[stmt.Cmd] {
+					continue
 				}
 				if r.bashPPGoSourceDecls == nil {
 					r.bashPPGoSourceDecls = map[string]bool{}

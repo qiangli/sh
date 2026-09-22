@@ -1,3 +1,5 @@
+//go:build full
+
 package interp_test
 
 import (
@@ -62,6 +64,52 @@ const exact = 1.0/10
 func main(){ x := float64(exact); x = x + 0.2; fmt.Printf("%.17g\n", x) }
 `,
 			"0.30000000000000004\n",
+		},
+		{
+			"imports precede constant preparation",
+			`package main
+import ( "fmt"; "math"; "time" )
+const second = time.Second
+const circle = math.Pi
+func main(){ fmt.Println(second, circle > 3) }
+`,
+			"1s true\n",
+		},
+		{
+			"group forward reference",
+			`package main
+import "fmt"
+const ( a = b + 1; b = 2 )
+func main(){ fmt.Println(a, b) }
+`,
+			"3 2\n",
+		},
+		{
+			"group dependencies do not falsely cycle",
+			`package main
+import "fmt"
+const ( a = b + 1; b = c + 1; c = 1 )
+func main(){ fmt.Println(a, b, c) }
+`,
+			"3 2 1\n",
+		},
+		{
+			"iota and inherited expression",
+			`package main
+import "fmt"
+const ( a = iota + 10; b; c )
+func main(){ fmt.Println(a, b, c) }
+`,
+			"10 11 12\n",
+		},
+		{
+			"typed group rounding and exact rational",
+			`package main
+import "fmt"
+const ( x float32 = 16777217; y = x - 16777216; third = 1.0/3; restored = third*3 )
+func main(){ fmt.Println(x, y, restored, restored == 1) }
+`,
+			"1.6777216e+07 0 1 true\n",
 		},
 	}
 	for _, tc := range tests {
