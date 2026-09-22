@@ -818,6 +818,16 @@ func (r *Runner) bashPPCellForInterfaceExpr(expr syntax.BashPPExpr) (*bashPPCell
 		}
 		return r.bashPPInterfaceSourceCell(cell, "call result")
 	}
+	// A dereference is a typed value read, including aggregate pointees and
+	// unsafe blank views. Reuse the structured cell path so interface boxing
+	// preserves its dynamic type and value copy instead of forcing a scalar.
+	if _, deref := expr.(*syntax.BashPPDerefExpr); deref && r.bashPPGoSource {
+		cell, err := r.goSourceValueCell(expr)
+		if err != nil {
+			return nil, nil, err
+		}
+		return r.bashPPInterfaceSourceCell(cell, "dereference")
+	}
 	// A dynamic value need not be a variable. `var i I = T{"hello"}`,
 	// `i = &T{}` and `i = 42` all store a value the interface then owns, so
 	// each is materialized into an anonymous cell carrying the dynamic type

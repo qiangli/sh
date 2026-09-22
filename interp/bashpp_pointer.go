@@ -870,6 +870,11 @@ func (r *Runner) bashPPBindPointerExpr(name string, expr syntax.BashPPExpr) bool
 	r.bashPPDeclareName(name, expand.Variable{Set: true, Kind: expand.String})
 	cell := r.bashPPScope.lookup(name)
 	cell.declType = typ
+	// Defined pointer types retain their named declaration, so storage must
+	// carry pointer metadata explicitly rather than infer from syntax shape.
+	if _, pointer := r.bashPPPointerType(typ); pointer {
+		meta = bashPPPointerMeta(typ)
+	}
 	if ptrType, ok := typ.(*syntax.BashPPPointerType); ok {
 		if named, ok := ptrType.Element.(*syntax.BashPPNamedType); ok {
 			cell.typeName = named.Name.Value
