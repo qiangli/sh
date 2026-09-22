@@ -56,13 +56,13 @@ func (S) M1(x IntAlias) float64 { return Float64(x) * 2 }
 func main() {
 	var i1 I1 = S{}
 	var i2 I2 = i1
-	println(i2.M1(21))
+	println(i2.M1(21) == 42)
 	var _ I1 = i2
 }
 `
 	_, stderr, err := runS219(t, src)
 	qt.Assert(t, qt.IsNil(err), qt.Commentf("stderr=%q", stderr))
-	qt.Assert(t, qt.StringContains(stderr, "+4.200000e+001"))
+	qt.Assert(t, qt.Equals(stderr, "true\n"))
 }
 
 // The negative: an alias makes signatures equal only when it names the same
