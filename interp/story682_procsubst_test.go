@@ -6,6 +6,7 @@ package interp
 import (
 	"bytes"
 	"context"
+	"io"
 	"io/fs"
 	"strings"
 	"testing"
@@ -113,5 +114,136 @@ func TestStory682ProcSubstPipePathPassesThroughPathconv(t *testing.T) {
 	}
 	if windowsShareDeleteEligible(p) || windowsShareDeleteEligible(`\\.\pipe\sh-np-4a37`) {
 		t.Error("a device path must not take the share-delete CreateFile")
+	}
+}
+
+// The replay window behind a second open (procsubst_body.go). It is
+// platform-neutral so the Windows serving logic's core is proven on any
+// host; the pipe itself is exercised by TestStory682ProcSubstPipeTwoOpens.
+
+// TestStory682ProcSubstBodyReplaysToEveryReader is the `diff <(t1) <(t2)`
+// case: a consumer opens the substituted path a second time and must see
+// the same bytes, from the start.
+func TestStory682ProcSubstBodyReplaysToEveryReader(t *testing.T) {
+	t.Parallel()
+
+	body := []byte("line one\nline two\nline three\n")
+	b := newProcSubstBody(procSubstReplayCap)
+	if _, err := b.Write(body); err != nil {
+		t.Fatal(err)
+	}
+	b.close()
+	for i := range 3 {
+		r := b.newReader()
+		got, err := io.ReadAll(r)
+		r.Close()
+		if err != nil {
+			t.Fatalf("reader %d: %v", i, err)
+		}
+		if !bytes.Equal(got, body) {
+			t.Errorf("reader %d read %q, want %q", i, got, body)
+		}
+	}
+}
+
+// A reader that opens while the substitution is still writing is replayed
+// what it missed and then follows the live stream to EOF.
+func TestStory682ProcSubstBodyLateReaderFollowsLive(t *testing.T) {
+	t.Parallel()
+
+	b := newProcSubstBody(procSubstReplayCap)
+	first := b.newReader()
+	defer first.Close()
+	if _, err := b.Write([]byte("head ")); err != nil {
+		t.Fatal(err)
+	}
+	// The first reader drains what is there; the second has not opened yet.
+	buf := make([]byte, 5)
+	if n, err := first.Read(buf); err != nil || string(buf[:n]) != "head " {
+		t.Fatalf("first read = %q, %v", buf[:n], err)
+	}
+	late := b.newReader()
+	defer late.Close()
+	go func() {
+		b.Write([]byte("tail"))
+		b.close()
+	}()
+	got, err := io.ReadAll(late)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "head tail" {
+		t.Errorf("late reader read %q, want the whole body", got)
+	}
+}
+
+// Past the replay window the body is no longer retained from its first
+// byte: the writer is throttled by the slowest live reader, memory stays
+// bounded, and a reader that opens late sees only what is still held.
+func TestStory682ProcSubstBodyBoundsTheWindow(t *testing.T) {
+	t.Parallel()
+
+	const capBytes = 64
+	b := newProcSubstBody(capBytes)
+	live := b.newReader()
+	defer live.Close()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range 8 {
+			if _, err := b.Write(bytes.Repeat([]byte("x"), capBytes)); err != nil {
+				return
+			}
+		}
+		b.close()
+	}()
+	n, err := io.Copy(io.Discard, live)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 8*capBytes {
+		t.Errorf("live reader read %d bytes, want %d", n, 8*capBytes)
+	}
+	<-done
+	if b.start == 0 {
+		t.Error("the window never advanced, so it was never bounded")
+	}
+	if len(b.buf) > capBytes {
+		t.Errorf("retained %d bytes, want at most %d", len(b.buf), capBytes)
+	}
+	// A reader opening now starts at the oldest byte still held, not at
+	// byte zero: the replay guarantee ends with the window.
+	late := b.newReader()
+	defer late.Close()
+	rest, err := io.ReadAll(late)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if int64(len(rest)) != b.end-b.start {
+		t.Errorf("late reader read %d bytes, want the %d still held", len(rest), b.end-b.start)
+	}
+}
+
+// abort is the teardown path: a substitution still writing fails as it
+// would on a broken pipe, and the readers stop where they are.
+func TestStory682ProcSubstBodyAbort(t *testing.T) {
+	t.Parallel()
+
+	b := newProcSubstBody(procSubstReplayCap)
+	r := b.newReader()
+	defer r.Close()
+	if _, err := b.Write([]byte("partial")); err != nil {
+		t.Fatal(err)
+	}
+	b.abort()
+	if _, err := b.Write([]byte("more")); err == nil {
+		t.Error("a write after abort must fail")
+	}
+	got, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "partial" {
+		t.Errorf("read %q, want the bytes written before the abort", got)
 	}
 }
