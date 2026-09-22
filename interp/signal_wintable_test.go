@@ -138,10 +138,18 @@ func TestSignalMarkerCodec(t *testing.T) {
 		if SignalMarkerExitCode(num) != int(code) {
 			t.Errorf("SignalMarkerExitCode(%d) = %d, want %d", num, SignalMarkerExitCode(num), code)
 		}
+		// The exported pair is what a host reaping a bashy-owned child
+		// itself (a Windows job carrier) round-trips a signal death through.
+		if got, ok := SignalFromMarkerExitCode(SignalMarkerExitCode(num)); !ok || got != num {
+			t.Errorf("SignalFromMarkerExitCode(%d) = %d, %v; want %d", SignalMarkerExitCode(num), got, ok, num)
+		}
 	}
 	for _, code := range []uint32{0, 1, 15, 128, 143, 137, 0x7E5A0000, 0x7E5A0041, 0x7E5A00FF, 0x7E5B000F, 0xFE5A000F, 0xFFFFFFFF} {
 		if num, ok := decodeSignalMarker(code); ok {
 			t.Errorf("decode(%#x) = %d, want no signal", code, num)
+		}
+		if num, ok := SignalFromMarkerExitCode(int(int32(code))); ok {
+			t.Errorf("SignalFromMarkerExitCode(%#x) = %d, want no signal", code, num)
 		}
 	}
 	// The marker keeps the sign bit clear so a 32-bit int exit code stays

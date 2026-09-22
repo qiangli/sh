@@ -242,6 +242,21 @@ func SignalMarkerExitCode(num int) int {
 	return int(encodeSignalMarker(num))
 }
 
+// SignalFromMarkerExitCode is the inverse of [SignalMarkerExitCode]: it
+// reports the signal a Windows exit code encodes, and false for any code
+// that is not a marker — including a plain `exit 143`, which is an ordinary
+// exit and never SIGTERM.
+//
+// The interpreter applies this judgement to its own children internally (see
+// execWaitStatus); this exports it for a host that reaps a bashy-owned child
+// itself and must tell the interpreter how it died. A Windows job carrier is
+// the case in point: the shell's `kill` terminates the carrier process with
+// the marker, and the host's [CarrierProcess.Wait] has only that exit code to
+// recover the signal number from.
+func SignalFromMarkerExitCode(code int) (num int, ok bool) {
+	return decodeSignalMarker(uint32(code))
+}
+
 // windowsWaitStatus is the Windows waitStatus: a decoded terminating signal,
 // or none. It is a distinct type from the Unix syscall.WaitStatus alias but
 // offers the same Signaled/Signal/CoreDump surface the handler uses.
