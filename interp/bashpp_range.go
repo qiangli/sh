@@ -379,8 +379,16 @@ func (r *Runner) bashPPRangeCollection(ctx context.Context, rng *syntax.BashPPRa
 		// slice/map reference semantics.
 		// `range &arr` is a pointer to the array, read as a value the same
 		// way; see goSourceRangePointerArray.
-		_, address := rng.Expr.(*syntax.BashPPAddressExpr)
-		if _, composite := rng.Expr.(*syntax.BashPPCompositeLit); !composite && !(address && r.bashPPGoSource) {
+		operand := rng.Expr
+		for {
+			paren, ok := operand.(*syntax.BashPPParenExpr)
+			if !ok {
+				break
+			}
+			operand = paren.X
+		}
+		_, address := operand.(*syntax.BashPPAddressExpr)
+		if _, composite := operand.(*syntax.BashPPCompositeLit); !composite && !(address && r.bashPPGoSource) {
 			return false
 		}
 	}

@@ -358,6 +358,20 @@ func (r *Runner) bashPPScalarPath(expr syntax.BashPPExpr) (bashPPScalar, error) 
 	if err != nil {
 		return bashPPScalar{}, err
 	}
+	// An interface element keeps its declared interface metadata so aggregate
+	// equality and nil checks can still see its dynamic identity.  When the
+	// dynamic value itself is scalar, however, scalar consumers such as
+	// `m[k] != s` must read that cell rather than rejecting all metadata as a
+	// structured value.  Keep the interface side channel on the scalar: later
+	// equality can still distinguish two defined dynamic types with identical
+	// underlying values.
+	if r.bashPPGoSource && meta != nil && meta.kind == "interface" && meta.interfaceValue != nil && !meta.interfaceValue.nilIface && meta.interfaceValue.cell != nil {
+		scalar := r.bashPPScalarFromCell(meta.interfaceValue.cell)
+		if scalar.value != nil && scalar.value.Kind() != constant.Unknown {
+			scalar.interfaceValue = meta.interfaceValue
+			return scalar, nil
+		}
+	}
 	if meta != nil {
 		return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-OPERAND: indexed value is not a scalar")
 	}

@@ -963,6 +963,10 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 		}
 	}
 	if d.Expr != nil {
+		// Parentheses do not change which value path evaluates an expression.
+		// Peel them only for dispatch; the selected pointer/composite evaluator
+		// still receives the original operand and therefore evaluates it once.
+		dispatchExpr := bashPPUnparenExpr(d.Expr)
 		if call, ok := d.Expr.(*syntax.BashPPCall); ok {
 			if cells, handled := r.goSourceErrorsAsTypeCells(call); handled {
 				if len(d.Lhs) != len(cells) {
@@ -1046,7 +1050,7 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 			}
 			return
 		}
-		if r.bashPPBindPointerExpr(d.Lhs[0].Value, d.Expr) {
+		if r.bashPPBindPointerExpr(d.Lhs[0].Value, dispatchExpr) {
 			return
 		}
 		// `bs := []byte(s)`: a conversion whose target is a collection binds the
@@ -1123,7 +1127,11 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 				return
 			}
 		}
-		if lit, ok := d.Expr.(*syntax.BashPPCompositeLit); ok {
+		// Parentheses do not change the value category of a composite literal.
+		// Keep it on the structured declaration path instead of falling through
+		// to scalar evaluation (`x := (T{})`).
+		structuredExpr := dispatchExpr
+		if lit, ok := structuredExpr.(*syntax.BashPPCompositeLit); ok {
 			if len(d.Lhs) != 1 {
 				r.errf("assignment mismatch: %d variable(s) but 1 value(s)\n", len(d.Lhs))
 				r.exit = exitStatus{code: 2}

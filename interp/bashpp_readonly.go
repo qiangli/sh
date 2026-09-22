@@ -303,6 +303,10 @@ func (r *Runner) bashPPTupleAssign(assign *syntax.BashPPAssign) {
 			r.exit = exitStatus{code: 2}
 			return
 		}
+		// Classify a parenthesized RHS by its operand so pointer and structured
+		// values reach their existing single-evaluation paths. Keep the source
+		// word unchanged for diagnostics and structured argument handling.
+		expr = bashPPUnparenExpr(expr)
 		// `f = i.(float64)` is an assertion, not a scalar expression, and its
 		// one-result form panics rather than yielding a value when it fails.
 		if cell, handled, err := r.bashPPAssertCandidate(expr); handled {

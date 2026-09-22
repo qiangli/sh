@@ -891,6 +891,16 @@ func (r *Runner) bashPPBindPointerExpr(name string, expr syntax.BashPPExpr) bool
 	return true
 }
 
+func bashPPUnparenExpr(expr syntax.BashPPExpr) syntax.BashPPExpr {
+	for {
+		paren, ok := expr.(*syntax.BashPPParenExpr)
+		if !ok {
+			return expr
+		}
+		expr = paren.X
+	}
+}
+
 func (r *Runner) bashPPDerefAssign(target *syntax.BashPPDerefExpr, rhs syntax.BashPPExpr) {
 	ptr, err := r.bashPPPointerExprValue(target.X)
 	if err == nil && ptr == nil {
