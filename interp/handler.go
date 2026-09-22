@@ -1420,6 +1420,12 @@ type StatHandlerFunc func(ctx context.Context, name string, followSymlinks bool)
 // DefaultStatHandler returns the [StatHandlerFunc] used by default.
 // It makes use of [os.Stat] and [os.Lstat], depending on followSymlinks.
 //
+// A Windows FIFO is a marker file naming a named pipe (fifo_marker.go), so
+// this is also where such a path picks up the type POSIX gives a FIFO —
+// [fifoMarkerStat], the identity everywhere else. Doing it here rather than
+// at each predicate is what keeps `test -p`, `test -f` and the open of the
+// same path telling one story.
+//
 // This is the shell's one reader of a POSIX mode. Windows has no mode bits,
 // so a mode set by chmod lives in the file's ACL ([winmode]) and io/fs
 // cannot see it: os.Stat reports 0666 or 0444 off the read-only attribute
@@ -1440,7 +1446,7 @@ func DefaultStatHandler() StatHandlerFunc {
 			if err != nil {
 				return statExeFallback(lstat, path, err, windows)
 			}
-			return info, nil
+			return fifoMarkerStat(path, info), nil
 		}
 		info, err := stat(path)
 		if err != nil {
@@ -1449,7 +1455,7 @@ func DefaultStatHandler() StatHandlerFunc {
 				return statExeFallback(stat, path, err, windows)
 			}
 		}
-		return info, nil
+		return fifoMarkerStat(path, info), nil
 	}
 }
 

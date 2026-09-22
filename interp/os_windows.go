@@ -21,8 +21,13 @@ import (
 	"mvdan.cc/sh/v3/winmode"
 )
 
+// mkfifo creates a FIFO at path. Windows has no filesystem node that is a
+// pipe, so what lands on disk is the format-v1 marker file naming the
+// \\.\pipe\ pipe every open of the path rendezvouses on — the same bytes
+// the coreutils mkfifo applet writes, and the same ones openPath below
+// recognises. See fifo_marker.go.
 func mkfifo(path string, mode uint32) error {
-	return fmt.Errorf("unsupported")
+	return createFifoMarker(path, os.FileMode(mode&0o777))
 }
 
 // canExec reports whether path is executable. On non-Unix platforms there
@@ -150,6 +155,15 @@ func userGroups() []string {
 func openPath(ctx context.Context, path string, flag int, perm os.FileMode) (io.ReadWriteCloser, error) {
 	if err := recordedModeDenies(path, flag); err != nil {
 		return nil, err
+	}
+	// A path carrying a FIFO marker is a FIFO: open the named pipe it
+	// names, never the marker file. This has to come before every other
+	// case, in particular before the O_TRUNC one — `echo x > fifo` must
+	// write to the pipe and leave the marker's bytes alone.
+	if leaf, ok, err := fifoMarkerLeaf(path); err != nil {
+		return nil, err
+	} else if ok {
+		return openFifoMarker(ctx, path, leaf, flag)
 	}
 	if f, handled, err := openShareDelete(path, flag, perm); handled {
 		if err != nil {
