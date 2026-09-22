@@ -1849,18 +1849,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					r.errf(r.bashErrPrefix(pos)+"kill: (%d) - %v\n", int(bg.pid.Load()), err)
 					continue
 				}
-				if signalStopsJob(sig) {
-					bg.ignoreNextContinue.Store(1)
-					if name, ok := signalName(sig); ok {
-						bg.setStopSignal("SIG" + name)
-					}
-					bg.setState(jobStopped)
-				} else if signalContinuesJob(sig) {
-					bg.ignoreNextContinue.Store(0)
-					bg.ignoreNextStop.Store(1)
-					bg.setState(jobRunning)
-					r.preferredJobID = bg.jobID
-				}
+				r.recordJobSignal(bg, sig)
 				continue
 			}
 			if strings.HasPrefix(target, "g") {
@@ -2049,18 +2038,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					r.errf(r.bashErrPrefix(pos)+"kill: (%d) - %v\n", int(bg.pid.Load()), err)
 					continue
 				}
-				if signalStopsJob(sig) {
-					bg.ignoreNextContinue.Store(1)
-					if name, ok := signalName(sig); ok {
-						bg.setStopSignal("SIG" + name)
-					}
-					bg.setState(jobStopped)
-				} else if signalContinuesJob(sig) {
-					bg.ignoreNextContinue.Store(0)
-					bg.ignoreNextStop.Store(1)
-					bg.setState(jobRunning)
-					r.preferredJobID = bg.jobID
-				}
+				r.recordJobSignal(bg, sig)
 				continue
 			}
 			if err := sendSignal(pid, sig); err != nil {
@@ -6276,6 +6254,36 @@ func asyncJobInheritedIgnore(bg *bgProc, sig killSig) bool {
 	return job.asyncDefaultIgnored[name]
 }
 
+// recordJobSignal moves a job through the stopped/running state machine
+// after `kill` has delivered sig to it — whether the job was named by `%N`,
+// by the PID of one of its processes, or is a synthetic goroutine job with no
+// PID at all. `jobs`, `jobs -r`, `jobs -s`, the `+`/`-` current-job markers,
+// `bg` and `fg` all read that state, so all three kill paths must record it
+// identically.
+//
+// On unix the same transition is also observed from the child's wait status
+// by the job-control waiter (os_unix.go), and ignoreNextStop/
+// ignoreNextContinue keep the two sources from double-counting. On Windows
+// there is no wait status for a stop at all: suspendProcess leaves the
+// process suspended inside the exec goroutine's Wait, which never returns
+// until it really exits. The kill is therefore the ONLY event that can tell
+// the job table anything, which is why this must sit on the sending side.
+func (r *Runner) recordJobSignal(bg *bgProc, sig killSig) {
+	switch {
+	case signalStopsJob(sig):
+		bg.ignoreNextContinue.Store(1)
+		if name, ok := signalName(sig); ok {
+			bg.setStopSignal("SIG" + name)
+		}
+		bg.setState(jobStopped)
+	case signalContinuesJob(sig):
+		bg.ignoreNextContinue.Store(0)
+		bg.ignoreNextStop.Store(1)
+		bg.setState(jobRunning)
+		r.preferredJobID = bg.jobID
+	}
+}
+
 func (r *Runner) killSyntheticBg(bg *bgProc, sig killSig) {
 	if bg == nil || sigIsZero(sig) {
 		return
@@ -6283,19 +6291,8 @@ func (r *Runner) killSyntheticBg(bg *bgProc, sig killSig) {
 	if asyncJobInheritedIgnore(bg, sig) {
 		return
 	}
-	if signalStopsJob(sig) {
-		bg.ignoreNextContinue.Store(1)
-		if name, ok := signalName(sig); ok {
-			bg.setStopSignal("SIG" + name)
-		}
-		bg.setState(jobStopped)
-		return
-	}
-	if signalContinuesJob(sig) {
-		bg.ignoreNextContinue.Store(0)
-		bg.ignoreNextStop.Store(1)
-		bg.setState(jobRunning)
-		r.preferredJobID = bg.jobID
+	if signalStopsJob(sig) || signalContinuesJob(sig) {
+		r.recordJobSignal(bg, sig)
 		return
 	}
 	if signalDefaultDoesNotTerminate(sig) {
