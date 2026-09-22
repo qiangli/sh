@@ -25,11 +25,32 @@ type bashPPPointer struct {
 	target *bashPPCell
 	path   []bashPPPointerStep
 	elem   syntax.BashPPTypeExpr
+	// storageAddress is the runtime address shared by standalone zero-sized
+	// objects. It is separate from target: each object still has its own typed
+	// value cell, while its address follows Go's zerobase allocation policy.
+	// Subobjects of nonzero containers leave this nil and retain target+path.
+	storageAddress *byte
 	// unsafeSource records the concrete storage type carried through an
 	// unsafe.Pointer conversion. unsafeView is the validated blank-only
 	// struct view presented by a following typed-pointer conversion.
 	unsafeSource syntax.BashPPTypeExpr
 	unsafeView   syntax.BashPPTypeExpr
+}
+
+// bashPPZeroSizeStorage is real process storage used as the canonical address
+// for standalone zero-sized Go-source objects. The byte is deliberately
+// nonzero-sized: its Go address is stable and never relies on the compiler's
+// own optional coalescing of zero-sized host variables.
+var bashPPZeroSizeStorage byte
+
+func (r *Runner) bashPPPointerForStorage(target *bashPPCell, elem syntax.BashPPTypeExpr, standalone bool) *bashPPPointer {
+	ptr := &bashPPPointer{target: target, elem: elem}
+	if standalone && r.bashPPGoSource {
+		if shape, ok := r.bashPPGoShapeType(elem, 0); ok && shape.Size() == 0 {
+			ptr.storageAddress = &bashPPZeroSizeStorage
+		}
+	}
+	return ptr
 }
 
 func bashPPPointerMeta(typ syntax.BashPPTypeExpr) *bashPPCollectionMeta {
@@ -245,7 +266,7 @@ func (r *Runner) bashPPPointerExprValue(expr syntax.BashPPExpr) (ptr *bashPPPoin
 		} else {
 			bashPPStoreCellValue(cell, value, meta)
 		}
-		return &bashPPPointer{target: cell, elem: x.AllocType}, nil
+		return r.bashPPPointerForStorage(cell, x.AllocType, true), nil
 	case *syntax.BashPPIdent:
 		cell := r.bashPPScope.lookup(x.Name.Value)
 		if cell == nil || !cell.pointer {
@@ -384,6 +405,9 @@ ordinaryAddress:
 	// metadata concurrently before this address reaches the atomic lock.
 	if _, direct := expr.(*syntax.BashPPIdent); direct && typ != nil {
 		ptr.elem = typ
+		if shape, ok := r.bashPPGoShapeType(typ, 0); r.bashPPGoSource && ok && shape.Size() == 0 {
+			ptr.storageAddress = &bashPPZeroSizeStorage
+		}
 		return ptr, nil
 	}
 	meta := bashPPCellMeta(cell)

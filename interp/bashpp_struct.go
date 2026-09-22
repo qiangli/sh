@@ -1391,7 +1391,7 @@ func (r *Runner) bashPPCompositeAddress(lit *syntax.BashPPCompositeLit) (*bashPP
 		cell.typeName = named.Name.Value
 	}
 	bashPPStoreCellValue(cell, value, meta)
-	return &bashPPPointer{target: cell, elem: typ}, nil
+	return r.bashPPPointerForStorage(cell, typ, true), nil
 }
 
 // bashPPRepresentableScalar converts an untyped constant toward the type it is

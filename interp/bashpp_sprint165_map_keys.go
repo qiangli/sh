@@ -58,6 +58,9 @@ func bashPPSprint165PointerMapValue(pointer *bashPPPointer) string {
 	if pointer == nil {
 		return "nil"
 	}
+	if pointer.storageAddress != nil {
+		return fmt.Sprintf("storage:%p", pointer.storageAddress)
+	}
 	var path strings.Builder
 	for _, step := range pointer.path {
 		path.WriteString(bashPPSprint165MapPart(step.field))

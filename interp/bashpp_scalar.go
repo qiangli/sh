@@ -1628,6 +1628,9 @@ func bashPPPointerEqual(left, right any) bool {
 	if lp == nil || rp == nil {
 		return lp == nil && rp == nil
 	}
+	if lp.storageAddress != nil || rp.storageAddress != nil {
+		return lp.storageAddress != nil && lp.storageAddress == rp.storageAddress
+	}
 	if lp.target == rp.target && len(lp.path) == len(rp.path) {
 		same := true
 		for i := range lp.path {
@@ -1655,7 +1658,13 @@ func bashPPPointerEqual(left, right any) bool {
 func (r *Runner) bashPPZeroSizePointerEqual(left, right any) bool {
 	lp, _ := left.(*bashPPPointer)
 	rp, _ := right.(*bashPPPointer)
-	if lp == nil || rp == nil || lp.target != rp.target {
+	if lp == nil || rp == nil {
+		return false
+	}
+	if lp.storageAddress != nil || rp.storageAddress != nil {
+		return lp.storageAddress != nil && lp.storageAddress == rp.storageAddress
+	}
+	if lp.target != rp.target {
 		return false
 	}
 	leftShape, ok := r.bashPPGoShapeType(lp.elem, 0)
