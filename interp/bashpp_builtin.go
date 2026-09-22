@@ -87,6 +87,15 @@ func (r *Runner) bashPPBuiltinArg(w *syntax.Word) bashPPBuiltinArg {
 }
 
 func bashPPBuiltinExactScalarValue(text string, scalar bashPPScalar) any {
+	if scalar.hasNonFiniteComplex {
+		return scalar.nonFiniteComplex
+	}
+	if scalar.hasNonFinite {
+		return scalar.nonFinite
+	}
+	if scalar.value == nil {
+		return text
+	}
 	switch scalar.value.Kind() {
 	case constant.String:
 		return constant.StringVal(scalar.value)
