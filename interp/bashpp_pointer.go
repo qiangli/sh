@@ -25,6 +25,11 @@ type bashPPPointer struct {
 	target *bashPPCell
 	path   []bashPPPointerStep
 	elem   syntax.BashPPTypeExpr
+	// unsafeSource records the concrete storage type carried through an
+	// unsafe.Pointer conversion. unsafeView is the validated blank-only
+	// struct view presented by a following typed-pointer conversion.
+	unsafeSource syntax.BashPPTypeExpr
+	unsafeView   syntax.BashPPTypeExpr
 }
 
 func bashPPPointerMeta(typ syntax.BashPPTypeExpr) *bashPPCollectionMeta {
@@ -118,6 +123,12 @@ func (r *Runner) bashPPPointerConversion(expr syntax.BashPPExpr) (*bashPPPointer
 		return nil, spelled, true, err
 	}
 	retyped := *ptr
+	if ptr.unsafeSource != nil {
+		if err := r.goSourceUnsafeBlankView(ptr.unsafeSource, target.Element); err != nil {
+			return nil, target, true, err
+		}
+		retyped.unsafeView = target.Element
+	}
 	retyped.elem = target.Element
 	return &retyped, spelled, true, nil
 }
@@ -200,6 +211,18 @@ func (r *Runner) bashPPPointerExprValue(expr syntax.BashPPExpr) (ptr *bashPPPoin
 	switch x := expr.(type) {
 	case *syntax.BashPPParenExpr:
 		return r.bashPPPointerExprValue(x.X)
+	case *syntax.BashPPConvertExpr:
+		if r.bashPPGoSource && r.goSourceUnsafePointerType(r.bashPPConvertTarget(x)) {
+			ptr, err := r.bashPPPointerExprValue(x.X)
+			if err != nil || ptr == nil {
+				return ptr, err
+			}
+			view := *ptr
+			view.unsafeSource = ptr.elem
+			view.unsafeView = nil
+			return &view, nil
+		}
+		return nil, fmt.Errorf("BASHPP-EPOINTER-TARGET: expression is not a pointer")
 	case *syntax.BashPPAddressExpr:
 		return r.bashPPAddress(x.X)
 	case *syntax.BashPPNewExpr:
@@ -560,6 +583,9 @@ func (p *bashPPPointer) read() (any, *bashPPCollectionMeta, syntax.BashPPTypeExp
 				meta = meta.sequence[step.index]
 			}
 		}
+	}
+	if p.unsafeView != nil {
+		value, meta = bashPPUnsafeBlankZero(p.unsafeView)
 	}
 	return value, meta, p.elem, nil
 }
