@@ -11,10 +11,11 @@ import (
 )
 
 // varenv.tests: `HOME=/a/b/c /bin/echo $HOME` must hand the child /a/b/c.
-// A single-letter first component is a drive only when that drive is
-// present; with the drive set pinned to C: and D:, /a/b/c is a POSIX path
-// while /c/… and /d/… still convert, in the built-in path variables, PATH
-// and the BASHYENV opt-ins alike.
+// Since story 682 that holds for every value, mounted or not: only PATH and
+// the BASHYENV opt-ins are converted. A single-letter first component is a
+// drive only when that drive is present; with the drive set pinned to C:
+// and D:, /a/b/c is a POSIX PATH element (and stays one) while /c/… and
+// /d/… become drive paths.
 func TestNativeExecEnvHonoursLogicalDrives(t *testing.T) {
 	// Not parallel: pins the LogicalDrives hook.
 	old := pathconv.LogicalDrives
@@ -33,7 +34,7 @@ func TestNativeExecEnvHonoursLogicalDrives(t *testing.T) {
 	want := []string{
 		"HOME=/a/b/c",
 		"TMPDIR=/mnt/a/tmp",
-		`USERPROFILE=C:\Users\me`,
+		"USERPROFILE=/c/Users/me",
 		`PATH=/a/bin;C:\Go\bin;D:\tools`,
 		"BASHYENV=X/p:Y/l",
 		"X=/e/x",
@@ -42,13 +43,14 @@ func TestNativeExecEnvHonoursLogicalDrives(t *testing.T) {
 	if got := nativeExecEnvMountsMode(nil, slices.Clone(env), true); !slices.Equal(got, want) {
 		t.Errorf("without mounts = %q\nwant %q", got, want)
 	}
-	// With a virtual root, /a/b/c is a directory under it — what MSYS
-	// hands a native child — and the present drives are unchanged.
+	// A virtual root does not change that: /a/b/c is a directory under it,
+	// but the child is told the name the script used. Only PATH — which the
+	// exec lookup walks — is resolved through the mounts.
 	m := pathconv.NewMounts(`D:\w\root`, nil, `C:\Temp`)
 	want = []string{
-		`HOME=D:\w\root\a\b\c`,
-		`TMPDIR=D:\w\root\mnt\a\tmp`,
-		`USERPROFILE=C:\Users\me`,
+		"HOME=/a/b/c",
+		"TMPDIR=/mnt/a/tmp",
+		"USERPROFILE=/c/Users/me",
 		`PATH=D:\w\root\a\bin;C:\Go\bin;D:\tools`,
 		"BASHYENV=X/p:Y/l",
 		"X=/e/x",

@@ -42,11 +42,11 @@ func TestNativeExecEnvBashyEnv(t *testing.T) {
 			want: []string{"BASHYENV=A/p:B/l", `A=C:\one`, `B=C:\x;C:\y`},
 		},
 		{
-			name: "overrides the built-in default for a listed name",
-			// TEMP defaults to /p, which leaves a colon list alone; /l opts
-			// into list conversion.
-			env:  []string{"BASHYENV=TEMP/l", "TEMP=/c/a:/c/b"},
-			want: []string{"BASHYENV=TEMP/l", `TEMP=C:\a;C:\b`},
+			// Story 682 removed the built-in name list: TEMP is converted
+			// only because BASHYENV asks for it.
+			name: "a name is converted only when listed",
+			env:  []string{"BASHYENV=TEMP/l", "TEMP=/c/a:/c/b", "TMPDIR=/c/a"},
+			want: []string{"BASHYENV=TEMP/l", `TEMP=C:\a;C:\b`, "TMPDIR=/c/a"},
 		},
 		{
 			name: "names match case-insensitively",
@@ -64,9 +64,9 @@ func TestNativeExecEnvBashyEnv(t *testing.T) {
 			want: []string{"BASHYENV=MYDIR/p:MYPATH/l", `MYDIR=C:\data`, `MYPATH=C:\a;C:\b`},
 		},
 		{
-			name: "built-in defaults still apply alongside",
-			env:  []string{"BASHYENV=MYDIR/p", "MYDIR=/c/data", "TEMP=/c/t"},
-			want: []string{"BASHYENV=MYDIR/p", `MYDIR=C:\data`, `TEMP=C:\t`},
+			name: "PATH is still converted alongside",
+			env:  []string{"BASHYENV=MYDIR/p", "MYDIR=/c/data", "PATH=/c/t"},
+			want: []string{"BASHYENV=MYDIR/p", `MYDIR=C:\data`, `PATH=C:\t`},
 		},
 	}
 	for _, tc := range tests {
