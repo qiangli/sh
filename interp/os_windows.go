@@ -353,17 +353,48 @@ func (r *Runner) inheritedFd(fd int) (*os.File, bool) {
 // close-on-exec primitive (syscall.CloseOnExec there takes a Handle).
 func closeOnExecFd(int) {}
 
-// hdocServe delivers a here-document body over a pipe. Non-unix platforms
-// cannot unlink an open file, so the temp-file approach used on unix isn't
-// available; the pipe+goroutine is retained here.
+// hdocServe materialises a here-document body as an already-readable,
+// delete-pending temporary file. Unlike an anonymous pipe, this does not
+// depend on CreatePipe's requested buffer size: Windows documents that size as
+// a suggestion, and a synchronous WriteFile may wait for a reader. Reopening
+// the file with FILE_SHARE_DELETE lets Remove hide it while its handle remains
+// valid, giving the Unix unlinked-temp-file lifetime without a writer race.
 func hdocServe(body []byte) (*os.File, error) {
-	pr, pw, err := os.Pipe()
+	created, err := os.CreateTemp("", "bashy-hdoc-")
 	if err != nil {
 		return nil, err
 	}
-	go func() {
-		pw.Write(body)
-		pw.Close()
-	}()
-	return pr, nil
+	path := created.Name()
+	if err := created.Close(); err != nil {
+		_ = os.Remove(path)
+		return nil, err
+	}
+	f, handled, err := openShareDelete(path, os.O_RDWR, 0o600)
+	if err != nil {
+		_ = os.Remove(path)
+		return nil, err
+	}
+	if !handled {
+		_ = os.Remove(path)
+		return nil, fmt.Errorf("cannot open here-document temp file with delete sharing")
+	}
+	if err := os.Remove(path); err != nil {
+		f.Close()
+		return nil, err
+	}
+	if len(body) > 0 {
+		n, err := f.Write(body)
+		if err == nil && n != len(body) {
+			err = io.ErrShortWrite
+		}
+		if err != nil {
+			f.Close()
+			return nil, err
+		}
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		f.Close()
+		return nil, err
+	}
+	return f, nil
 }

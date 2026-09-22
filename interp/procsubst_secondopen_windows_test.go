@@ -179,6 +179,52 @@ func TestProcSubstPipeTwoOpensBeforeAnyRead(t *testing.T) {
 	}
 }
 
+// Opening more times than the warm-listener count proves that the count is
+// overlap tolerance rather than a lifetime cap. Each accepted connection must
+// replenish its listener before the next external CreateFile arrives.
+func TestProcSubstPipeReplenishesListeners(t *testing.T) {
+	r, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := r.newProcSubstPipe(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.cleanup()
+
+	go func() {
+		f, err := p.openWriter()
+		if err != nil {
+			return
+		}
+		io.WriteString(f, "once\n")
+		f.Close()
+	}()
+
+	const opens = 8
+	files := make([]*os.File, 0, opens)
+	for i := range opens {
+		f, err := openPipe(t, p.path())
+		if err != nil {
+			t.Fatalf("open %d: %v", i+1, err)
+		}
+		files = append(files, f)
+	}
+	var seen bytes.Buffer
+	for i, f := range files {
+		b, err := io.ReadAll(f)
+		f.Close()
+		if err != nil {
+			t.Fatalf("read %d: %v", i+1, err)
+		}
+		seen.Write(b)
+	}
+	if seen.String() != "once\n" {
+		t.Fatalf("all opens together saw %q, want the stream once", seen.String())
+	}
+}
+
 // Once the shell releases the pipe the name is gone: an open fails, and the
 // shell's own stat of the path reports it missing rather than inventing a
 // FIFO that is no longer there. Both are what the unlinked FIFO does on
@@ -278,9 +324,9 @@ func TestProcSubstPipeCleanupWithNoConsumer(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		// Serving starts when the substitution opens its end; do it
-		// without a consumer, so the listeners are all still waiting.
-		// Both directions, since they share the accept loop.
+		// Serving starts at construction so an external consumer cannot win
+		// a scheduling race. Also wait for the substitution's end here,
+		// without a consumer, to cover both connect directions and stopCh.
 		if i%2 == 0 {
 			go p.openWriter()
 		} else {
