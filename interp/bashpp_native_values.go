@@ -63,6 +63,9 @@ func (r *Runner) bashPPBridgeHandles(call *syntax.BashPPCall) bool {
 		}
 	}
 	if len(call.Fun) == 1 {
+		if r.bashPPGoSourceNativeFunc(call.Fun[0].Value) {
+			return true
+		}
 		if value := r.bashPPNativeCellValue(call.Fun[0].Value); value != nil && value.Kind == "handle" && (value.Function || strings.HasPrefix(value.Type, "func(")) {
 			return true
 		}
@@ -72,6 +75,19 @@ func (r *Runner) bashPPBridgeHandles(call *syntax.BashPPCall) bool {
 					return true
 				}
 			}
+		}
+	}
+	return false
+}
+
+func (r *Runner) bashPPGoSourceNativeFunc(name string) bool {
+	if !r.bashPPGoSource || r.bashPPGoSourceFile == nil {
+		return false
+	}
+	_, funcs := r.bashPPGoSourceNativeCompanions(r.bashPPGoSourceSourceDir())
+	for _, fn := range funcs {
+		if fn.Name == name {
+			return true
 		}
 	}
 	return false

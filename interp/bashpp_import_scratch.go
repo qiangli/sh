@@ -15,6 +15,15 @@ type bashPPImportSource struct {
 	cleanup   func()
 }
 
+func (s *bashPPImportSource) remap(buildPath string) error {
+	s.buildPath = buildPath
+	data, err := json.Marshal(struct{ Replace map[string]string }{map[string]string{buildPath: s.Name()}})
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(s.overlay, data, 0600)
+}
+
 // bashPPScratchPolicy decides whether private helper scratch may be placed
 // inside the caller's own source directory. The two bash++ evaluation paths
 // answer differently, and the split is exactly the GoSource/Classic boundary:

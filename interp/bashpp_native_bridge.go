@@ -160,6 +160,7 @@ type bashPPNativeSession struct {
 	imports             string
 	locals              string
 	embeds              string
+	companions          string
 	instances           string
 	id                  string
 }
@@ -233,6 +234,9 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 		if s.embeds != bashPPEmbedIdentity(req.EmbedDecls) {
 			return errors.New("gosource: embed declarations changed after native dependency initialization")
 		}
+		if s.companions != bashPPNativeCompanionIdentity(req.CompanionFiles, req.NativeFuncs) {
+			return errors.New("gosource: native companions changed after native dependency initialization")
+		}
 		if s.instances != bashPPImportedInstanceIdentity(req.Instances) {
 			return errors.New("gosource: imported instantiations changed after native dependency initialization")
 		}
@@ -261,7 +265,7 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 	}
 	sourceDir := bashPPModuleRequest(req).Dir
 	policy := bashPPScratchIsolated
-	if len(req.EmbedDecls) > 0 {
+	if len(req.EmbedDecls) > 0 || len(req.CompanionFiles) > 0 {
 		sourceDir = req.SourceDir
 		policy = bashPPScratchSourceRoot
 	}
@@ -282,7 +286,24 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 	}
 	binary := file.Name() + ".bin"
 	buildEnv := setEnvString(req.Env, "CGO_ENABLED", "0")
-	if policy == bashPPScratchSourceRoot {
+	if len(req.CompanionFiles) > 0 {
+		if req.SourceFile == "" {
+			cleanup()
+			return fmt.Errorf("gosource: native companions require an original source file")
+		}
+		if err = file.remap(req.SourceFile); err != nil {
+			cleanup()
+			return err
+		}
+		build := exec.CommandContext(ctx, req.Go, "build", "-p", "2", "-overlay="+file.overlay, "-o", binary, ".")
+		build.Dir, build.Env = req.SourceDir, buildEnv
+		var diagnostics bytes.Buffer
+		build.Stdout, build.Stderr = &diagnostics, &diagnostics
+		if err = build.Run(); err != nil {
+			cleanup()
+			return fmt.Errorf("gosource: build dependency bridge: %w: %s", err, diagnostics.String())
+		}
+	} else if policy == bashPPScratchSourceRoot {
 		// go:embed patterns resolve against the worker's logical location;
 		// only cmd/go's overlay gives the worker one inside the source root.
 		build := exec.CommandContext(ctx, req.Go, "build", "-p", "2", "-overlay="+file.overlay, "-o", binary, file.buildPath)
@@ -403,6 +424,7 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 	s.imports = bridgeImportIdentity(req.Imports)
 	s.locals = bashPPLocalTypeIdentity(req.LocalTypes)
 	s.embeds = bashPPEmbedIdentity(req.EmbedDecls)
+	s.companions = bashPPNativeCompanionIdentity(req.CompanionFiles, req.NativeFuncs)
 	s.instances = bashPPImportedInstanceIdentity(req.Instances)
 	go func() {
 		for {
@@ -871,6 +893,21 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 			fmt.Fprintf(&typeEntries, "%q: reflect.TypeFor[%s](),\n", local.WireType, local.Name)
 		}
 	}
+	for _, fn := range req.NativeFuncs {
+		if !syntax.BashPPValidIdent(fn.Name) {
+			return "", fmt.Errorf("gosource: invalid native companion function %q", fn.Name)
+		}
+		params, results, err := bashPPNativeFuncSignatureImports(fn.Params, fn.Results, importAliases)
+		if err != nil {
+			return "", err
+		}
+		if results == "" {
+			fmt.Fprintf(&locals, "func %s(%s)\n", fn.Name, params)
+		} else {
+			fmt.Fprintf(&locals, "func %s(%s)(%s)\n", fn.Name, params, results)
+		}
+		fmt.Fprintf(&symbols, "%q: reflect.ValueOf(%s),\n", fn.Name, fn.Name)
+	}
 	codecs, err := bashPPLocalCodecsGo(localTypes)
 	if err != nil {
 		return "", err
@@ -887,6 +924,41 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 func bashPPEmbedIdentity(decls []bashPPEmbedDecl) string {
 	data, _ := json.Marshal(decls)
 	return string(data)
+}
+
+func bashPPNativeCompanionIdentity(files []string, funcs []bashPPNativeFuncDecl) string {
+	data, _ := json.Marshal(struct {
+		Files []string
+		Funcs []bashPPNativeFuncDecl
+	}{files, funcs})
+	return string(data)
+}
+
+func bashPPNativeFuncSignatureImports(params, results string, aliases map[string]string) (string, string, error) {
+	source := "func _(" + params + ")"
+	if results != "" {
+		source += "(" + results + ")"
+	}
+	decl, err := bashPPNativeDeclImports(source, aliases)
+	if err != nil {
+		return "", "", err
+	}
+	decl = strings.TrimSpace(decl)
+	open := strings.IndexByte(decl, '(')
+	if open < 0 {
+		return "", "", fmt.Errorf("gosource: malformed native companion signature %q", decl)
+	}
+	close := strings.IndexByte(decl[open+1:], ')')
+	if close < 0 {
+		return "", "", fmt.Errorf("gosource: malformed native companion signature %q", decl)
+	}
+	close += open + 1
+	params = decl[open+1 : close]
+	results = strings.TrimSpace(decl[close+1:])
+	if strings.HasPrefix(results, "(") && strings.HasSuffix(results, ")") {
+		results = strings.TrimSuffix(strings.TrimPrefix(results, "("), ")")
+	}
+	return params, results, nil
 }
 
 func bashPPBridgeLiteral(text string) (bashPPBridgeValue, error) {

@@ -5,7 +5,9 @@ package interp
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"mvdan.cc/sh/v3/syntax"
@@ -18,6 +20,12 @@ type bashPPEmbedDecl struct {
 	Name       string
 	Type       string
 	Directives []string
+}
+
+type bashPPNativeFuncDecl struct {
+	Name    string
+	Params  string
+	Results string
 }
 
 const bashPPEmbedSymbolPrefix = "\x00gosource.embed."
@@ -52,9 +60,24 @@ func (r *Runner) bashPPGoSourceEmbedRequest() ([]bashPPEmbedDecl, string) {
 	if len(decls) == 0 {
 		return nil, ""
 	}
+	return decls, r.bashPPGoSourceSourceDir()
+}
+
+func (r *Runner) bashPPGoSourceSourceDir() string {
+	sourceFile := r.bashPPGoSourceSourceFile()
+	if sourceFile == "" {
+		return r.Dir
+	}
+	return filepath.Dir(sourceFile)
+}
+
+func (r *Runner) bashPPGoSourceSourceFile() string {
+	if r.bashPPGoSourceFile == nil {
+		return ""
+	}
 	name := r.bashPPGoSourceFile.Name
 	if name == "" {
-		return decls, r.Dir
+		return ""
 	}
 	if !filepath.IsAbs(name) {
 		base := r.Dir
@@ -63,7 +86,47 @@ func (r *Runner) bashPPGoSourceEmbedRequest() ([]bashPPEmbedDecl, string) {
 		}
 		name = filepath.Join(base, name)
 	}
-	return decls, filepath.Dir(name)
+	return name
+}
+
+func (r *Runner) bashPPGoSourceNativeCompanions(sourceDir string) ([]string, []bashPPNativeFuncDecl) {
+	if !r.bashPPGoSource || r.bashPPGoSourceFile == nil || sourceDir == "" {
+		return nil, nil
+	}
+	var funcs []bashPPNativeFuncDecl
+	for _, stmt := range r.bashPPGoSourceFile.Stmts {
+		decl, ok := stmt.Cmd.(*syntax.BashPPFuncDecl)
+		if !ok || decl.Body != nil || decl.Receiver != nil || decl.Name == nil || len(decl.TypeParams) > 0 {
+			continue
+		}
+		funcs = append(funcs, bashPPNativeFuncDecl{
+			Name:    decl.Name.Value,
+			Params:  bashPPBridgeFieldsTextIn(decl.Params, r.bashPPScopedLocalTypeName),
+			Results: bashPPBridgeFieldsTextIn(decl.Results, r.bashPPScopedLocalTypeName),
+		})
+	}
+	if len(funcs) == 0 {
+		return nil, nil
+	}
+	entries, err := os.ReadDir(sourceDir)
+	if err != nil {
+		return nil, funcs
+	}
+	var files []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if strings.EqualFold(filepath.Ext(name), ".s") {
+			files = append(files, filepath.Join(sourceDir, name))
+		}
+	}
+	sort.Strings(files)
+	if len(files) == 0 {
+		return nil, funcs
+	}
+	return files, funcs
 }
 
 func (r *Runner) bashPPNativeEmbedDeclaration(d *syntax.BashPPDecl) bool {

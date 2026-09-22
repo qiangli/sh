@@ -45,7 +45,14 @@ type bashPPEvalRequest struct {
 	ModuleDir  string
 	RuntimeEnv []string
 	SourceDir  string
+	SourceFile string
 	EmbedDecls []bashPPEmbedDecl
+	// CompanionFiles are non-Go same-package object companions, such as .s
+	// files, that may satisfy no-body declarations from the original Go
+	// source. They are bound into the dependency helper without compiling the
+	// original Go root.
+	CompanionFiles []string
+	NativeFuncs    []bashPPNativeFuncDecl
 	// LocalTypes materialises the original program's own named types inside
 	// the dependency helper. Sprint #118 Story #54 (c3a60493cde9).
 	LocalTypes []bashPPLocalType
@@ -518,8 +525,13 @@ func (r *Runner) bashPPEvalRequest() (bashPPEvalRequest, error) {
 		r.bashPPTools.requestEnv, r.bashPPTools.runtimeEnv = env, runtimeEnv
 	}
 	embedDecls, sourceDir := r.bashPPGoSourceEmbedRequest()
+	if r.bashPPGoSource && sourceDir == "" {
+		sourceDir = r.bashPPGoSourceSourceDir()
+	}
+	sourceFile := r.bashPPGoSourceSourceFile()
+	companionFiles, nativeFuncs := r.bashPPGoSourceNativeCompanions(sourceDir)
 	return bashPPEvalRequest{CallbackOwner: r, CallbackDepth: r.bashPPTools.callbackDepth, LocalTypes: r.bashPPLocalTypeDescriptors(), Instances: r.bashPPImportedInstances(), RuntimeEnv: runtimeEnv, ModuleDir: moduleDir, ImportPath: importPath, TestMain: testMain, Argv: append([]string{r.filename}, r.Params...), Bridge: r.bashPPTools.bridge, Go: r.bashPPTools.goBinary, Dir: r.Dir, Env: env, Stdin: r.stdin,
-		Stdout: r.bashPPWriter(r.stdout), Stderr: r.bashPPWriter(r.stderr), Imports: r.bashPPImports, SourceDir: sourceDir, EmbedDecls: embedDecls}, nil
+		Stdout: r.bashPPWriter(r.stdout), Stderr: r.bashPPWriter(r.stderr), Imports: r.bashPPImports, SourceDir: sourceDir, SourceFile: sourceFile, EmbedDecls: embedDecls, CompanionFiles: companionFiles, NativeFuncs: nativeFuncs}, nil
 }
 
 func setEnvString(env []string, name, value string) []string {
