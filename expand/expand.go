@@ -5703,10 +5703,16 @@ var (
 // results are joined with `/` everywhere — the OS accepts it on Windows too,
 // and the filesystem walk below converts on the way in, not the way out.
 func pathJoin2(elem1, elem2 string) string {
+	return pathJoin2Mode(elem1, elem2, runtime.GOOS == "windows")
+}
+
+// pathJoin2Mode is [pathJoin2] with an explicit windows flag: only there is
+// a trailing backslash a separator.
+func pathJoin2Mode(elem1, elem2 string, windows bool) string {
 	if elem1 == "" {
 		return elem2
 	}
-	if strings.HasSuffix(elem1, "/") || strings.HasSuffix(elem1, string(filepath.Separator)) {
+	if strings.HasSuffix(elem1, "/") || (windows && strings.HasSuffix(elem1, `\`)) {
 		return elem1 + elem2
 	}
 	return elem1 + "/" + elem2
