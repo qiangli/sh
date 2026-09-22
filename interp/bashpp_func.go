@@ -1029,6 +1029,11 @@ func (r *Runner) bashPPTypeSetSatisfied(arg, constraint syntax.BashPPTypeExpr) b
 		if c.Name.Value == "comparable" {
 			return r.bashPPComparableType(arg, make(map[string]bool))
 		}
+		// A declared constraint such as `type C comparable` carries the type
+		// set of its underlying constraint expression.
+		if decl, ok := r.bashPPTypes[c.Name.Value]; ok && decl.typeExpr != nil {
+			return r.bashPPTypeSetSatisfied(arg, r.bashPPInstantiateNamedType(c))
+		}
 		// A union term may itself be an interface — `OrderedNumeric |
 		// Complex` — whose type set, not its assignability, decides.
 		if iface, ok := r.bashPPInterfaceType(c); ok {
@@ -1239,6 +1244,9 @@ func (r *Runner) bashPPConstraintSatisfied(arg, constraint syntax.BashPPTypeExpr
 		case "comparable":
 			return r.bashPPComparableType(arg, make(map[string]bool))
 		default:
+			if decl, ok := r.bashPPTypes[c.Name.Value]; ok && decl.typeExpr != nil {
+				return r.bashPPConstraintSatisfied(arg, r.bashPPInstantiateNamedType(c))
+			}
 			if iface, ok := r.bashPPInterfaceType(c); ok {
 				return r.bashPPImplements(arg, iface) == nil && r.bashPPInterfaceTypeSetSatisfied(arg, iface, make(map[*syntax.BashPPInterfaceType]bool))
 			}

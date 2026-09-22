@@ -46,6 +46,12 @@ func (r *Runner) bashPPValidateTypeRepresentation(typ syntax.BashPPTypeExpr, act
 			return err
 		}
 		name := x.Name.Value
+		// comparable is a predeclared constraint interface. It may be the
+		// underlying type of a declared constraint (type C comparable), but it
+		// is not a concrete builtin type and must stay out of bashPPBuiltinType.
+		if name == "comparable" {
+			return nil
+		}
 		if r.bashPPNativeType(x) {
 			_, err := r.bashPPNativeTypeRequest("type", x)
 			return err
