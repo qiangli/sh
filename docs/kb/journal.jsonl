@@ -35,3 +35,4 @@
 {"op":"add","slug":"bind-reflected-callback-provenance-to-handle-identity","id":"01a0c6c2-a40b-791f-9dca-93481223b800","tool":"codex-gpt5.6-sol-w53-a","episode":"weave-issue-53","at":"2026-09-22T01:37:19.884254Z"}
 {"op":"add","slug":"preserve-channel-allocation-domains-through-identity-free-values","id":"01a0c94b-3069-728c-9a2f-81ccc12b058b","tool":"codex-gpt5.6-sol-w173-q","host":"dragon","episode":"weave-issue-173","at":"2026-09-22T13:25:43.146061Z"}
 {"op":"add","slug":"build-gosource-assembly-companions-through-package-overlay","id":"01a0ca59-557f-78cd-89d0-fad267c98424","tool":"codex-gpt-5.5-w","host":"dragon","episode":"weave-issue-205","at":"2026-09-22T18:20:47.360504Z"}
+{"op":"add","slug":"place-overlay-only-cgo-helpers-in-an-existing-logical-directory","id":"01a0caa9-8764-7e34-9451-05bfc996efef","tool":"codex-gpt5.6-sol-w213-e","host":"dragon","episode":"weave-issue-213","at":"2026-09-22T19:48:23.014608Z"}

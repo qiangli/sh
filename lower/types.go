@@ -497,6 +497,9 @@ func (e *emitter) selectorExpr(n *syntax.BashPPSelectorExpr) (string, error) {
 	if n.Sel == nil {
 		return "", e.fail(n.X, CodeExpr, "missing selector name")
 	}
+	if id, ok := n.X.(*syntax.BashPPIdent); ok && e.cgoAliases[id.Name.Value] {
+		value = "C"
+	}
 	return e.group(value) + "." + n.Sel.Value, nil
 }
 func (e *emitter) typeAssertExpr(n *syntax.BashPPTypeAssertExpr) (string, error) {

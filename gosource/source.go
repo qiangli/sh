@@ -190,6 +190,16 @@ func Load(sources []Source, options Options) (*Program, error) {
 	if err != nil {
 		return nil, err
 	}
+	importsC := sourcesImportC(sources)
+	for _, spec := range options.Packages {
+		importsC = importsC || sourcesImportC(spec.Sources)
+	}
+	if importsC && !checker.fakeImportC {
+		if !automaticCgoEnabled() {
+			return nil, fmt.Errorf("gosource: cgo disabled: import %q requires CGO_ENABLED=1 (go env CGO_ENABLED)", "C")
+		}
+		checker.fakeImportC = true
+	}
 	c := &converter{fset: token.NewFileSet(), info: newTypeInfo(), renames: map[types.Object]string{}}
 	p := &Program{File: &syntax.File{Name: sources[0].Name, GoSource: true}}
 	parseErrors := append(ErrorList(nil), syntaxErrors...)
@@ -223,6 +233,7 @@ func Load(sources []Source, options Options) (*Program, error) {
 	if len(c.files) == 0 {
 		return nil, parseErrors
 	}
+	c.checkerNames = prepareCgoFiles(c.fset, c.files)
 	if len(syntaxErrors) > 0 {
 		parseErrors = appendStructuralCheckerDiagnostics(parseErrors, gcFiles)
 	}
@@ -302,7 +313,7 @@ func Load(sources []Source, options Options) (*Program, error) {
 		checked := imp.checked[path]
 		mapped[path] = i
 		mappedPkgs = append(mappedPkgs, checked.pkg)
-		linked = append(linked, &converter{packagePath: path, fset: c.fset, files: checked.files, sources: checked.sources, info: checked.info, renames: c.renames, shadowedBuiltins: shadowedBuiltinTypes(checked.pkg)})
+		linked = append(linked, &converter{packagePath: path, fset: c.fset, files: checked.files, sources: checked.sources, info: checked.info, renames: c.renames, checkerNames: checked.checkerNames, shadowedBuiltins: shadowedBuiltinTypes(checked.pkg)})
 	}
 	// The converter's own package is the one the checker built: for an
 	// external test package that is <pkg>_test, so the tested package's
@@ -433,6 +444,7 @@ func Load(sources []Source, options Options) (*Program, error) {
 		p.InitFunctions = append(p.InitFunctions, lp.initFunctions...)
 		lowered = append(lowered, lp)
 	}
+	p.File.CgoPackages = cgoPackages(linked)
 	// Imports first: the interpreter starts the native dependency bridge once,
 	// at the first statement that is not an import.
 	for _, lp := range lowered {

@@ -131,6 +131,9 @@ func (r *Runner) bashPPNativeCallback(ctx context.Context, selector string, recv
 			err = fmt.Errorf("gosource: original callback interpreter failure: %v", failure)
 		}
 	}()
+	if name, ok := strings.CutPrefix(selector, bashPPCompanionSelectorPrefix); ok {
+		return r.bashPPNativeCompanionCallback(ctx, name, recv.CallArgs)
+	}
 	typeName, method, ok := strings.Cut(selector, ".")
 	if !ok {
 		return nil, fmt.Errorf("gosource: malformed original method selector %q", selector)
@@ -521,4 +524,15 @@ func (s *bashPPNativeSession) bashPPAuthenticateCallbackValue(v *bashPPBridgeVal
 		s.bashPPAuthenticateCallbackValue(&v.Entries[i].Key)
 		s.bashPPAuthenticateCallbackValue(&v.Entries[i].Value)
 	}
+}
+
+// bashPPNativeCompanionCallback runs the original package function an object
+// companion called. The trampoline in the helper only carries the call; the
+// body executes here, over this runner's own package state.
+func (r *Runner) bashPPNativeCompanionCallback(ctx context.Context, name string, args []bashPPBridgeValue) ([]bashPPBridgeValue, error) {
+	fn := r.bashPPFuncs[name]
+	if fn == nil {
+		return nil, fmt.Errorf("gosource: assembly companion target %s is not an original function", name)
+	}
+	return r.bashPPRunCallbackFunc(ctx, fn, args)
 }

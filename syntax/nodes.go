@@ -28,9 +28,32 @@ type File struct {
 	GoSource bool
 	// Sources maps merged Go AST offsets to their original immutable inputs.
 	Sources []SourceFile
+	// CgoPackages describes each flattened Go package which imported the
+	// pseudo-package C. The source package remains interpreted; this metadata
+	// lets its C selectors be bound by the native dependency worker without
+	// merging package-local preambles.
+	CgoPackages []CgoPackage
 
 	Stmts []*Stmt
 	Last  []Comment
+}
+
+// CgoPackage is the authenticated, package-scoped import "C" surface retained
+// by gosource. Alias is the collision-free binding used by the flattened tree.
+type CgoPackage struct {
+	Path, Alias, Preamble string
+	Symbols               []CgoSymbol
+}
+
+// CgoSymbol is one referenced C selector. Kind is "func" for a call target;
+// every other selector is retained as "unsupported" and refused precisely by
+// the execution boundary. ProbeArgs contains only safe zero/nil expressions
+// used to ask cmd/cgo for the function's platform ABI; no Go source body is
+// copied into or executed by the native worker.
+type CgoSymbol struct {
+	Name, Kind string
+	ProbeArgs  []string
+	ResultUsed bool
 }
 
 // SourceFile identifies one input in a combined positioned Go syntax tree.

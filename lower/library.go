@@ -53,13 +53,16 @@ func (e *emitter) libraryResult(file *syntax.File, options Options, globalTypes 
 		goFiles = append(goFiles, parsed)
 		result.Files = append(result.Files, generated)
 	}
+	for _, parsed := range goFiles {
+		prepareCgoCheckerFile(parsed)
+	}
 	for path := range allImports {
 		result.Imports = append(result.Imports, path)
 	}
 	sort.Strings(result.Imports)
 
 	var diagnostics ErrorList
-	conf := types.Config{Importer: bridgeImporter{fallback: e.moduleImporter, path: options.Runtime, cache: map[string]*types.Package{}}, Error: func(err error) {
+	conf := types.Config{FakeImportC: len(file.CgoPackages) > 0, Importer: bridgeImporter{fallback: e.moduleImporter, path: options.Runtime, cache: map[string]*types.Package{}}, Error: func(err error) {
 		te, ok := err.(types.Error)
 		pos := file.Pos()
 		node := "File"
@@ -131,6 +134,9 @@ func (e *emitter) libraryImportLines(name string) ([]string, string) {
 		}
 		seen[key] = true
 		paths = append(paths, item.path)
+		if item.path == "C" && e.sourceFile != nil && len(e.sourceFile.CgoPackages) == 1 {
+			out.WriteString(e.sourceFile.CgoPackages[0].Preamble)
+		}
 		if !item.aliased {
 			fmt.Fprintf(&out, "import %s\n", strconv.Quote(item.path))
 		} else {

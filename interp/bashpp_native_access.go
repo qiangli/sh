@@ -330,12 +330,17 @@ func (r *Runner) bashPPNativeIteration(ctx context.Context, rng *syntax.BashPPRa
 
 // bashPPNativeIterationValue converts one element into the interpreter's
 // iteration binding. Scalars bind by value; anything else keeps its handle.
+// An element of an interface-typed sequence (`[]ast.Decl`, `[]any`) binds as
+// an interface value over the dependency's dynamic value, exactly as the same
+// element would when read by index or returned from a call, so that a type
+// assertion or type switch on the loop variable sees an interface operand.
 func (r *Runner) bashPPNativeIterationValue(element bashPPBridgeValue) (any, *bashPPCollectionMeta, syntax.BashPPTypeExpr, error) {
-	typeName := element.Type
 	if element.Interface != "" {
-		typeName = element.Interface
+		cell := r.goSourceNativeValueCell(element)
+		meta := &bashPPCollectionMeta{kind: "interface", typ: cell.declType, interfaceValue: cell.interfaceValue}
+		return cell.vrValue(), meta, cell.declType, nil
 	}
-	typ := bashPPRangeNamedType(typeName)
+	typ := bashPPRangeNamedType(element.Type)
 	scalar, err := element.scalar()
 	if err != nil {
 		if element.Kind == "handle" || element.Kind == "nil" {

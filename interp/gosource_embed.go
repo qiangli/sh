@@ -89,9 +89,32 @@ func (r *Runner) bashPPGoSourceSourceFile() string {
 	return name
 }
 
-func (r *Runner) bashPPGoSourceNativeCompanions(sourceDir string) ([]string, []bashPPNativeFuncDecl) {
+// bashPPGoSourceRootFiles lists the original inputs of the interpreted
+// program's own package, as the loader recorded them. A linked package carries
+// a declared import path; the program package is the one that does not.
+func (r *Runner) bashPPGoSourceRootFiles() []string {
+	if r.bashPPGoSourceFile == nil {
+		return nil
+	}
+	var out []string
+	for _, source := range r.bashPPGoSourceFile.Sources {
+		if source.PackagePath != "" || source.Name == "" {
+			continue
+		}
+		out = append(out, source.Name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// bashPPGoSourceNativeCompanions reports the same-package object companions
+// of the interpreted Go root, the no-body declarations they may satisfy, the
+// original functions they call back into, and the companion frames the runtime
+// has no pointer map for. An unsound reference — package data the interpreter
+// owns — is refused here rather than linked.
+func (r *Runner) bashPPGoSourceNativeCompanions(sourceDir string) ([]string, []bashPPNativeFuncDecl, []bashPPCompanionTrampoline, []string, error) {
 	if !r.bashPPGoSource || r.bashPPGoSourceFile == nil || sourceDir == "" {
-		return nil, nil
+		return nil, nil, nil, nil, nil
 	}
 	var funcs []bashPPNativeFuncDecl
 	for _, stmt := range r.bashPPGoSourceFile.Stmts {
@@ -106,11 +129,11 @@ func (r *Runner) bashPPGoSourceNativeCompanions(sourceDir string) ([]string, []b
 		})
 	}
 	if len(funcs) == 0 {
-		return nil, nil
+		return nil, nil, nil, nil, nil
 	}
 	entries, err := os.ReadDir(sourceDir)
 	if err != nil {
-		return nil, funcs
+		return nil, funcs, nil, nil, nil
 	}
 	var files []string
 	for _, entry := range entries {
@@ -124,9 +147,13 @@ func (r *Runner) bashPPGoSourceNativeCompanions(sourceDir string) ([]string, []b
 	}
 	sort.Strings(files)
 	if len(files) == 0 {
-		return nil, funcs
+		return nil, funcs, nil, nil, nil
 	}
-	return files, funcs
+	trampolines, unmapped, err := r.bashPPGoSourceCompanionTrampolines(files)
+	if err != nil {
+		return files, funcs, nil, nil, err
+	}
+	return files, funcs, trampolines, unmapped, nil
 }
 
 func (r *Runner) bashPPNativeEmbedDeclaration(d *syntax.BashPPDecl) bool {

@@ -39,6 +39,7 @@ type emitter struct {
 	panicSupport          bool
 	imports               map[string]string
 	importAliased         map[string]bool // import bindings the input spelled with an alias
+	cgoAliases            map[string]bool
 	fileImports           map[string][]sourceImport
 	callableParams        map[*syntax.BashPPField]string
 	resultTypes           []string
@@ -185,13 +186,16 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 	if options.Package == "" {
 		options.Package = "main"
 	}
+	if len(file.CgoPackages) > 1 {
+		return nil, ErrorList{{Code: CodeUnsupported, Msg: "compiled flattened output cannot merge multiple package-scoped cgo preambles", Pos: file.Pos()}}
+	}
 	if options.Runtime == "" {
 		options.Runtime = DefaultRuntime
 	}
 	if !token.IsIdentifier(options.Package) || token.Lookup(options.Package).IsKeyword() {
 		return nil, ErrorList{{Code: CodeType, Msg: "invalid package name", Pos: file.Pos()}}
 	}
-	e := &emitter{goSource: file.GoSource, sourceFile: file, writtenNames: map[string]bool{}, inferredParams: map[*syntax.BashPPField]string{}, declaredTypes: map[string]*syntax.BashPPDecl{}, functionDecls: map[string]*syntax.BashPPFuncDecl{}, enumMembers: map[string][]*syntax.Lit{}, options: options, funcs: map[string]bool{}, scopes: []map[string]bool{{}}, globals: map[string]bool{}, visibleGlobals: map[string]bool{}, imports: map[string]string{}, importAliased: map[string]bool{}, fileImports: map[string][]sourceImport{}, callableParams: map[*syntax.BashPPField]string{}, dotNames: map[string]bool{}, declaredGlobals: map[string]bool{}, typeNames: map[string]bool{}, globalTypes: globalTypes, foreignImportAliases: map[string]int{}, pythonValues: map[string]bool{}, goErrorFuncs: map[*syntax.BashPPFuncDecl]bool{}}
+	e := &emitter{goSource: file.GoSource, sourceFile: file, writtenNames: map[string]bool{}, inferredParams: map[*syntax.BashPPField]string{}, declaredTypes: map[string]*syntax.BashPPDecl{}, functionDecls: map[string]*syntax.BashPPFuncDecl{}, enumMembers: map[string][]*syntax.Lit{}, options: options, funcs: map[string]bool{}, scopes: []map[string]bool{{}}, globals: map[string]bool{}, visibleGlobals: map[string]bool{}, imports: map[string]string{}, importAliased: map[string]bool{}, cgoAliases: map[string]bool{}, fileImports: map[string][]sourceImport{}, callableParams: map[*syntax.BashPPField]string{}, dotNames: map[string]bool{}, declaredGlobals: map[string]bool{}, typeNames: map[string]bool{}, globalTypes: globalTypes, foreignImportAliases: map[string]int{}, pythonValues: map[string]bool{}, goErrorFuncs: map[*syntax.BashPPFuncDecl]bool{}}
 	e.foreignFunctions = map[string]foreignFunction{}
 	e.moduleImporter = newModuleImporter(options.Dir)
 	if options.Importer != nil {
@@ -582,8 +586,9 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 	if err != nil {
 		return nil, e.fail(file, CodeExpr, err.Error())
 	}
+	prepareCgoCheckerFile(goFile)
 	var diagnostics ErrorList
-	conf := types.Config{Importer: bridgeImporter{fallback: e.moduleImporter, path: options.Runtime, cache: map[string]*types.Package{}}, Error: func(err error) {
+	conf := types.Config{FakeImportC: len(file.CgoPackages) > 0, Importer: bridgeImporter{fallback: e.moduleImporter, path: options.Runtime, cache: map[string]*types.Package{}}, Error: func(err error) {
 		te, ok := err.(types.Error)
 		pos := file.Pos()
 		node := "File"
@@ -668,6 +673,46 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 		}
 	}
 	return result, nil
+}
+
+// prepareCgoCheckerFile models cmd/cgo for the validation check over generated
+// source. The emitted bytes intentionally retain import "C", C.name calls,
+// and a user's package declaration named C for the native cgo build. go/types'
+// FakeImportC incorrectly lets the pseudo-package collide with that declaration,
+// so only the checker tree receives a hygienic spelling for the Go object.
+func prepareCgoCheckerFile(file *ast.File) {
+	if file == nil || file.Scope == nil {
+		return
+	}
+	object := file.Scope.Lookup("C")
+	if object == nil || object.Kind == ast.Pkg {
+		return
+	}
+	alias := "__lower_go_C"
+	used := map[string]bool{}
+	selectorBases := map[*ast.Ident]bool{}
+	ast.Inspect(file, func(node ast.Node) bool {
+		if id, ok := node.(*ast.Ident); ok {
+			used[id.Name] = true
+		}
+		if sel, ok := node.(*ast.SelectorExpr); ok {
+			if id, ok := ast.Unparen(sel.X).(*ast.Ident); ok && id.Name == "C" {
+				selectorBases[id] = true
+			}
+		}
+		return true
+	})
+	for used[alias] {
+		alias += "_"
+	}
+	ast.Inspect(file, func(node ast.Node) bool {
+		id, ok := node.(*ast.Ident)
+		if ok && id.Obj == object && !selectorBases[id] {
+			id.Name = alias
+		}
+		return true
+	})
+	object.Name = alias
 }
 
 // sourceDecl is one top-level declaration's generated text keyed by the
@@ -1810,6 +1855,9 @@ func (e *emitter) call(c *syntax.BashPPCall) (string, error) {
 	for i, part := range c.Fun {
 		qualifiedParts[i] = part.Value
 	}
+	if len(qualifiedParts) > 1 && e.cgoAliases[qualifiedParts[0]] {
+		qualifiedParts[0] = "C"
+	}
 	if foreign, ok := e.foreignFunctions[strings.Join(qualifiedParts, ".")]; ok {
 		var args []string
 		for i := range c.Args {
@@ -1849,7 +1897,7 @@ func (e *emitter) call(c *syntax.BashPPCall) (string, error) {
 			}
 			args = append(args, x)
 		}
-		callee := strings.Join(names(c.Fun), ".")
+		callee := strings.Join(qualifiedParts, ".")
 		if c.PointerMethodExpr {
 			callee = "(*" + c.Fun[0].Value + ")." + c.Fun[1].Value
 		}
