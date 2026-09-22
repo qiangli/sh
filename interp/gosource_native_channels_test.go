@@ -151,7 +151,8 @@ func TestGoSourceNativeChannelsThreeModes(t *testing.T) {
 }
 func TestGoSourceNativeChannelsRejectedReferencesAndMixed(t *testing.T) {
 	for name, test := range map[string]struct{ body, want string }{
-		"mixed":           {`func main(){a:=dep.Buffer();a<-7;b:=make(chan []int,1);b<-[]int{8};select{case <-a:case <-b:};fmt.Println("UNREACHABLE")}`, "mixed native/interpreted channel select"},
+		"mixed_receive":   {`func main(){a:=dep.Buffer();a<-7;b:=make(chan []int,1);b<-[]int{8};select{case <-a:case <-b:};fmt.Println("UNREACHABLE")}`, "mixed native/interpreted channel select"},
+		"mixed_send":      {`func main(){a:=dep.Buffer();b:=make(chan []int,1);select{case a<-7:case b<-[]int{8}:default:};fmt.Println("UNREACHABLE")}`, "mixed native/interpreted channel select"},
 		"retained_method": {`type Item struct{N int};func(i Item)String()string{return "item"};func main(){c:=dep.Anys();c<-Item{1};fmt.Println("UNREACHABLE")}`, "cannot retain original callback identity"},
 		"reference":       {`func main(){c:=dep.Bytes();c<-[]byte{1};fmt.Println("UNREACHABLE")}`, "cannot retain interpreter-owned reference values"},
 	} {
