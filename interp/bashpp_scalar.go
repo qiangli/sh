@@ -1149,6 +1149,9 @@ type bashPPComparableValue struct {
 }
 
 func (r *Runner) bashPPCompareExpr(left syntax.BashPPExpr, op token.Token, right syntax.BashPPExpr) (bool, error) {
+	if equal, handled, err := r.goSourceInterfaceScalarComparison(left, op, right); handled {
+		return equal, err
+	}
 	if r.bashPPGoSource && (r.bashPPNativeExpr(left) || r.bashPPNativeExpr(right)) {
 		return r.bashPPNativeCompare(left, op, right)
 	}
