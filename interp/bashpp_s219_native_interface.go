@@ -65,6 +65,20 @@ func (r *Runner) goSourceNativeImplements(cell *bashPPCell, dynamic syntax.BashP
 		return true, err
 	}
 	value.Interface = ""
+	session, key, cached, err := r.goSourceNativeAdmission(value, iface)
+	if err != nil {
+		return true, err
+	}
+	if cached {
+		return true, nil
+	}
+	// Only a successful semantic admission is reusable. Errors (including
+	// unresolved registry entries) remain live diagnostics on every attempt.
+	defer func() {
+		if claimed && err == nil && session != nil {
+			session.rememberNativeAdmission(key)
+		}
+	}()
 	// A diagnostic spells the dynamic type as the interpreter knows it, or
 	// as the dependency reports the handle when the cell was inferred.
 	spelled := bashPPStripLocalPackage(value.Type)
@@ -104,11 +118,11 @@ func (r *Runner) goSourceNativeMethodSetMismatch(value bashPPBridgeValue, spelle
 		if goSourceUnexportedName(name) {
 			return fmt.Errorf("BASHPP-EINTERFACE-MISSING: %s does not implement interface (missing method %s)", spelled, name)
 		}
-		member, err := r.bashPPNativeAccess(r.ectx, "member", value, name)
-		if err != nil || member.Kind != "handle" || !(member.Function || strings.HasPrefix(member.Type, "func(")) {
+		member, err := r.bashPPNativeAccess(r.ectx, "method-type", value, name)
+		if err != nil || member.Kind != "string" || !strings.HasPrefix(member.Text, "func(") {
 			return fmt.Errorf("BASHPP-EINTERFACE-MISSING: %s does not implement interface (missing method %s)", spelled, name)
 		}
-		if !r.goSourceNativeSignatureMatches(member.Type, method) {
+		if !r.goSourceNativeSignatureMatches(member.Text, method) {
 			return fmt.Errorf("BASHPP-EINTERFACE-SIGNATURE: %s method %s has wrong signature", spelled, name)
 		}
 	}

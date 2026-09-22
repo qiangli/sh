@@ -502,6 +502,7 @@ func bashPPBridgeScalarValue(v bashPPBridgeValue) (any, *bashPPCollectionMeta, e
 func (s *bashPPNativeSession) bashPPAuthenticateCallbackValue(v *bashPPBridgeValue) {
 	if v.Kind == "handle" || v.Kind == "callback" || v.Origin != 0 {
 		v.Session = s.id
+		s.rememberNativeHandleType(*v)
 	}
 	for i := range v.CallArgs {
 		s.bashPPAuthenticateCallbackValue(&v.CallArgs[i])

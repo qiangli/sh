@@ -42,21 +42,22 @@ type bashPPBridgeValue struct {
 
 	// Callable is derived by the interpreter from authenticated native type or
 	// import metadata; the dependency worker cannot set callback policy itself.
-	Callable   string                       `json:"-"`
-	NativeType string                       `json:"native_type,omitempty"`
-	Callbacks  bool                         `json:"callbacks,omitempty"`
-	Function   bool                         `json:"function,omitempty"`
-	Origin     uint64                       `json:"origin,omitempty"`
-	Interface  string                       `json:"interface,omitempty"`
-	Session    string                       `json:"session,omitempty"`
-	Kind       string                       `json:"kind"`
-	Type       string                       `json:"type,omitempty"`
-	Text       string                       `json:"text,omitempty"`
-	Bytes      []byte                       `json:"bytes,omitempty"`
-	Handle     uint64                       `json:"handle,omitempty"`
-	Elements   []bashPPBridgeValue          `json:"elements,omitempty"`
-	Fields     map[string]bashPPBridgeValue `json:"fields,omitempty"`
-	Entries    []bashPPBridgeEntry          `json:"entries,omitempty"`
+	Callable     string                       `json:"-"`
+	NativeType   string                       `json:"native_type,omitempty"`
+	NativeTypeID uint64                       `json:"native_type_id,omitempty"`
+	Callbacks    bool                         `json:"callbacks,omitempty"`
+	Function     bool                         `json:"function,omitempty"`
+	Origin       uint64                       `json:"origin,omitempty"`
+	Interface    string                       `json:"interface,omitempty"`
+	Session      string                       `json:"session,omitempty"`
+	Kind         string                       `json:"kind"`
+	Type         string                       `json:"type,omitempty"`
+	Text         string                       `json:"text,omitempty"`
+	Bytes        []byte                       `json:"bytes,omitempty"`
+	Handle       uint64                       `json:"handle,omitempty"`
+	Elements     []bashPPBridgeValue          `json:"elements,omitempty"`
+	Fields       map[string]bashPPBridgeValue `json:"fields,omitempty"`
+	Entries      []bashPPBridgeEntry          `json:"entries,omitempty"`
 }
 type bashPPBridgeEntry struct {
 	Key   bashPPBridgeValue `json:"key"`
@@ -109,11 +110,14 @@ type bashPPBridgeResponse struct {
 	Error    string              `json:"error,omitempty"`
 }
 type bashPPNativeSession struct {
-	functions       map[uint64]*bashPPFunc
-	functionNext    uint64
-	callbackGate    chan struct{}
-	activeCallbacks chan bashPPBridgeResponse
-	callbackOwner   *Runner
+	// Type facts are authenticated on this connection; no native values are cached.
+	handleTypes         map[uint64]uint64
+	interfaceAdmissions map[goSourceNativeAdmissionKey]bool
+	functions           map[uint64]*bashPPFunc
+	functionNext        uint64
+	callbackGate        chan struct{}
+	activeCallbacks     chan bashPPBridgeResponse
+	callbackOwner       *Runner
 	// retained records that this session was handed an original callback it
 	// keeps past the handing-over call. Every later request then parks as a
 	// callback server; see requestCallbackCapable.
@@ -547,6 +551,7 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 			for i := range reply.Values {
 				if reply.Values[i].Kind == "handle" {
 					reply.Values[i].Session = s.id
+					s.rememberNativeHandleType(reply.Values[i])
 					if reply.Values[i].Origin != 0 && reply.Values[i].Function {
 						reply.Values[i].Callbacks = true
 					}
