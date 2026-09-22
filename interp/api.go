@@ -3462,6 +3462,13 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 			r.bashPPGoSource = savedGoSource
 			r.bashPPConvertHashQY = savedConvertHashQY
 		}()
+		if r.bashPPConvertHashQY {
+			for _, source := range node.Sources {
+				if source.PackagePath != "" {
+					return fmt.Errorf("gosource: unscoped conversion policy for linked packages is unsupported")
+				}
+			}
+		}
 		savedAgentic := r.bashPPAgentic
 		r.bashPPAgentic = false
 		defer func() { r.bashPPAgentic = savedAgentic }()

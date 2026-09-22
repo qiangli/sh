@@ -3,8 +3,12 @@
 package interp
 
 import (
+	"context"
 	"go/constant"
 	"math"
+	"mvdan.cc/sh/v3/expand"
+	"mvdan.cc/sh/v3/syntax"
+	"strings"
 	"testing"
 )
 
@@ -48,11 +52,27 @@ func TestS243ConversionPolicyFlagAuthentication(t *testing.T) {
 		{"-gcflags=-d=converthash=xx", false},
 		{"-gcflags=-d=converthash=qy -gcflags=-d=converthash=xx", false},
 		{"-gcflags=-d=converthash=xx -gcflags=-d=converthash=qy", true},
-		{"-gcflags=-d=converthash=qy -gcflags=example.com/unrelated=-d=converthash=xx", true},
+		{"-gcflags=-d=converthash=qy -gcflags=example.com/unrelated=-d=converthash=xx", false},
 		{"'-gcflags=-d=converthash=qy", false},
+		{"-gcflags=-d=converthash=qy -gcflags=all=-d=converthash=xx", false},
+		{"-gcflags=all=-d=converthash=qy -gcflags=-d=converthash=xx", false},
 	} {
 		if got := bashPPGoFlagsConvertHashQY(test.flags); got != test.want {
 			t.Errorf("%q: got %v, want %v", test.flags, got, test.want)
 		}
+	}
+}
+
+func TestS243ConversionPolicyRejectsLinkedPackageScope(t *testing.T) {
+	r, err := New(Lang(syntax.LangBashPP), Env(expand.ListEnviron("GOFLAGS=-gcflags=-d=converthash=qy")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = r.Run(context.Background(), &syntax.File{GoSource: true, Sources: []syntax.SourceFile{{PackagePath: "example.com/dep"}}})
+	if err == nil || !strings.Contains(err.Error(), "unscoped conversion policy for linked packages") {
+		t.Fatalf("got %v", err)
+	}
+	if r.bashPPConvertHashQY {
+		t.Fatal("policy leaked after rejected file")
 	}
 }

@@ -1836,9 +1836,13 @@ func bashPPGoFlagsConvertHashQY(flags string) bool {
 	for _, field := range fields {
 		if strings.HasPrefix(field, "-gcflags=") {
 			value := strings.TrimPrefix(field, "-gcflags=")
-			if value == "" || strings.HasPrefix(value, "-") {
-				selected = value
+			if value != "" && !strings.HasPrefix(value, "-") {
+				// Package-scoped lists require package matching, including
+				// possibly overriding an earlier unscoped value. They are
+				// outside this limited carrier; never retain a stale policy.
+				return false
 			}
+			selected = value
 		}
 	}
 	return selected == "-d=converthash=qy"
