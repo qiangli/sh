@@ -14,7 +14,6 @@ import (
  "reflect"
  "strconv"
  "sync"
-	"sync/atomic"
  "time"
  bppTextTemplate "text/template"
  bppTemplateParse "text/template/parse"
@@ -88,9 +87,9 @@ func livePointers()([]uint64,[]reflect.Value){originalPointers.Lock();defer orig
 // writablePointee is the set of pointee shapes the interpreter rebuilds at the
 // pointer's declared type. A shape outside it is never written back silently.
 func writablePointee(kind string)bool{switch kind{case "string","bool","int","uint","float","complex","nil","handle","struct","slice","array","map":return true};return false}
-var handles = struct { sync.Mutex; next uint64; values map[uint64]reflect.Value; stop chan struct{} }{values: map[uint64]reflect.Value{},stop:make(chan struct{})}
-var reflectedMethodInvocation = struct{ sync.Mutex; origin atomic.Uint64 }{}
-func callbackReceiver(v reflect.Value)value{recv:=structural(v);if origin:=reflectedMethodInvocation.origin.Load();origin!=0{recv.Origin=origin};return recv}
+type reflectedMethodContext struct { origin uint64; receiver reflect.Value; selector string }
+var handles = struct { sync.Mutex; next uint64; values map[uint64]reflect.Value; reflected map[uint64]reflectedMethodContext; stop chan struct{} }{values: map[uint64]reflect.Value{},reflected:map[uint64]reflectedMethodContext{},stop:make(chan struct{})}
+func callbackReceiver(v reflect.Value)value{return structural(v)}
 func typeID(t reflect.Type) string { if t.Name()!="" && t.PkgPath()!="" {return t.PkgPath()+"."+t.Name()}; return t.String() }
 // seenTypes registers every type this helper has handed the interpreter, by
 // the identity it was handed under. A value the interpreter sends back names
@@ -101,6 +100,8 @@ var seenTypes sync.Map
 func registerType(t reflect.Type) { if t!=nil { seenTypes.LoadOrStore(typeID(t),t) } }
 func nativeTypeID(t reflect.Type) string {if t.Kind()==reflect.Pointer{return "*"+nativeTypeID(t.Elem())};if t.Name()!=""&&t.PkgPath()!=""{return t.PkgPath()+"."+t.Name()};return t.String()}
 func encodeHandle(v reflect.Value,result value)value {handles.Lock();handles.next++;id:=handles.next;copy:=reflect.New(v.Type()).Elem();copy.Set(v);handles.values[id]=copy;handles.Unlock();result.Kind="handle";result.Handle=id;return result}
+func reflectedContext(id uint64)(reflectedMethodContext,bool){handles.Lock();defer handles.Unlock();ctx,ok:=handles.reflected[id];return ctx,ok}
+func setReflectedContext(id uint64,ctx reflectedMethodContext){handles.Lock();handles.reflected[id]=ctx;handles.Unlock()}
 func encode(v reflect.Value) value {
  if !v.IsValid() { return value{Kind:"nil"} }
  static:="";if v.Kind()==reflect.Interface {registerType(v.Type());static=typeID(v.Type());if v.IsNil(){return value{Kind:"nil",Type:static,Interface:static}};v=v.Elem()}
@@ -434,10 +435,14 @@ func dispatch(q request)(reply response){
   defer func(){for _,buffer:=range q.SliceBuffers {v:=args[buffer.Index];reply.SliceUpdates=append(reply.SliceUpdates,sliceBuffer{Index:buffer.Index,Length:v.Len(),Value:structural(v.Slice(0,v.Cap()))})};origins,ptrs:=livePointers();for i,origin:=range origins{elem:=structural(ptrs[i].Elem());if !writablePointee(elem.Kind){continue};snapshot:=pointerSnapshot(elem);originalPointers.Lock();changed:=snapshot!=originalPointers.sent[origin];if changed{originalPointers.sent[origin]=snapshot};originalPointers.Unlock();if !changed{continue};reply.PtrUpdates=append(reply.PtrUpdates,value{Kind:"pointer",Type:ptrs[i].Type().String(),Origin:origin,Session:bridgeAuth[:16],Elements:[]value{elem}})}}()
  if handled,err:=sourceLog(q,args);handled{reply.Error=err;return}
  var returned []reflect.Value
-	if q.Receiver!=nil&&q.Receiver.Origin!=0&&fn.Kind()==reflect.Func {reflectedMethodInvocation.Lock();reflectedMethodInvocation.origin.Store(q.Receiver.Origin);defer func(){reflectedMethodInvocation.origin.Store(0);reflectedMethodInvocation.Unlock()}()}
+ if q.Receiver!=nil&&q.Selector=="" {if ctx,ok:=reflectedContext(q.Receiver.Handle);ok&&ctx.selector!="" {recv:=structural(ctx.receiver);recv.Origin=ctx.origin;recv.CallArgs=make([]value,len(args));for i,arg:=range args{recv.CallArgs[i]=encode(arg)};out,err:=callback(ctx.selector,recv);if err!=nil{reply.Error=err.Error();return};if len(out)!=signature.NumOut(){reply.Error="original reflected method returned wrong result count";return};for i,item:=range out{v,err:=decode(item,signature.Out(i));if err!=nil{reply.Error=err.Error();return};returned=append(returned,v)};for _,v:=range returned{reply.Values=append(reply.Values,encode(v))};return}}
  if q.Spread {if !signature.IsVariadic()||len(args)!=n{reply.Error="invalid spread call";return};returned=fn.CallSlice(args)}else{returned=fn.Call(args)}
-	origin:=uint64(0);if q.Receiver!=nil{origin=q.Receiver.Origin}else if len(q.Args)==1&&len(returned)>0&&returned[0].Type()==reflect.TypeFor[reflect.Value](){origin=q.Args[0].Origin}
-	for _,v:=range returned{encoded:=encode(v);if encoded.Kind=="handle"&&origin!=0{encoded.Origin=origin};reply.Values=append(reply.Values,encoded)};return
+ for _,v:=range returned{encoded:=encode(v);if encoded.Kind=="handle" {
+   var ctx reflectedMethodContext;valid:=false
+   if q.Receiver==nil&&len(q.Args)==1&&q.Args[0].Origin!=0&&v.Type()==reflect.TypeFor[reflect.Value](){snapshot:=reflect.New(args[0].Type()).Elem();snapshot.Set(args[0]);ctx=reflectedMethodContext{receiver:snapshot};if args[0].Kind()==reflect.Pointer{ctx.origin=q.Args[0].Origin};valid=true
+   }else if q.Receiver!=nil {if parent,ok:=reflectedContext(q.Receiver.Handle);ok {switch q.Selector {case "MethodByName":if len(args)==1&&args[0].Kind()==reflect.String{typ:=parent.receiver.Type();if typ.Kind()==reflect.Pointer{typ=typ.Elem()};parent.selector=typ.Name()+"."+args[0].String();ctx,valid=parent,true};case "Method":if len(args)==1 {i:=int(args[0].Int());typ:=parent.receiver.Type();if i>=0&&i<typ.NumMethod(){name:=typ.Method(i).Name;if typ.Kind()==reflect.Pointer{typ=typ.Elem()};parent.selector=typ.Name()+"."+name;ctx,valid=parent,true}};case "Interface":if parent.selector!=""{ctx,valid=parent,true}}}}
+   if valid{if q.Receiver!=nil{encoded.Origin=q.Receiver.Origin}else{encoded.Origin=q.Args[0].Origin};setReflectedContext(encoded.Handle,ctx)}
+  };reply.Values=append(reply.Values,encoded)};return
 }
 func main(){
  conn,err:=net.Dial("tcp",bridgeAddress);if err!=nil{panic(err)};defer conn.Close()

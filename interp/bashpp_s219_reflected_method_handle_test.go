@@ -30,6 +30,24 @@ func main() {
 		qt.Assert(t, qt.Equals(stderr, "7\n"))
 	})
 
+	t.Run("value receiver snapshots at extraction", func(t *testing.T) {
+		src := `package main
+import "reflect"
+type M int
+var called int
+func (m M) M() { called += int(m) }
+func main() {
+	local := M(7)
+	f := reflect.ValueOf(local).MethodByName("M").Interface().(func())
+	local = 9
+	f()
+	println(local, called)
+}`
+		_, stderr, err := runGoSource(t, "s219-reflected-value-snapshot", src)
+		qt.Assert(t, qt.IsNil(err), qt.Commentf("stderr=%q", stderr))
+		qt.Assert(t, qt.Equals(stderr, "9 7\n"))
+	})
+
 	t.Run("pointer receiver identity", func(t *testing.T) {
 		src := `package main
 import "reflect"
@@ -43,6 +61,26 @@ func main() {
 		_, stderr, err := runGoSource(t, "s219-reflected-pointer", src)
 		qt.Assert(t, qt.IsNil(err), qt.Commentf("stderr=%q", stderr))
 		qt.Assert(t, qt.Equals(stderr, "5\n"))
+	})
+
+	t.Run("nested handles retain distinct receivers", func(t *testing.T) {
+		src := `package main
+import "reflect"
+type M int
+var inner func()
+var trace int
+func (m M) M() { trace = trace*10 + int(m); if m == 7 { inner() } }
+func main() {
+	outerLocal := M(7)
+	innerLocal := M(3)
+	outer := reflect.ValueOf(outerLocal).Method(0).Interface().(func())
+	inner = reflect.ValueOf(innerLocal).MethodByName("M").Interface().(func())
+	outer()
+	println(trace)
+}`
+		_, stderr, err := runGoSource(t, "s219-reflected-nested", src)
+		qt.Assert(t, qt.IsNil(err), qt.Commentf("stderr=%q", stderr))
+		qt.Assert(t, qt.Equals(stderr, "73\n"))
 	})
 
 	t.Run("retained dependency refused", func(t *testing.T) {
