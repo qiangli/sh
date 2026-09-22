@@ -3893,8 +3893,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			return r.readLineFrom(readCtx, input, raw, delimByte)
 		}
 		isReadTimeout := func(err error) bool {
-			return timeout > 0 && (errors.Is(readCtx.Err(), context.DeadlineExceeded) ||
-				errors.Is(err, os.ErrDeadlineExceeded))
+			return readErrorIsTimeout(readCtx, err, timeout)
 		}
 		var line []byte
 		var err error
