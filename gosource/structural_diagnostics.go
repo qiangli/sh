@@ -2,9 +2,84 @@ package gosource
 
 import (
 	"fmt"
+	"go/token"
+	"go/types"
+	"strings"
 
 	gcsyntax "mvdan.cc/sh/v3/gosource/internal/gcsyntax"
 )
+
+// dropRecoveredCallUnused removes an unused diagnostic only when the exact
+// declaration object is referenced by a non-call go/defer operand retained by
+// gc's tree. go/parser discards that operand, so go/types cannot record the
+// use. Independent declarations with the same spelling remain errors.
+func dropRecoveredCallUnused(out ErrorList, fset *token.FileSet, info *types.Info, files []*gcsyntax.File) ErrorList {
+	used := map[types.Object]bool{}
+	position := func(pos gcsyntax.Pos) token.Pos {
+		var found token.Pos
+		fset.Iterate(func(file *token.File) bool {
+			if file.Name() != pos.FileBase().Filename() || int(pos.Line()) > file.LineCount() {
+				return true
+			}
+			found = file.LineStart(int(pos.Line())) + token.Pos(pos.Col()-1)
+			return false
+		})
+		return found
+	}
+	lookup := func(name string, pos token.Pos) types.Object {
+		var innermost *types.Scope
+		for _, scope := range info.Scopes {
+			if scope.Contains(pos) && (innermost == nil || scope.Pos() >= innermost.Pos()) {
+				innermost = scope
+			}
+		}
+		if innermost == nil {
+			return nil
+		}
+		_, obj := innermost.LookupParent(name, pos)
+		return obj
+	}
+	for _, file := range files {
+		gcsyntax.Inspect(file, func(node gcsyntax.Node) bool {
+			stmt, ok := node.(*gcsyntax.CallStmt)
+			if !ok || stmt == nil || stmt.Call == nil {
+				return true
+			}
+			if _, ok := stmt.Call.(*gcsyntax.CallExpr); ok {
+				return false
+			}
+			gcsyntax.Inspect(stmt.Call, func(node gcsyntax.Node) bool {
+				if name, ok := node.(*gcsyntax.Name); ok && name != nil {
+					if obj := lookup(name.Value, position(name.Pos())); obj != nil {
+						used[obj] = true
+					}
+				}
+				return true
+			})
+			return false
+		})
+	}
+	byPos := map[token.Pos]types.Object{}
+	for id, obj := range info.Defs {
+		if obj != nil {
+			byPos[id.Pos()] = obj
+		}
+	}
+	for _, obj := range info.Implicits {
+		if obj != nil {
+			byPos[obj.Pos()] = obj
+		}
+	}
+	kept := out[:0]
+	for _, diagnostic := range out {
+		e, ok := diagnostic.(types.Error)
+		if ok && (strings.Contains(e.Msg, "declared and not used") || strings.Contains(e.Msg, "imported and not used")) && used[byPos[e.Pos]] {
+			continue
+		}
+		kept = append(kept, diagnostic)
+	}
+	return kept
+}
 
 // structuralCheckerDiagnostics recovers checker diagnostics which go/types
 // cannot produce from go/parser's recovered tree. The gc parser retains the
