@@ -1096,17 +1096,36 @@ func (r *Runner) bashPPGo(ctx context.Context, g *syntax.BashPPGo) {
 	// Resolve the function value first; then evaluate its arguments exactly
 	// once in the launching goroutine, before any task is registered.
 	call := g.Call
-	shared, pin := r.bashPPGoSourceTaskCapture(call)
-	if r.exit.code != 0 {
-		return
-	}
+	var shared map[*bashPPCell]bool
+	var pin *bashPPGoSourcePin
 	var prepared *goSourceTaskArguments
-	if r.bashPPGoSource {
-		prepared, shared = r.goSourcePrepareTaskArguments(call, pin)
-		if prepared == nil || r.exit.code != 0 {
+	// A callee with no original body — a builtin, a dependency operation, a
+	// native function value — has nothing for the lexical capture analysis to
+	// walk; its operands are fixed here and the call runs in the task. See
+	// gosource_task_native.go.
+	launch, handled := r.goSourcePrepareNativeLaunch(ctx, call)
+	if handled {
+		if launch == nil || r.exit.code != 0 {
 			return
 		}
-		pin = prepared.pin
+		shared = launch.shared
+		if launch.original != nil {
+			prepared = launch.original
+			pin = prepared.pin
+			launch = nil
+		}
+	} else {
+		shared, pin = r.bashPPGoSourceTaskCapture(call)
+		if r.exit.code != 0 {
+			return
+		}
+		if r.bashPPGoSource {
+			prepared, shared = r.goSourcePrepareTaskArguments(call, pin)
+			if prepared == nil || r.exit.code != 0 {
+				return
+			}
+			pin = prepared.pin
+		}
 	}
 	c := r.bashPPConcurrency(ctx)
 	state, ok := c.add()
@@ -1165,9 +1184,12 @@ func (r *Runner) bashPPGo(ctx context.Context, g *syntax.BashPPGo) {
 			// the launched task's cancellation lifetime with its statements.
 			child.fillExpandConfig(c.ctx)
 		}
-		if prepared != nil {
+		switch {
+		case launch != nil:
+			launch.run(c.ctx, child)
+		case prepared != nil:
 			child.goSourceInvokeTaskArguments(c.ctx, call, prepared)
-		} else {
+		default:
 			child.bashPPCall(c.ctx, call)
 		}
 		code := child.exit.code

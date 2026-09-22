@@ -14,22 +14,33 @@ import (
 // the operand's variable; the close (and any nil/closed panic) happens only
 // while unwinding the original interpreted function's defer stack.
 func (r *Runner) goSourceCaptureDeferredClose(call *syntax.BashPPCall) (func(), bool) {
-	if !r.bashPPGoSource || call == nil || call.FuncLit != nil || call.CalleeExpr != nil || len(call.Fun) != 1 || call.Fun[0].Value != "close" {
-		return nil, false
-	}
-	if r.bashPPFuncs["close"] != nil || (r.bashPPScope != nil && r.bashPPScope.lookup("close") != nil) {
-		return nil, false
-	}
-	if len(call.Args) != 1 || len(call.ArgExprs) != 1 || call.ArgExprs[0] == nil {
-		r.errf("gosource: deferred close requires one positioned channel operand\n")
-		r.exit = exitStatus{code: 2}
-		return nil, true
-	}
-	channel, ok := r.goSourceChannelOperand(call.ArgExprs[0], nil, "close")
-	if !ok {
-		return nil, true
+	channel, ok, handled := r.goSourceCloseBuiltinOperand(call, "deferred")
+	if !handled || !ok {
+		return nil, handled
 	}
 	return func() { r.goSourceCloseChannelValue(channel) }, true
+}
+
+// goSourceCloseBuiltinOperand is the operand rule `defer close(ch)` and
+// `go close(ch)` share: the predeclared close is resolved and its channel
+// operand evaluated where the statement runs, once. It reports whether the
+// call is the predeclared close at all — a declared or bound `close` is not —
+// and, when it is, whether the operand was fixed or has been diagnosed. what
+// names the statement in the diagnostic.
+func (r *Runner) goSourceCloseBuiltinOperand(call *syntax.BashPPCall, what string) (channel *bashPPChannel, ok, handled bool) {
+	if !r.bashPPGoSource || call == nil || call.FuncLit != nil || call.CalleeExpr != nil || len(call.Fun) != 1 || call.Fun[0].Value != "close" {
+		return nil, false, false
+	}
+	if r.bashPPFuncs["close"] != nil || (r.bashPPScope != nil && r.bashPPScope.lookup("close") != nil) {
+		return nil, false, false
+	}
+	if len(call.Args) != 1 || len(call.ArgExprs) != 1 || call.ArgExprs[0] == nil {
+		r.errf("gosource: %s close requires one positioned channel operand\n", what)
+		r.exit = exitStatus{code: 2}
+		return nil, false, true
+	}
+	channel, ok = r.goSourceChannelOperand(call.ArgExprs[0], nil, "close")
+	return channel, ok, true
 }
 
 // goSourceCaptureDeferredValueBuiltin fixes the same defer-time evaluation

@@ -162,30 +162,9 @@ func (r *Runner) bashPPPredeclared(name string, c *syntax.BashPPCall, args []str
 			return nil, false
 		}
 		r.bashPPPanicTrace(c)
-		var value any = args[0]
-		if r.bashPPGoSource && len(c.ArgExprs) == 1 {
-			if cell, err := r.bashPPStructuredArgCell(c.Args[0], c.ArgExprs[0]); err == nil && cell != nil {
-				if cell.interfaceValue != nil {
-					value = cell.interfaceValue
-				} else if boxed := r.goSourcePanicStructuredValue(cell); boxed != nil {
-					value = boxed
-				}
-			} else if boxed, text, ok := r.goSourcePanicNativeValue(c.ArgExprs[0]); ok {
-				if boxed == nil {
-					return nil, false
-				}
-				r.bashPPRaiseValue(text, boxed)
-				return nil, false
-			}
-			if scalar, err := r.bashPPEvalScalarExpr(c.ArgExprs[0]); err == nil {
-				if _, alreadyInterface := value.(*bashPPInterfaceValue); !alreadyInterface {
-					value = r.bashPPPanicScalarValue(scalar)
-				}
-			}
-		}
-		text := args[0]
-		if r.bashPPGoSource {
-			value, text = r.bashPPPanicArgument(c, value, text)
+		value, text, ok := r.bashPPPanicOperand(c, args[0])
+		if !ok {
+			return nil, false
 		}
 		r.bashPPRaiseValue(text, value)
 		return nil, false
@@ -229,6 +208,42 @@ func (r *Runner) bashPPPredeclared(name string, c *syntax.BashPPCall, args []str
 		return []string{text}, true
 	}
 	return nil, false
+}
+
+// bashPPPanicOperand evaluates the value `panic(v)` receives and the text its
+// report prints, from the call's positioned operand where there is one. It
+// reports false when the evaluation itself stopped the statement — an
+// interrupted or refused dependency operand — and there is nothing to raise.
+//
+// The direct call raises what this conversion returns at once. A launched
+// panic supplies a retained operand binding, so inspecting its type here never
+// re-evaluates user code (see gosource_task_native.go).
+func (r *Runner) bashPPPanicOperand(c *syntax.BashPPCall, arg string) (value any, text string, ok bool) {
+	value = arg
+	if r.bashPPGoSource && len(c.ArgExprs) == 1 {
+		if cell, err := r.bashPPStructuredArgCell(c.Args[0], c.ArgExprs[0]); err == nil && cell != nil {
+			if cell.interfaceValue != nil {
+				value = cell.interfaceValue
+			} else if boxed := r.goSourcePanicStructuredValue(cell); boxed != nil {
+				value = boxed
+			}
+		} else if boxed, text, ok := r.goSourcePanicNativeValue(c.ArgExprs[0]); ok {
+			if boxed == nil {
+				return nil, "", false
+			}
+			return boxed, text, true
+		}
+		if scalar, err := r.bashPPEvalScalarExpr(c.ArgExprs[0]); err == nil {
+			if _, alreadyInterface := value.(*bashPPInterfaceValue); !alreadyInterface {
+				value = r.bashPPPanicScalarValue(scalar)
+			}
+		}
+	}
+	text = arg
+	if r.bashPPGoSource {
+		value, text = r.bashPPPanicArgument(c, value, text)
+	}
+	return value, text, true
 }
 
 // bashPPRaise starts a panic with value, abandoning the current statement.
