@@ -72,6 +72,57 @@ func main() { c := make(chan int, 1); c <- 9; println(<-makers[0](c)) }
 	}
 }
 
+// TestS219ChannelRange guards the call boundary used by the Go corpus channel
+// tests. A channel-producing call is evaluated once, and range binds each
+// received element rather than a synthetic collection index.
+func TestS219ChannelRange(t *testing.T) {
+	for _, tc := range []struct {
+		name, source, want string
+	}{
+		{
+			name: "call_once_received_values",
+			source: `package main
+var calls int
+func seq(lo, hi int) chan int { calls++; c := make(chan int, hi-lo+1); for i := lo; i <= hi; i++ { c <- i }; close(c); return c }
+func main() { s := ""; for v := range seq('a', 'c') { s += string(v) }; println(s, calls) }
+`,
+			want: "abc 1\n",
+		},
+		{
+			name: "interpreted_element_channel",
+			source: `package main
+type item struct { n int }
+func seq() chan item { c := make(chan item, 2); c <- item{7}; c <- item{9}; close(c); return c }
+func main() { total := 0; for v := range seq() { total += v.n }; println(total) }
+`,
+			want: "16\n",
+		},
+		{
+			name: "closed_channel_zero_and_range_control",
+			source: `package main
+func closed() chan uint { c := make(chan uint); close(c); return c }
+func main() { n := 0; for range closed() { n++ }; c := closed(); v, ok := <-c; println(n, v, ok) }
+`,
+			want: "0 0 false\n",
+		},
+		{
+			name: "typed_second_send_parameter",
+			source: `package main
+func send(a, b chan uint) { a <- 1; if b != nil { b <- 2 } }
+func main() { a := make(chan uint, 1); b := make(chan uint, 1); send(a, b); println(<-a, <-b) }
+`,
+			want: "1 2\n",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stdout, got, err := bashPPRunGoSource(t, t.TempDir(), "outside-corpus.go", tc.source)
+			if err != nil || stdout != "" || got != tc.want {
+				t.Fatalf("run=%v stdout=%q stderr=%q; want stderr=%q", err, stdout, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestS219ChannelDirectionGuards(t *testing.T) {
 	for _, tc := range []struct {
 		name, source string
