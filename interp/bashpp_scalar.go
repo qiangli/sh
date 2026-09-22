@@ -692,6 +692,9 @@ func bashPPScalarFloat64(value bashPPScalar) (float64, bool) {
 		return 0, false
 	}
 	n, _ := constant.Float64Val(value.value)
+	if n == 0 && value.negativeZero {
+		n = math.Copysign(0, -1)
+	}
 	return n, true
 }
 
@@ -727,6 +730,11 @@ func (r *Runner) bashPPRuntimeFloatSpecial(op token.Token, left, right bashPPSca
 		result = float64(float32(result))
 	}
 	if !math.IsInf(result, 0) && !math.IsNaN(result) {
+		if left.hasNonFinite || right.hasNonFinite || left.negativeZero || right.negativeZero {
+			// IEEE inputs can produce a finite result, notably -1 / +Inf.
+			// Their dummy constant carriers must never reach constant folding.
+			return bashPPScalar{value: constant.MakeFloat64(result), typ: typ, runtime: true, negativeZero: result == 0 && math.Signbit(result)}, true
+		}
 		return bashPPScalar{}, false
 	}
 	return bashPPScalar{value: constant.MakeFloat64(0), typ: typ, runtime: true, nonFinite: result, hasNonFinite: true}, true

@@ -1510,7 +1510,7 @@ func (r *Runner) bashPPTypedCallArgs(call *syntax.BashPPCall, fn *bashPPFunc) (r
 			return nil, false, err
 		}
 		text := bashPPScalarStorageString(value)
-		cell := &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: text}, scalarKind: value.value.Kind(), nonFinite: value.nonFinite, hasNonFinite: value.hasNonFinite}
+		cell := &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: text}, scalarKind: value.value.Kind(), negativeZero: value.negativeZero, nonFinite: value.nonFinite, hasNonFinite: value.hasNonFinite}
 		if value.typ != "" {
 			cell.declType, cell.typeName = bashPPScalarNamedType(value.typ)
 		}
@@ -2848,7 +2848,7 @@ func (r *Runner) bashPPReturnScalarExpr(expr syntax.BashPPExpr) {
 		return
 	}
 	text := bashPPScalarStorageString(value)
-	cell := &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: text}, scalarKind: value.value.Kind(), nonFinite: value.nonFinite, hasNonFinite: value.hasNonFinite}
+	cell := &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: text}, scalarKind: value.value.Kind(), negativeZero: value.negativeZero, nonFinite: value.nonFinite, hasNonFinite: value.hasNonFinite}
 	if value.typ != "" {
 		cell.declType, cell.typeName = bashPPScalarNamedType(value.typ)
 	}

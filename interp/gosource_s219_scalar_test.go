@@ -318,3 +318,52 @@ func TestS219ConstantFloat32OverflowRejected(t *testing.T) {
 		})
 	}
 }
+
+// TestS219SignedZeroRegression is an outside-corpus reduction of
+// fixedbugs/issue27718.go. Signed zero and non-finite provenance must survive
+// both parameter and result cells; each argument producer is evaluated once.
+// The integer zero-divisor negative keeps that runtime-float exception narrow.
+func TestS219SignedZeroRegression(t *testing.T) {
+	typedSendThreeModes(t, `package main
+
+import "math"
+
+var calls int
+
+func source64(x float64) float64 { calls++; return x }
+func source32(x float32) float32 { calls++; return x }
+
+func add64(x float64) float64 { return x + 0 }
+func sub64(x float64) float64 { return x - 0 }
+func neg64(x float64) float64 { return -x }
+func add32(x float32) float32 { return x + 0 }
+func sub32(x float32) float32 { return x - 0 }
+func neg32(x float32) float32 { return -x }
+
+func rejectIntegerDivideByZero() {
+	defer func() { println(recover() != nil) }()
+	var zero int
+	_ = 1 / zero
+	println(false)
+}
+
+func main() {
+	zero := float64(0)
+	inf := 1.0 / zero
+	negZero64 := -1 / inf
+	negZero32 := float32(negZero64)
+	println(
+		1/add64(negZero64) == inf,
+		math.IsInf(1/sub64(negZero64), -1),
+		1/neg64(negZero64) == inf,
+	)
+	println(
+		math.IsInf(float64(1/add32(negZero32)), 1),
+		math.IsInf(float64(1/sub32(negZero32)), -1),
+		math.IsInf(float64(1/neg32(negZero32)), 1),
+	)
+	println(source64(1), source32(2), calls)
+	rejectIntegerDivideByZero()
+}
+`)
+}
