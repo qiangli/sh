@@ -138,6 +138,9 @@ func (r *Runner) bashPPEvalScalarExpr(expr syntax.BashPPExpr) (result bashPPScal
 			}
 			return r.bashPPScalarFromCell(cell), nil
 		}
+		if cell, ok := r.goSourceStaticArrayLength(name, x); ok {
+			return r.bashPPScalarFromCell(cell), nil
+		}
 		args := make([]bashPPBuiltinArg, len(x.Args))
 		for i := range x.Args {
 			var err error
