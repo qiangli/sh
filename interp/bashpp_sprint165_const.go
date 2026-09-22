@@ -114,6 +114,12 @@ func (r *Runner) goSourceStaticExprType(expr syntax.BashPPExpr) (syntax.BashPPTy
 		if cell.typeName != "" {
 			return &syntax.BashPPNamedType{Name: &syntax.Lit{Value: cell.typeName}}, true
 		}
+		// A short declaration initialized from an untyped string may have no
+		// named type metadata. Its retained scalar kind still proves the Go
+		// default string type, without inspecting or evaluating its contents.
+		if cell.scalarKind == constant.String {
+			return &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "string"}}, true
+		}
 		if cell.pointer {
 			if cell.pointerValue == nil {
 				return nil, false
