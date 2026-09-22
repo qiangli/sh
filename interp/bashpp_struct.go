@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"go/constant"
+	"strconv"
 	"strings"
 
 	"mvdan.cc/sh/v3/expand"
@@ -1322,6 +1323,20 @@ func (r *Runner) bashPPCompositeAddress(lit *syntax.BashPPCompositeLit) (*bashPP
 	value, meta, err := r.bashPPEvalComposite(lit, nil)
 	if err != nil {
 		return nil, err
+	}
+	// [...]T is not the type of the resulting value; it is syntax asking Go
+	// to infer a concrete array length. Preserve that concrete identity when
+	// the literal is addressed, too, so &[...]T{...} has type *[N]T.
+	if collection, ok := r.bashPPUnderlyingType(typ).(*syntax.BashPPCollectionType); ok && collection.Kind == "inferred-array" {
+		sequence, _ := value.([]any)
+		typ = &syntax.BashPPCollectionType{
+			Kind:    "array",
+			Length:  &syntax.Lit{Value: strconv.Itoa(len(sequence))},
+			Element: collection.Element,
+		}
+		if meta != nil {
+			meta.kind, meta.typ = "array", typ
+		}
 	}
 	cell := &bashPPCell{declType: typ}
 	if named, ok := typ.(*syntax.BashPPNamedType); ok && named.Name != nil {

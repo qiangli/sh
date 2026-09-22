@@ -122,7 +122,10 @@ func bashPPCloneCollectionMeta(meta *bashPPCollectionMeta, seen map[*bashPPColle
 		}
 		out.interfaceValue = &iface
 	}
-	out.sequence = make([]*bashPPCollectionMeta, len(meta.sequence))
+	// A slice header's metadata is a parallel view of the same backing
+	// capacity as its payload. Preserve that capacity across snapshots so a
+	// later legal re-slice does not outrun its element metadata.
+	out.sequence = make([]*bashPPCollectionMeta, len(meta.sequence), cap(meta.sequence))
 	for i, child := range meta.sequence {
 		out.sequence[i] = bashPPCloneCollectionMeta(child, seen, cloneCell)
 	}
@@ -533,13 +536,20 @@ func (r *Runner) bashPPCollectionZero(typ syntax.BashPPTypeExpr) (any, *bashPPCo
 	case *syntax.BashPPCollectionType:
 		meta := &bashPPCollectionMeta{kind: x.Kind, typ: x}
 		if x.Kind == "map" {
-			return nil, meta
+			// Keep a typed nil payload. expand.NewObject(nil) deliberately turns
+			// an absent interface into invalidObject, but a nil Go map is still a
+			// present, typed value which may be read, ranged over, or compared to
+			// nil.
+			return map[string]any(nil), meta
 		}
 		length := 0
 		if x.Kind == "array" {
 			length, _ = r.bashPPArrayLength(x.Length.Value)
 		} else {
-			return nil, meta
+			// As with maps, the zero slice is nil but not an absent object. Its
+			// typed payload also gives slicing and the builtins a consistent
+			// zero-length/capacity representation.
+			return []any(nil), meta
 		}
 		values := make([]any, length)
 		meta.sequence = make([]*bashPPCollectionMeta, length)
