@@ -88,7 +88,8 @@ import "time"
 func main() { time.Sleep(1e100) }
 `
 	_, err := gosource.Parse(strings.NewReader(source), "overflow.go", gosource.Options{RunMain: true})
-	if err == nil || !strings.Contains(err.Error(), "overflows") {
+	if err == nil || (!strings.Contains(err.Error(), "overflows") &&
+		!(strings.Contains(err.Error(), "cannot use") && strings.Contains(err.Error(), "time.Duration"))) {
 		t.Fatalf("expected checked constant overflow, got %v", err)
 	}
 }

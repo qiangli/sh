@@ -2052,7 +2052,12 @@ func (r *Runner) bashPPSwitchComparable(tag, candidate bashPPScalar) error {
 	if tag.typ != "" && candidate.typ != "" && tag.typ != candidate.typ {
 		tagType, _ := bashPPScalarNamedType(tag.typ)
 		candidateType, _ := bashPPScalarNamedType(candidate.typ)
-		compatible := r.bashPPTypeAssignable(tagType, candidateType) || r.bashPPTypeAssignable(candidateType, tagType)
+		// A scalar read from an interface cell has already passed Go's static
+		// assignment checks and retains its authenticated dynamic carrier. Its
+		// canonical scalar spelling can be merely "interface", so use the
+		// carrier rather than globally weakening named-type compatibility.
+		compatible := tag.interfaceValue != nil || candidate.interfaceValue != nil ||
+			r.bashPPTypeAssignable(tagType, candidateType) || r.bashPPTypeAssignable(candidateType, tagType)
 		if iface, ok := r.bashPPInterfaceType(tagType); ok {
 			compatible = compatible || r.bashPPImplements(candidateType, iface) == nil
 		}
@@ -2074,6 +2079,32 @@ func (r *Runner) bashPPSwitchComparable(tag, candidate bashPPScalar) error {
 func (r *Runner) bashPPSwitchEqual(tag, candidate bashPPScalar) (bool, error) {
 	if err := r.bashPPSwitchComparable(tag, candidate); err != nil {
 		return false, err
+	}
+	if tag.interfaceValue != nil || candidate.interfaceValue != nil {
+		box := func(value bashPPScalar) *bashPPInterfaceValue {
+			if value.interfaceValue != nil {
+				return value.interfaceValue
+			}
+			name := value.typ
+			if name == "" {
+				name = bashPPDefaultScalarTypeName(value.value.Kind())
+			}
+			dynamic, canonical := bashPPScalarNamedType(name)
+			return &bashPPInterfaceValue{dynamic: dynamic, cell: &bashPPCell{
+				vr:          expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarString(value.value)},
+				exactScalar: value.value,
+				scalarKind:  value.value.Kind(),
+				typeName:    canonical,
+				declType:    dynamic,
+			}}
+		}
+		equal, handled, err := r.goSourceInterfaceEqual(
+			bashPPComparableValue{value: box(tag)},
+			bashPPComparableValue{value: box(candidate)},
+		)
+		if handled {
+			return equal, err
+		}
 	}
 	return bashPPCompareScalar(tag.value, token.EQL, candidate.value)
 }
