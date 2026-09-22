@@ -205,6 +205,20 @@ func openShareDelete(path string, flag int, perm os.FileMode) (f *os.File, handl
 		}
 		return pathErr(err)
 	}
+	// Windows treats a write as access too. Keep a shell write-only
+	// redirection from advancing the file's last-access time, so that the
+	// native timestamps retain the distinction used by test -N. SetFileTime
+	// documents this all-ones value as a per-handle suppression request and
+	// requires it immediately after CreateFile. Both GENERIC_WRITE and the
+	// explicit append rights in windowsOpenSpecFor include
+	// FILE_WRITE_ATTRIBUTES.
+	if flag&(os.O_WRONLY|os.O_RDWR) == os.O_WRONLY {
+		allOnes := windows.Filetime{LowDateTime: ^uint32(0), HighDateTime: ^uint32(0)}
+		if terr := windows.SetFileTime(h, nil, &allOnes, nil); terr != nil {
+			_ = windows.CloseHandle(h)
+			return pathErr(terr)
+		}
+	}
 	// Truncate after opening rather than via CREATE_ALWAYS, which would
 	// replace a read-only file with a fresh one (go.dev/issue/38225).
 	// windows.CreateFile drops the ERROR_ALREADY_EXISTS hint Go uses to
