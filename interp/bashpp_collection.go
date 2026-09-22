@@ -238,8 +238,8 @@ func (r *Runner) bashPPTypeAssignable(actual, expected syntax.BashPPTypeExpr) bo
 	if expected == nil {
 		return true
 	}
-	actual = r.bashPPCanonicalAssignableType(r.bashPPPredeclaredAliases(actual))
-	expected = r.bashPPCanonicalAssignableType(r.bashPPPredeclaredAliases(expected))
+	actual = r.bashPPPredeclaredAliases(r.bashPPCanonicalAssignableType(actual))
+	expected = r.bashPPPredeclaredAliases(r.bashPPCanonicalAssignableType(expected))
 	if bashPPTypeText(actual) == bashPPTypeText(expected) {
 		return true
 	}
@@ -378,16 +378,52 @@ func (r *Runner) bashPPCanonicalAssignableType(typ syntax.BashPPTypeExpr) syntax
 	seen := make(map[string]bool)
 	for {
 		name, ok := typ.(*syntax.BashPPNamedType)
-		if !ok || seen[name.Name.Value] {
+		if !ok {
 			return typ
 		}
-		decl, found := r.bashPPTypes[name.Name.Value]
+		key := name.Name.Value
+		if scope, known := r.goSourceLocalTypeScope(name); known {
+			key += "@" + scope
+		}
+		if seen[key] {
+			return typ
+		}
+		decl, found := r.bashPPTypeDeclarationForReference(name)
 		if !found || !decl.alias || decl.typeExpr == nil {
 			return typ
 		}
-		seen[name.Name.Value] = true
-		typ = r.bashPPInstantiateNamedType(name)
+		seen[key] = true
+		typ = bashPPInstantiateTypeDeclaration(name, decl)
 	}
+}
+
+// Alias references retain their declaration position. A local type may hide
+// the registry entry while a package alias still refers to that older entry.
+// Select by lexical declaration identity from the existing shadow stack.
+func (r *Runner) bashPPTypeDeclarationForReference(name *syntax.BashPPNamedType) (bashPPType, bool) {
+	decl, found := r.bashPPTypes[name.Name.Value]
+	scope, known := r.goSourceLocalTypeScope(name)
+	if !found || !known {
+		return decl, found
+	}
+	matches := func(candidate bashPPType) bool {
+		if candidate.typeExpr == nil {
+			return false
+		}
+		ref := &syntax.BashPPNamedType{Name: &syntax.Lit{Value: name.Name.Value, ValuePos: candidate.typeExpr.Pos()}}
+		candidateScope, known := r.goSourceLocalTypeScope(ref)
+		return known && candidateScope == scope
+	}
+	if matches(decl) {
+		return decl, true
+	}
+	for i := len(r.bashPPShadowedTypes) - 1; i >= 0; i-- {
+		previous := r.bashPPShadowedTypes[i]
+		if previous.name == name.Name.Value && previous.prev != nil && matches(*previous.prev) {
+			return *previous.prev, true
+		}
+	}
+	return bashPPType{}, false
 }
 
 func (r *Runner) bashPPEvalCollection(lit *syntax.BashPPCompositeLit, expected syntax.BashPPTypeExpr) (any, *bashPPCollectionMeta, error) {

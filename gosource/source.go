@@ -997,10 +997,18 @@ func mangleLinkedNames(linked []*converter, mappedPkgs []*types.Package) {
 			if pointer, ok := typ.(*types.Pointer); ok {
 				typ = pointer.Elem()
 			}
-			if named, ok := typ.(*types.Named); ok {
-				if rename := c.renames[named.Obj()]; rename != "" {
-					c.renames[field] = rename
-				}
+			var declaration *types.TypeName
+			switch typ := typ.(type) {
+			case *types.Named:
+				declaration = typ.Obj()
+			case *types.Alias:
+				// An embedded alias retains its own field name even though its
+				// type is identical to its target. Match the alias declaration,
+				// not the unaliased target or an unrelated same-spelled name.
+				declaration = typ.Obj()
+			}
+			if rename := c.renames[declaration]; rename != "" {
+				c.renames[field] = rename
 			}
 		}
 	}

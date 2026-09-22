@@ -429,8 +429,9 @@ func bashPPStructLiteralOwner(typ syntax.BashPPTypeExpr) bool {
 // bashPPAliasedSignatureEqual reports whether two signatures whose texts
 // differ spell the same types once declared aliases are read through:
 // `M1(IntAlias2) Float64` is `M1(Int) float64` when IntAlias2 = IntAlias =
-// Int and Float64 = float64. Only the textual mismatch reaches here, so the
-// alias walk is not on the path of an ordinary identical signature.
+// Int and Float64 = float64. Native import aliases are compared by package
+// path and local types retain lexical identity. Only textual mismatches reach
+// this fallback; ordinary identical signatures need no alias walk.
 func (r *Runner) bashPPAliasedSignatureEqual(aParams, aResults, bParams, bResults []*syntax.BashPPField) bool {
 	aliases := r.bashPPDeclaredAliasBindings()
 	if len(aliases) == 0 {
@@ -448,7 +449,19 @@ func (r *Runner) bashPPAliasedSignatureEqual(aParams, aResults, bParams, bResult
 			}
 			text = next
 		}
-		return text
+		// Linked files may bind the same native package under different
+		// aliases. Compare their import identities, while local declarations
+		// continue to use the current lexical type scope.
+		return bashPPBridgeFieldsTextIn(fields, func(named *syntax.BashPPNamedType) (string, bool) {
+			if name, ok := r.bashPPScopedLocalTypeName(named); ok {
+				return name, true
+			}
+			alias, member, qualified := strings.Cut(named.Name.Value, ".")
+			if path, imported := r.bashPPImports[alias]; qualified && imported {
+				return path + "." + member, true
+			}
+			return "", false
+		})
 	}
 	return canonical(aParams) == canonical(bParams) && canonical(aResults) == canonical(bResults)
 }
@@ -1091,17 +1104,19 @@ func (r *Runner) bashPPTypeAssertCell(assert *syntax.BashPPTypeAssertExpr, comma
 		} else if assertingInterface {
 			matched = r.bashPPImplements(iv.dynamic, assertIface) == nil
 		} else {
-			matched = bashPPStripLocalPackage(bashPPInterfaceAssertTypeText(r.bashPPPredeclaredAliases(iv.dynamic))) == bashPPStripLocalPackage(bashPPInterfaceAssertTypeText(r.bashPPPredeclaredAliases(assert.Assert))) ||
-				r.goSourceNativeTypeIdentical(iv.dynamic, assert.Assert)
+			dynamic := r.bashPPCanonicalAssignableType(iv.dynamic)
+			asserted := r.bashPPCanonicalAssignableType(assert.Assert)
+			matched = bashPPStripLocalPackage(bashPPInterfaceAssertTypeText(r.bashPPPredeclaredAliases(dynamic))) == bashPPStripLocalPackage(bashPPInterfaceAssertTypeText(r.bashPPPredeclaredAliases(asserted))) ||
+				r.goSourceNativeTypeIdentical(dynamic, asserted)
 			// A struct literal type is identified by its fields, not by the
 			// word "struct"; see gosource_struct_identity.go.
-			if matched && (bashPPStructLiteralType(iv.dynamic) || bashPPStructLiteralType(assert.Assert)) {
-				matched = r.goSourceDynamicTypeIdentity(iv.dynamic) == r.goSourceDynamicTypeIdentity(assert.Assert)
+			if matched && (bashPPStructLiteralType(dynamic) || bashPPStructLiteralType(asserted)) {
+				matched = r.goSourceDynamicTypeIdentity(dynamic) == r.goSourceDynamicTypeIdentity(asserted)
 			}
 			// Same spelling, possibly different declarations: a type declared
 			// inside a function is its own type; see bashpp_sprint162_type_scope.go.
 			if matched {
-				matched = r.goSourceSameTypeScope(iv.dynamic, assert.Assert)
+				matched = r.goSourceSameTypeScope(dynamic, asserted)
 			}
 		}
 	}

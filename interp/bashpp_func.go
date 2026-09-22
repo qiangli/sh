@@ -1116,8 +1116,15 @@ func (r *Runner) bashPPComparableType(typ syntax.BashPPTypeExpr, seen map[string
 
 func (r *Runner) bashPPInstantiateNamedType(named *syntax.BashPPNamedType) syntax.BashPPTypeExpr {
 	decl, ok := r.bashPPTypes[named.Name.Value]
-	if !ok || len(decl.typeParams) == 0 {
-		if ok && decl.typeExpr != nil {
+	if !ok {
+		return named
+	}
+	return bashPPInstantiateTypeDeclaration(named, decl)
+}
+
+func bashPPInstantiateTypeDeclaration(named *syntax.BashPPNamedType, decl bashPPType) syntax.BashPPTypeExpr {
+	if len(decl.typeParams) == 0 {
+		if decl.typeExpr != nil {
 			return decl.typeExpr
 		}
 		return named
