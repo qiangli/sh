@@ -158,6 +158,14 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 		// outermost block; give it one rather than binding nowhere.
 		r.bashPPScope = newBashPPScope(nil)
 	}
+	if linked, handled := r.goSourceLinknameDeclaration(d); handled {
+		if linked != nil {
+			r.errf("%s%v\n", r.bashErrPrefix(d.Pos()), linked)
+			r.exit = exitStatus{code: 2}
+		}
+		return
+	}
+	defer r.goSourceRegisterLinknameTarget(d)
 	if r.goSourceChannelDeclaration(d) {
 		return
 	}

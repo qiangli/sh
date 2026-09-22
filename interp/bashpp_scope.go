@@ -102,6 +102,11 @@ func (c *bashPPCell) vrValue() any {
 type bashPPScope struct {
 	parent  *bashPPScope
 	entries map[string]*bashPPCell
+	// linknames is populated only on the outermost Go-source scope. It maps
+	// linker package symbols to the same cells entries exposes by source name;
+	// keeping it out of entries prevents synthetic linker keys from leaking
+	// through environment/name enumeration.
+	linknames map[string]*bashPPCell
 	// labels records, per Go label executed in this block, which names the
 	// block had declared when the label was reached. A backward goto to the
 	// label re-enters the block at that point, so the names declared after
@@ -261,6 +266,12 @@ func (c *bashPPCloner) clone(s *bashPPScope) *bashPPScope {
 	out.parent = c.clone(s.parent)
 	for name, cell := range s.entries {
 		out.entries[name] = c.cloneCell(cell)
+	}
+	if len(s.linknames) > 0 {
+		out.linknames = make(map[string]*bashPPCell, len(s.linknames))
+		for name, cell := range s.linknames {
+			out.linknames[name] = c.cloneCell(cell)
+		}
 	}
 	return out
 }
