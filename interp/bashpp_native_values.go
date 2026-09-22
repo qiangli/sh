@@ -1091,19 +1091,20 @@ func bashPPBridgeTypeTextIn(typ syntax.BashPPTypeExpr, scope bashPPBridgeTypeSco
 	case *syntax.BashPPChanType:
 		return goSourceNativeChannelTypeTextIn(t, scope)
 	case *syntax.BashPPNamedType:
-		if len(t.TypeArgs) == 0 {
-			if scope != nil {
-				if name, ok := scope(t); ok {
-					return name
-				}
+		base := t.Name.Value
+		if scope != nil {
+			if name, ok := scope(t); ok {
+				base = name
 			}
-			return t.Name.Value
+		}
+		if len(t.TypeArgs) == 0 {
+			return base
 		}
 		args := make([]string, len(t.TypeArgs))
 		for i, arg := range t.TypeArgs {
 			args[i] = bashPPBridgeTypeTextIn(arg.ArgType, scope)
 		}
-		return t.Name.Value + "[" + strings.Join(args, ",") + "]"
+		return base + "[" + strings.Join(args, ",") + "]"
 	case *syntax.BashPPPointerType:
 		return "*" + bashPPBridgeTypeTextIn(t.Element, scope)
 	case *syntax.BashPPFuncType:
@@ -1201,6 +1202,23 @@ func (r *Runner) bashPPBridgeCell(cell *bashPPCell) (bashPPBridgeValue, error) {
 		}
 		value, err := r.bashPPBridgeCell(cell.interfaceValue.cell)
 		if err == nil && r.bashPPGoSource {
+			// Interface construction fixed the dynamic type before the payload
+			// was copied. Preserve that producer-owned identity: aliases are
+			// transparent, while local generic declarations retain the source
+			// position needed to select their lexical registry entry.
+			if cell.interfaceValue.dynamic != nil {
+				dynamic := r.bashPPCanonicalAssignableType(cell.interfaceValue.dynamic)
+				// Older scalar call binding records the dynamic declaration by
+				// base name while the copied payload retains the concrete generic
+				// target. Enrich only that exact base/instance pair; never infer
+				// across names, packages, pointer depth, or lexical declarations.
+				if base, ok := dynamic.(*syntax.BashPPNamedType); ok && base.Name != nil && len(base.TypeArgs) == 0 && cell.interfaceValue.cell != nil {
+					if concrete, ok := cell.interfaceValue.cell.declType.(*syntax.BashPPNamedType); ok && concrete.Name != nil && concrete.Name.Value == base.Name.Value && len(concrete.TypeArgs) > 0 {
+						dynamic = concrete
+					}
+				}
+				value.Type = r.bashPPBridgeTypeIdentity(dynamic)
+			}
 			// A typed nil dynamic value is still a nonnil interface. Range
 			// copies and argument/result cells must retain that static wrapper.
 			value.Interface = r.bashPPBridgeTypeIdentity(cell.declType)

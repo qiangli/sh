@@ -183,13 +183,20 @@ func (r *Runner) bashPPBuildLocalTypeDescriptors() ([]bashPPLocalType, map[strin
 	scopedNames := map[string]string{}
 	for key := range scopedDecls {
 		scopedNames[key] = bashPPScopedLocalName(key)
+		if d := scopedDecls[key].decl; len(d.TypeParams) > 0 && !d.Alias {
+			generics[scopedNames[key]] = d
+		}
 	}
 	for name := range ambiguous {
 		delete(declared, name)
 		delete(generics, name)
 		if d := packageLevel[name]; d != nil && !bashPPHelperReserved[name] {
-			declared[name] = d.DeclTypeExpr
-			aliases[name] = d.Alias
+			if len(d.TypeParams) > 0 && !d.Alias {
+				generics[name] = d
+			} else if len(d.TypeParams) == 0 {
+				declared[name] = d.DeclTypeExpr
+				aliases[name] = d.Alias
+			}
 		}
 	}
 	resolveScoped := func(named *syntax.BashPPNamedType) (string, bool) {
@@ -261,6 +268,9 @@ func (r *Runner) bashPPBuildLocalTypeDescriptors() ([]bashPPLocalType, map[strin
 	sort.Strings(scopedKeys)
 	for _, key := range scopedKeys {
 		d := scopedDecls[key].decl
+		if len(d.TypeParams) > 0 {
+			continue
+		}
 		local.refs = map[string]bool{}
 		decl, ok := local.source(d.DeclTypeExpr, 0)
 		if !ok {
@@ -339,6 +349,11 @@ func (r *Runner) bashPPBuildLocalTypeDescriptors() ([]bashPPLocalType, map[strin
 		named := instantiations[wire]
 		base := generics[named.Name.Value]
 		if base == nil {
+			if scoped, ok := resolveScoped(named); ok {
+				base = generics[scoped]
+			}
+		}
+		if base == nil {
 			continue
 		}
 		var params []string
@@ -385,7 +400,13 @@ func (r *Runner) bashPPBuildLocalTypeDescriptors() ([]bashPPLocalType, map[strin
 			continue
 		}
 		name := local.instanceName(wire)
-		materialised := bashPPLocalType{Name: name, Decl: decl, WireType: wire, Callback: named.Name.Value, Methods: mirrored, refs: local.refs}
+		identity := base.GoTypeIdentity
+		if identity != nil {
+			public := *identity
+			public.Name = bashPPTypeText(named)
+			identity = &public
+		}
+		materialised := bashPPLocalType{Name: name, Identity: identity, Decl: decl, WireType: wire, Callback: named.Name.Value, Methods: mirrored, refs: local.refs}
 		for _, method := range methods[named.Name.Value] {
 			seen := false
 			for _, m := range materialised.Methods {
@@ -430,7 +451,17 @@ func (r *Runner) bashPPBuildLocalTypeDescriptors() ([]bashPPLocalType, map[strin
 	// A scoped identity whose declaration was dropped must not be spelled
 	// either: the reference falls back to the plain name and is refused.
 	for key, name := range scopedNames {
-		if !emitted[name] {
+		registered := emitted[name]
+		if !registered {
+			prefix := name + "["
+			for _, materialised := range out {
+				if strings.HasPrefix(materialised.WireType, prefix) {
+					registered = true
+					break
+				}
+			}
+		}
+		if !registered {
 			delete(scopedNames, key)
 		}
 	}

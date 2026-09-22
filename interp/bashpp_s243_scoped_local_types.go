@@ -70,7 +70,7 @@ func bashPPScopedLocalDecls(file *syntax.File, ambiguous map[string]bool) (scope
 	}
 	syntax.Walk(file, func(node syntax.Node) bool {
 		d, ok := node.(*syntax.BashPPDecl)
-		if !ok || d.Site != syntax.StartTypeDecl || d.Name == nil || d.DeclTypeExpr == nil || len(d.TypeParams) > 0 {
+		if !ok || d.Site != syntax.StartTypeDecl || d.Name == nil || d.DeclTypeExpr == nil {
 			return true
 		}
 		name := d.Name.Value
@@ -96,7 +96,7 @@ func bashPPScopedLocalDecls(file *syntax.File, ambiguous map[string]bool) (scope
 // a reference to a function-local declaration of a reused name spells
 // the helper identity registered for that declaration.
 func (r *Runner) bashPPScopedLocalTypeName(named *syntax.BashPPNamedType) (string, bool) {
-	if !r.bashPPGoSource || named == nil || named.Name == nil || len(named.TypeArgs) > 0 {
+	if !r.bashPPGoSource || named == nil || named.Name == nil {
 		return "", false
 	}
 	r.bashPPLocalTypeDescriptors()
