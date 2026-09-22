@@ -104,3 +104,19 @@ TEXT ·AsmTriple(SB), NOSPLIT, $0-16
 		t.Fatalf("reference stdout=%q, want %q", wantOut.String(), "42 6\n")
 	}
 }
+
+// Sprint: #249; Story: #715; Story-ID: 90f96d4f4dae
+//
+// Blocker reproducer, left skipped. Upstream's own fixedbugs/issue15609.dir
+// declares its companion as `TEXT ·jump(SB),NOSPLIT,$8` -- a non-zero frame
+// with no NO_LOCAL_POINTERS, so that frame carries no stackmap. Natively the
+// function it calls is a two-instruction leaf and nothing ever needs one. The
+// trampoline that keeps that function interpreted is callback protocol, which
+// both grows the stack and is a point where the collector may scan it, and the
+// runtime answers either with `fatal error: missing stackmap`. That is the
+// trampoline's shape, not the companion build's: with the build fixed, the
+// leaf's interpreted issue15609 reaches main.jump -> main.target -> callback
+// and dies there, while issue74648, whose companion has no frame, passes.
+func TestGoSourceS249CompanionFramedAssemblyCallsInterpreted(t *testing.T) {
+	t.Skip("blocked: a framed assembly companion with no NO_LOCAL_POINTERS has no stackmap, and a callback trampoline needs one (bashPPCompanionTrampolineGo, interp/gosource_companion_symbols.go)")
+}
