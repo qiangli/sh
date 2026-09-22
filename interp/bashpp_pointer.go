@@ -137,25 +137,33 @@ func (r *Runner) bashPPSliceToArrayPointer(conv *syntax.BashPPConvertExpr, targe
 		}
 		operand = paren.X
 	}
-	root, ok := bashPPCollectionRoot(operand)
-	if !ok {
+	// Keep non-collection call and pointer-conversion operands on their existing path.
+	root, rooted := bashPPCollectionRoot(operand)
+	if !rooted || r.bashPPScope.lookup(root) == nil {
 		return nil, false, nil
 	}
-	cell := r.bashPPScope.lookup(root)
-	if cell == nil {
-		return nil, false, nil
+	if ident, direct := operand.(*syntax.BashPPIdent); direct {
+		cell := r.bashPPScope.lookup(ident.Name.Value)
+		if cell != nil && cell.pointer {
+			return nil, false, nil
+		}
 	}
-	if _, direct := operand.(*syntax.BashPPIdent); direct && cell.pointer {
-		return nil, false, nil
-	}
-	ptr, err := r.bashPPAddress(operand)
+	// Evaluate the complete slice operand once before constructing the pointer.
+	// Storing that value in an anonymous cell captures its slice header: nested
+	// views keep their own length and capacity, while the []any payload still
+	// shares the original backing array. In particular, a bound expression or a
+	// later statement may reassign the source variable without redirecting this
+	// pointer to the replacement slice.
+	value, meta, err := r.bashPPReadExpr(operand)
 	if err != nil {
+		return nil, true, err
+	}
+	if meta == nil || meta.kind != "slice" {
 		return nil, false, nil
 	}
-	value, meta, _, err := ptr.read()
-	if err != nil || meta == nil || meta.kind != "slice" {
-		return nil, false, nil
-	}
+	cell := &bashPPCell{declType: meta.typ}
+	bashPPStoreCellValue(cell, value, meta)
+	ptr := &bashPPPointer{target: cell}
 	n, err := r.bashPPArrayLength(array.Length.Value)
 	if err != nil {
 		return nil, true, fmt.Errorf("BASHPP-EPOINTER-TYPE: %v", err)
@@ -164,8 +172,9 @@ func (r *Runner) bashPPSliceToArrayPointer(conv *syntax.BashPPConvertExpr, targe
 	if seq == nil {
 		return nil, true, nil
 	}
-	if len(seq) < n {
-		message := fmt.Sprintf("runtime error: cannot convert slice with length %d to array or pointer to array with length %d", len(seq), n)
+	length := len(seq)
+	if length < n {
+		message := fmt.Sprintf("runtime error: cannot convert slice with length %d to array or pointer to array with length %d", length, n)
 		if r.bashPPGoSource {
 			return nil, true, r.bashPPRaiseRuntimeError("runtime.errorString", message)
 		}
@@ -371,6 +380,19 @@ func (r *Runner) bashPPAddress(expr syntax.BashPPExpr) (result *bashPPPointer, e
 		case *syntax.BashPPIndexExpr:
 			if err := descend(x.X); err != nil {
 				return err
+			}
+			// Go permits indexing a pointer to an array as shorthand for
+			// indexing the array itself: p[i] is (*p)[i]. Keep that implicit
+			// indirection in the stored address path, just as selectors above
+			// do for pointer bases. This is ordinary typed pointer semantics;
+			// it deliberately does not reinterpret unsafe.Pointer storage.
+			if pointer, isPointer := r.bashPPUnderlyingType(typ).(*syntax.BashPPPointerType); isPointer {
+				array, isArray := r.bashPPUnderlyingType(pointer.Element).(*syntax.BashPPCollectionType)
+				if isArray && array.Kind == "array" {
+					ptr.path = append(ptr.path, bashPPPointerStep{deref: true})
+					meta = nil
+					typ = pointer.Element
+				}
 			}
 			// A defined type such as `type bag []int` indexes exactly as its
 			// underlying collection does, so the shape has to be read through
