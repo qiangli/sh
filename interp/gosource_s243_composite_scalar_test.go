@@ -50,3 +50,17 @@ func main() {
 }
 `)
 }
+
+func TestS243ParenthesizedCompositePointerControls(t *testing.T) {
+	typedSendThreeModes(t, `package main
+type T struct { A, B int }
+var calls int
+func next() int { calls++; return calls }
+func main() {
+	p := (&T{next(), next()})
+	if p == nil || p.A != 1 || p.B != 2 || calls != 2 { panic("short declaration") }
+	p = (&T{next(), next()})
+	if p == nil || p.A != 3 || p.B != 4 || calls != 4 { panic("assignment") }
+}
+`)
+}
