@@ -163,11 +163,7 @@ func (r *Runner) goSourceValueCells(expr syntax.BashPPExpr, spread bool) ([]*bas
 			if len(values) != 1 && !spread {
 				return nil, fmt.Errorf("Go value requires one result")
 			}
-			cells := make([]*bashPPCell, len(values))
-			for i, value := range values {
-				cells[i] = r.goSourceNativeValueCell(value)
-			}
-			return cells, nil
+			return r.goSourceNativeCallResultCells(call, values), nil
 		}
 		if fn, ok := r.bashPPLookupFunc(call); ok {
 			cells, err := r.goSourceCallResultCells(call, fn)

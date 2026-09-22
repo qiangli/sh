@@ -115,6 +115,65 @@ func main() {
 	}
 }
 
+// A mapped test package executes its body in the interpreter even though the
+// generated test main reaches it through testing's native descriptor wrapper.
+// Interface results must survive both the native call and the interpreted
+// helper's return boundary.
+func TestGoSourceS249PackageTestMainKeepsInterfaceReturn(t *testing.T) {
+	xtest := gosource.PackageSpec{Path: "example.com/lib_test", Sources: []gosource.Source{s249Source("lib_test.go", `package lib_test
+
+import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	. "go/types"
+	"testing"
+)
+
+
+func consume(_ *Package, err error) {
+	if _, ok := err.(Error); !ok {
+		panic("not a types.Error")
+	}
+}
+
+func TestInterfaceReturn(t *testing.T) {
+	t.Run("nested", func(t *testing.T) {
+		fset := token.NewFileSet()
+		file, _ := parser.ParseFile(fset, "x.go", "package x; var _ = missing", 0)
+		consume(new(Config).Check("x", fset, []*ast.File{file}, nil))
+	})
+}
+`)}}
+	driver := s249Source("_testmain.go", `package main
+
+import (
+	"os"
+	"testing"
+	"testing/internal/testdeps"
+	_xtest "example.com/lib_test"
+)
+
+var tests = []testing.InternalTest{{"TestInterfaceReturn", _xtest.TestInterfaceReturn}}
+var benchmarks = []testing.InternalBenchmark{}
+var fuzzTargets = []testing.InternalFuzzTarget{}
+var examples = []testing.InternalExample{}
+
+func main() {
+	m := testing.MainStart(testdeps.TestDeps{}, tests, benchmarks, fuzzTargets, examples)
+	os.Exit(m.Run())
+}
+`)
+
+	got, err := runS249PackageTestMain(t, []gosource.Source{driver}, []gosource.PackageSpec{xtest})
+	if err != nil {
+		t.Fatalf("Runner: %v; stderr: %s", err, got.stderr)
+	}
+	if want := (s249GoSourceOutcome{stdout: "PASS\n"}); got != want {
+		t.Fatalf("Runner %+v; want %+v", got, want)
+	}
+}
+
 func TestGoSourceS249PackageTestMainRequiresAuthenticatedFact(t *testing.T) {
 	driver := s249Source("_testmain.go", `package main
 

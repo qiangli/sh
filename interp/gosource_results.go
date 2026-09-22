@@ -51,26 +51,42 @@ func (r *Runner) goSourceNativeAssignCall(ctx context.Context, assign *syntax.Ba
 	}
 	cells := make([]*bashPPCell, len(values))
 	for i, value := range values {
-		cells[i] = r.goSourceNativeValueCell(value)
 		var expected syntax.BashPPTypeExpr
 		if target := r.bashPPScope.lookup(assign.Names[i].Value); target != nil {
 			expected = target.declType
 		} else if i < len(assign.Call.ResultTypes) {
 			expected = assign.Call.ResultTypes[i]
 		}
-		if _, iface := r.bashPPInterfaceType(expected); iface {
-			// The source was typechecked, and the dependency returned its actual
-			// dynamic value. Preserve the static interface type even for :=,
-			// whose LHS has not been declared yet.
-			value.Interface = r.bashPPBridgeTypeIdentity(expected)
-			cells[i] = r.goSourceNativeValueCell(value)
-			payload := bashPPCopyAssignmentCell(cells[i])
-			cells[i].interfaceValue = &bashPPInterfaceValue{nilIface: value.Kind == "nil", cell: payload, dynamic: bashPPBridgeDynamicType(value.Type)}
-			cells[i].declType = expected
-			cells[i].typeName = bashPPNamedTypeBase(expected)
-		}
+		cells[i] = r.goSourceNativeTypedResultCell(value, expected)
 	}
 	r.bashPPCommitTupleAssign(assign, cells)
+}
+
+// goSourceNativeTypedResultCell restores the checked static type around the
+// dependency's dynamic transport value. Reflection may hand the worker a
+// concrete result even when the called signature declares an interface; that
+// distinction belongs to every expression path, not just assignments.
+func (r *Runner) goSourceNativeTypedResultCell(value bashPPBridgeValue, expected syntax.BashPPTypeExpr) *bashPPCell {
+	if _, iface := r.bashPPInterfaceType(expected); !iface {
+		return r.goSourceNativeValueCell(value)
+	}
+	value.Interface = r.bashPPBridgeTypeIdentity(expected)
+	cell := r.goSourceNativeValueCell(value)
+	cell.declType = expected
+	cell.typeName = bashPPNamedTypeBase(expected)
+	return cell
+}
+
+func (r *Runner) goSourceNativeCallResultCells(call *syntax.BashPPCall, values []bashPPBridgeValue) []*bashPPCell {
+	cells := make([]*bashPPCell, len(values))
+	for i, value := range values {
+		var expected syntax.BashPPTypeExpr
+		if call != nil && i < len(call.ResultTypes) {
+			expected = call.ResultTypes[i]
+		}
+		cells[i] = r.goSourceNativeTypedResultCell(value, expected)
+	}
+	return cells
 }
 
 func (r *Runner) goSourceErrorsAsTypeCells(call *syntax.BashPPCall) ([]*bashPPCell, bool) {
