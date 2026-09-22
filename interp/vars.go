@@ -147,11 +147,47 @@ type namedVariable struct {
 	Prev expand.Variable
 }
 
+// normalize folds a variable name to the inherited environment's spelling
+// on Windows and is the identity everywhere else. Shell variables are
+// case-sensitive in bash on every platform — MSYS/Cygwin bash included —
+// so `declare -A A` and `declare -a a` are two variables (array.tests,
+// quotearray.tests, dollar-at-star9.sub). Only the OS environment is
+// case-insensitive, and it arrives through expand.ListEnviron with its
+// names upper-cased; a name whose upper-case form is an INHERITED variable
+// therefore resolves to that variable in any spelling (`Path`, `path` and
+// `PATH` are one thing, as Windows itself says), while a name the script
+// introduces keeps the case it was written in.
 func (o *overlayEnviron) normalize(name string) string {
-	if runtime.GOOS == "windows" {
-		return strings.ToUpper(name)
+	return o.normalizeMode(name, runtime.GOOS == "windows")
+}
+
+// normalizeMode is [overlayEnviron.normalize] with an explicit windows flag.
+func (o *overlayEnviron) normalizeMode(name string, windows bool) string {
+	if !windows {
+		return name
+	}
+	upper := strings.ToUpper(name)
+	if upper == name {
+		return name
+	}
+	if base := o.baseEnviron(); base != nil && base.Get(upper).IsSet() {
+		return upper
 	}
 	return name
+}
+
+// baseEnviron is the non-overlay environment at the root of o's parent
+// chain: the process environment the runner inherited. nil when the chain
+// has no such root.
+func (o *overlayEnviron) baseEnviron() expand.Environ {
+	cur := o
+	for {
+		next := cur.next()
+		if next == nil {
+			return cur.parent
+		}
+		cur = next
+	}
 }
 
 func (o *overlayEnviron) Get(name string) expand.Variable {
