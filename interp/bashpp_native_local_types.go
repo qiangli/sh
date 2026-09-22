@@ -49,6 +49,7 @@ type bashPPLocalMethod struct {
 // Decl is the generated Go type body; it is structural, so the dependency's
 // reflect view has exactly the original field names and element types.
 type bashPPLocalType struct {
+	Identity       *syntax.BashPPTypeIdentity
 	Name           string
 	Alias          bool
 	WireType       string
@@ -77,6 +78,7 @@ var bashPPHelperReserved = map[string]bool{
 	"decode": true, "resolveType": true, "typeID": true, "access": true,
 	"dispatch": true, "main": true, "callback": true, "callbackFailed": true,
 	"takeFailure": true, "bridgeAddress": true, "bridgeAuth": true,
+	"originalTypeIdentity": true, "originalTypeIdentities": true, "originalTypeString": true, "hasOriginalTypeIdentity": true,
 }
 
 // bashPPLocalScalarTypes are the predeclared names the helper's base type
@@ -126,6 +128,7 @@ func (r *Runner) bashPPLocalTypeDescriptors() []bashPPLocalType {
 
 func (r *Runner) bashPPBuildLocalTypeDescriptors() ([]bashPPLocalType, map[string]string) {
 	declared := map[string]syntax.BashPPTypeExpr{}
+	identities := map[string]*syntax.BashPPTypeIdentity{}
 	methods := map[string][]*syntax.BashPPFuncDecl{}
 	aliases := map[string]bool{}
 	ambiguous := map[string]bool{}
@@ -145,6 +148,7 @@ func (r *Runner) bashPPBuildLocalTypeDescriptors() ([]bashPPLocalType, map[strin
 				ambiguous[name] = true
 			}
 			declared[name] = d.DeclTypeExpr
+			identities[name] = d.GoTypeIdentity
 			aliases[name] = d.Alias
 		}
 		if d, ok := node.(*syntax.BashPPDecl); ok && d.Site == syntax.StartTypeDecl && len(d.TypeParams) > 0 && d.DeclTypeExpr != nil && !d.Alias {
@@ -262,7 +266,7 @@ func (r *Runner) bashPPBuildLocalTypeDescriptors() ([]bashPPLocalType, map[strin
 		if !ok {
 			continue
 		}
-		out = append(out, bashPPLocalType{Name: scopedNames[key], Decl: decl, Alias: d.Alias, refs: local.refs})
+		out = append(out, bashPPLocalType{Name: scopedNames[key], Identity: d.GoTypeIdentity, Decl: decl, Alias: d.Alias, refs: local.refs})
 	}
 	for _, name := range names {
 		if bashPPHelperReserved[name] {
@@ -273,7 +277,7 @@ func (r *Runner) bashPPBuildLocalTypeDescriptors() ([]bashPPLocalType, map[strin
 		if !ok {
 			continue
 		}
-		materialised := bashPPLocalType{Name: name, Decl: decl, Alias: aliases[name], refs: local.refs}
+		materialised := bashPPLocalType{Name: name, Identity: identities[name], Decl: decl, Alias: aliases[name], refs: local.refs}
 		// A defined interface type cannot carry a method declaration, so its
 		// implementations are mirrored instead — the dynamic value is what
 		// crosses the boundary.
@@ -1023,6 +1027,7 @@ func bashPPLocalTypeIdentity(locals []bashPPLocalType) string {
 	var b strings.Builder
 	for _, local := range locals {
 		fmt.Fprintf(&b, "%s|%s|%t|%s|%s|", local.Name, local.Decl, local.Alias, local.WireType, local.Callback)
+		fmt.Fprintf(&b, "%v|", local.Identity)
 		for _, method := range local.Methods {
 			fmt.Fprintf(&b, "%s:%t:%t:%t:%v:%v,", method.Name, method.Pointer, method.ReaderLocalBuffer, method.General, method.Params, method.Results)
 		}

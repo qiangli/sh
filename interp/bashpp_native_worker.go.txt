@@ -266,9 +266,41 @@ func decodeIn(st *decodeState, v value, target reflect.Type)(reflect.Value,error
 // instead of materialising an interpreter copy.
 // Bind value methods to a value snapshot; pointer methods retain the original
 // native receiver. Exported field traversal never exposes unexported storage.
+// Metadata belongs to the exact mirrored type, never its spelling. Keep
+// reflect.Type itself unchanged so equality, assignability and method identity
+// continue to use the same real type as native dependencies.
+type originalTypeIdentity struct { Name, PackageName, PackagePath string }
+var originalTypeIdentities = map[reflect.Type]originalTypeIdentity{}
+func hasOriginalTypeIdentity(t reflect.Type) bool {
+ if _,ok:=originalTypeIdentities[t];ok{return true}
+ if t.Name()!="" {return false}
+ switch t.Kind(){case reflect.Pointer,reflect.Slice,reflect.Array,reflect.Chan:return hasOriginalTypeIdentity(t.Elem());case reflect.Map:return hasOriginalTypeIdentity(t.Key())||hasOriginalTypeIdentity(t.Elem())}
+ return false
+}
+func originalTypeString(t reflect.Type) string {
+ if id,ok:=originalTypeIdentities[t];ok{return id.PackageName+"."+id.Name}
+ if t.Name()!="" || !hasOriginalTypeIdentity(t) {return t.String()}
+ switch t.Kind(){
+ case reflect.Pointer:return "*"+originalTypeString(t.Elem())
+ case reflect.Slice:return "[]"+originalTypeString(t.Elem())
+ case reflect.Array:return "["+strconv.Itoa(t.Len())+"]"+originalTypeString(t.Elem())
+ case reflect.Map:return "map["+originalTypeString(t.Key())+"]"+originalTypeString(t.Elem())
+ case reflect.Chan:
+  prefix:="chan ";if t.ChanDir()==reflect.RecvDir{prefix="<-chan "}else if t.ChanDir()==reflect.SendDir{prefix="chan<- "}
+  elem:=originalTypeString(t.Elem())
+  if t.ChanDir()==reflect.BothDir&&t.Elem().Name()==""&&t.Elem().Kind()==reflect.Chan&&t.Elem().ChanDir()==reflect.RecvDir{elem="("+elem+")"}
+  return prefix+elem
+ }
+ return t.String()
+}
 func memberMethod(rv reflect.Value,name string) reflect.Value {
  for rv.IsValid()&&rv.Kind()==reflect.Interface&&!rv.IsNil(){rv=rv.Elem()}
  if !rv.IsValid(){return reflect.Value{}}
+ if rv.CanInterface(){if typ,ok:=rv.Interface().(reflect.Type);ok {
+  if id,mapped:=originalTypeIdentities[typ];mapped {switch name {case "Name":return reflect.ValueOf(func()string{return id.Name});case "PkgPath":return reflect.ValueOf(func()string{return id.PackagePath})}}
+  if name=="String" {return reflect.ValueOf(func()string{return originalTypeString(typ)})}
+ }}
+
  if method:=rv.MethodByName(name);method.IsValid(){snapshot:=reflect.New(rv.Type()).Elem();snapshot.Set(rv);return snapshot.MethodByName(name)}
  if rv.CanAddr(){return rv.Addr().MethodByName(name)}
  return reflect.Value{}

@@ -202,6 +202,12 @@ func (c *SiteClass) UnmarshalText(b []byte) error {
 	return nil
 }
 
+// BashPPTypeIdentity preserves a checked Go declaration's identity independently
+// of the linker's private name and the native helper's implementation package.
+type BashPPTypeIdentity struct {
+	Name, PackageName, PackagePath string
+}
+
 // BashPPDecl is a Go declaration in command position: var, const or type.
 //
 // It covers the three keyword-led Day-1 sites, which share a shape (keyword,
@@ -217,6 +223,8 @@ func (c *SiteClass) UnmarshalText(b []byte) error {
 // BashPPDecl could reach an encoder — and it is worth a line here because the
 // collision is invisible until a tree containing one is serialized.
 type BashPPDecl struct {
+	GoTypeIdentity *BashPPTypeIdentity
+
 	Site       StartSite // StartVar, StartConst or StartTypeDecl
 	Kw         *Lit      // the literal "var", "const" or "type" as written
 	Name       *Lit      // the declared identifier

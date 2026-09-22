@@ -664,6 +664,9 @@ func (c *converter) importedPathIsMapped(i *ast.ImportSpec, path string) bool {
 }
 func (c *converter) typeDecl(g *ast.GenDecl, t *ast.TypeSpec) *s.BashPPDecl {
 	out := &s.BashPPDecl{Site: s.StartTypeDecl, Kw: c.lit(g.TokPos, "type"), Name: c.ident(t.Name), DeclType: c.lit(t.Type.Pos(), c.text(t.Type)), DeclTypeExpr: c.typ(t.Type), Alias: t.Assign.IsValid(), TypeParams: c.typeParams(t.TypeParams), End_: c.pos(t.End())}
+	if obj := c.info.Defs[t.Name]; obj != nil && obj.Pkg() != nil {
+		out.GoTypeIdentity = &s.BashPPTypeIdentity{Name: obj.Name(), PackageName: obj.Pkg().Name(), PackagePath: obj.Pkg().Path()}
+	}
 	if st, ok := out.DeclTypeExpr.(*s.BashPPStructType); ok {
 		out.DeclType.Value = "struct"
 		out.StructFields = st.Fields

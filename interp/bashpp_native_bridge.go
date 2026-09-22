@@ -818,6 +818,12 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 	}
 	for _, local := range localTypes {
 		locals.WriteString(bashPPLocalTypeGo(local))
+		// Aliases inherit their target's identity; registering an alias here would
+		// overwrite the metadata of that target's exact reflect.Type.
+		if id := local.Identity; id != nil && !local.Alias {
+			fmt.Fprintf(&locals, "func init(){originalTypeIdentities[reflect.TypeFor[%s]()] = originalTypeIdentity{Name:%q, PackageName:%q, PackagePath:%q}}\n", local.Name, id.Name, id.PackageName, id.PackagePath)
+		}
+
 		// Both spellings resolve: the original program's own name, and the
 		// package-qualified identity Go's %T prints for it.
 		fmt.Fprintf(&typeEntries, "%q: reflect.TypeFor[%s](),\n%q: reflect.TypeFor[%s](),\n", local.Name, local.Name, "main."+local.Name, local.Name)
