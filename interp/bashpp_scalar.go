@@ -1824,12 +1824,58 @@ func (r *Runner) bashPPConvertScalar(typ string, x bashPPScalar) (bashPPScalar, 
 }
 
 func bashPPGoFlagsConvertHashQY(flags string) bool {
-	for _, field := range strings.Fields(flags) {
-		if strings.HasPrefix(field, "-gcflags=") && strings.Contains(strings.TrimPrefix(field, "-gcflags="), "-d=converthash=qy") {
-			return true
+	fields, ok := bashPPGoFlagsFields(flags)
+	if !ok {
+		return false
+	}
+	// cmd/go applies repeated per-package flags in order, with the last
+	// matching value winning. We intentionally support only the unscoped
+	// command-line-package form used by convert5.go. Package patterns require
+	// the go command's package matcher and must not silently become global.
+	selected := ""
+	for _, field := range fields {
+		if strings.HasPrefix(field, "-gcflags=") {
+			value := strings.TrimPrefix(field, "-gcflags=")
+			if value == "" || strings.HasPrefix(value, "-") {
+				selected = value
+			}
 		}
 	}
-	return false
+	return selected == "-d=converthash=qy"
+}
+
+// bashPPGoFlagsFields follows cmd/internal/quoted.Split, which is the parser
+// cmd/go uses for GOFLAGS: quotes are recognized only around a complete field
+// and their contents are not unescaped.
+func bashPPGoFlagsFields(value string) ([]string, bool) {
+	var fields []string
+	for len(value) > 0 {
+		for len(value) > 0 && strings.ContainsRune(" \t\n\r", rune(value[0])) {
+			value = value[1:]
+		}
+		if value == "" {
+			break
+		}
+		if value[0] == '\'' || value[0] == '"' {
+			quote := value[0]
+			value = value[1:]
+			end := strings.IndexByte(value, quote)
+			if end < 0 {
+				return nil, false
+			}
+			fields = append(fields, value[:end])
+			value = value[end+1:]
+			continue
+		}
+		end := strings.IndexAny(value, " \t\n\r")
+		if end < 0 {
+			fields = append(fields, value)
+			break
+		}
+		fields = append(fields, value[:end])
+		value = value[end:]
+	}
+	return fields, true
 }
 
 // bashPPRuntimeFloatToIntegerQY implements only the conversion implementation

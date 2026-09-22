@@ -37,11 +37,19 @@ func TestS243ConversionPolicyFlagAuthentication(t *testing.T) {
 		flags string
 		want  bool
 	}{
+		{"", false},
 		{"-p=2", false},
 		{"-d=converthash=qy", false},
 		{"-gcflags=-d=converthash=qy", true},
-		{"-p=2 -gcflags=all=-d=converthash=qy", true},
+		{"'-gcflags=-d=converthash=qy'", true},
+		{"-gcflags=example.com/unrelated=-d=converthash=qy", false},
+		{"-gcflags=all=-d=converthash=qy", false},
+		{"-gcflags=-d=converthash=qySuffix", false},
 		{"-gcflags=-d=converthash=xx", false},
+		{"-gcflags=-d=converthash=qy -gcflags=-d=converthash=xx", false},
+		{"-gcflags=-d=converthash=xx -gcflags=-d=converthash=qy", true},
+		{"-gcflags=-d=converthash=qy -gcflags=example.com/unrelated=-d=converthash=xx", true},
+		{"'-gcflags=-d=converthash=qy", false},
 	} {
 		if got := bashPPGoFlagsConvertHashQY(test.flags); got != test.want {
 			t.Errorf("%q: got %v, want %v", test.flags, got, test.want)
