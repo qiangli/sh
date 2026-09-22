@@ -53,15 +53,17 @@ alias := cfg
 printf '%s:%d:%s\n' alias.Meta.Name alias.Ports[1] alias.Labels["tier"]
 `, "prod:443:edge\n"},
 		{"mutable imported pointer", `import "net/url"
+import "fmt"
 endpoint, _ := url.Parse("https://example.test/original")
 endpoint.Host = "changed.test"
-printf '%s\n' endpoint.Host
+fmt.Println(endpoint.Host)
 `, "changed.test\n"},
 		{"mutable imported pointer alias", `import "net/url"
+import "fmt"
 endpoint, _ := url.Parse("https://example.test/original")
 alias := endpoint
 alias.Host = "changed.test"
-printf '%s:%s\n' endpoint.Host alias.Host
+fmt.Printf("%s:%s\n", endpoint.Host, alias.Host)
 `, "changed.test:changed.test\n"},
 	}
 	for _, tc := range positives {
