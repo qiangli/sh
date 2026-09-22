@@ -4886,6 +4886,11 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	{"foo() { export bar; }; foo; bar=foo; $ENV_PROG | grep ^bar=", "bar=foo\n"},
 	{"foo() { export bar=foo; }; foo; readonly bar; $ENV_PROG | grep ^bar=", "bar=foo\n"},
 	{"var=10; export var; export -n var; var=60 export var; declare -p var", "declare -x var=\"60\"\n"},
+	// `export -f name` of something that is not a function is an error,
+	// not an invisible function (errors.tests line 120); the diagnostic
+	// does not depend on the host.
+	{"export -f XPATH; echo status=$?", "export: XPATH: not a function\nstatus=1\n #JUSTERR"},
+	{"XPATH=x; export -f XPATH; echo status=$?", "export: XPATH: not a function\nstatus=1\n #JUSTERR"},
 
 	// local
 	{
