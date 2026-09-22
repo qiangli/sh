@@ -697,6 +697,21 @@ var runTests = []runTest{
 	{"printf '%d' ' -42'", "-42"},
 	{"printf '%d' abc", "printf: abc: invalid number\n0exit status 1 #JUSTERR"},
 	{"printf '%d' 18446744073709551615", "printf: 18446744073709551615: Result not representable\n9223372036854775807exit status 1 #JUSTERR"},
+	// A `*` width/precision argument is read like getint in bash's printf.def:
+	// strtoimax base 0, a quote is the character's code, trailing junk is
+	// "invalid number" keeping the converted prefix (status 1), a value
+	// outside int is strerror(ERANGE) and the width is dropped, a negative
+	// precision is as if omitted (printf7.sub).
+	{"printf '[%*s]\\n' 12abc X", "printf: 12abc: invalid number\n[           X]\nexit status 1 #JUSTERR"},
+	{"printf '[%.*s]\\n' abc XYZ", "printf: abc: invalid number\n[]\nexit status 1 #JUSTERR"},
+	{"printf '[%*s]\\n' '' X", "printf: : invalid number\n[X]\nexit status 1 #JUSTERR"},
+	{"printf '[%*s][%*s][%*s]\\n' 0x10 X 010 Y \"'A\" Z", "[               X][       Y][                                                                Z]\n"},
+	{"printf '[%*s]\\n' 21474836470 X", "printf: 21474836470: Numerical result out of range\n[X]\nexit status 1 #JUSTERR"},
+	{"printf '[%.*s]\\n' 99999999999999999999 X", "printf: 99999999999999999999: Numerical result out of range\n[X]\nexit status 1 #JUSTERR"},
+	{"printf '[%.*s][%*s][%-*s]\\n' -3 XYZ -5 X 5 X", "[XYZ][X    ][X    ]\n"},
+	// The fixture's own path to line 62: INT_MAX read as a non-number
+	// ("undefined") makes $(( INT_MAX * 10 )) zero, and zero is no overflow.
+	{"INT_MAX=undefined; TOOBIG=$(( $INT_MAX * 10 )); printf '[%.*s]\\n' \"$TOOBIG\" X; echo $?", "[]\n0\n"},
 	// getopts: missing required arg reports '?' in verbose mode (no leading ':'
 	// in optstring), ':' only in silent mode.
 	{"set -- -a; getopts 'a:' o 2>/dev/null; echo \"$o/$OPTARG\"", "?/\n"},
@@ -4871,6 +4886,11 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	{"foo() { export bar; }; foo; bar=foo; $ENV_PROG | grep ^bar=", "bar=foo\n"},
 	{"foo() { export bar=foo; }; foo; readonly bar; $ENV_PROG | grep ^bar=", "bar=foo\n"},
 	{"var=10; export var; export -n var; var=60 export var; declare -p var", "declare -x var=\"60\"\n"},
+	// `export -f name` of something that is not a function is an error,
+	// not an invisible function (errors.tests line 120); the diagnostic
+	// does not depend on the host.
+	{"export -f XPATH; echo status=$?", "export: XPATH: not a function\nstatus=1\n #JUSTERR"},
+	{"XPATH=x; export -f XPATH; echo status=$?", "export: XPATH: not a function\nstatus=1\n #JUSTERR"},
 
 	// local
 	{

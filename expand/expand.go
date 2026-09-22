@@ -13,6 +13,7 @@ import (
 	"iter"
 	"os"
 	"os/user"
+	"path"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -1662,30 +1663,47 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 				wArg := args[0]
 				args = args[1:]
 				isPrecision := len(fmts) > 0 && fmts[len(fmts)-1] == '.'
-				width, err := strconv.ParseInt(strings.TrimSpace(wArg), 10, 64)
-				if err != nil {
-					if warn != nil {
-						warn(fmt.Sprintf("printf: %s: numerical result out of range", wArg))
+				// Bash reads the number as getint does: strtoimax with
+				// base 0 (so 0x10 and 010 count), a leading quote as
+				// the character's code, trailing junk as "invalid
+				// number" keeping the converted prefix (12abc is 12,
+				// abc is 0) with exit status 1, and a value outside
+				// int as ERANGE: the diagnostic and, since such a
+				// width cannot be honoured, no width at all.
+				var width int64
+				var wmsg string
+				if wArg != "" && (wArg[0] == '\'' || wArg[0] == '"') {
+					if len(wArg) > 1 {
+						r, _ := utf8.DecodeRuneInString(wArg[1:])
+						width = int64(r)
 					}
-					if isPrecision {
-						fmts = fmts[:len(fmts)-1]
-					}
-					break
+				} else {
+					width, wmsg = bashPrintfInt(wArg)
 				}
 				const maxPrintfWidth = int64(1<<31 - 1)
-				if width > maxPrintfWidth || width < -maxPrintfWidth {
+				switch {
+				case strings.HasSuffix(wmsg, ": invalid number"):
 					if warn != nil {
-						warn(fmt.Sprintf("printf: %s: numerical result out of range", wArg))
+						warn("printf: " + wmsg)
+					}
+				case wmsg != "", width > maxPrintfWidth, width < -maxPrintfWidth-1:
+					if warn != nil {
+						warn(fmt.Sprintf("printf: %s: Numerical result out of range", wArg))
 					}
 					if isPrecision {
 						fmts = fmts[:len(fmts)-1]
 					}
-					break
+					continue
+				}
+				if isPrecision && width < 0 {
+					// C: a negative precision is taken as if omitted.
+					fmts = fmts[:len(fmts)-1]
+					continue
 				}
 				fmts = append(fmts, []byte(strconv.FormatInt(width, 10))...)
 			case 'q', 'Q':
 				if precisionOverflow && c == 'Q' && warn != nil {
-					warn("printf: numerical result out of range")
+					warn("printf: Numerical result out of range")
 				}
 				// bash printf %q outputs the argument quoted so it can
 				// be reused as shell input. Empty → '', strings with
@@ -5726,9 +5744,25 @@ func globPathAbs(p string) bool {
 }
 
 // globPathJoin joins a glob path element onto base unless it is absolute.
+// The result is the directory the walk reads next, in the shell's spelling:
+// base is $PWD, which on Windows keeps the POSIX form a script typed
+// (/tmp/x, /c/Users/x), and the directory reader converts that on the way
+// in. [filepath.Join] would respell it `\tmp\x\lib`, which is a
+// drive-relative native path (C:\tmp\x\lib) to the converter, not the
+// /tmp mount — so `ls lib/**` after `cd $TMPDIR/x` found nothing and reached
+// ls literally (globstar.tests).
 func globPathJoin(base, p string) string {
+	return globPathJoinMode(base, p, runtime.GOOS == "windows")
+}
+
+// globPathJoinMode is [globPathJoin] with an explicit windows flag: there
+// the join cleans with `/` ([path.Join]), elsewhere with the OS separator.
+func globPathJoinMode(base, p string, windows bool) string {
 	if globPathAbs(p) {
 		return p
+	}
+	if windows {
+		return path.Join(base, p)
 	}
 	return filepath.Join(base, p)
 }
@@ -6288,12 +6322,12 @@ func (cfg *Config) globDir(base, dir string, matcher func(string) bool, wantDir,
 			// does not follow symlinks for each of the directory entries.
 			// ReadDir is somewhat wasteful here, as we only want its error result,
 			// but we could try to reuse its result as per the TODO in [Config.glob].
-			if _, err := cfg.ReadDir2(filepath.Join(fullDir, info.Name())); err != nil {
+			if _, err := cfg.ReadDir2(globPathJoin(fullDir, info.Name())); err != nil {
 				continue
 			}
 		} else if mode.IsDir() {
 			if needSearch {
-				candidate := filepath.Join(fullDir, info.Name())
+				candidate := globPathJoin(fullDir, info.Name())
 				if cfg.IsSearchable != nil {
 					if !cfg.IsSearchable(candidate) {
 						continue
