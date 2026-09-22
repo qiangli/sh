@@ -1466,7 +1466,10 @@ func (r *Runner) bashPPTypedCallArgs(call *syntax.BashPPCall, fn *bashPPFunc) (r
 			failure = errBashPPScalarInterrupted
 		}
 	}()
-	if r.bashPPGoSource && !call.Ellipsis.IsValid() {
+	// The Go-source argument path retains a spread slice as one cell and marks
+	// the call as spread.  Expanding it here would turn []T into its printed
+	// form before goSourceBindSpreadVariadic can preserve its backing store.
+	if r.bashPPGoSource {
 		return r.goSourceCallArguments(call, fn)
 	}
 	if len(call.ArgExprs) != len(call.Args) {
