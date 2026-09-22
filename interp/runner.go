@@ -5518,9 +5518,9 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 	case *syntax.BashPPForAssign:
 		r.bashPPForAssign(cm)
 	case *syntax.BashPPIncDec:
-		r.bashPPIncDec(cm)
+		r.bashPPIncDec(r.bashPPBindIncDec(cm))
 	case *syntax.BashPPUpdate:
-		r.bashPPUpdate(cm)
+		r.bashPPUpdate(r.bashPPBindUpdate(cm))
 	case *syntax.BashPPBranch:
 		r.bashPPBranchStmt(cm)
 	case *syntax.BashPPLabeled:
