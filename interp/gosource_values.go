@@ -278,6 +278,10 @@ func (r *Runner) goSourceParallelDecl(d *syntax.BashPPShortDecl) {
 		r.bashPPDeclareName(lhs.Value, cells[i].vr)
 		if target := r.bashPPScope.lookup(lhs.Value); target != nil {
 			*target = *cells[i]
+			// A constant RHS keeps exact expression metadata while operands
+			// are evaluated, but := always introduces mutable variables.
+			target.constant, target.vr.ReadOnly = false, false
+			target.exactScalar = nil
 		}
 	}
 }
