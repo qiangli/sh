@@ -16,7 +16,6 @@ func TestNativeExecEnvKeepsShellSpelling(t *testing.T) {
 	// /a/b/c is a real directory under the virtual root.
 	env := []string{
 		"HOME=/a/b/c",
-		"TEMP=/tmp",
 		"TMPDIR=/tmp",
 		"GOPATH=/c/go",
 		"USERPROFILE=/c/Users/me",
@@ -28,7 +27,19 @@ func TestNativeExecEnvKeepsShellSpelling(t *testing.T) {
 			t.Errorf("%q was converted to %q", env[i], got[i])
 		}
 	}
-	// The two exceptions still apply.
+	// TMP and TEMP are the host's own variables — os.TempDir reads them and
+	// the /tmp mount is built from that, so a child shell handed the shell's
+	// spelling loses its temp directory. They convert; TMPDIR does not.
+	env = []string{"TMP=/tmp", "TEMP=/c/Users/x/AppData/Local/Temp", "TMPDIR=/tmp"}
+	want2 := []string{`TMP=C:\Temp\bash53-1\tmp`, `TEMP=C:\Users\x\AppData\Local\Temp`, "TMPDIR=/tmp"}
+	got = nativeExecEnvMountsMode(m, append([]string(nil), env...), true)
+	for i := range want2 {
+		if got[i] != want2[i] {
+			t.Errorf("host temp env: got %q, want %q", got[i], want2[i])
+		}
+	}
+
+	// The other exceptions still apply.
 	env = []string{"BASHYENV=GOPATH/p", "GOPATH=/c/go", "PATH=/bin:/c/Go/bin"}
 	want := []string{"BASHYENV=GOPATH/p", `GOPATH=C:\go`, `PATH=C:\Temp\bash53-1\root\usr\bin;C:\Go\bin`}
 	got = nativeExecEnvMountsMode(m, append([]string(nil), env...), true)

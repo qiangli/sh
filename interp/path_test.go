@@ -168,14 +168,14 @@ func TestNativeExecEnvWindows(t *testing.T) {
 		{
 			// Sprint 245, story 682: values are the script's, not the
 			// host's — no name is converted by default any more.
-			name: "temp keeps the shell's spelling",
+			name: "the host's temp variables convert; TMPDIR does not",
 			env:  []string{"TEMP=/c/Users/x/AppData/Local/Temp"},
-			want: []string{"TEMP=/c/Users/x/AppData/Local/Temp"},
+			want: []string{`TEMP=C:\Users\x\AppData\Local\Temp`},
 		},
 		{
 			name: "other drive letters",
 			env:  []string{"TMP=/d/w/a", "GOCACHE=/e/cache"},
-			want: []string{"TMP=/d/w/a", "GOCACHE=/e/cache"},
+			want: []string{`TMP=D:\w\a`, "GOCACHE=/e/cache"},
 		},
 		{
 			name: "drive root",
@@ -204,6 +204,8 @@ func TestNativeExecEnvWindows(t *testing.T) {
 		},
 		{
 			name: "not an msys drive path",
+			// A relative or list-shaped value is not a single path: only an
+			// absolute one converts, and TMPDIR stays the shell's.
 			env:  []string{"TMPDIR=/tmp", "TEMP=tmp/x", "GOPATH=/cc/go", "TMP=/c/a:/c/b", "TEMP="},
 			want: []string{"TMPDIR=/tmp", "TEMP=tmp/x", "GOPATH=/cc/go", "TMP=/c/a:/c/b", "TEMP="},
 		},

@@ -72,6 +72,10 @@ func shellPathFromOSMode(path string, windows bool) string {
 //
 //   - PATH, because the exec lookup itself walks those entries and needs
 //     native directories (see [nativeExecPathListMounts]).
+//   - TMP and TEMP, which are the host's own variables: os.TempDir reads
+//     them, and the /tmp mount is built from that, so a child shell handed
+//     the shell's spelling loses its temp directory entirely. TMPDIR — the
+//     POSIX name, which the shell owns — is passed through untouched.
 //   - the names listed in BASHYENV (VAR/p:VAR2/l), the explicit per-variable
 //     opt-in a script uses when it does invoke a native tool that needs the
 //     Windows spelling. See [parseBashyEnv].
@@ -126,6 +130,12 @@ func nativeExecEnvMode(env []string, windows bool) []string {
 
 // nativeExecEnvMountsMode is [nativeExecEnvMode] with an explicit mount
 // table, so the virtual root (/bin, /tmp) can be exercised on any host.
+// windowsHostTempEnv reports the host's own temp-directory variables, the
+// ones os.TempDir consults.
+func windowsHostTempEnv(name string) bool {
+	return strings.EqualFold(name, "TMP") || strings.EqualFold(name, "TEMP")
+}
+
 func nativeExecEnvMountsMode(m *pathconv.Mounts, env []string, windows bool) []string {
 	if !windows {
 		return env
@@ -152,6 +162,15 @@ func nativeExecEnvMountsMode(m *pathconv.Mounts, env []string, windows bool) []s
 			}
 		} else if strings.EqualFold(name, "PATH") {
 			conv = nativeExecPathListMounts(m, value)
+		} else if windowsHostTempEnv(name) {
+			// TMP and TEMP are Windows' own variables, not shell text: every
+			// native program reads them to find the temp directory, this
+			// shell included (os.TempDir backs the /tmp mount). Handing a
+			// child the shell's spelling makes ITS /tmp resolve to a
+			// drive-relative \tmp that does not exist, which took 15
+			// fixtures with it. The POSIX spelling belongs in TMPDIR, which
+			// the shell owns and passes through untouched.
+			conv = pathconv.NativePathMounts(m, value)
 		} else {
 			continue
 		}
