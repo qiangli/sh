@@ -89,6 +89,10 @@ type Config struct {
 	// the shell's POSIX spelling (/c/x, /tmp/x) and so never recognised
 	// the symlink at all.
 	Lstat func(string) (fs.FileInfo, error)
+	// Stat reports a path's file info with a followed final symlink. Glob
+	// sorting uses it to obtain size and timestamps in the shell's spelling.
+	// If nil, os.Stat is used.
+	Stat func(string) (fs.FileInfo, error)
 
 	// GlobStar corresponds to the shell option which allows globbing with "**".
 	GlobStar bool
@@ -6113,16 +6117,26 @@ func (cfg *Config) sortGlobMatches(base string, matches []string) {
 			info fs.FileInfo
 		}
 		statMatches := make([]statMatch, len(matches))
+		stat := cfg.Stat
+		if stat == nil {
+			stat = os.Stat
+		}
 		for i, match := range matches {
 			path := globPathJoin(base, match)
-			info, _ := os.Stat(path)
+			info, _ := stat(path)
 			statMatches[i] = statMatch{name: match, info: info}
 		}
 		slices.SortFunc(statMatches, func(a, b statMatch) int {
 			c := cmp.Compare(a.name, b.name)
 			if a.info != nil && b.info != nil {
 				switch key {
-				case "atime", "mtime":
+				case "atime":
+					if aa, ok := fileAccessTime(a.info); ok {
+						if bb, ok := fileAccessTime(b.info); ok {
+							c = aa.Compare(bb)
+						}
+					}
+				case "mtime":
 					c = a.info.ModTime().Compare(b.info.ModTime())
 				case "size":
 					c = cmp.Compare(a.info.Size(), b.info.Size())

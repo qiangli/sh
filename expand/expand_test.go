@@ -27,6 +27,49 @@ func parseWord(t *testing.T, src string) *syntax.Word {
 	return word
 }
 
+func TestGlobSortUsesShellStatAndAccessTime(t *testing.T) {
+	if runtime.GOOS != "windows" && runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("access time provider unavailable on this target")
+	}
+	dir := t.TempDir()
+	base := time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC)
+	for _, file := range []struct {
+		name        string
+		access, mod time.Time
+	}{
+		{"a", base.Add(2 * time.Hour), base},
+		{"z", base, base.Add(2 * time.Hour)},
+	} {
+		path := filepath.Join(dir, file.name)
+		if err := os.WriteFile(path, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(path, file.access, file.mod); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct {
+		key  string
+		want string
+	}{
+		{"+atime", "z,a"},
+		{"+mtime", "a,z"},
+	} {
+		cfg := &Config{Env: ListEnviron("GLOBSORT=" + tc.key)}
+		cfg.Stat = func(p string) (fs.FileInfo, error) {
+			if !strings.HasPrefix(p, "/shell/") {
+				t.Fatalf("stat path %q did not retain shell spelling", p)
+			}
+			return os.Stat(filepath.Join(dir, strings.TrimPrefix(p, "/shell/")))
+		}
+		matches := []string{"a", "z"}
+		cfg.sortGlobMatches("/shell", matches)
+		if got := strings.Join(matches, ","); got != tc.want {
+			t.Errorf("GLOBSORT=%s: got %q, want %q", tc.key, got, tc.want)
+		}
+	}
+}
+
 func parseCallArg(t *testing.T, src string, index int) *syntax.Word {
 	t.Helper()
 	p := syntax.NewParser()

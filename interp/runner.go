@@ -413,6 +413,9 @@ func (r *Runner) updateExpandOpts() {
 		r.ecfg.Lstat = func(s string) (fs.FileInfo, error) {
 			return r.lstat(r.ectx, s)
 		}
+		r.ecfg.Stat = func(s string) (fs.FileInfo, error) {
+			return r.stat(r.ectx, s)
+		}
 	}
 	r.ecfg.GlobStar = r.opts[optGlobStar]
 	if opt, _ := r.bashOptByName("globskipdots"); opt != nil {
