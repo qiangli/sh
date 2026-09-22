@@ -1859,7 +1859,9 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 			case *ast.ExprStmt:
 				comm.X = ast.Unparen(comm.X)
 			}
-			v := &s.BashPPSelectCase{Case: c.pos(cc.Case), Colon: c.pos(cc.Colon), Default: cc.Comm == nil, Comm: c.one(cc.Comm)}
+			comm, prefix := c.selectComm(cc.Comm)
+			v := &s.BashPPSelectCase{Case: c.pos(cc.Case), Colon: c.pos(cc.Colon), Default: cc.Comm == nil, Comm: comm}
+			v.Stmts = append(v.Stmts, prefix...)
 			for _, body := range cc.Body {
 				v.Stmts = append(v.Stmts, c.statements(body)...)
 			}
@@ -1964,6 +1966,25 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 	}
 	return []*s.Stmt{c.stmt(cmd)}
 }
+
+// selectComm keeps a select receive atomic even when its assignment has
+// complex targets. The select engine receives into hidden names; only after
+// that arm wins do the ordinary tuple-assignment rules evaluate and commit the
+// original targets, which is the order required by the Go specification.
+func (c *converter) selectComm(st ast.Stmt) (s.Command, []*s.Stmt) {
+	assign, ok := st.(*ast.AssignStmt)
+	if !ok || assign.Tok != token.ASSIGN || len(assign.Lhs) < 2 || tuplePlainTargets(assign.Lhs) {
+		return c.one(st), nil
+	}
+	temps := make([]ast.Expr, len(assign.Lhs))
+	for i, lhs := range assign.Lhs {
+		temps[i] = &ast.Ident{NamePos: ast.Unparen(lhs).Pos(), Name: fmt.Sprintf("%sselect_%d_%d", c.prefix, assign.TokPos, i)}
+	}
+	recv := &ast.AssignStmt{Lhs: temps, TokPos: assign.TokPos, Tok: token.DEFINE, Rhs: assign.Rhs}
+	commit := &ast.AssignStmt{Lhs: assign.Lhs, TokPos: assign.TokPos, Tok: token.ASSIGN, Rhs: temps}
+	return c.one(recv), c.statements(commit)
+}
+
 func (c *converter) one(st ast.Stmt) s.Command {
 	if st == nil {
 		return nil

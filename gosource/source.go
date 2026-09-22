@@ -228,7 +228,7 @@ func Load(sources []Source, options Options) (*Program, error) {
 	}
 	fallback := options.Importer
 	if fallback == nil {
-		fallback = importer.Default()
+		fallback = defaultSourceImporter{Importer: importer.Default()}
 	}
 	imp := newMapImporter(options.ImportBase, fallback)
 	imp.fset, imp.checker = c.fset, checker
