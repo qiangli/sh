@@ -93,7 +93,12 @@ func (r *Runner) access(ctx context.Context, path string, mode uint32) error {
 		}
 	case access_X_OK:
 		if !winmode.Recorded(info) {
-			if m.IsDir() || r.hasPathExt(path) {
+			// No mode was ever recorded for this file — it was created by
+			// something that does not speak POSIX modes, which on Windows
+			// is most things. Cygwin's rule for exactly this case: a file
+			// is executable if Windows would run it by extension, or if it
+			// begins with `#!` or `MZ`. Anything else is a data file.
+			if m.IsDir() || r.hasPathExt(path) || hasExecutableMagic(path) {
 				return nil
 			}
 			return fmt.Errorf("file is not executable")
