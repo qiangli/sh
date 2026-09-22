@@ -320,7 +320,13 @@ func (r *Runner) goSourceCollectionReadCell(expr syntax.BashPPExpr, value any, m
 // the complex carrier rather than mistaking that spelling for a Go string.
 func (r *Runner) bashPPStringCarriesComplex(typ syntax.BashPPTypeExpr, text string) bool {
 	shape, ok := r.bashPPUnderlyingType(typ).(*syntax.BashPPNamedType)
-	return ok && (shape.Name.Value == "complex64" || shape.Name.Value == "complex128") && bashPPParseComplex(text).Kind() == constant.Complex
+	if !ok || (shape.Name.Value != "complex64" && shape.Name.Value != "complex128") {
+		return false
+	}
+	if _, special := bashPPNonFiniteComplexText(text); special {
+		return true
+	}
+	return bashPPParseComplex(text).Kind() == constant.Complex
 }
 
 // goSourceNativeSequenceContents materialises a dependency-owned array or

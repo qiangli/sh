@@ -13,7 +13,7 @@ import (
 
 func goSourceNativeValueCell(value bashPPBridgeValue) *bashPPCell {
 	if scalar, err := value.scalar(); err == nil {
-		cell := &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarStorageString(scalar)}, scalarKind: scalar.value.Kind(), negativeZero: scalar.negativeZero, nonFinite: scalar.nonFinite, hasNonFinite: scalar.hasNonFinite, typeName: scalar.typ, declType: &syntax.BashPPNamedType{Name: &syntax.Lit{Value: scalar.typ}}}
+		cell := &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarStorageString(scalar)}, scalarKind: scalar.value.Kind(), negativeZero: scalar.negativeZero, nonFinite: scalar.nonFinite, hasNonFinite: scalar.hasNonFinite, nonFiniteComplex: scalar.nonFiniteComplex, hasNonFiniteComplex: scalar.hasNonFiniteComplex, typeName: scalar.typ, declType: &syntax.BashPPNamedType{Name: &syntax.Lit{Value: scalar.typ}}}
 		if value.Interface != "" {
 			cell.declType = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.Interface}}
 			payload := bashPPCopyAssignmentCell(cell)
@@ -181,7 +181,7 @@ func (r *Runner) goSourceValueCells(expr syntax.BashPPExpr, spread bool) ([]*bas
 	if err != nil {
 		return nil, err
 	}
-	cell := &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarStorageString(v)}, scalarKind: v.value.Kind(), negativeZero: v.negativeZero, nonFinite: v.nonFinite, hasNonFinite: v.hasNonFinite, typeName: v.typ}
+	cell := &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarStorageString(v)}, scalarKind: v.value.Kind(), negativeZero: v.negativeZero, nonFinite: v.nonFinite, hasNonFinite: v.hasNonFinite, nonFiniteComplex: v.nonFiniteComplex, hasNonFiniteComplex: v.hasNonFiniteComplex, typeName: v.typ}
 	if v.typ != "" {
 		cell.declType, cell.typeName = bashPPScalarNamedType(v.typ)
 	}

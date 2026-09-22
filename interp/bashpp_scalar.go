@@ -24,8 +24,10 @@ type bashPPScalar struct {
 	negativeZero bool
 	// nonFinite carries the runtime IEEE values that go/constant deliberately
 	// cannot represent. It is only set for Go-source runtime float operations.
-	nonFinite    float64
-	hasNonFinite bool
+	nonFinite           float64
+	hasNonFinite        bool
+	nonFiniteComplex    complex128
+	hasNonFiniteComplex bool
 }
 
 // bashPPEvalScalarExpr consumes syntax's typed tree. Parsing belongs solely
@@ -54,8 +56,18 @@ func (r *Runner) bashPPEvalScalarExpr(expr syntax.BashPPExpr) (result bashPPScal
 			return value, err
 		}
 	}
-	if value, handled, err := r.bashPPBridgeScalar(expr); handled {
-		return value, err
+	localConversion := false
+	if conversion, ok := expr.(*syntax.BashPPConvertExpr); ok && r.bashPPGoSource {
+		if target := r.bashPPConvertTarget(conversion); target != nil {
+			if named, ok := target.(*syntax.BashPPNamedType); ok && named.Name != nil {
+				_, localConversion = r.bashPPTypes[named.Name.Value]
+			}
+		}
+	}
+	if !localConversion {
+		if value, handled, err := r.bashPPBridgeScalar(expr); handled {
+			return value, err
+		}
 	}
 	switch x := expr.(type) {
 	case *syntax.BashPPBasicLit:
@@ -493,6 +505,9 @@ func (r *Runner) bashPPIdentScalar(name string) (bashPPScalar, error) {
 // considering its rendered shell text. Quoted "2" and "true" values must not
 // become numbers or booleans merely because their storage is textual.
 func (r *Runner) bashPPScalarFromCell(cell *bashPPCell) bashPPScalar {
+	if cell.hasNonFiniteComplex {
+		return bashPPNonFiniteComplexScalar(cell.nonFiniteComplex, cell.typeName)
+	}
 	if cell.hasNonFinite {
 		return bashPPScalar{value: constant.MakeFloat64(0), typ: cell.typeName, runtime: true, nonFinite: cell.nonFinite, hasNonFinite: true}
 	}
@@ -741,6 +756,9 @@ func (r *Runner) bashPPRuntimeFloatSpecial(op token.Token, left, right bashPPSca
 }
 
 func bashPPScalarStorageString(value bashPPScalar) string {
+	if value.hasNonFiniteComplex {
+		return strconv.FormatComplex(value.nonFiniteComplex, 'g', -1, 128)
+	}
 	if value.hasNonFinite {
 		return strconv.FormatFloat(value.nonFinite, 'g', -1, 64)
 	}

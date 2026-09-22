@@ -16,7 +16,13 @@ import (
 // destination type when read.
 func bashPPSprint162ComplexCollectionText(value any) bool {
 	text, ok := value.(string)
-	return ok && bashPPParseComplex(text).Kind() == constant.Complex
+	if !ok {
+		return false
+	}
+	if _, special := bashPPNonFiniteComplexText(text); special {
+		return true
+	}
+	return bashPPParseComplex(text).Kind() == constant.Complex
 }
 
 // bashPPSprint162CollectionBoundsPanic turns a dynamic indexing fault into

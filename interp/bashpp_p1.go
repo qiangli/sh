@@ -1254,6 +1254,7 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 			target.scalarKind = value.value.Kind()
 			target.negativeZero = value.negativeZero
 			target.nonFinite, target.hasNonFinite = value.nonFinite, value.hasNonFinite
+			target.nonFiniteComplex, target.hasNonFiniteComplex = value.nonFiniteComplex, value.hasNonFiniteComplex
 			target.typeName = value.typ
 			// `f := IteratorFunc[int](it)`: an instantiated named type is
 			// kept as a tree, since its type arguments are what the
@@ -1363,6 +1364,7 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 				target.scalarKind = value.value.Kind()
 				target.typeName = value.typ
 				target.nonFinite, target.hasNonFinite = value.nonFinite, value.hasNonFinite
+				target.nonFiniteComplex, target.hasNonFiniteComplex = value.nonFiniteComplex, value.hasNonFiniteComplex
 			}
 			return
 		}

@@ -62,6 +62,28 @@ func bashPPComplexNumber(v constant.Value) complex128 {
 	return complex(re, im)
 }
 
+func bashPPScalarComplex128(v bashPPScalar) (complex128, bool) {
+	if v.hasNonFiniteComplex {
+		return v.nonFiniteComplex, true
+	}
+	if v.value == nil || (v.value.Kind() != constant.Int && v.value.Kind() != constant.Float && v.value.Kind() != constant.Complex) {
+		return 0, false
+	}
+	return bashPPComplexNumber(v.value), true
+}
+
+func bashPPNonFiniteComplexScalar(value complex128, typ string) bashPPScalar {
+	return bashPPScalar{value: bashPPComplexConstant(0), typ: typ, runtime: true, nonFiniteComplex: value, hasNonFiniteComplex: true}
+}
+
+func bashPPNonFiniteComplexText(text string) (complex128, bool) {
+	value, err := strconv.ParseComplex(text, 128)
+	if err != nil {
+		return 0, false
+	}
+	return value, math.IsInf(real(value), 0) || math.IsInf(imag(value), 0) || math.IsNaN(real(value)) || math.IsNaN(imag(value))
+}
+
 // Go's runtime operations round intermediate floating components too. Using
 // constant.BinaryOp for runtime multiplication would incorrectly keep exact
 // products until the final addition and can change cancellation results.
@@ -76,7 +98,11 @@ func (r *Runner) bashPPComplexRuntimeOp(op token.Token, left, right bashPPScalar
 	if named, ok := r.bashPPUnderlyingType(&syntax.BashPPNamedType{Name: &syntax.Lit{Value: typ}}).(*syntax.BashPPNamedType); ok {
 		base = named.Name.Value
 	}
-	a, b := bashPPComplexNumber(left.value), bashPPComplexNumber(right.value)
+	a, aok := bashPPScalarComplex128(left)
+	b, bok := bashPPScalarComplex128(right)
+	if !aok || !bok {
+		return bashPPScalar{}, true, fmt.Errorf("BASHPP-EEXPR-OPERAND: complex operation requires numeric operands")
+	}
 	var z complex128
 	if base == "complex64" {
 		a, b := complex64(a), complex64(b)
@@ -103,7 +129,7 @@ func (r *Runner) bashPPComplexRuntimeOp(op token.Token, left, right bashPPScalar
 		}
 	}
 	if math.IsInf(real(z), 0) || math.IsInf(imag(z), 0) || math.IsNaN(real(z)) || math.IsNaN(imag(z)) {
-		return bashPPScalar{}, true, fmt.Errorf("BASHPP-EEXPR-CONVERT: non-finite complex runtime result is not supported by scalar carrier")
+		return bashPPNonFiniteComplexScalar(z, typ), true, nil
 	}
 	return bashPPScalar{value: bashPPComplexConstant(z), typ: typ, runtime: true}, true, nil
 }
@@ -187,12 +213,24 @@ func (r *Runner) bashPPComplexBuiltinValues(name string, args []bashPPScalar) (b
 				}
 			}
 		}
+		if args[0].hasNonFinite || args[1].hasNonFinite {
+			re, reOK := bashPPScalarFloat64(args[0])
+			im, imOK := bashPPScalarFloat64(args[1])
+			if !reOK || !imOK {
+				return bashPPScalar{}, fmt.Errorf("complex requires floating-point arguments")
+			}
+			value := complex(re, im)
+			if typ == "complex64" {
+				value = complex128(complex64(value))
+			}
+			return bashPPNonFiniteComplexScalar(value, typ), nil
+		}
 		v := constant.BinaryOp(args[0].value, token.ADD, constant.MakeImag(args[1].value))
 		result, err := r.bashPPTypedScalarResult(v, typ, runtime)
 		return result, err
 	}
 	a := args[0]
-	if a.value.Kind() != constant.Complex && a.value.Kind() != constant.Int && a.value.Kind() != constant.Float {
+	if a.value.Kind() != constant.Complex && !a.hasNonFiniteComplex {
 		return bashPPScalar{}, fmt.Errorf("%s requires complex argument", name)
 	}
 	typ := ""
@@ -209,6 +247,16 @@ func (r *Runner) bashPPComplexBuiltinValues(name string, args []bashPPScalar) (b
 		default:
 			return bashPPScalar{}, fmt.Errorf("%s requires complex argument", name)
 		}
+	}
+	if a.hasNonFiniteComplex {
+		part := real(a.nonFiniteComplex)
+		if name == "imag" {
+			part = imag(a.nonFiniteComplex)
+		}
+		if math.IsInf(part, 0) || math.IsNaN(part) {
+			return bashPPNonFiniteScalar(part, typ), nil
+		}
+		return bashPPScalar{value: constant.MakeFloat64(part), typ: typ, runtime: true}, nil
 	}
 	v := constant.Real(a.value)
 	if name == "imag" {
