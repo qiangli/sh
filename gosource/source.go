@@ -223,6 +223,9 @@ func Load(sources []Source, options Options) (*Program, error) {
 	if len(c.files) == 0 {
 		return nil, parseErrors
 	}
+	if len(syntaxErrors) > 0 {
+		parseErrors = appendStructuralCheckerDiagnostics(parseErrors, gcFiles)
+	}
 	if len(syntaxErrors) == 0 {
 		parseErrors = append(parseErrors, validateCompilerDirectives(c.fset, c.files, checker)...)
 	}

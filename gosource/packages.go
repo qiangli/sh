@@ -216,6 +216,9 @@ func (m *mapImporter) checkDependency(fset *token.FileSet, spec PackageSpec, che
 	if len(files) == 0 {
 		return diagnostics
 	}
+	if len(syntaxErrors) > 0 {
+		diagnostics = appendStructuralCheckerDiagnostics(diagnostics, gcFiles)
+	}
 	if len(syntaxErrors) == 0 {
 		diagnostics = append(diagnostics, validateCompilerDirectives(fset, files, checker)...)
 	}
