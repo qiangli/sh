@@ -1056,11 +1056,23 @@ func splitLookPath(path string, windows bool) []string {
 	return pathconv.SplitPathList(path, windows)
 }
 
+// lookPathHasPath reports whether a command word names a path, which bash
+// hands to execve as is, rather than a name to search on $PATH. On Windows
+// a separator or a leading drive spec ("C:") counts; a colon anywhere else
+// is an ordinary character of the name, so a function called `<(:)` that
+// is not found is "command not found", not "No such file or directory".
 func lookPathHasPath(file string, windows bool) bool {
 	if windows {
-		return strings.ContainsAny(file, `:\/`)
+		if strings.ContainsAny(file, `\/`) {
+			return true
+		}
+		return len(file) >= 2 && file[1] == ':' && isASCIILetter(file[0])
 	}
 	return strings.Contains(file, `/`)
+}
+
+func isASCIILetter(c byte) bool {
+	return 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z'
 }
 
 func lookPathJoin(dir, file string, windows bool) string {

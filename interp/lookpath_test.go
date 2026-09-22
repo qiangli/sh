@@ -179,6 +179,13 @@ func TestLookPathHasPath(t *testing.T) {
 		{"windows slash", "bin/rpc-server", true, true},
 		{"windows backslash", `bin\rpc-server`, true, true},
 		{"windows drive", `C:\bin\rpc-server`, true, true},
+		{"windows bare drive", `C:`, true, true},
+		{"windows lowercase drive", `d:tool`, true, true},
+		{"windows colon inside a name", `<(:)`, true, false},
+		{"windows trailing colon", `a:`, true, true},
+		{"windows colon after two chars", `ab:c`, true, false},
+		{"windows leading colon", `:x`, true, false},
+		{"windows digit before colon", `1:x`, true, false},
 	}
 
 	for _, tt := range tests {
