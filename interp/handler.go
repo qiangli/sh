@@ -47,6 +47,10 @@ type devNetworkRedirectCtxKey struct{}
 // running non-exec component must not overwrite the replacement's result.
 type execReplacingCtxKey struct{}
 
+// execStartOverrideCtxKey is an internal test seam for observing the command
+// selected by the exec path without creating a Windows process.
+type execStartOverrideCtxKey struct{}
+
 func (r *Runner) devNetworkRedirectsEnabled() bool {
 	switch r.Dialect() {
 	case syntax.LangBash, syntax.LangBashPP, syntax.LangBats:
@@ -261,6 +265,12 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			lookupDir = shellPathFromOS(execDir)
 		}
 		path, err := LookPathDir(lookupDir, hc.Env, args[0])
+		if err != nil && runtime.GOOS == "windows" {
+			// CreateProcess does not consider extensionless files executable,
+			// but bash does: it attempts execve and then applies its ENOEXEC
+			// script fallback. Find the file without PATHEXT filtering here.
+			path, err = lookPathDir(lookupDir, hc.Env, args[0], findFile)
+		}
 		if err != nil {
 			err = shellVisibleLookupError(err, lookupDir, hc.Dir)
 			if hc.runner != nil && hc.runner.bashCompatErrors {
@@ -337,6 +347,12 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 		cmdArgs := args
 		if hc.ExecAs != "" {
 			cmdArgs = append([]string{hc.ExecAs}, args[1:]...)
+		}
+		execPath, cmdArgs, missingInterp := preparePlatformExec(lookupDir, execPath, diagnosticScriptPath, cmdArgs)
+		if missingInterp != "" && hc.runner != nil && hc.runner.bashCompatErrors {
+			fmt.Fprintf(hc.Stderr, "%s: %s: %s: bad interpreter: No such file or directory\n",
+				hc.runner.filename, args[0], missingInterp)
+			return ExitStatus(126)
 		}
 		extraFiles, inheritedFds, closeExtraFiles, err := hc.runner.execExtraFiles()
 		if err != nil {
@@ -482,7 +498,9 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 		}()
 		startCmd := func() error {
 			var startErr error
-			if hc.runner != nil {
+			if start, ok := ctx.Value(execStartOverrideCtxKey{}).(func(*exec.Cmd) error); ok {
+				startErr = start(&cmd)
+			} else if hc.runner != nil {
 				startErr = hc.runner.startExecCmdWithUmask(ctx, &cmd, hc.runner.umask)
 			} else {
 				startErr = cmd.Start()
@@ -761,19 +779,14 @@ func setExecEnvValue(env []string, name, value string) []string {
 }
 
 func missingShebangInterpreter(path string) (string, bool) {
-	data, err := os.ReadFile(path)
-	if err != nil || !strings.HasPrefix(string(data), "#!") {
+	data, err := readShebangProbe(path)
+	if err != nil {
 		return "", false
 	}
-	line := string(data[2:])
-	if i := strings.IndexByte(line, '\n'); i >= 0 {
-		line = line[:i]
-	}
-	fields := strings.Fields(line)
-	if len(fields) == 0 {
+	interp, _, ok := parseShebang(data)
+	if !ok {
 		return "", false
 	}
-	interp := fields[0]
 	if shellPathAbs(interp) {
 		if _, err := os.Stat(shellPathToOS(path, interp)); err == nil {
 			return "", false
@@ -784,17 +797,6 @@ func missingShebangInterpreter(path string) (string, bool) {
 		return "", false
 	}
 	return interp, true
-}
-
-// isExecFormatError reports whether err is the ENOEXEC error returned
-// by execve when the file isn't a recognised executable format (no
-// shebang, not an ELF/Mach-O binary). bash, dash, and ash all fall
-// back to running the file as a shell script in that case.
-func isExecFormatError(err error) bool {
-	if err == nil {
-		return false
-	}
-	return strings.Contains(err.Error(), "exec format error")
 }
 
 // classifyExecPath inspects a command name that contains a slash and
@@ -813,6 +815,9 @@ func classifyExecPath(dir, file string) (string, int) {
 		}
 		if os.IsPermission(err) {
 			return "Permission denied", 126
+		}
+		if reason, ok := posixErrorText(err); ok {
+			return reason, 127
 		}
 		return "No such file or directory", 127
 	}
