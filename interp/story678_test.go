@@ -107,9 +107,13 @@ func TestFindExecutablePosixSpellingKeepsInput(t *testing.T) {
 	if got, err := findExecutable(dir, explicit, exts); err != nil || got != explicit {
 		t.Errorf("findExecutable(%q) = (%q, %v)", explicit, got, err)
 	}
-	// A relative operand still reports the file that was found.
-	if got, err := findExecutable(dir, "cmd", exts); err != nil || got != "cmd.exe" {
-		t.Errorf("findExecutable(cmd) = (%q, %v), want cmd.exe", got, err)
+	// A bare name found through PATHEXT keeps its spelling too: the exec
+	// handler resolves the file (execFileWithExt), type/hash show the name.
+	if got, err := findExecutable(dir, "cmd", exts); err != nil || got != "cmd" {
+		t.Errorf("findExecutable(cmd) = (%q, %v), want cmd", got, err)
+	}
+	if got, err := findExecutable(dir, "cmd.exe", exts); err != nil || got != "cmd.exe" {
+		t.Errorf("findExecutable(cmd.exe) = (%q, %v), want cmd.exe", got, err)
 	}
 	if _, err := findExecutable(dir, filepath.ToSlash(filepath.Join(dir, "none")), exts); err == nil {
 		t.Error("findExecutable(none) succeeded")

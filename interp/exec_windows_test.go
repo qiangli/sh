@@ -79,3 +79,31 @@ func TestWindowsExecNativePathEnv(t *testing.T) {
 		t.Errorf("output %q: want both children to see %q", got, native)
 	}
 }
+
+// A bare name found on PATH through PATHEXT is displayed without the
+// suffix — `type -p w` and `command -v w` print …\w for w.exe, as bash on
+// Cygwin does — while the command itself still runs the .exe.
+func TestWindowsPathExtHitKeepsSpelling(t *testing.T) {
+	dir := t.TempDir()
+	src, err := os.ReadFile(`C:\Windows\System32\where.exe`)
+	if err != nil {
+		t.Skip("no where.exe")
+	}
+	if err := os.WriteFile(filepath.Join(dir, "w.exe"), src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb strings.Builder
+	r, _ := interp.New(interp.StdIO(nil, &out, &errb),
+		interp.Env(expand.ListEnviron("PATH="+dir, "PATHEXT=.COM;.EXE;.BAT")))
+	script := `type -p w; command -v w; w /Q w.exe; echo rc=$?; w.exe /Q w.exe; echo rc=$?; type -p w.exe`
+	f, perr := syntax.NewParser().Parse(strings.NewReader(script), "")
+	if perr != nil {
+		t.Fatal(perr)
+	}
+	_ = r.Run(context.Background(), f)
+	bare := filepath.Join(dir, "w")
+	want := bare + "\n" + bare + "\nrc=0\nrc=0\n" + bare + ".exe\n"
+	if out.String() != want {
+		t.Fatalf("out=%q err=%q\nwant %q", out.String(), errb.String(), want)
+	}
+}

@@ -298,6 +298,15 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			// argv[0], diagnostics and "_" keep the spelling the shell resolved.
 			execPath = filepath.Join(execDir, execPath)
 		}
+		if runtime.GOOS == "windows" {
+			// The lookup keeps the operand's spelling when the hit came
+			// through PATHEXT (type, hash and $_ say /tmp/bash, not
+			// /tmp/bash.exe); the OS runs the file itself.
+			execPath = execFileWithExt(execPath, pathExts(hc.Env), func(p string) bool {
+				_, err := os.Stat(p)
+				return err == nil
+			})
+		}
 		scriptPath := execPath
 		if lookupDir != hc.Dir {
 			// On Linux, a retained cwd is represented by /proc/self/fd/N.
@@ -961,19 +970,35 @@ func findExecutable(dir, file string, exts []string) (string, error) {
 		}
 	}
 	for _, e := range exts {
-		f := file + e
-		if f, err := checkStat(dir, f, true); err == nil {
-			if strings.HasPrefix(file, "/") {
-				// A POSIX-spelled operand (/bin/sh) keeps its spelling
-				// when the hit came through PATHEXT: `type -t /bin/sh`
-				// prints file and `hash -p /bin/sh` records what bash
-				// records; os/exec appends the extension itself.
-				return file, nil
-			}
-			return f, nil
+		if _, err := checkStat(dir, file+e, true); err == nil {
+			// A hit through PATHEXT keeps the operand's spelling — the
+			// POSIX-spelled /bin/sh and a bare name joined onto its PATH
+			// element alike: `type -p bash` prints /tmp/bash, `hash`
+			// records it and $_ carries it, as bash on Cygwin shows the
+			// file. The exec handler resolves the file to run from that
+			// spelling (execFileWithExt), and os/exec appends the
+			// extension itself.
+			return file, nil
 		}
 	}
 	return "", fmt.Errorf("not found")
+}
+
+// execFileWithExt returns the file to run for a path in the shell's display
+// spelling: the path itself when it exists, else the first path+ext in
+// PATHEXT order that does. The Windows lookup reports the spelling without
+// the suffix (findExecutable); the shebang probe, the self-identity check
+// and CreateProcess need the file.
+func execFileWithExt(path string, exts []string, exists func(string) bool) string {
+	if exists(path) {
+		return path
+	}
+	for _, e := range exts {
+		if exists(path + e) {
+			return path + e
+		}
+	}
+	return path
 }
 
 // findFile returns the path to an existing file.
