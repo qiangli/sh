@@ -508,14 +508,14 @@ func (r *Runner) bashPPMakeInterfaceValue(expr syntax.BashPPExpr, expected synta
 		if cell.interfaceValue != nil && cell.interfaceValue.nilIface {
 			return &bashPPInterfaceValue{nilIface: true}, cell.vr, nil
 		}
-		if err := r.bashPPImplements(cell.declType, iface); err != nil {
+		if err := r.bashPPImplementsCell(cell, cell.declType, iface); err != nil {
 			return nil, expand.Variable{}, err
 		}
 		return &bashPPInterfaceValue{dynamic: cell.declType, cell: cell}, cell.vr, nil
 	}
 	if id, ok := expr.(*syntax.BashPPIdent); ok {
 		if source := r.bashPPScope.lookup(id.Name.Value); source != nil && source.interfaceValue != nil {
-			if err := r.bashPPImplements(source.declType, iface); err != nil {
+			if err := r.bashPPImplementsCell(source, source.declType, iface); err != nil {
 				return nil, expand.Variable{}, err
 			}
 			if source.interfaceValue.nilIface {
@@ -538,7 +538,7 @@ func (r *Runner) bashPPMakeInterfaceValue(expr syntax.BashPPExpr, expected synta
 		if source.nilIface {
 			return &bashPPInterfaceValue{nilIface: true}, expand.Variable{Set: true, Kind: expand.String}, nil
 		}
-		if err := r.bashPPImplements(source.dynamic, iface); err != nil {
+		if err := r.bashPPImplementsCell(source.cell, source.dynamic, iface); err != nil {
 			return nil, expand.Variable{}, err
 		}
 		iv := *source
@@ -552,7 +552,7 @@ func (r *Runner) bashPPMakeInterfaceValue(expr syntax.BashPPExpr, expected synta
 	if err != nil {
 		return nil, expand.Variable{}, err
 	}
-	if err := r.bashPPImplements(actual, iface); err != nil {
+	if err := r.bashPPImplementsCell(cell, actual, iface); err != nil {
 		return nil, expand.Variable{}, err
 	}
 	stored := bashPPCopyInterfaceCell(cell)
@@ -644,7 +644,7 @@ func (r *Runner) bashPPBindInterfaceParam(cell *bashPPCell, typ syntax.BashPPTyp
 	if dynamic == nil || bashPPTypeText(dynamic) == bashPPTypeText(typ) {
 		return nil
 	}
-	if err := r.bashPPImplements(dynamic, iface); err != nil {
+	if err := r.bashPPImplementsCell(cell, dynamic, iface); err != nil {
 		return err
 	}
 	cell.interfaceValue = &bashPPInterfaceValue{dynamic: dynamic, cell: bashPPCopyInterfaceCell(cell)}
@@ -682,7 +682,7 @@ func (r *Runner) bashPPInterfaceConversion(x syntax.BashPPExpr) (*bashPPCell, bo
 			cell.interfaceValue = &bashPPInterfaceValue{nilIface: true}
 			return cell, true, nil
 		}
-		if err := r.bashPPImplements(source.declType, iface); err != nil {
+		if err := r.bashPPImplementsCell(source, source.declType, iface); err != nil {
 			return nil, true, err
 		}
 		cell.interfaceValue = &bashPPInterfaceValue{dynamic: source.declType, cell: bashPPCopyInterfaceCell(source)}
@@ -698,7 +698,7 @@ func (r *Runner) bashPPInterfaceConversion(x syntax.BashPPExpr) (*bashPPCell, bo
 		cell.interfaceValue = &bashPPInterfaceValue{nilIface: true}
 		return cell, true, nil
 	}
-	if err := r.bashPPImplements(dynamic, iface); err != nil {
+	if err := r.bashPPImplementsCell(source, dynamic, iface); err != nil {
 		return nil, true, err
 	}
 	cell.interfaceValue = &bashPPInterfaceValue{dynamic: dynamic, cell: bashPPCopyInterfaceCell(source)}

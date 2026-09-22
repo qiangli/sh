@@ -500,7 +500,7 @@ func (r *Runner) goSourceConvertedInterfaceValue(expr syntax.BashPPExpr, iface *
 	if source == nil || source.nilIface {
 		return &bashPPInterfaceValue{nilIface: true}, expand.Variable{Set: true, Kind: expand.String}, true, nil
 	}
-	if err := r.bashPPImplements(source.dynamic, iface); err != nil {
+	if err := r.bashPPImplementsCell(source.cell, source.dynamic, iface); err != nil {
 		return nil, expand.Variable{}, true, err
 	}
 	iv := *source
