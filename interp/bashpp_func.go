@@ -2314,6 +2314,17 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 			r.bashPPResultCells[i].typeName = bashPPNamedTypeBase(resultTypes[i])
 		}
 	}
+	// A status recover used to REPORT its answer — "nothing to recover",
+	// which is what the bare `recover()` of a guard like `defer rec()` says
+	// on a frame that did not panic — is that call's, not this frame's. A
+	// Go function has no status of its own, so the answer is consumed at
+	// the func boundary too: left in place it made a task whose last frame
+	// ended on such a guard a failed task, and a program whose main did so
+	// exit 1. The stamp is what tells this status from a real failure that
+	// merely inherited the exemption.
+	if r.bashPPGoSource && r.exit.recoverSeq != 0 && r.exit.errexitExempt && !r.exit.exiting && !r.exit.fatalExit {
+		r.exit.code, r.exit.err, r.exit.recoverSeq, r.exit.errexitExempt = 0, nil, 0, false
+	}
 	// A Go-form return is consumed at the func boundary, exactly as a shell
 	// function's `return` is in [Runner.call]; it must not unwind the caller.
 	r.exit.returning = false
