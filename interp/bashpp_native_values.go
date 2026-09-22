@@ -246,6 +246,11 @@ func (value bashPPBridgeValue) scalar() (bashPPScalar, error) {
 	case "complex":
 		scalar.value = bashPPParseComplex(value.Text)
 	case "float":
+		// math.NaN() and math.Inf(1) cross as the text go/constant cannot
+		// hold; they are the runtime non-finite scalar, not an invalid one.
+		if special, ok := bashPPNonFiniteText(value.Text); ok {
+			return bashPPNonFiniteScalar(special, value.Type), nil
+		}
 		scalar.value = constant.MakeFromLiteral(value.Text, token.FLOAT, 0)
 		if number, err := strconv.ParseFloat(value.Text, 64); err == nil {
 			scalar.negativeZero = number == 0 && math.Signbit(number)
@@ -950,10 +955,11 @@ func (r *Runner) bashPPBridgeShortDecl(ctx context.Context, d *syntax.BashPPShor
 func (r *Runner) bashPPBindNativeValue(name string, value bashPPBridgeValue) {
 	scalar, err := value.scalar()
 	if err == nil {
-		r.bashPPDeclareName(name, expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarString(scalar.value)})
+		r.bashPPDeclareName(name, expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarStorageString(scalar)})
 		cell := r.bashPPScope.lookup(name)
 		cell.scalarKind = scalar.value.Kind()
 		cell.negativeZero = scalar.negativeZero
+		cell.nonFinite, cell.hasNonFinite = scalar.nonFinite, scalar.hasNonFinite
 		cell.typeName = value.Type
 		cell.declType = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.Type}}
 		return

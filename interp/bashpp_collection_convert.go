@@ -35,6 +35,20 @@ func (r *Runner) bashPPConvertTarget(x *syntax.BashPPConvertExpr) syntax.BashPPT
 	return nil
 }
 
+// bashPPConvertTargetName is the type name a scalar conversion converts
+// through. The front end keeps the source spelling in ConvType — `(byte)` for
+// `(byte)(0)`, `T[int]` for an instantiated defined type — while the
+// structured ConvTypeExpr names the type itself; a Bash++ conversion without
+// the structured form is spelled by its name alone.
+func (r *Runner) bashPPConvertTargetName(x *syntax.BashPPConvertExpr) string {
+	if r.bashPPGoSource {
+		if named, ok := x.ConvTypeExpr.(*syntax.BashPPNamedType); ok && named.Name != nil {
+			return named.Name.Value
+		}
+	}
+	return x.ConvType.Value
+}
+
 // bashPPByteOrRuneSlice reports whether typ is a slice whose elements are the
 // byte or rune spellings a string converts to and from. The answer is the
 // element's own kind, since a byte slice converts the string's bytes and a rune
@@ -102,6 +116,30 @@ func (r *Runner) bashPPCollectionOperand(expr syntax.BashPPExpr) (any, *bashPPCo
 	return r.bashPPStructuredBridgeRead(expr)
 }
 
+// bashPPCallOperandCell evaluates a conversion operand that is a call once,
+// returning the callee's own value cell the way a `return` hands it back —
+// `LineString(ps.Clone())` in fixedbugs/issue29329 converts a method result
+// that no named operand carries. Only an interpreted Go-source call is
+// claimed; a native call, a nested conversion and every other operand shape
+// report false untouched so their existing readers still own them.
+func (r *Runner) bashPPCallOperandCell(expr syntax.BashPPExpr) (*bashPPCell, bool, error) {
+	if paren, ok := expr.(*syntax.BashPPParenExpr); ok {
+		return r.bashPPCallOperandCell(paren.X)
+	}
+	call, ok := expr.(*syntax.BashPPCall)
+	if !ok || !r.bashPPGoSource || r.bashPPNativeExpr(call) {
+		return nil, false, nil
+	}
+	if _, conversion := r.bashPPConversionCall(call); conversion {
+		return nil, false, nil
+	}
+	cell, err := r.goSourceValueCell(call)
+	if err != nil {
+		return nil, true, err
+	}
+	return cell, cell != nil, nil
+}
+
 // bashPPElementInt recovers the integer a byte or rune element holds. Elements
 // arrive as the interpreter's own int, but one read back through a bridge value
 // or an exact scalar can still be spelled as text.
@@ -125,6 +163,9 @@ func bashPPElementInt(value any) (int, bool) {
 // conversion has been claimed.
 func (r *Runner) bashPPConvertToCollection(x *syntax.BashPPConvertExpr) (any, *bashPPCollectionMeta, bool, error) {
 	target := r.bashPPConvertTarget(x)
+	// operand is a call result already evaluated above the string
+	// conversion, which must not run the call a second time.
+	var operand *bashPPCell
 	if r.bashPPGoSource {
 		array, ok := r.bashPPUnderlyingType(target).(*syntax.BashPPCollectionType)
 		if ok && array.Kind == "array" && array.Length != nil {
@@ -168,7 +209,23 @@ func (r *Runner) bashPPConvertToCollection(x *syntax.BashPPConvertExpr) (any, *b
 		// `sets[int, []int](x)`). The value is not a scalar spelling and must
 		// reach the generic/interface call as its complete cell.
 		if ok {
-			if value, meta, exists := r.bashPPCollectionOperand(x.X); exists {
+			value, meta, exists := r.bashPPCollectionOperand(x.X)
+			if !exists {
+				// A call result is read once; a scalar result is kept for
+				// the string conversion below rather than evaluated again.
+				cell, called, err := r.bashPPCallOperandCell(x.X)
+				if err != nil {
+					return nil, nil, true, err
+				}
+				if called {
+					if cellMeta := bashPPCellMeta(cell); cell.vr.Kind == expand.Object && cellMeta != nil && cellMeta.kind != "" {
+						value, meta, exists = cell.vr.Obj, cellMeta, true
+					} else {
+						operand = cell
+					}
+				}
+			}
+			if exists {
 				if bashPPTypeText(r.bashPPUnderlyingType(meta.typ)) != bashPPTypeText(r.bashPPUnderlyingType(target)) {
 					return nil, nil, true, fmt.Errorf("BASHPP-EEXPR-CONVERT: cannot convert %s to %s", bashPPTypeText(meta.typ), bashPPTypeText(target))
 				}
@@ -190,7 +247,7 @@ func (r *Runner) bashPPConvertToCollection(x *syntax.BashPPConvertExpr) (any, *b
 	}
 	// `[]byte(bs)` on a slice operand is an identity conversion; the payload is
 	// shared, exactly as Go shares it.
-	if value, meta, ok := r.bashPPCollectionOperand(x.X); ok {
+	if value, meta, ok := r.bashPPCollectionOperand(x.X); ok && operand == nil {
 		if _, ok := r.bashPPByteOrRuneSlice(meta.typ); !ok {
 			return nil, nil, true, fmt.Errorf("BASHPP-EEXPR-CONVERT: cannot convert %s to %s", bashPPTypeText(meta.typ), bashPPTypeText(target))
 		}
@@ -198,9 +255,17 @@ func (r *Runner) bashPPConvertToCollection(x *syntax.BashPPConvertExpr) (any, *b
 		converted.typ = target
 		return value, &converted, true, nil
 	}
-	scalar, err := r.bashPPEvalScalarExpr(x.X)
-	if err != nil {
-		return nil, nil, true, err
+	var scalar bashPPScalar
+	if operand != nil {
+		scalar = r.bashPPScalarFromCell(operand)
+	} else {
+		var err error
+		if scalar, err = r.bashPPEvalScalarExpr(x.X); err != nil {
+			return nil, nil, true, err
+		}
+	}
+	if scalar.value == nil {
+		return nil, nil, true, fmt.Errorf("BASHPP-EEXPR-CONVERT: cannot convert call result to %s", bashPPTypeText(target))
 	}
 	if scalar.value.Kind() != constant.String {
 		return nil, nil, true, fmt.Errorf("BASHPP-EEXPR-CONVERT: cannot convert %s to %s", scalar.value.Kind(), bashPPTypeText(target))

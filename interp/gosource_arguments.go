@@ -65,10 +65,17 @@ func (r *Runner) goSourceContextualFloatCallArgs(params []bashPPParam, args []st
 	var outArgs []string
 	var outCells []*bashPPCell
 	for i, cell := range cells {
-		if i >= len(args) || cell == nil || i >= len(params) || params[i].variadic {
+		if i >= len(args) || cell == nil || len(params) == 0 {
 			continue
 		}
-		expected, ok := r.bashPPUnderlyingType(params[i].typ).(*syntax.BashPPNamedType)
+		// The trailing `...float64` parameter receives every remaining
+		// argument as one element each (fixedbugs/issue58671 infers it for
+		// `g(1, 'a', 2.3)`); a spread call was excluded above.
+		if i >= len(params) && !params[len(params)-1].variadic {
+			continue
+		}
+		param := params[min(i, len(params)-1)]
+		expected, ok := r.bashPPUnderlyingType(param.typ).(*syntax.BashPPNamedType)
 		if !ok || expected.Name == nil || (expected.Name.Value != "float32" && expected.Name.Value != "float64") {
 			continue
 		}
@@ -86,8 +93,8 @@ func (r *Runner) goSourceContextualFloatCallArgs(params []bashPPParam, args []st
 		copy.negativeZero = converted.negativeZero
 		copy.nonFinite = converted.nonFinite
 		copy.hasNonFinite = converted.hasNonFinite
-		copy.declType = params[i].typ
-		copy.typeName = params[i].declared
+		copy.declType = param.typ
+		copy.typeName = param.declared
 		if outArgs == nil {
 			outArgs = append([]string(nil), args...)
 			outCells = append([]*bashPPCell(nil), cells...)

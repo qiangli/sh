@@ -227,7 +227,7 @@ func (r *Runner) bashPPEvalScalarExpr(expr syntax.BashPPExpr) (result bashPPScal
 				}
 			}
 		}
-		return r.bashPPConvertNamedScalar(x.ConvType.Value, v)
+		return r.bashPPConvertNamedScalar(r.bashPPConvertTargetName(x), x.ConvTypeExpr, v)
 	case *syntax.BashPPIndexExpr:
 		// Strings are scalar values, not collection objects. Go indexing is by
 		// byte, so keep it in the scalar evaluator and leave other index shapes
@@ -345,6 +345,13 @@ func (r *Runner) bashPPScalarPath(expr syntax.BashPPExpr) (bashPPScalar, error) 
 		if r.bashPPGoSource && r.bashPPStringCarriesComplex(r.bashPPExprScalarType(expr), value) {
 			return bashPPScalar{value: bashPPParseComplex(value), typ: typ, runtime: true}, nil
 		}
+		// A NaN or infinity reaches a float element only as its storage
+		// spelling, since go/constant has no value for it.
+		if r.bashPPGoSource && r.bashPPFloatTypeName(typ) {
+			if special, ok := bashPPNonFiniteText(value); ok {
+				return bashPPNonFiniteScalar(special, typ), nil
+			}
+		}
 		// A large unsigned element is stored as its decimal spelling because
 		// it exceeds the interpreter's signed int carrier. Reconstruct it as
 		// the integer it is when the declared scalar type is integral, so
@@ -362,6 +369,9 @@ func (r *Runner) bashPPScalarPath(expr syntax.BashPPExpr) (bashPPScalar, error) 
 	case int64:
 		return bashPPScalar{value: constant.MakeInt64(value), typ: typ, runtime: true}, nil
 	case float64:
+		if r.bashPPGoSource && (math.IsInf(value, 0) || math.IsNaN(value)) {
+			return bashPPNonFiniteScalar(value, typ), nil
+		}
 		return bashPPScalar{value: constant.MakeFloat64(value), typ: typ, runtime: true}, nil
 	}
 	return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-OPERAND: indexed value is not a scalar")
@@ -495,6 +505,21 @@ func (r *Runner) bashPPScalarFromCell(cell *bashPPCell) bashPPScalar {
 	}
 	text := cell.vr.String()
 	value := bashPPScalar{}
+	// A float struct field or element written from a NaN or infinity keeps
+	// only the storage spelling; the cell flag above is set for variables.
+	if r.bashPPGoSource && cell.scalarKind != constant.String {
+		typ := cell.typeName
+		if typ == "" {
+			if named, ok := cell.declType.(*syntax.BashPPNamedType); ok && named.Name != nil {
+				typ = named.Name.Value
+			}
+		}
+		if cell.scalarKind == constant.Float || r.bashPPFloatTypeName(typ) {
+			if special, ok := bashPPNonFiniteText(text); ok {
+				return bashPPNonFiniteScalar(special, typ)
+			}
+		}
+	}
 	switch cell.scalarKind {
 	case constant.String:
 		value.value = constant.MakeString(text)
@@ -623,6 +648,42 @@ func bashPPScalarFromString(s string) bashPPScalar {
 	return bashPPScalar{value: constant.MakeString(s)}
 }
 
+// bashPPNonFiniteText decodes the spelling under which a runtime IEEE value
+// that go/constant cannot hold travels as text: "NaN", "+Inf" and "-Inf" as
+// bashPPScalarStorageString writes them into a cell, and as the native bridge
+// renders a float result such as math.NaN() or math.Inf(1). Any finite text,
+// including one strconv would accept, reports false so the exact constant
+// decoders keep owning it.
+func bashPPNonFiniteText(text string) (float64, bool) {
+	switch strings.ToLower(strings.TrimLeft(text, "+-")) {
+	case "nan", "inf", "infinity":
+	default:
+		return 0, false
+	}
+	value, err := strconv.ParseFloat(text, 64)
+	if err != nil || (!math.IsInf(value, 0) && !math.IsNaN(value)) {
+		return 0, false
+	}
+	return value, true
+}
+
+// bashPPNonFiniteScalar is the runtime scalar carrying a NaN or an infinity
+// of the given float type; its constant carrier is the zero every consumer
+// of hasNonFinite ignores.
+func bashPPNonFiniteScalar(value float64, typ string) bashPPScalar {
+	return bashPPScalar{value: constant.MakeFloat64(0), typ: typ, runtime: true, nonFinite: value, hasNonFinite: true}
+}
+
+// bashPPFloatTypeName reports whether the declared name (through any defined
+// type) has a float32 or float64 underlying type.
+func (r *Runner) bashPPFloatTypeName(name string) bool {
+	if name == "" {
+		return false
+	}
+	named, ok := r.bashPPUnderlyingType(&syntax.BashPPNamedType{Name: &syntax.Lit{Value: name}}).(*syntax.BashPPNamedType)
+	return ok && named.Name != nil && (named.Name.Value == "float32" || named.Name.Value == "float64")
+}
+
 func bashPPScalarFloat64(value bashPPScalar) (float64, bool) {
 	if value.hasNonFinite {
 		return value.nonFinite, true
@@ -719,21 +780,25 @@ func (r *Runner) bashPPUnaryScalar(op token.Token, x bashPPScalar) (bashPPScalar
 	return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-OPERAND: unsupported unary operator %s", op)
 }
 
+// bashPPCanonicalScalarType folds Go's predeclared aliases onto the types
+// they name — byte is uint8 and rune is int32 — so two spellings of one type
+// compare as identical. A script-declared type of the same name is its own.
+func (r *Runner) bashPPCanonicalScalarType(name string) string {
+	if _, declared := r.bashPPTypes[name]; declared {
+		return name
+	}
+	switch name {
+	case "byte":
+		return "uint8"
+	case "rune":
+		return "int32"
+	}
+	return name
+}
+
 func (r *Runner) bashPPBinaryScalar(op token.Token, left, right bashPPScalar) (bashPPScalar, error) {
 	if r.bashPPGoSource {
-		canonical := func(name string) string {
-			if _, declared := r.bashPPTypes[name]; declared {
-				return name
-			}
-			switch name {
-			case "byte":
-				return "uint8"
-			case "rune":
-				return "int32"
-			}
-			return name
-		}
-		left.typ, right.typ = canonical(left.typ), canonical(right.typ)
+		left.typ, right.typ = r.bashPPCanonicalScalarType(left.typ), r.bashPPCanonicalScalarType(right.typ)
 	}
 	resultType := left.typ
 	if resultType == "" {
@@ -852,6 +917,15 @@ func (r *Runner) bashPPBinaryScalar(op token.Token, left, right bashPPScalar) (b
 		}
 		return r.bashPPTypedScalarResult(value, resultType, left.runtime || right.runtime)
 	case token.SHL, token.SHR:
+		// An untyped float constant whose value is an integer shifts as that
+		// integer — `1e100 >> 1000` and `1 << 100 >> 100` in const.go. A
+		// typed or runtime float operand, and a constant with a fraction,
+		// keep the integer-operand diagnostic below.
+		if r.bashPPGoSource && left.typ == "" && !left.runtime && left.value.Kind() == constant.Float {
+			if integer := constant.ToInt(left.value); integer.Kind() == constant.Int {
+				left.value = integer
+			}
+		}
 		// constant.Uint64Val panics on a non-integer, and `1 << "a"` is now
 		// reachable from source, so the kind is checked before the call rather
 		// than recovered after it.
@@ -1484,15 +1558,28 @@ func (r *Runner) bashPPConvertScalar(typ string, x bashPPScalar) (bashPPScalar, 
 			return bashPPScalar{value: x.value, typ: typ, runtime: x.runtime}, nil
 		}
 	case "float32", "float64":
+		// A NaN or infinity converts between the float types as itself.
+		if r.bashPPGoSource && x.hasNonFinite {
+			return bashPPNonFiniteScalar(x.nonFinite, typ), nil
+		}
 		if x.value.Kind() == constant.Int || x.value.Kind() == constant.Float {
+			// Only a constant overflows: Go rounds a runtime float64 that
+			// exceeds float32's range to the infinity of its sign, as
+			// `float32(v)` with v = -1.79769e+308 does in convinline.go.
 			if typ == "float32" {
 				value, _ := constant.Float32Val(x.value)
 				if math.IsInf(float64(value), 0) {
+					if r.bashPPGoSource && x.runtime {
+						return bashPPNonFiniteScalar(float64(value), typ), nil
+					}
 					return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-CONVERT: constant %s overflows %s", x.value, typ)
 				}
 			} else {
 				value, _ := constant.Float64Val(x.value)
 				if math.IsInf(value, 0) {
+					if r.bashPPGoSource && x.runtime {
+						return bashPPNonFiniteScalar(value, typ), nil
+					}
 					return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-CONVERT: constant %s overflows %s", x.value, typ)
 				}
 			}
