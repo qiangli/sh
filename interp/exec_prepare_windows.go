@@ -9,17 +9,27 @@ import (
 	"strings"
 )
 
-func preparePlatformExec(dir, execPath, diagnosticPath string, args []string) (string, []string, string) {
+// preparePlatformExec settles what to hand os/exec for execPath on
+// Windows: a shebang script runs through its interpreter (this binary
+// when that is bash or sh), and an extensionless PE image — which os/exec
+// would refuse — through a name it accepts (exec_pe.go). The returned
+// cleanup, when non-nil, is to run after the command has been waited for;
+// the third result names a shebang interpreter that does not exist.
+func preparePlatformExec(dir, execPath, diagnosticPath string, args []string) (string, []string, string, func()) {
 	data, err := readShebangProbe(diagnosticPath)
 	if err != nil {
-		return execPath, args, ""
+		return execPath, args, "", nil
 	}
 	interp, optarg, ok := parseShebang(data)
 	if !ok {
-		return execPath, args, ""
+		self, _ := os.Executable()
+		if path, cleanup, ok := planExtensionlessPEExec(execPath, data, self, os.TempDir()); ok {
+			return path, args, "", cleanup
+		}
+		return execPath, args, "", nil
 	}
 	if strings.ContainsAny(interp, "\x00") {
-		return execPath, args, ""
+		return execPath, args, "", nil
 	}
 	resolved := interp
 	if shellPathAbs(interp) {
@@ -34,10 +44,10 @@ func preparePlatformExec(dir, execPath, diagnosticPath string, args []string) (s
 			if self, selfErr := os.Executable(); selfErr == nil {
 				resolved = self
 			} else {
-				return execPath, args, interp
+				return execPath, args, interp, nil
 			}
 		} else {
-			return execPath, args, interp
+			return execPath, args, interp, nil
 		}
 	}
 	if self, err := os.Executable(); err == nil {
@@ -47,5 +57,5 @@ func preparePlatformExec(dir, execPath, diagnosticPath string, args []string) (s
 			}
 		}
 	}
-	return resolved, shebangArgs(resolved, optarg, execPath, args), ""
+	return resolved, shebangArgs(resolved, optarg, execPath, args), "", nil
 }

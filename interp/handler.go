@@ -343,7 +343,12 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 		if hc.ExecAs != "" {
 			cmdArgs = append([]string{hc.ExecAs}, args[1:]...)
 		}
-		execPath, cmdArgs, missingInterp := preparePlatformExec(lookupDir, execPath, diagnosticScriptPath, cmdArgs)
+		execPath, cmdArgs, missingInterp, execCleanup := preparePlatformExec(lookupDir, execPath, diagnosticScriptPath, cmdArgs)
+		if execCleanup != nil {
+			// An alias made for an extensionless PE image (exec_pe.go)
+			// lives until the command has been waited for.
+			defer execCleanup()
+		}
 		if missingInterp != "" && hc.runner != nil && hc.runner.bashCompatErrors {
 			fmt.Fprintf(hc.Stderr, "%s: %s: %s: bad interpreter: No such file or directory\n",
 				hc.runner.filename, args[0], missingInterp)
