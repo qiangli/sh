@@ -35,6 +35,13 @@ func (r *Runner) goSourceInterfaceScalarComparison(left syntax.BashPPExpr, op to
 		}
 		iv := cell.interfaceValue
 		if iv == nil {
+			// Aggregate/native writeback can retain the interface identity on
+			// value metadata rather than directly on the binding cell.
+			if meta := bashPPCellMeta(cell); meta != nil {
+				iv = meta.interfaceValue
+			}
+		}
+		if iv == nil {
 			payload, typ, err := r.bashPPInterfaceSourceCell(cell, "comparison operand")
 			if err != nil {
 				return bashPPComparableValue{}, err

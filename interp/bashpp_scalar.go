@@ -1168,11 +1168,13 @@ type bashPPComparableValue struct {
 }
 
 func (r *Runner) bashPPCompareExpr(left syntax.BashPPExpr, op token.Token, right syntax.BashPPExpr) (bool, error) {
-	if equal, handled, err := r.goSourceInterfaceScalarComparison(left, op, right); handled {
-		return equal, err
-	}
+	// Native values retain their authenticated dynamic payload and comparison
+	// semantics. Local scalar boxing must not intercept that transport path.
 	if r.bashPPGoSource && (r.bashPPNativeExpr(left) || r.bashPPNativeExpr(right)) {
 		return r.bashPPNativeCompare(left, op, right)
+	}
+	if equal, handled, err := r.goSourceInterfaceScalarComparison(left, op, right); handled {
+		return equal, err
 	}
 	lv, err := r.bashPPComparableExpr(left)
 	if err != nil {
