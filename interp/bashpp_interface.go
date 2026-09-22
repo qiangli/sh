@@ -560,6 +560,11 @@ func (r *Runner) bashPPMakeInterfaceValue(expr syntax.BashPPExpr, expected synta
 	}
 	if id, ok := expr.(*syntax.BashPPIdent); ok {
 		if source := r.bashPPScope.lookup(id.Name.Value); source != nil && source.interfaceValue != nil {
+			// A front-end temporary bound from the untyped nil literal has
+			// no type to implement anything; it is the nil interface.
+			if goSourceUntypedNilCell(source) {
+				return &bashPPInterfaceValue{nilIface: true}, expand.Variable{Set: true, Kind: expand.String}, nil
+			}
 			if err := r.bashPPImplementsCell(source, source.declType, iface); err != nil {
 				return nil, expand.Variable{}, err
 			}

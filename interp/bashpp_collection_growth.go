@@ -101,8 +101,13 @@ func (r *Runner) bashPPGoShapeType(typ syntax.BashPPTypeExpr, depth int) (reflec
 // the []any payload's own growth, which is what callers did before.
 func (r *Runner) bashPPSliceGrowCap(elem syntax.BashPPTypeExpr, oldLen, oldCap, added int) (int, bool) {
 	shape, ok := r.bashPPGoShapeType(elem, 0)
-	if !ok || shape.Size() == 0 {
+	if !ok {
 		return 0, false
+	}
+	if shape.Size() == 0 {
+		// growslice allocates nothing for a zero-size element and sets the
+		// capacity to the new length exactly.
+		return oldLen + added, true
 	}
 	grown, ok := bashPPReflectGrow(shape, oldLen, oldCap, added)
 	if !ok || grown < oldLen+added {

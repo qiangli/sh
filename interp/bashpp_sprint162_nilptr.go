@@ -40,7 +40,14 @@ func (e *bashPPRuntimeError) Error() string { return e.refusal }
 
 // bashPPRuntimeErrorText is the text of the runtime.Error Go's runtime
 // reports for the fault, and therefore the value a recover observes.
-func (e *bashPPRuntimeError) bashPPRuntimeErrorText() string { return "runtime error: " + e.runtime }
+func (e *bashPPRuntimeError) bashPPRuntimeErrorText() string {
+	// The runtime raises a few faults as plainError, whose text carries no
+	// prefix; bashPPRuntimeErrorPayload boxes them as the same value.
+	if bashPPRuntimePlainErrors[e.runtime] {
+		return e.runtime
+	}
+	return "runtime error: " + e.runtime
+}
 
 // errBashPPNilDereference is the fault every nil dereference site reports.
 // It is a single value so that the plain-function sites, which have no
@@ -55,6 +62,14 @@ var errBashPPNilDereference = &bashPPRuntimeError{
 var errBashPPNilEmbeddedDereference = &bashPPRuntimeError{
 	refusal: "BASHPP-ENIL-DEREF: dereference of nil embedded pointer",
 	runtime: "invalid memory address or nil pointer dereference",
+}
+
+// errBashPPNilMapAssign is the fault every nil-map element write reports:
+// Go raises the plainError `assignment to entry in nil map`, which a defer
+// in the same frame recovers after the assignments before it took effect.
+var errBashPPNilMapAssign = &bashPPRuntimeError{
+	refusal: "BASHPP-ENIL-MAP: assignment to nil map",
+	runtime: "assignment to entry in nil map",
 }
 
 // goSourceRuntimeFault turns a run-time fault into the panic Go raises.

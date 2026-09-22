@@ -972,9 +972,10 @@ func (r *Runner) bashPPStructuredAssign(target, rhs syntax.BashPPExpr) {
 	cell := r.bashPPScope.lookup(root)
 	if ok && cell != nil && cell.pointer {
 		if index, indexed := target.(*syntax.BashPPIndexExpr); indexed && r.bashPPGoSource {
-			if err := r.bashPPPointerElementAssign(index, rhs); err != nil && !errors.Is(err, errBashPPScalarInterrupted) {
-				r.errf("%v\n", err)
-				r.exit = exitStatus{code: 2}
+			// A fault met at the target — a write into a nil map — is the
+			// panic it always is; anything else is the diagnostic.
+			if err := r.bashPPPointerElementAssign(index, rhs); err != nil {
+				r.bashPPReportFault(err)
 			}
 			return
 		}
@@ -1233,7 +1234,7 @@ func (r *Runner) bashPPStructuredAssign(target, rhs syntax.BashPPExpr) {
 // the map is named directly or reached through a pointer.
 func (r *Runner) bashPPMapElementWrite(parent any, parentMeta *bashPPCollectionMeta, collection *syntax.BashPPCollectionType, index syntax.BashPPExpr, savedKey any, savedKeyMeta *bashPPCollectionMeta, value any, child *bashPPCollectionMeta) error {
 	if parent == nil {
-		return fmt.Errorf("BASHPP-ENIL-MAP: assignment to nil map")
+		return errBashPPNilMapAssign
 	}
 	key := savedKey
 	keyMeta := savedKeyMeta
@@ -1245,7 +1246,7 @@ func (r *Runner) bashPPMapElementWrite(parent any, parentMeta *bashPPCollectionM
 	}
 	mapping, valid := parent.(map[string]any)
 	if !valid || mapping == nil {
-		return fmt.Errorf("BASHPP-ENIL-MAP: assignment to nil map")
+		return errBashPPNilMapAssign
 	}
 	_, err := r.bashPPSprint165MapStore(mapping, parentMeta, key, keyMeta, collection.Key, value, child)
 	return err

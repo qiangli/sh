@@ -247,10 +247,10 @@ fmt.Println((*p)[1:3])}`,
 	}
 }
 
-// These controls pin the diagnostics for nil map writes and nil pointer
-// access. A nil pointer access is Go's run-time panic, reported as an
-// unrecovered panic when nothing recovers it; the nil map write keeps its
-// diagnostic.
+// These controls pin the faults for nil map writes and nil pointer access.
+// Both are Go's run-time panics, reported as an unrecovered panic when
+// nothing recovers them; the nil map write raises the runtime's plainError
+// `assignment to entry in nil map` (Sprint 243).
 func TestGoSourcePointerDefinedMapNilDiagnostics(t *testing.T) {
 	for _, tc := range []struct{ name, source, want string }{
 		{
@@ -258,7 +258,7 @@ func TestGoSourcePointerDefinedMapNilDiagnostics(t *testing.T) {
 			source: `package main
 type table map[string]int
 func main(){var empty table;p:=&empty;(*p)["a"]=1}`,
-			want: "BASHPP-ENIL-MAP: assignment to nil map",
+			want: "panic: assignment to entry in nil map",
 		},
 		{
 			name: "read_through_nil_pointer",

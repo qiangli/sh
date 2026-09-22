@@ -274,7 +274,7 @@ func (r *Runner) bashPPSprint165MapStore(mapping map[string]any, meta *bashPPCol
 			r.goSourceRuntimePanic("assignment to entry in nil map")
 			return "", errBashPPScalarInterrupted
 		}
-		return "", fmt.Errorf("BASHPP-ENIL-MAP: assignment to nil map")
+		return "", errBashPPNilMapAssign
 	}
 	key, nonreflexive, err := r.bashPPSprint165MapKey(value, valueMeta, typ)
 	if err != nil {

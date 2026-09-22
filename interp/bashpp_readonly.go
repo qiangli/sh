@@ -385,6 +385,19 @@ func (r *Runner) bashPPTupleAssign(assign *syntax.BashPPAssign) {
 			candidates[i] = candidate
 			continue
 		}
+		// `p, p.x.y = nil, 7` is split by the front end into temporaries
+		// bound before the targets; the nil temporary carries no type of its
+		// own, so it is typed here as the literal would be — the nil of the
+		// target's own type.
+		if candidate, handled, err := r.goSourceUntypedNilTemporaryCandidate(r.bashPPScope.lookup(assign.Names[i].Value), expr); handled {
+			if err != nil {
+				r.errf("%s%v\n", r.bashErrPrefix(expr.Pos()), err)
+				r.exit = exitStatus{code: 2}
+				return
+			}
+			candidates[i] = candidate
+			continue
+		}
 		// A call used as one member of a parallel assignment still produces a
 		// Go value, not merely its scalar spelling. In particular, `p, q =
 		// makep(1), makep(2)` must retain each returned pointer's storage
@@ -449,6 +462,51 @@ func (r *Runner) bashPPTupleAssign(assign *syntax.BashPPAssign) {
 		candidates[i] = cell
 	}
 	r.bashPPCommitTupleAssign(assign, candidates)
+}
+
+// goSourceUntypedNilTemporaryCandidate types an untyped nil held by a
+// front-end temporary as the target's own nil. The tuple split binds
+// `tuple_N := nil` before assigning `p = tuple_N`; the temporary's cell is
+// the bare nil interface goSourceNilValueCell builds for the literal, and
+// assigning it to a pointer, map, slice, func, chan or interface target must
+// produce the value `p = nil` produces. The cell, not the identifier's
+// spelling, establishes untyped-nil provenance; typed nil is not this path's.
+func (r *Runner) goSourceUntypedNilTemporaryCandidate(target *bashPPCell, expr syntax.BashPPExpr) (*bashPPCell, bool, error) {
+	if !r.bashPPGoSource || target == nil {
+		return nil, false, nil
+	}
+	ident, ok := expr.(*syntax.BashPPIdent)
+	if !ok || ident.Name == nil {
+		return nil, false, nil
+	}
+	source := r.bashPPScope.lookup(ident.Name.Value)
+	if source == nil || !goSourceUntypedNilCell(source) {
+		return nil, false, nil
+	}
+	typ := target.declType
+	if typ == nil {
+		if meta := bashPPCellMeta(target); meta != nil && meta.typ != nil {
+			typ = meta.typ
+		} else {
+			typ = bashPPInferredCellType(target)
+		}
+	}
+	if typ == nil || !r.goSourceNilableType(typ) {
+		return nil, false, nil
+	}
+	typed, err := r.goSourceExpectedCell(&bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String}, interfaceValue: &bashPPInterfaceValue{nilIface: true}}, typ)
+	if err != nil {
+		return nil, true, err
+	}
+	return typed, true, nil
+}
+
+// goSourceUntypedNilCell reports whether cell holds the untyped nil literal
+// itself: a nil interface with no declared or inferred type at all.
+func goSourceUntypedNilCell(cell *bashPPCell) bool {
+	return cell != nil && cell.interfaceValue != nil && cell.interfaceValue.nilIface &&
+		cell.declType == nil && cell.typeName == "" && cell.valueMeta == nil &&
+		cell.object == nil && !cell.pointer && cell.vr.Kind == expand.String && cell.vr.Str == ""
 }
 
 // bashPPCopyAssignmentCell snapshots the complete source cell while retaining

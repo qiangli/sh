@@ -329,6 +329,22 @@ func (r *Runner) bashPPRangeCollection(ctx context.Context, rng *syntax.BashPPRa
 		}
 		return r.bashPPRangeScalarValue(ctx, rng, r.bashPPScalarFromCell(cell))
 	}
+	// `range []byte(s)`, `range []rune(f())`: a conversion that produces a
+	// collection is ranged as the slice it builds. The operand is evaluated
+	// once, inside the conversion; a scalar conversion is not claimed here
+	// and keeps the scalar range path.
+	if conv, isConv := rng.Expr.(*syntax.BashPPConvertExpr); isConv && r.bashPPGoSource {
+		cell, handled, err := r.bashPPConvertCollectionCell(conv)
+		if err != nil {
+			if !errors.Is(err, errBashPPScalarInterrupted) {
+				r.bashPPRangeError(rng, "BASHPP-ERANGE-TYPE: %v", err)
+			}
+			return true
+		}
+		if handled && cell.vr.Kind == expand.Object && bashPPCellMeta(cell) != nil {
+			return r.bashPPRangeCollectionValue(ctx, rng, cell.vr.Obj, bashPPCellMeta(cell))
+		}
+	}
 	root, ok := bashPPCollectionRoot(rng.Expr)
 	if !ok {
 		// A composite is a range value in its own right. It has no lexical root

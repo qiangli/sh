@@ -90,8 +90,14 @@ func bashPPCopyArrayValue(value any, meta *bashPPCollectionMeta) (any, *bashPPCo
 	if !ok {
 		return value, meta
 	}
-	out := append([]any(nil), sequence...)
-	metaCopy.sequence = append([]*bashPPCollectionMeta(nil), meta.sequence...)
+	// An array's capacity is its length, so the copy is allocated at exactly
+	// that size for both the payload and its metadata; append's size-class
+	// rounding would give the two different spare capacities, which cap()
+	// and a re-slice up to cap would then observe.
+	out := make([]any, len(sequence))
+	copy(out, sequence)
+	metaCopy.sequence = make([]*bashPPCollectionMeta, len(meta.sequence))
+	copy(metaCopy.sequence, meta.sequence)
 	for i, child := range metaCopy.sequence {
 		if bashPPValueMeta(child) || child != nil && child.interfaceValue != nil {
 			out[i], metaCopy.sequence[i] = bashPPCopyArrayValue(out[i], child)
@@ -1385,8 +1391,7 @@ func (r *Runner) bashPPCollectionAssign(target *syntax.BashPPIndexExpr, rhs synt
 	}
 	if meta.kind == "map" {
 		if parent == nil {
-			r.errf("BASHPP-ENIL-MAP: assignment to nil map\n")
-			r.exit = exitStatus{code: 2}
+			r.bashPPReportFault(errBashPPNilMapAssign)
 			return
 		}
 		key, keyMeta, keyErr := r.bashPPEvalElement(target.Index, typ.Key)
