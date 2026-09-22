@@ -1270,6 +1270,9 @@ func (r *Runner) bashPPComparableExpr(expr syntax.BashPPExpr) (bashPPComparableV
 		if err != nil {
 			return bashPPComparableValue{}, err
 		}
+		if value.hasNonFinite {
+			return bashPPComparableValue{value: value.nonFinite}, nil
+		}
 		return bashPPComparableValue{value: bashPPScalarAny(value.value)}, nil
 	}
 	return bashPPComparableValue{}, fmt.Errorf("BASHPP-ECOMPARE-SCALAR: scalar")

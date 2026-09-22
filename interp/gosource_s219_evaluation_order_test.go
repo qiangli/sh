@@ -55,3 +55,16 @@ func main() {
 }
 `)
 }
+
+func TestS219EvaluationOrderNonFinite(t *testing.T) {
+	source := `package main
+func main() {
+ var zero float64
+ inf := 1 / zero
+ println((inf + 1) == inf, (inf - inf) == (inf - inf))
+}`
+	_, stderr, err := runGoSource(t, "s219compareieee", source)
+	if err != nil || stderr != "true false\n" {
+		t.Fatalf("run=%v stderr=%q", err, stderr)
+	}
+}
