@@ -62,24 +62,47 @@ type handoffFd struct {
 	writer io.Writer
 }
 
+// fileOpen reports whether f still has a live descriptor. A table entry
+// can outlive its file: `{ exec 10>&1; } >log` leaves fd 10 pointing at
+// the block's stdout after the block closed it, and duplicating that
+// handle for a child fails with "use of closed file". The probe is the
+// same Control call the duplication makes, so it errs exactly when that
+// would.
+func fileOpen(f *os.File) bool {
+	if f == nil {
+		return false
+	}
+	rc, err := f.SyscallConn()
+	if err != nil {
+		return false
+	}
+	return rc.Control(func(uintptr) {}) == nil
+}
+
 // selectHandoffFds lists the descriptors >= 3 the runner holds open, in
 // ascending fd order, skipping holes. fdTable, fdReadTable and fdWriteTable
 // are the runner's own maps; the mode is derived from which side tables
-// mention the fd, defaulting to read-only for a bare fdTable entry.
+// mention the fd, defaulting to read-only for a bare fdTable entry. A
+// closed *os.File in either table is not an open descriptor: it is skipped
+// (see fileOpen) rather than failing the exec.
 func selectHandoffFds(fdTable map[int]*os.File, fdReadTable map[int]bool, fdWriteTable map[int]io.Writer) []handoffFd {
 	seen := make(map[int]bool, len(fdTable)+len(fdWriteTable))
 	var fds []int
 	for fd, f := range fdTable {
-		if fd >= 3 && f != nil && !seen[fd] {
+		if fd >= 3 && fileOpen(f) && !seen[fd] {
 			seen[fd] = true
 			fds = append(fds, fd)
 		}
 	}
 	for fd, w := range fdWriteTable {
-		if fd >= 3 && w != nil && !seen[fd] {
-			seen[fd] = true
-			fds = append(fds, fd)
+		if fd < 3 || w == nil || seen[fd] {
+			continue
 		}
+		if f, ok := w.(*os.File); ok && !fileOpen(f) {
+			continue
+		}
+		seen[fd] = true
+		fds = append(fds, fd)
 	}
 	slices.Sort(fds)
 	out := make([]handoffFd, 0, len(fds))
@@ -95,7 +118,7 @@ func selectHandoffFds(fdTable map[int]*os.File, fdReadTable map[int]bool, fdWrit
 		default:
 			h.mode = "r"
 		}
-		if f, ok := fdTable[fd]; ok && f != nil {
+		if f := fdTable[fd]; fileOpen(f) {
 			h.file = f
 		} else if f, ok := fdWriteTable[fd].(*os.File); ok {
 			h.file = f

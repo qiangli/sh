@@ -119,6 +119,11 @@ func (r *Runner) windowsHandoffFds() (*childFds, error) {
 			})
 		}
 		dup, err := duplicateInheritableHandle(f)
+		if err != nil && !fileOpen(f) {
+			// Closed between selection and now (the table entry outlived
+			// its file): not an open descriptor, so nothing to hand over.
+			continue
+		}
 		if err != nil {
 			return fail(fmt.Errorf("fd %d: cannot duplicate handle for child: %w", h.fd, err))
 		}

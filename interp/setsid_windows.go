@@ -7,6 +7,7 @@ package interp
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"syscall"
 )
@@ -54,7 +55,12 @@ func detachedSysProcAttr() *syscall.SysProcAttr {
 }
 
 func detachedExecCmd(r *Runner, path string, args []string) exec.Cmd {
-	execPath := shellPathToOS(r.Dir, path)
+	// The lookup reports the spelling without a PATHEXT suffix (see
+	// findExecutable); CreateProcess needs the file.
+	execPath := execFileWithExt(shellPathToOS(r.Dir, path), pathExts(r.writeEnv), func(p string) bool {
+		_, err := os.Stat(p)
+		return err == nil
+	})
 	execDir := shellPathToOS(r.Dir, r.Dir)
 	return exec.Cmd{
 		Path:        execPath,

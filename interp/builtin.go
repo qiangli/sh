@@ -8022,6 +8022,12 @@ func absPath(dir, path string) string {
 	if path == "" {
 		return ""
 	}
+	if _, ok := devTTYStat(path); ok {
+		// The synthetic Windows /dev/tty (devtty_windows.go) is answered by
+		// the stat handler by its POSIX spelling; joined onto the cwd it
+		// would become C:\…\dev\tty and `test -c /dev/tty` would say no.
+		return path
+	}
 	path = shellPathJoinAbs(dir, path)
 	return filepath.Clean(path) // TODO: this clean is likely unnecessary
 }

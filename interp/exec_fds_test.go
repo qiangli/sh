@@ -100,6 +100,51 @@ func TestSelectHandoffFdsSparseAndDeterministic(t *testing.T) {
 	}
 }
 
+// A table entry whose file was closed underneath it — `{ exec 10>&1; } >log`
+// leaves fd 10 on the block's closed stdout — is not an open descriptor:
+// it must be skipped, not fail the exec with "use of closed file".
+func TestSelectHandoffFdsSkipsClosedFiles(t *testing.T) {
+	rd, wr, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rd.Close()
+	defer wr.Close()
+	closedRd, closedWr, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	closedRd.Close()
+	closedWr.Close()
+	if fileOpen(closedWr) || !fileOpen(wr) || fileOpen(nil) {
+		t.Fatal("fileOpen misreports a closed, open or nil file")
+	}
+	var sink strings.Builder
+	fdTable := map[int]*os.File{
+		3:  rd,
+		10: closedWr, // closed under the table entry
+		11: closedRd, // closed, with a live writer for the same fd
+		12: closedRd, // closed, with a closed writer for the same fd
+	}
+	fdReadTable := map[int]bool{3: true, 11: true, 12: true}
+	fdWriteTable := map[int]io.Writer{
+		10: closedWr,
+		11: wr,
+		12: closedWr,
+		13: closedWr, // closed writer only
+		14: &sink,
+	}
+	want := []handoffFd{
+		{fd: 3, mode: "r", file: rd},
+		{fd: 11, mode: "rw", file: wr},
+		{fd: 14, mode: "w", writer: &sink},
+	}
+	got := selectHandoffFds(fdTable, fdReadTable, fdWriteTable)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %+v, want %+v", got, want)
+	}
+}
+
 func TestBindInheritedFile(t *testing.T) {
 	f, err := os.Open(os.DevNull)
 	if err != nil {

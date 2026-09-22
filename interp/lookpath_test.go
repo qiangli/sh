@@ -131,16 +131,16 @@ func TestFindExecutableWithWindowsExtensions(t *testing.T) {
 		want string
 	}{
 		{
-			name: "bare name resolves exe",
+			name: "bare name keeps its spelling",
 			file: "rpc-server",
 			exts: []string{".exe"},
-			want: "rpc-server.exe",
+			want: "rpc-server",
 		},
 		{
-			name: "relative slash path resolves exe",
+			name: "relative slash path keeps its spelling",
 			file: "bin/rpc-server",
 			exts: []string{".com", ".exe"},
-			want: "bin/rpc-server.exe",
+			want: "bin/rpc-server",
 		},
 		{
 			name: "explicit exe returns as-is",
@@ -163,6 +163,26 @@ func TestFindExecutableWithWindowsExtensions(t *testing.T) {
 	}
 }
 
+// The exec handler turns the display spelling back into the file to run.
+func TestExecFileWithExt(t *testing.T) {
+	t.Parallel()
+
+	files := map[string]bool{`C:\t\bash.exe`: true, `C:\t\run.bat`: true, `C:\t\sh`: true, `C:\t\sh.exe`: true}
+	exists := func(p string) bool { return files[p] }
+	exts := []string{".com", ".exe", ".bat"}
+	for _, tt := range []struct{ in, want string }{
+		{`C:\t\bash`, `C:\t\bash.exe`},
+		{`C:\t\bash.exe`, `C:\t\bash.exe`},
+		{`C:\t\run`, `C:\t\run.bat`},
+		{`C:\t\sh`, `C:\t\sh`}, // an extensionless file wins over its twin
+		{`C:\t\none`, `C:\t\none`},
+	} {
+		if got := execFileWithExt(tt.in, exts, exists); got != tt.want {
+			t.Errorf("execFileWithExt(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+	}
+}
+
 func TestLookPathHasPath(t *testing.T) {
 	t.Parallel()
 
@@ -179,6 +199,13 @@ func TestLookPathHasPath(t *testing.T) {
 		{"windows slash", "bin/rpc-server", true, true},
 		{"windows backslash", `bin\rpc-server`, true, true},
 		{"windows drive", `C:\bin\rpc-server`, true, true},
+		{"windows bare drive", `C:`, true, true},
+		{"windows lowercase drive", `d:tool`, true, true},
+		{"windows colon inside a name", `<(:)`, true, false},
+		{"windows trailing colon", `a:`, true, true},
+		{"windows colon after two chars", `ab:c`, true, false},
+		{"windows leading colon", `:x`, true, false},
+		{"windows digit before colon", `1:x`, true, false},
 	}
 
 	for _, tt := range tests {

@@ -2,6 +2,6 @@
 
 package interp
 
-func preparePlatformExec(_ string, execPath, _ string, args []string) (string, []string, string) {
-	return execPath, args, ""
+func preparePlatformExec(_ string, execPath, _ string, args []string) (string, []string, string, func()) {
+	return execPath, args, "", nil
 }

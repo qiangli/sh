@@ -273,12 +273,22 @@ func ToSlashMode(dir, path string, windows bool) string {
 // joins an MSYS-style PWD with a relative pattern. It returns the UPPERCASE
 // drive letter and the remainder beginning with "/" ("/c" -> 'C',"/";
 // "/mnt/c/Users" -> 'C',"/Users"). A bare "/foo" is left to the
-// volume-prepend fallback in [ToOS] (it is not a drive reference).
+// volume-prepend fallback in [ToOS] (it is not a drive reference), and so
+// is a single-letter first component whose drive is not present per
+// [LogicalDrives]: /a/b/c on a host without an A: drive is a POSIX path.
 func DrivePath(path string) (drive byte, rest string, ok bool) {
+	return DrivePathIn(LogicalDrives(), path)
+}
+
+// DrivePathIn is [DrivePath] against an explicit set of present drives.
+func DrivePathIn(drives DriveSet, path string) (drive byte, rest string, ok bool) {
 	// WSL form: /mnt/c[/...]. Only the forward-slash spelling exists in the
 	// wild; require it exactly.
 	if len(path) >= 6 && strings.HasPrefix(path, "/mnt/") &&
 		isDriveLetter(path[5]) && (len(path) == 6 || isSlash(path[6])) {
+		if !drives.Has(path[5]) {
+			return 0, "", false
+		}
 		r := path[6:]
 		if r == "" {
 			r = "/"
@@ -288,6 +298,9 @@ func DrivePath(path string) (drive byte, rest string, ok bool) {
 	}
 	if len(path) >= 2 && isSlash(path[0]) && isDriveLetter(path[1]) &&
 		(len(path) == 2 || isSlash(path[2])) {
+		if !drives.Has(path[1]) {
+			return 0, "", false
+		}
 		r := path[2:]
 		if r == "" {
 			r = "/"
@@ -326,7 +339,9 @@ func normalizeOperand(path string) (string, bool) {
 // to its native backslash form; anything else is returned unchanged. Only
 // the forward-slash form counts: a value holding a colon is never a single
 // MSYS path, and \c\… is a drive-relative native path a child can already
-// open. See [NativePathMounts] for the mount-aware form.
+// open. The drive must be present per [LogicalDrives]; /a/b/c stays as it
+// is on a host without an A: drive. See [NativePathMounts] for the
+// mount-aware form.
 func NativePath(value string) string {
 	return NativePathMounts(nil, value)
 }
