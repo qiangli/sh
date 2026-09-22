@@ -503,7 +503,9 @@ func (r *Runner) bashPPTypedScalarDeclValue(d *syntax.BashPPDecl) (expand.Variab
 	if err != nil {
 		return expand.Variable{}, true, err
 	}
-	return expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarString(converted.value)}, true, nil
+	// `var nan float64 = math.NaN()` keeps the non-finite spelling, which
+	// the float-typed cell decodes on every read.
+	return expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarStorageString(converted)}, true, nil
 }
 
 func (r *Runner) bashPPConstantScalarExpr(expr syntax.BashPPExpr, targetBase string) bool {
@@ -766,11 +768,18 @@ func (r *Runner) bashPPConversionCall(call *syntax.BashPPCall) (*syntax.BashPPCo
 // keeps MyFloat as the result's type: that named identity is what carries the
 // defined type's method set, so `MyFloat(3).Abs()` resolves where a bare
 // float64 would not.
-func (r *Runner) bashPPConvertNamedScalar(name string, x bashPPScalar) (bashPPScalar, error) {
+//
+// An instantiated target — `T[int](0)` with `type T[_ any] int` in
+// typeparam/issue54456 — converts through the instantiation's underlying
+// type, which only the structured target can name.
+func (r *Runner) bashPPConvertNamedScalar(name string, target syntax.BashPPTypeExpr, x bashPPScalar) (bashPPScalar, error) {
 	if bashPPBuiltinType(name) {
 		return r.bashPPConvertScalar(name, x)
 	}
 	named := &syntax.BashPPNamedType{Name: &syntax.Lit{Value: name}}
+	if instantiated, ok := target.(*syntax.BashPPNamedType); ok && instantiated.Name != nil && instantiated.Name.Value == name && len(instantiated.TypeArgs) > 0 {
+		named = instantiated
+	}
 	shape, ok := r.bashPPUnderlyingType(named).(*syntax.BashPPNamedType)
 	if !ok || shape == named || !bashPPBuiltinType(shape.Name.Value) {
 		return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-CONVERT: cannot convert %s to %s", x.value.Kind(), name)
@@ -1799,6 +1808,11 @@ func (r *Runner) bashPPSwitch(ctx context.Context, sw *syntax.BashPPSwitch) {
 			r.exit = exitStatus{code: 2}
 			return
 		}
+		// `switch prog[pc]` tags a uint8 while a case constant may arrive
+		// as byte (turing.go); the alias names the same type.
+		if r.bashPPGoSource {
+			tag.typ = r.bashPPCanonicalScalarType(tag.typ)
+		}
 	}
 	cases, err := r.bashPPValidateSwitchCases(sw, tag)
 	if err != nil {
@@ -1944,7 +1958,11 @@ func (r *Runner) bashPPSwitchCaseScalar(tag bashPPScalar, expr syntax.BashPPExpr
 			}
 		}
 	}
-	return r.bashPPEvalScalarExpr(expr)
+	candidate, err := r.bashPPEvalScalarExpr(expr)
+	if err == nil && r.bashPPGoSource {
+		candidate.typ = r.bashPPCanonicalScalarType(candidate.typ)
+	}
+	return candidate, err
 }
 
 func bashPPSwitchComparable(tag, candidate bashPPScalar) error {
