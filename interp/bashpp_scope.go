@@ -55,13 +55,15 @@ type bashPPCell struct {
 	// bool, integer, or float expression. Re-parsing vr.Str would turn quoted
 	// "2" into an integer and quoted "true" into a bool at assignment time.
 	// exactScalar preserves untyped Go constants without a text round trip.
-	exactScalar  constant.Value
-	scalarKind   constant.Kind
-	negativeZero bool
-	nonFinite    float64
-	hasNonFinite bool
-	channel      *bashPPChannel
-	channelOwner *bashPPConcurrent
+	exactScalar         constant.Value
+	scalarKind          constant.Kind
+	negativeZero        bool
+	nonFinite           float64
+	hasNonFinite        bool
+	nonFiniteComplex    complex128
+	hasNonFiniteComplex bool
+	channel             *bashPPChannel
+	channelOwner        *bashPPConcurrent
 	// object is shared by every alias of one structured value. Deep readonly
 	// is an attribute of this identity rather than of one variable spelling.
 	object *bashPPObjectIdentity

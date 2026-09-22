@@ -882,7 +882,15 @@ func (r *Runner) bashPPEvalElement(expr syntax.BashPPExpr, expected syntax.BashP
 		}
 		return value, nil, nil
 	}
-	value := bashPPScalarAny(r.bashPPRepresentableScalar(scalar, expected).value)
+	represented := r.bashPPRepresentableScalar(scalar, expected)
+	var value any
+	if represented.hasNonFiniteComplex {
+		// go/constant has no Inf or NaN representation. Collections retain the
+		// exact runtime spelling and reconstruct the tagged scalar on read.
+		value = bashPPScalarStorageString(represented)
+	} else {
+		value = bashPPScalarAny(represented.value)
+	}
 	value = r.bashPPContextualCollectionValue(value, expected)
 	if err := r.bashPPCheckCollectionValue(value, expected); err != nil {
 		return nil, nil, err

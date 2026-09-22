@@ -1469,15 +1469,17 @@ func (r *Runner) bashPPGoSourceArgCell(w *syntax.Word, expr syntax.BashPPExpr) *
 		return structured
 	}
 	value, err := r.bashPPEvalScalarExpr(expr)
-	if err != nil || value.value == nil || value.value.Kind() == constant.Unknown {
+	if err != nil || value.kind() == constant.Unknown {
 		return nil
 	}
 	cell := &bashPPCell{
-		vr:           expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarStorageString(value)},
-		scalarKind:   value.value.Kind(),
-		negativeZero: value.negativeZero,
-		nonFinite:    value.nonFinite,
-		hasNonFinite: value.hasNonFinite,
+		vr:                  expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarStorageString(value)},
+		scalarKind:          value.kind(),
+		negativeZero:        value.negativeZero,
+		nonFinite:           value.nonFinite,
+		hasNonFinite:        value.hasNonFinite,
+		nonFiniteComplex:    value.nonFiniteComplex,
+		hasNonFiniteComplex: value.hasNonFiniteComplex,
 	}
 	if value.typ != "" {
 		cell.declType, cell.typeName = bashPPScalarNamedType(value.typ)
@@ -1546,7 +1548,7 @@ func (r *Runner) bashPPTypedCallArgs(call *syntax.BashPPCall, fn *bashPPFunc) (r
 			return nil, false, err
 		}
 		text := bashPPScalarStorageString(value)
-		cell := &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: text}, scalarKind: value.value.Kind(), negativeZero: value.negativeZero, nonFinite: value.nonFinite, hasNonFinite: value.hasNonFinite}
+		cell := &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: text}, scalarKind: value.kind(), negativeZero: value.negativeZero, nonFinite: value.nonFinite, hasNonFinite: value.hasNonFinite, nonFiniteComplex: value.nonFiniteComplex, hasNonFiniteComplex: value.hasNonFiniteComplex}
 		if value.typ != "" {
 			cell.declType, cell.typeName = bashPPScalarNamedType(value.typ)
 		}
@@ -2884,7 +2886,7 @@ func (r *Runner) bashPPReturnScalarExpr(expr syntax.BashPPExpr) {
 		return
 	}
 	text := bashPPScalarStorageString(value)
-	cell := &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: text}, scalarKind: value.value.Kind(), negativeZero: value.negativeZero, nonFinite: value.nonFinite, hasNonFinite: value.hasNonFinite}
+	cell := &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: text}, scalarKind: value.kind(), negativeZero: value.negativeZero, nonFinite: value.nonFinite, hasNonFinite: value.hasNonFinite, nonFiniteComplex: value.nonFiniteComplex, hasNonFiniteComplex: value.hasNonFiniteComplex}
 	if value.typ != "" {
 		cell.declType, cell.typeName = bashPPScalarNamedType(value.typ)
 	}

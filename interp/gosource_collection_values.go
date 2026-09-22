@@ -297,6 +297,12 @@ func (r *Runner) goSourceCollectionReadCell(expr syntax.BashPPExpr, value any, m
 	if meta == nil {
 		switch v := value.(type) {
 		case string:
+			if special, ok := bashPPNonFiniteComplexText(v); ok && r.bashPPStringCarriesComplex(cell.declType, v) {
+				cell.nonFiniteComplex, cell.hasNonFiniteComplex = special, true
+				cell.typeName = bashPPTypeText(cell.declType)
+				cell.scalarKind = constant.Complex
+				break
+			}
 			// A large unsigned element stored as its decimal spelling keeps the
 			// integer identity of its declared type: leave the scalar kind
 			// unset so bashPPScalarFromCell reconstructs it as the integer it
@@ -320,7 +326,13 @@ func (r *Runner) goSourceCollectionReadCell(expr syntax.BashPPExpr, value any, m
 // the complex carrier rather than mistaking that spelling for a Go string.
 func (r *Runner) bashPPStringCarriesComplex(typ syntax.BashPPTypeExpr, text string) bool {
 	shape, ok := r.bashPPUnderlyingType(typ).(*syntax.BashPPNamedType)
-	return ok && (shape.Name.Value == "complex64" || shape.Name.Value == "complex128") && bashPPParseComplex(text).Kind() == constant.Complex
+	if !ok || (shape.Name.Value != "complex64" && shape.Name.Value != "complex128") {
+		return false
+	}
+	if _, special := bashPPNonFiniteComplexText(text); special {
+		return true
+	}
+	return bashPPParseComplex(text).Kind() == constant.Complex
 }
 
 // goSourceNativeSequenceContents materialises a dependency-owned array or

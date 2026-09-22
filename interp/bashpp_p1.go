@@ -1128,7 +1128,9 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 				}
 				cell.valueMeta = meta
 			} else {
-				r.bashPPDeclareName(name, expand.Variable{Set: true, Kind: expand.String, Str: fmt.Sprint(value)})
+				cell := r.goSourceCollectionReadCell(d.Expr, value, meta)
+				r.bashPPDeclareName(name, cell.vr)
+				*r.bashPPScope.lookup(name) = *cell
 			}
 			return
 		}
@@ -1179,7 +1181,9 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 					}
 					cell.valueMeta = meta
 				} else {
-					r.bashPPDeclareName(name, expand.Variable{Set: true, Kind: expand.String, Str: fmt.Sprint(value)})
+					cell := r.goSourceCollectionReadCell(d.Expr, value, meta)
+					r.bashPPDeclareName(name, cell.vr)
+					*r.bashPPScope.lookup(name) = *cell
 				}
 				return
 			}
@@ -1251,9 +1255,10 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 		r.bashPPDeclareName(d.Lhs[0].Value, expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarStorageString(value)})
 		target := r.bashPPScope.lookup(d.Lhs[0].Value)
 		if target != nil {
-			target.scalarKind = value.value.Kind()
+			target.scalarKind = value.kind()
 			target.negativeZero = value.negativeZero
 			target.nonFinite, target.hasNonFinite = value.nonFinite, value.hasNonFinite
+			target.nonFiniteComplex, target.hasNonFiniteComplex = value.nonFiniteComplex, value.hasNonFiniteComplex
 			target.typeName = value.typ
 			// `f := IteratorFunc[int](it)`: an instantiated named type is
 			// kept as a tree, since its type arguments are what the
@@ -1360,9 +1365,10 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 			}
 			r.bashPPDeclareName(d.Lhs[0].Value, expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarStorageString(value)})
 			if target := r.bashPPScope.lookup(d.Lhs[0].Value); target != nil {
-				target.scalarKind = value.value.Kind()
+				target.scalarKind = value.kind()
 				target.typeName = value.typ
 				target.nonFinite, target.hasNonFinite = value.nonFinite, value.hasNonFinite
+				target.nonFiniteComplex, target.hasNonFiniteComplex = value.nonFiniteComplex, value.hasNonFiniteComplex
 			}
 			return
 		}
