@@ -485,7 +485,7 @@ func dispatch(q request)(reply response){
   };reply.Values=append(reply.Values,encoded)};return
 }
 func main(){
- conn,err:=net.Dial("tcp",bridgeAddress);if err!=nil{panic(err)};defer conn.Close()
+ conn,err:=net.Dial(bridgeNetwork,bridgeAddress);if err!=nil{panic(err)};defer conn.Close()
  encoder:=json.NewEncoder(conn);if err=encoder.Encode(bridgeAuth);err!=nil{return};decoder:=json.NewDecoder(conn)
  outbound.Lock();outbound.encoder=encoder;outbound.Unlock()
  // Host EOF/close ends the dependency process, including blocked native calls.
