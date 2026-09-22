@@ -34,3 +34,17 @@ func main(){
  func(){defer func(){fmt.Println(recover()!=nil)}();var y any=[]int{1};_ = y==y}()
 }`)
 }
+
+func TestS243InterfaceComplexIEEEComparison(t *testing.T) {
+	typedSendThreeModes(t, `package main
+import "math"
+type C complex64
+func main(){
+ z:=complex(0.0,math.Copysign(0,-1)); var a any=z
+ if a!=complex(0.0,0.0) || a!=z {panic("zero equality")}
+ n:=complex(math.NaN(),0.0);var b any=n
+ if b==b || b==n {panic("NaN equality")}
+ var c any=complex64(1+2i);var d any=C(1+2i)
+ if c!=complex64(1+2i)||c==complex128(1+2i)||d!=C(1+2i)||d==complex64(1+2i){panic("dynamic width identity")}
+}`)
+}

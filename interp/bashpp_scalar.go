@@ -1586,6 +1586,9 @@ func bashPPCompareScalarAny(left, right any) (bool, error) {
 	case float64:
 		r, ok := right.(float64)
 		return ok && l == r, nil
+	case complex128:
+		r, ok := right.(complex128)
+		return ok && l == r, nil
 	}
 	return false, fmt.Errorf("BASHPP-ECOMPARE-NONCOMPARABLE: unsupported scalar comparison")
 }

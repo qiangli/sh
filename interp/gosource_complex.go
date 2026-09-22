@@ -74,7 +74,13 @@ func bashPPScalarComplex128(v bashPPScalar) (complex128, bool) {
 }
 
 func bashPPNonFiniteComplexScalar(value complex128, typ string) bashPPScalar {
-	return bashPPScalar{typ: typ, runtime: true, nonFiniteComplex: value, hasNonFiniteComplex: true}
+	scalar := bashPPScalar{typ: typ, runtime: true, nonFiniteComplex: value, hasNonFiniteComplex: true}
+	// Finite values still satisfy the exact-carrier contract used by scalar
+	// consumers. The IEEE carrier remains authoritative for signed zero.
+	if !math.IsNaN(real(value)) && !math.IsNaN(imag(value)) && !math.IsInf(real(value), 0) && !math.IsInf(imag(value), 0) {
+		scalar.value = bashPPComplexConstant(value)
+	}
+	return scalar
 }
 
 func bashPPNonFiniteComplexText(text string) (complex128, bool) {

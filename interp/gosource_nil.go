@@ -3,6 +3,7 @@ package interp
 // Sprint: #118; Story: #52; Story-ID: d564bada90bb
 import (
 	"fmt"
+	"go/constant"
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
 	"strings"
@@ -188,7 +189,17 @@ func (r *Runner) goSourceInterfaceEqual(left, right bashPPComparableValue) (bool
 		if iv.cell.vr.Kind == expand.Object {
 			return iv.cell.vr.Obj, bashPPCellMeta(iv.cell)
 		}
-		return bashPPScalarAny(r.bashPPScalarFromCell(iv.cell).value), nil
+		scalar := r.bashPPScalarFromCell(iv.cell)
+		if scalar.hasNonFiniteComplex {
+			return scalar.nonFiniteComplex, nil
+		}
+		if scalar.hasNonFinite {
+			return scalar.nonFinite, nil
+		}
+		if scalar.value != nil && scalar.value.Kind() == constant.Complex {
+			return bashPPComplexNumber(scalar.value), nil
+		}
+		return bashPPScalarAny(scalar.value), nil
 	}
 	lv, lm := comparable(li)
 	rv, rm := comparable(ri)
