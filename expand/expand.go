@@ -76,6 +76,11 @@ type Config struct {
 	// and filesystem probes. Interpreters should provide an access(2)-backed
 	// implementation so readable and searchable directories stay distinct.
 	IsSearchable func(string) bool
+	// IsReadable reports whether a directory may be enumerated by a glob.
+	// A literal path component needs only search permission, while a wildcard
+	// requires read permission for the directory whose entries it matches.
+	// If nil, ReadDir2 itself decides whether enumeration is permitted.
+	IsReadable func(string) bool
 
 	// Lstat reports a path's file info without following a final symlink.
 	// The path is in the shell's own spelling, exactly as [ReadDir2]
@@ -6350,6 +6355,9 @@ func globIgnorePathnameBlocked(pat string) bool {
 
 func (cfg *Config) globDir(base, dir string, matcher func(string) bool, wantDir, needSearch bool, matches []string) ([]string, error) {
 	fullDir := globPathJoin(base, dir)
+	if cfg.IsReadable != nil && !cfg.IsReadable(fullDir) {
+		return matches, fs.ErrPermission
+	}
 	infos, err := cfg.ReadDir2(fullDir)
 	if err != nil {
 		// We still want to return matches, for the sake of reusing slices.

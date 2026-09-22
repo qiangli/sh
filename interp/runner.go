@@ -386,14 +386,6 @@ func (r *Runner) updateExpandOpts() {
 	} else {
 		r.ecfg.ReadDir2 = func(s string) ([]fs.DirEntry, error) {
 			s = shellPathJoinAbs(r.Dir, s)
-			// Windows can enumerate a directory after chmod has recorded a
-			// POSIX mode without read permission in its ACL. Globbing must
-			// honor that recorded mode, as a Unix readdir would.
-			if runtime.GOOS == "windows" {
-				if err := r.access(r.ectx, s, access_R_OK); err != nil {
-					return nil, err
-				}
-			}
 			entries, err := r.readDirHandler(r.handlerCtx(r.ectx, handlerKindReadDir, todoPos), s)
 			// Names NTFS could not store verbatim (a:b) come back in
 			// their Cygwin encoding; globbing must see the script's
@@ -403,6 +395,16 @@ func (r *Runner) updateExpandOpts() {
 		r.ecfg.IsSearchable = func(s string) bool {
 			s = shellPathJoinAbs(r.Dir, s)
 			return r.access(r.ectx, s, access_X_OK) == nil
+		}
+		if runtime.GOOS == "windows" {
+			// os.ReadDir can enumerate a directory after chmod records a
+			// POSIX mode without read permission in its ACL. Only glob
+			// enumeration needs the read check; literal path components
+			// can still be traversed when the directory is searchable.
+			r.ecfg.IsReadable = func(s string) bool {
+				s = shellPathJoinAbs(r.Dir, s)
+				return r.access(r.ectx, s, access_R_OK) == nil
+			}
 		}
 		// `**` must stop at a symlinked directory. The globber only has
 		// the shell's spelling of the path, which os.Lstat cannot open on
