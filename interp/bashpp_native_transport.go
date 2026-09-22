@@ -131,6 +131,15 @@ func validateLocalTransport(req bashPPEvalRequest, q bashPPBridgeRequest) error 
 	if functionCallbacks && nativeSliceCallable(req, q) == "testing.Main" {
 		return nil
 	}
+	// An exclusive slice transfer (bashpp_native_transfer.go) hands the
+	// dependency the slices as its own storage of record and, beside them,
+	// only handles and scalars it already owns: no copy of interpreter
+	// storage crosses for it to mutate or retain. The callbacks the elements
+	// carry are retained by the callee, and the session serves them from now
+	// on (markRetainedCallbacks at the request).
+	if nativeSliceTransferOnly(q) {
+		return nil
+	}
 	if synchronousReaderCallback(req, q) || synchronousImageCallback(req, q) || !functionCallbacks && (synchronousUnwrapCallback(req, q) || synchronousErrorsAsType(req, q)) {
 		return nil
 	}

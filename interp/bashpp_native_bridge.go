@@ -83,9 +83,17 @@ type bashPPBridgeRequest struct {
 	// nothing is written back; changed elements are an in-place mutation and
 	// are written back over the visible length. Host-only.
 	sliceReconcile []bool
-	ID             uint64 `json:"id"`
-	Op             string `json:"op"`
-	Selector       string `json:"selector"`
+	// Transfers lists the argument indexes whose original slice is handed to
+	// the dependency as the storage of record rather than as a copy; the
+	// worker answers each with a handle on that same slice (Transferred) and
+	// argCells[i] is the interpreter binding the transfer rebinds to it. See
+	// bashpp_native_transfer.go. argCells and sourceProgram are host-only.
+	Transfers     []int `json:"transfers,omitempty"`
+	argCells      []*bashPPCell
+	sourceProgram bool   // the call site is in the program package itself
+	ID            uint64 `json:"id"`
+	Op            string `json:"op"`
+	Selector      string `json:"selector"`
 	// Instance is the type-argument suffix of an instantiated imported
 	// generic function; the helper resolves Selector+Instance.
 	Instance   string              `json:"instance,omitempty"`
@@ -102,7 +110,10 @@ type bashPPBridgeRequest struct {
 }
 type bashPPBridgeResponse struct {
 	SliceUpdates []bashPPNativeSliceBuffer `json:"slice_updates,omitempty"`
-	PtrUpdates   []bashPPBridgeValue       `json:"ptr_updates,omitempty"`
+	// Transferred answers each requested transfer with a handle on the
+	// decoded slice the dependency received, in Transfers order.
+	Transferred []bashPPNativeSliceBuffer `json:"transferred,omitempty"`
+	PtrUpdates  []bashPPBridgeValue       `json:"ptr_updates,omitempty"`
 
 	Panic *bashPPBridgeValue `json:"panic,omitempty"`
 	ID    uint64             `json:"id"`
@@ -444,7 +455,10 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 	if err := validateLocalTransport(req, q); err != nil {
 		return nil, err
 	}
-	if retainedFunctionCallback(req, q) {
+	// A transfer hands the dependency slices whose elements carry original
+	// callbacks; the callee may keep them past this call exactly as a
+	// registration API does, so the session serves callbacks from now on.
+	if retainedFunctionCallback(req, q) || len(q.Transfers) > 0 && requestHasCallbacks(req, q) {
 		s.markRetainedCallbacks()
 	}
 	release, callbacks, err := s.enterCallbacks(ctx, req, q)
@@ -553,6 +567,11 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 					return nil, errBashPPScalarInterrupted
 				}
 				return nil, errors.New(reply.Error)
+			}
+			// The dependency now holds each transferred slice; rebind the
+			// interpreter's supplying variable to that same storage.
+			if err := s.applyNativeSliceTransfers(q, reply); err != nil {
+				return nil, err
 			}
 			for i := range reply.Values {
 				if reply.Values[i].Kind == "handle" {
