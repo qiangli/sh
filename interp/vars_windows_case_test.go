@@ -6,30 +6,22 @@ import (
 	"mvdan.cc/sh/v3/expand"
 )
 
-// Windows folds a variable name only onto an INHERITED environment variable;
-// names a script introduces stay case-sensitive, as in bash on every OS.
-func TestOverlayEnvironNormalizeWindowsMode(t *testing.T) {
-	base := expand.ListEnviron("MIXEDCASE_INTERP_GLOBAL=value", "PATH=x")
+// Shell variable names are case-sensitive on every platform, Windows
+// included: bash's varenv23.sub exports A=AVAR and expects the child's
+// unset `$a` to stay unset. Only the OS environment is case-insensitive,
+// and expand.ListEnviron handles that at import.
+func TestOverlayEnvironNamesAreCaseSensitive(t *testing.T) {
+	base := expand.ListEnviron("A=AVAR", "PATH=x")
 	o := &overlayEnviron{parent: base, values: map[string]namedVariable{}}
-	cases := map[string]string{
-		"MIXEDCASE_interp_global": "MIXEDCASE_INTERP_GLOBAL",
-		"path":                    "PATH",
-		"PATH":                    "PATH",
-		"a":                       "a",
-		"A":                       "A",
-		"Foo":                     "Foo",
-	}
-	for in, want := range cases {
-		if got := o.normalizeMode(in, true); got != want {
-			t.Errorf("normalizeMode(%q, windows) = %q, want %q", in, got, want)
-		}
-		if got := o.normalizeMode(in, false); got != in {
-			t.Errorf("normalizeMode(%q, unix) = %q, want identity", in, got)
+	for _, name := range []string{"a", "A", "path", "PATH", "Foo"} {
+		if got := o.normalize(name); got != name {
+			t.Errorf("normalize(%q) = %q, want it unchanged", name, got)
 		}
 	}
-	// A nested overlay reaches the same root.
-	child := &overlayEnviron{parent: o, values: map[string]namedVariable{}}
-	if got := child.normalizeMode("mixedcase_interp_global", true); got != "MIXEDCASE_INTERP_GLOBAL" {
-		t.Errorf("nested normalize = %q", got)
+	if vr := o.Get("a"); vr.IsSet() {
+		t.Errorf(`$a resolved to %q; an exported A must not answer it`, vr.String())
+	}
+	if vr := o.Get("A"); vr.String() != "AVAR" {
+		t.Errorf(`$A = %q, want AVAR`, vr.String())
 	}
 }
