@@ -398,7 +398,7 @@ func TestParsePosOverflow(t *testing.T) {
 		{
 			"LargestLineNumber",
 			strings.Repeat("\n", lineMax-1) + ")",
-			"262143:1: `)` can only be used to close a subshell",
+			fmt.Sprintf("%d:1: `)` can only be used to close a subshell", lineMax),
 		},
 		{
 			"LargestColNumber",

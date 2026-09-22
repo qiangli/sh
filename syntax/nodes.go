@@ -114,7 +114,8 @@ func stmtsEnd(stmts []*Stmt, last []Comment) Pos {
 
 // Pos is a position within a shell source file.
 type Pos struct {
-	offs, lineCol uint32
+	offs    uint32
+	lineCol uint64
 }
 
 const (
@@ -128,10 +129,16 @@ const (
 	// We used to split line and column numbers evenly in 16 bits, but line numbers
 	// are significantly more important in practice. Use more bits for them.
 
-	lineBitSize = 18
+	// Go line directives use large sentinel lines to verify runtime
+	// instruction positions (for example, 999999 in issue29504). Keep enough
+	// line bits for those valid positions while retaining four thousand bytes
+	// of column precision.
+	lineBitSize = 20
 	lineMax     = (1 << lineBitSize) - 1
 
-	colBitSize = 32 - lineBitSize
+	// lineCol is wider than the offset word so increasing line precision does
+	// not regress the established 14-bit column range.
+	colBitSize = 14
 	colMax     = (1 << colBitSize) - 1
 	colBitMask = colMax
 )
@@ -157,7 +164,7 @@ func NewPos(offset, line, column uint) Pos {
 	}
 	return Pos{
 		offs:    uint32(offset),
-		lineCol: (uint32(line) << colBitSize) | uint32(column),
+		lineCol: (uint64(line) << colBitSize) | uint64(column),
 	}
 }
 
@@ -234,7 +241,7 @@ func posAddCol(p Pos, n int) Pos {
 		return p
 	}
 	// TODO: guard against overflows
-	p.lineCol += uint32(n)
+	p.lineCol += uint64(n)
 	p.offs += uint32(n)
 	return p
 }
