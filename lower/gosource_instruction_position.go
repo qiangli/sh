@@ -7,9 +7,19 @@ import "mvdan.cc/sh/v3/syntax"
 // interface method lookup belongs to the selected method identifier. Keeping
 // this position on the generated statement lets the Go backend reproduce the
 // compiler's PC position without rewriting tracebacks.
-func (e *emitter) goSourceInstructionPos(command syntax.Command) syntax.Pos {
+func goSourceInstructionPos(command syntax.Command) syntax.Pos {
 	if command == nil {
 		return syntax.Pos{}
+	}
+	// Same-line instructions already inherit the correct generated column
+	// from the statement anchor. Moving that anchor to a selector or bracket
+	// adds its source-column offset twice. Only a distinct fault line needs
+	// a new directive; retain the original anchor for ordinary calls.
+	faultLine := func(pos syntax.Pos) syntax.Pos {
+		if pos.Line() == command.Pos().Line() {
+			return command.Pos()
+		}
+		return pos
 	}
 	exprPos := func(expr syntax.BashPPExpr) syntax.Pos {
 		switch x := expr.(type) {
@@ -18,40 +28,28 @@ func (e *emitter) goSourceInstructionPos(command syntax.Command) syntax.Pos {
 		case *syntax.BashPPSliceExpr:
 			return x.Lbrack
 		case *syntax.BashPPSelectorExpr:
-			// A method dispatch can fault while resolving the receiver, and gc
-			// attributes that instruction to the selected method identifier.
-			// Package-qualified functions (p.F) are ordinary calls: moving their
-			// directive to F makes the generated indentation shift compiler
-			// diagnostics a second time.
-			id, packageQualified := x.X.(*syntax.BashPPIdent)
-			packageQualified = packageQualified && e.imports[id.Name.Value] != ""
-			if x.MethodValue && !packageQualified {
-				return x.Sel.Pos()
-			}
+			return x.Sel.Pos()
 		}
 		return syntax.Pos{}
 	}
 	switch x := command.(type) {
 	case *syntax.BashPPCall:
 		if pos := exprPos(x.CalleeExpr); pos.IsValid() {
-			return pos
+			return faultLine(pos)
 		}
-		// Simple selector calls use Fun rather than CalleeExpr. Only a value
-		// receiver needs the selector instruction position; an import binding
-		// names an ordinary package function call.
-		if len(x.Fun) > 1 && e.imports[x.Fun[0].Value] == "" {
-			return x.Fun[len(x.Fun)-1].Pos()
+		if len(x.Fun) > 1 {
+			return faultLine(x.Fun[len(x.Fun)-1].Pos())
 		}
 	case *syntax.BashPPAssign:
 		if pos := exprPos(x.TargetExpr); pos.IsValid() {
-			return pos
+			return faultLine(pos)
 		}
 		if pos := exprPos(x.ValueExpr); pos.IsValid() {
-			return pos
+			return faultLine(pos)
 		}
 	case *syntax.BashPPShortDecl:
 		if pos := exprPos(x.Expr); pos.IsValid() {
-			return pos
+			return faultLine(pos)
 		}
 	}
 	return command.Pos()
