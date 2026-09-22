@@ -191,6 +191,21 @@ func (r *Runner) bashPPBuiltinInt(name string, arg bashPPBuiltinArg) (int, bool)
 }
 
 func (r *Runner) bashPPBuiltinElement(arg bashPPBuiltinArg, expected syntax.BashPPTypeExpr) (any, *bashPPCollectionMeta, bool) {
+	// append into an interface slice performs an interface assignment, not a
+	// scalar conversion. Keep the source cell so the interface element retains
+	// its dynamic type and callable/channel/structured side channels for later
+	// assertions and dispatch.
+	if _, ok := r.bashPPInterfaceType(expected); ok && arg.cell != nil {
+		stored := bashPPCopyInterfaceCell(arg.cell)
+		if err := r.bashPPBindInterfaceParam(stored, expected); err != nil {
+			r.bashPPBuiltinError("TYPE", "%v", err)
+			return nil, nil, false
+		}
+		if stored.interfaceValue != nil {
+			meta := &bashPPCollectionMeta{kind: "interface", typ: expected, interfaceValue: stored.interfaceValue}
+			return stored.vrValue(), meta, true
+		}
+	}
 	// A channel argument carries its identity on the cell, not in a value the
 	// scalar check below could see. Store it the way a composite literal
 	// element does, so `a = append(a, make(chan bool))` keeps the reference.
