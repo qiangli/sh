@@ -76,11 +76,12 @@ type mapImporter struct {
 // sources, their ASTs, the checker's Info over them and the resulting
 // package object, which is the same pointer every importer of it receives.
 type checkedPackage struct {
-	spec    PackageSpec
-	sources []Source
-	files   []*ast.File
-	info    *types.Info
-	pkg     *types.Package
+	spec         PackageSpec
+	sources      []Source
+	files        []*ast.File
+	info         *types.Info
+	pkg          *types.Package
+	checkerNames map[string]string
 }
 
 func newMapImporter(base string, fallback types.Importer) *mapImporter {
@@ -216,6 +217,7 @@ func (m *mapImporter) checkDependency(fset *token.FileSet, spec PackageSpec, che
 	if len(files) == 0 {
 		return diagnostics
 	}
+	checkerNames := prepareCgoFiles(fset, files)
 	if len(syntaxErrors) > 0 {
 		diagnostics = appendStructuralCheckerDiagnostics(diagnostics, gcFiles)
 	}
@@ -238,7 +240,7 @@ func (m *mapImporter) checkDependency(fset *token.FileSet, spec PackageSpec, che
 		}
 		return diagnostics
 	}
-	if err := m.add(&checkedPackage{spec: spec, sources: sources, files: files, info: info, pkg: pkg}); err != nil {
+	if err := m.add(&checkedPackage{spec: spec, sources: sources, files: files, info: info, pkg: pkg, checkerNames: checkerNames}); err != nil {
 		return ErrorList{err}
 	}
 	return nil

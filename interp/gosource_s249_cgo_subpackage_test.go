@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -33,13 +34,14 @@ func main() { bad.Bad() }
 */
 import "C"
 
+type A struct{ B }
+type B struct{ C1, C2 C }
+type C struct{ D1, D2 D }
+type D struct{ Bytes []byte }
+
 func Bad() {
-	type L struct {
-		Outer []byte
-		Nested struct{ Inner []byte }
-	}
-	zero := map[string]L{}["missing"]
-	if len(zero.Outer) != 0 || len(zero.Nested.Inner) != 0 {
+	zero := map[string]A{}["missing"]
+	if len(zero.B.C1.D1.Bytes) != 0 || len(zero.B.C2.D2.Bytes) != 0 {
 		panic("map miss did not produce a zero value")
 	}
 	p := C.malloc(100)
@@ -72,9 +74,8 @@ func Bad() {
 	}
 
 	program, err := gosource.Load([]gosource.Source{{Name: filepath.Join(dir, "main.go"), Data: mainSource}}, gosource.Options{
-		RunMain:     true,
-		FakeImportC: true,
-		ImportPath:  "example.com/cgosubpackage",
+		RunMain:    true,
+		ImportPath: "example.com/cgosubpackage",
 		Packages: []gosource.PackageSpec{{
 			Path:    "example.com/cgosubpackage/bad",
 			Sources: []gosource.Source{{Name: filepath.Join(dir, "bad/bad.go"), Data: badSource}},
@@ -110,6 +111,36 @@ func Bad() {
 		compiled.Dir = compiledDir
 		if output, err := compiled.CombinedOutput(); err != nil {
 			t.Fatalf("compiled control: %v: %s\n--- generated ---\n%s", err, output, result.Source)
+		}
+	})
+
+	t.Run("native-unit", func(t *testing.T) {
+		unit, err := gosource.Load([]gosource.Source{{Name: filepath.Join(dir, "bad/bad.go"), Data: badSource}}, gosource.Options{
+			PreserveNativeInit: true,
+			ImportPath:         "example.com/cgosubpackage/bad",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := lower.Compile(unit.File, lower.Options{Package: unit.Package, Library: true, Dir: filepath.Join(dir, "bad"), Importer: unit.Importer})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(result.Files) != 1 {
+			t.Fatalf("native unit files = %d", len(result.Files))
+		}
+		generated := string(result.Files[0].Source)
+		for _, want := range []string{`import "C"`, "type C struct", "C.malloc(100)", "C.free(p)"} {
+			if !strings.Contains(generated, want) {
+				t.Fatalf("native unit lost %q:\n%s", want, generated)
+			}
+		}
+		write(filepath.Join("nativeunit", "go.mod"), []byte("module example.com/cgosubpackage/nativeunit\n\ngo 1.27\n"))
+		write(filepath.Join("nativeunit", "bad.go"), result.Files[0].Source)
+		compiled := exec.CommandContext(ctx, "go", "build", ".")
+		compiled.Dir = filepath.Join(dir, "nativeunit")
+		if output, err := compiled.CombinedOutput(); err != nil {
+			t.Fatalf("native-unit build: %v: %s\n--- generated ---\n%s", err, output, result.Files[0].Source)
 		}
 	})
 }

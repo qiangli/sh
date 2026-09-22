@@ -67,15 +67,15 @@ func TestGoSourceLeadingCheckerLanguageFlag(t *testing.T) {
 	}
 }
 
-func TestGoSourceCheckerConfigurationDoesNotLeak(t *testing.T) {
+func TestGoSourceCheckerConfigurationAndAutomaticCgo(t *testing.T) {
 	source := checkerFixture(t, "fake_import_c.go.txt")
 	_, err := Parse(strings.NewReader(source), "fake.go", Options{})
 	if err == nil || !strings.Contains(err.Error(), "undefined: missing") || strings.Contains(err.Error(), "could not import C") {
 		t.Fatalf("FakeImportC load: %v", err)
 	}
 	_, err = Parse(strings.NewReader(strings.TrimPrefix(source, "// -fakeImportC\n")), "real.go", Options{})
-	if err == nil || !strings.Contains(err.Error(), "could not import C") {
-		t.Fatalf("FakeImportC leaked to later load: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "undefined: missing") || strings.Contains(err.Error(), "could not import C") {
+		t.Fatalf("automatic cgo load: %v", err)
 	}
 }
 

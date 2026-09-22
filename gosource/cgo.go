@@ -2,6 +2,8 @@ package gosource
 
 import (
 	"go/ast"
+	"go/build"
+	"go/parser"
 	"go/token"
 	"go/types"
 	"sort"
@@ -9,6 +11,104 @@ import (
 
 	"mvdan.cc/sh/v3/syntax"
 )
+
+func sourcesImportC(sources []Source) bool {
+	for _, source := range sources {
+		file, _ := parser.ParseFile(token.NewFileSet(), source.Name, source.Data, parser.ImportsOnly)
+		if file == nil {
+			continue
+		}
+		for _, spec := range file.Imports {
+			if strings.Trim(spec.Path.Value, `"`) == "C" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func automaticCgoEnabled() bool { return build.Default.CgoEnabled }
+
+// prepareCgoFiles gives a package-scope Go declaration named C a private
+// spelling for go/types. cmd/cgo does not introduce C into the Go file block:
+// it consumes C.name selectors and removes import "C" before the ordinary
+// compiler sees the file. types.Config.FakeImportC is close, but incorrectly
+// declares C as a package name and collides with the user's declaration.
+//
+// The returned map is private spelling -> source spelling. Conversion applies
+// it to checked objects and type strings, so the rewrite is never observable.
+func prepareCgoFiles(fset *token.FileSet, files []*ast.File) map[string]string {
+	hasCgo := false
+	used := map[string]bool{}
+	for _, file := range files {
+		for _, spec := range file.Imports {
+			hasCgo = hasCgo || strings.Trim(spec.Path.Value, `"`) == "C"
+		}
+		ast.Inspect(file, func(node ast.Node) bool {
+			if id, ok := node.(*ast.Ident); ok {
+				used[id.Name] = true
+			}
+			return true
+		})
+	}
+	if !hasCgo {
+		return nil
+	}
+	fileMap := make(map[string]*ast.File, len(files))
+	for _, file := range files {
+		fileMap[fset.Position(file.Pos()).Filename] = file
+	}
+	pkg, _ := ast.NewPackage(fset, fileMap, func(imports map[string]*ast.Object, path string) (*ast.Object, error) {
+		if found := imports[path]; found != nil {
+			return found, nil
+		}
+		obj := ast.NewObj(ast.Pkg, path)
+		obj.Data = ast.NewScope(nil)
+		imports[path] = obj
+		return obj, nil
+	}, nil)
+	if pkg == nil {
+		return nil
+	}
+	object := pkg.Scope.Lookup("C")
+	if object == nil || object.Kind == ast.Pkg {
+		return nil
+	}
+	alias := ""
+	for index := 0; alias == "" || used[alias]; index++ {
+		alias = "__gosource_go_C_" + tokenName(index)
+	}
+	selectorBases := map[*ast.Ident]bool{}
+	for _, file := range files {
+		ast.Inspect(file, func(node ast.Node) bool {
+			if sel, ok := node.(*ast.SelectorExpr); ok {
+				if id, ok := ast.Unparen(sel.X).(*ast.Ident); ok && id.Name == "C" {
+					selectorBases[id] = true
+				}
+			}
+			return true
+		})
+	}
+	for _, file := range files {
+		ast.Inspect(file, func(node ast.Node) bool {
+			id, ok := node.(*ast.Ident)
+			if ok && id.Obj == object && !selectorBases[id] {
+				id.Name = alias
+			}
+			return true
+		})
+	}
+	object.Name = alias
+	return map[string]string{alias: "C"}
+}
+
+func tokenName(index int) string {
+	const digits = "0123456789abcdefghijklmnopqrstuvwxyz"
+	if index < len(digits) {
+		return digits[index : index+1]
+	}
+	return tokenName(index/len(digits)-1) + tokenName(index%len(digits))
+}
 
 func cgoPackages(linked []*converter) []syntax.CgoPackage {
 	var result []syntax.CgoPackage

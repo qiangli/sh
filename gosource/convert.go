@@ -44,6 +44,9 @@ type converter struct {
 	sources       []Source
 	info          *types.Info
 	renames       map[types.Object]string
+	// checkerNames restores identifiers hygienically renamed solely to model
+	// cmd/cgo's non-binding pseudo-package C during go/types checking.
+	checkerNames map[string]string
 	// shadowedBuiltins names predeclared type names a package redeclares at
 	// package scope as a non-type (e.g. `const int = 15`). expr() must not
 	// materialize an untyped constant through such a name: `int(x)` would call
@@ -155,6 +158,8 @@ func (c *converter) ident(n *ast.Ident) *s.Lit {
 	obj := c.info.ObjectOf(n)
 	if rename := c.renames[obj]; rename != "" {
 		v = rename
+	} else if rename := c.checkerNames[v]; rename != "" {
+		v = rename
 	}
 	out := c.lit(n.Pos(), v)
 	out.ValueEnd = c.pos(n.End())
@@ -241,6 +246,9 @@ func (c *converter) qualifier(p *types.Package) string {
 // latter's rename; the runtime has no lexical type namespace either.
 func (c *converter) typeString(t types.Type) string {
 	text := types.TypeString(t, c.qualifier)
+	for private, source := range c.checkerNames {
+		text = strings.ReplaceAll(text, private, source)
+	}
 	if len(c.mapped) == 0 || !strings.Contains(text, c.prefix+"pkg_") {
 		return text
 	}
@@ -270,7 +278,11 @@ func (c *converter) text(n ast.Node) string {
 			return true
 		}
 		if id, ok := node.(*ast.Ident); ok {
-			if name := c.renames[c.info.ObjectOf(id)]; name != "" && original[id] == "" {
+			name := c.renames[c.info.ObjectOf(id)]
+			if name == "" {
+				name = c.checkerNames[id.Name]
+			}
+			if name != "" && original[id] == "" {
 				original[id] = id.Name
 				id.Name = name
 			}
