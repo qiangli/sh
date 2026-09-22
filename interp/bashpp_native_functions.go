@@ -127,6 +127,13 @@ func (r *Runner) bashPPNativeFunctionCallback(ctx context.Context, id uint64, ar
 	if fn == nil {
 		return nil, fmt.Errorf("gosource: original callback handle expired")
 	}
+	return r.bashPPRunCallbackFunc(ctx, fn, args)
+}
+
+// bashPPRunCallbackFunc executes one original function body on behalf of the
+// dependency: a retained closure reached through its handle, or a package
+// function an object companion called through a generated trampoline.
+func (r *Runner) bashPPRunCallbackFunc(ctx context.Context, fn *bashPPFunc, args []bashPPBridgeValue) (values []bashPPBridgeValue, err error) {
 	params := bashppParams(fn.params())
 	if len(args) != len(params) {
 		return nil, fmt.Errorf("gosource: original callback argument count mismatch")

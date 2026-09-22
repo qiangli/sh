@@ -89,9 +89,13 @@ func (r *Runner) bashPPGoSourceSourceFile() string {
 	return name
 }
 
-func (r *Runner) bashPPGoSourceNativeCompanions(sourceDir string) ([]string, []bashPPNativeFuncDecl) {
+// bashPPGoSourceNativeCompanions reports the same-package object companions
+// of the interpreted Go root, the no-body declarations they may satisfy, and
+// the original functions they call back into. An unsound reference — package
+// data the interpreter owns — is refused here rather than linked.
+func (r *Runner) bashPPGoSourceNativeCompanions(sourceDir string) ([]string, []bashPPNativeFuncDecl, []bashPPCompanionTrampoline, error) {
 	if !r.bashPPGoSource || r.bashPPGoSourceFile == nil || sourceDir == "" {
-		return nil, nil
+		return nil, nil, nil, nil
 	}
 	var funcs []bashPPNativeFuncDecl
 	for _, stmt := range r.bashPPGoSourceFile.Stmts {
@@ -106,11 +110,11 @@ func (r *Runner) bashPPGoSourceNativeCompanions(sourceDir string) ([]string, []b
 		})
 	}
 	if len(funcs) == 0 {
-		return nil, nil
+		return nil, nil, nil, nil
 	}
 	entries, err := os.ReadDir(sourceDir)
 	if err != nil {
-		return nil, funcs
+		return nil, funcs, nil, nil
 	}
 	var files []string
 	for _, entry := range entries {
@@ -124,9 +128,13 @@ func (r *Runner) bashPPGoSourceNativeCompanions(sourceDir string) ([]string, []b
 	}
 	sort.Strings(files)
 	if len(files) == 0 {
-		return nil, funcs
+		return nil, funcs, nil, nil
 	}
-	return files, funcs
+	trampolines, err := r.bashPPGoSourceCompanionTrampolines(files)
+	if err != nil {
+		return files, funcs, nil, err
+	}
+	return files, funcs, trampolines, nil
 }
 
 func (r *Runner) bashPPNativeEmbedDeclaration(d *syntax.BashPPDecl) bool {

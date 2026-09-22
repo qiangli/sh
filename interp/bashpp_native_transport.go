@@ -333,7 +333,26 @@ func requestCallbackCapable(req bashPPEvalRequest, q bashPPBridgeRequest) bool {
 	if reflectValueCall(q) && localMethodsMirrored(req) {
 		return true
 	}
+	if companionTrampolineCall(req, q) {
+		return true
+	}
 	return req.Bridge != nil && req.Bridge.retainedCallbacks()
+}
+
+// companionTrampolineCall reports a call of a no-body declaration satisfied by
+// an object companion which itself references an original package function.
+// The companion may reach that body while this request is parked, so the
+// request must own its callbacks exactly as a mirrored method call does.
+func companionTrampolineCall(req bashPPEvalRequest, q bashPPBridgeRequest) bool {
+	if len(req.CompanionTrampolines) == 0 || q.Op != "call" || q.Receiver != nil {
+		return false
+	}
+	for _, fn := range req.NativeFuncs {
+		if fn.Name == q.Selector {
+			return true
+		}
+	}
+	return false
 }
 
 // reflectValueCall reports a reflect.Value.Call or CallSlice request. The

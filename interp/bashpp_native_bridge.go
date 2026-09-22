@@ -234,7 +234,7 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 		if s.embeds != bashPPEmbedIdentity(req.EmbedDecls) {
 			return errors.New("gosource: embed declarations changed after native dependency initialization")
 		}
-		if s.companions != bashPPNativeCompanionIdentity(req.CompanionFiles, req.NativeFuncs) {
+		if s.companions != bashPPNativeCompanionIdentity(req.CompanionFiles, req.NativeFuncs, req.CompanionTrampolines) {
 			return errors.New("gosource: native companions changed after native dependency initialization")
 		}
 		if s.instances != bashPPImportedInstanceIdentity(req.Instances) {
@@ -424,7 +424,7 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 	s.imports = bridgeImportIdentity(req.Imports)
 	s.locals = bashPPLocalTypeIdentity(req.LocalTypes)
 	s.embeds = bashPPEmbedIdentity(req.EmbedDecls)
-	s.companions = bashPPNativeCompanionIdentity(req.CompanionFiles, req.NativeFuncs)
+	s.companions = bashPPNativeCompanionIdentity(req.CompanionFiles, req.NativeFuncs, req.CompanionTrampolines)
 	s.instances = bashPPImportedInstanceIdentity(req.Instances)
 	go func() {
 		for {
@@ -908,6 +908,23 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 		}
 		fmt.Fprintf(&symbols, "%q: reflect.ValueOf(%s),\n", fn.Name, fn.Name)
 	}
+	// A companion object may call a package function whose body is interpreted.
+	// The trampoline is what makes the companion link; it compiles no original
+	// statement, it only carries the call back to the interpreter that owns it.
+	for _, fn := range req.CompanionTrampolines {
+		if !syntax.BashPPValidIdent(fn.Name) {
+			return "", fmt.Errorf("gosource: invalid assembly companion trampoline %q", fn.Name)
+		}
+		params, err := bashPPNativeTypeTexts(fn.Params, importAliases)
+		if err != nil {
+			return "", err
+		}
+		results, err := bashPPNativeTypeTexts(fn.Results, importAliases)
+		if err != nil {
+			return "", err
+		}
+		locals.WriteString(bashPPCompanionTrampolineGo(fn.Name, params, results))
+	}
 	codecs, err := bashPPLocalCodecsGo(localTypes)
 	if err != nil {
 		return "", err
@@ -926,12 +943,27 @@ func bashPPEmbedIdentity(decls []bashPPEmbedDecl) string {
 	return string(data)
 }
 
-func bashPPNativeCompanionIdentity(files []string, funcs []bashPPNativeFuncDecl) string {
+func bashPPNativeCompanionIdentity(files []string, funcs []bashPPNativeFuncDecl, trampolines []bashPPCompanionTrampoline) string {
 	data, _ := json.Marshal(struct {
-		Files []string
-		Funcs []bashPPNativeFuncDecl
-	}{files, funcs})
+		Files       []string
+		Funcs       []bashPPNativeFuncDecl
+		Trampolines []bashPPCompanionTrampoline
+	}{files, funcs, trampolines})
 	return string(data)
+}
+
+// bashPPNativeTypeTexts maps declared type spellings into the helper's own
+// import aliases, one entry per declared value.
+func bashPPNativeTypeTexts(texts []string, aliases map[string]string) ([]string, error) {
+	out := make([]string, len(texts))
+	for i, text := range texts {
+		mapped, err := bashPPNativeTypeImports(text, aliases)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = mapped
+	}
+	return out, nil
 }
 
 func bashPPNativeFuncSignatureImports(params, results string, aliases map[string]string) (string, string, error) {

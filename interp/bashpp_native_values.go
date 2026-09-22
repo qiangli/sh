@@ -84,7 +84,7 @@ func (r *Runner) bashPPGoSourceNativeFunc(name string) bool {
 	if !r.bashPPGoSource || r.bashPPGoSourceFile == nil {
 		return false
 	}
-	_, funcs := r.bashPPGoSourceNativeCompanions(r.bashPPGoSourceSourceDir())
+	_, funcs, _, _ := r.bashPPGoSourceNativeCompanions(r.bashPPGoSourceSourceDir())
 	for _, fn := range funcs {
 		if fn.Name == name {
 			return true
