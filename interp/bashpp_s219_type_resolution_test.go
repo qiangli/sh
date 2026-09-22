@@ -17,6 +17,21 @@ import (
 )
 
 func TestS219TypeResolution(t *testing.T) {
+	t.Run("dot imported native alias retains checked identity", func(t *testing.T) {
+		stderr := runS219TypeResolution(t, `package main
+import . "go/build"
+type MyContext = Context
+func contextOS(c MyContext) string { return c.GOOS }
+func main() {
+	var c MyContext = Default
+	var copy MyContext = c
+	println(contextOS(copy))
+}`, true)
+		if stderr == "\n" || !strings.HasSuffix(stderr, "\n") {
+			t.Fatalf("runtime alias value output = %q", stderr)
+		}
+	})
+
 	t.Run("mapped embedded type keeps package identity", func(t *testing.T) {
 		dep := `package a; type T struct{ N int }`
 		main := `package main; import "./a"; type T struct{ a.T }; func main(){ var v T; v.N=7; println(v.N) }`
@@ -32,6 +47,17 @@ type C comparable
 type value[T C] struct{ val T }
 func equal[T C](a, b T) bool { return a == b }
 func main(){ println(equal(3,3)); var v value[string]; v.val="ok"; println(v.val) }`, true)
+	})
+
+	t.Run("named term preserves identity", func(t *testing.T) {
+		runS219TypeResolution(t, `package main
+type MyInt int
+type Box[T MyInt] struct{ val T }
+func main(){ var good Box[MyInt]; good.val = 3; println(good.val) }`, true)
+		runS219TypeResolution(t, `package main
+type MyInt int
+type Box[T MyInt] struct{ val T }
+func main(){ var bad Box[int]; _ = bad }`, false)
 	})
 
 	t.Run("pointer recursion remains valid", func(t *testing.T) {
@@ -56,14 +82,14 @@ func main(){ println(equal(3,3)); var v value[string]; v.val="ok"; println(v.val
 	})
 }
 
-func runS219TypeResolution(t *testing.T, source string, wantOK bool) {
+func runS219TypeResolution(t *testing.T, source string, wantOK bool) string {
 	t.Helper()
 	program, err := gosource.Parse(strings.NewReader(source), "type_resolution.go", gosource.Options{RunMain: true})
 	if err != nil {
 		if wantOK {
 			t.Fatal(err)
 		}
-		return
+		return ""
 	}
 	var out, errout bytes.Buffer
 	runner, err := interp.New(interp.Lang(syntax.LangBashPP), interp.Dir(t.TempDir()), interp.StdIO(nil, &out, &errout))
@@ -79,4 +105,5 @@ func runS219TypeResolution(t *testing.T, source string, wantOK bool) {
 	if !wantOK && err == nil {
 		t.Fatalf("invalid recursive type accepted; output=%q", out.String())
 	}
+	return errout.String()
 }
