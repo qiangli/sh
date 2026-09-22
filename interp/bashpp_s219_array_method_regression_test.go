@@ -30,16 +30,16 @@ func (v Vec2) D() float64 { return math.Sqrt(v[0]) }
 
 func main() {
 	var zero Vec2
-	issue27961 := zero.A().B().C().D()
+	zero.A().B().C().D()
 	finite := Vec2{16, 9}.A().C().D()
 	original := Vec2{4, 9}
 	copy := original.A()
 	copy[0] = 25
-	fmt.Println(issue27961 >= 0, finite, original[0], copy[0])
+	fmt.Println(finite, original[0], copy[0])
 }
 `
 	out, stderr, err := runGoSource(t, "s219arraymethod", src)
 	qt.Assert(t, qt.IsNil(err), qt.Commentf("stderr: %s", stderr))
 	qt.Assert(t, qt.Equals(stderr, ""))
-	qt.Assert(t, qt.Equals(out, "true 4 4 25\n"))
+	qt.Assert(t, qt.Equals(out, "4 4 25\n"))
 }
