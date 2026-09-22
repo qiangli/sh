@@ -3999,14 +3999,14 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			// SetReadDeadline silently no-ops on fds not registered with the
 			// runtime poller (e.g. `read -u 9 -t` on an `exec 9<>p` fifo would
 			// block forever on linux). Use the poll-based reader there. On
-			// non-unix timeoutReader returns nil and we keep SetReadDeadline.
-			// Plain stdin / here-strings / terminals keep the SetReadDeadline
-			// path, which works for them on every platform.
+			// Windows, fd0 redirects such as here-strings and pipeline input
+			// also use anonymous pipe handles outside Go's runtime poller, so
+			// route them through the readiness reader too. Its poll-before-read
+			// shape mirrors Cygwin: buffered input wins over an expired
+			// deadline, and an empty pipe times out cleanly.
 			var fdReader io.Reader
-			if stdinSwapped {
-				if f, ok := input.(*os.File); ok && f != nil {
-					fdReader = timeoutReader(readCtx, f, deadline)
-				}
+			if f, ok := input.(*os.File); ok && f != nil && (stdinSwapped || runtime.GOOS == "windows") {
+				fdReader = timeoutReader(readCtx, f, deadline)
 			}
 			if fdReader != nil {
 				cancelGrace()

@@ -5619,6 +5619,10 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 		"got=hi\n",
 	},
 	{
+		"coproc { :; }; echo ${COPROC[0]} ${COPROC[1]}; wait $COPROC_PID",
+		"63 60\n",
+	},
+	{
 		"coproc CO { /bin/sleep 2; }; { sleep 0.05; kill $CO_PID; } & wait $CO_PID; echo status:$?",
 		"status:143\n",
 	},
@@ -5872,6 +5876,10 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	},
 	{
 		"a=4; read -t 0.000001 a <<< abcde; status=$?; echo ${a:-unset} $status",
+		"abcde 0\n",
+	},
+	{
+		"a=4; read -t 0.000001 a <<<abcde; status=$?; echo ${a:-unset} $status",
 		"abcde 0\n",
 	},
 	{
