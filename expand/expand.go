@@ -5697,15 +5697,19 @@ var (
 )
 
 // pathJoin2 is a simpler version of [filepath.Join] without cleaning the result,
-// since that's needed for globbing.
+// since that's needed for globbing. A glob's matches are shell WORDS, not OS
+// paths: bash keeps the separator the pattern was typed with, so `f*/bar`
+// expands to `foo/bar` on every platform (glob.tests, globstar.tests). The
+// results are joined with `/` everywhere — the OS accepts it on Windows too,
+// and the filesystem walk below converts on the way in, not the way out.
 func pathJoin2(elem1, elem2 string) string {
 	if elem1 == "" {
 		return elem2
 	}
-	if strings.HasSuffix(elem1, string(filepath.Separator)) {
+	if strings.HasSuffix(elem1, "/") || strings.HasSuffix(elem1, string(filepath.Separator)) {
 		return elem1 + elem2
 	}
-	return elem1 + string(filepath.Separator) + elem2
+	return elem1 + "/" + elem2
 }
 
 // pathSplit splits a file path into its elements, retaining empty ones. Before
@@ -5770,11 +5774,11 @@ func (cfg *Config) glob(base, pat string) ([]string, error) {
 	if filepath.IsAbs(pat) {
 		if parts[0] == "" {
 			// unix-like
-			matches[0] = string(filepath.Separator)
+			matches[0] = "/"
 		} else {
-			// windows (for some reason it won't work without the
-			// trailing separator)
-			matches[0] = parts[0] + string(filepath.Separator)
+			// windows: the volume needs its trailing separator to name the
+			// root directory rather than the drive-relative cwd.
+			matches[0] = parts[0] + "/"
 		}
 		parts = parts[1:]
 	}

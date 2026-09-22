@@ -8394,7 +8394,9 @@ func TestRunnerDir(t *testing.T) {
 		got = strings.TrimSpace(got)
 		want := `/symlink /symlink/realfile`
 		if runtime.GOOS == "windows" {
-			want = `\\REAL.{4} \\REAL.{4}\\realfile`
+			// Glob words keep `/` (Sprint 245); $PWD itself is in the
+			// shell's own spelling.
+			want = `REAL.{4} .*REAL.{4}/realfile$`
 		}
 		if !regexp.MustCompile(want).MatchString(got) {
 			t.Fatalf("\nwant regexp: %q\ngot: %q", want, got)
