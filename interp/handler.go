@@ -415,6 +415,18 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			env = setExecEnvValue(env, bashyParentPIDEnv, parent)
 		}
 		env = append(env, fds.env...)
+		// `exec CMD` is execve everywhere it can be, and execve inherits
+		// SIG_IGN. On Windows nothing is replaced: the shell starts CMD and
+		// exits in its place, and a bashy ignore lives in this process's own
+		// signal bus rather than in a kernel disposition, so there is nothing
+		// for CreateProcess to carry. Bridge it by name instead, the way the
+		// ENOEXEC self re-exec below does — a child bashy strips the variable
+		// and treats the set as ignored-on-entry (trap.tests/trap1.sub).
+		if hc.ExecReplace && runtime.GOOS == "windows" && hc.runner != nil {
+			if ign := hc.runner.hardIgnoreEnvValue(); ign != "" {
+				env = setExecEnvValue(env, BashyHardIgnoreEnv, ign)
+			}
+		}
 		hc.runner.closeClosedInheritedFdsOnExec()
 		// If stdin is the in-memory script-source reader, back it with a
 		// seekable temp file: os/exec eagerly drains a non-File stdin, which
@@ -557,7 +569,7 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 				reExecEnv := env
 				if hc.runner != nil {
 					if ign := hc.runner.hardIgnoreEnvValue(); ign != "" {
-						reExecEnv = append(append([]string(nil), env...), BashyHardIgnoreEnv+"="+ign)
+						reExecEnv = setExecEnvValue(append([]string(nil), env...), BashyHardIgnoreEnv, ign)
 					}
 				}
 				// The target is now our own binary: on Windows that is
@@ -929,11 +941,21 @@ func isBinarySource(content []byte) bool {
 func checkStat(dir, file string, checkExec bool) (string, error) {
 	target := file
 	target = lookupStatPath(dir, target)
-	info, err := os.Stat(target)
-	if err != nil {
-		info, err = statLongPath(target, err)
+	// A Windows process-substitution pipe is answered from its name. It is
+	// not a filesystem node: every CreateFile on \\.\pipe\<name> —
+	// os.Stat's included — takes the consumer's one connection to the
+	// server instance, so `. <(cmd)`, which looks the path up here before
+	// opening it, would eat its own rendezvous and then find the pipe
+	// busy. r.stat sidesteps it the same way.
+	info, ok := procSubstPipeStat(target)
+	if !ok {
+		var err error
+		info, err = os.Stat(target)
 		if err != nil {
-			return "", err
+			info, err = statLongPath(target, err)
+			if err != nil {
+				return "", err
+			}
 		}
 	}
 	m := info.Mode()

@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"strconv"
@@ -107,13 +108,26 @@ func (r *Runner) access(ctx context.Context, path string, mode uint32) error {
 	return nil
 }
 
-// unTestOwnOrGrp panics. Under Unix, it implements the -O and -G unary tests,
-// but under Windows, it's unclear how to implement those tests, since Windows
-// doesn't have the concept of a file owner, just ACLs, and it's unclear how
-// to map the one to the other.
+// unTestOwnOrGrp implements the -O and -G unary tests. Windows has no uid
+// or gid to compare, but it does have an owner SID and a primary group SID
+// on every file, and a process token that says which of them are this
+// shell's — which is the whole of what the two tests ask. [winmode] reads
+// them, as it reads the ACL the recorded mode lives in.
+//
+// A file that does not exist, or one on a filesystem with no security
+// descriptor to read, is false rather than an error: the same answer the
+// Unix implementation gives when the stat fails.
 func (r *Runner) unTestOwnOrGrp(ctx context.Context, op syntax.UnTestOperator, x string) bool {
-	r.errf("unsupported unary test op: %v\n", op)
-	return false
+	if _, err := r.stat(ctx, x); err != nil {
+		return false
+	}
+	path := r.absPath(x)
+	if op == syntax.TsUsrOwn {
+		owned, _ := winmode.IsOwner(path)
+		return owned
+	}
+	member, _ := winmode.InGroup(path)
+	return member
 }
 
 // userGroups is bash's $GROUPS. Windows has no numeric gid (os.Getgid is
@@ -134,6 +148,9 @@ func userGroups() []string {
 // mirrors syscall.Open's (see windowsOpenSpecFor); devices, \\.\ and \\?\
 // paths, long paths and exotic flags fall back to os.OpenFile.
 func openPath(ctx context.Context, path string, flag int, perm os.FileMode) (io.ReadWriteCloser, error) {
+	if err := recordedModeDenies(path, flag); err != nil {
+		return nil, err
+	}
 	if f, handled, err := openShareDelete(path, flag, perm); handled {
 		if err != nil {
 			return nil, err
@@ -186,6 +203,48 @@ func openShareDelete(path string, flag int, perm os.FileMode) (f *os.File, handl
 		}
 	}
 	return os.NewFile(uintptr(h), path), true, nil
+}
+
+// recordedModeDenies reports the EACCES a chmod'ed mode calls for when the
+// access this open asks of path is one that mode took away.
+//
+// Windows enforces only half of a recorded mode (see [winmode]) by itself.
+// Clearing w also clears the read-only attribute every CreateFile checks,
+// so `chmod a-w f; > f` fails without anyone's help — which is why the
+// write half of redir12.sub passed while the read half did not. Clearing r
+// leaves nothing for the platform to refuse on: the DACL is consulted only
+// when the file has one this shell wrote, and even then a process holding
+// SeBackupPrivilege reads straight through it. The shell therefore asks
+// the same question its own `test -r` asks (see [Runner.access]) and gives
+// the redirection the same answer, so the two predicates cannot disagree
+// about what chmod recorded.
+//
+// Only a mode somebody recorded counts. A file nobody has chmod'ed has no
+// POSIX opinion to honour, and the attribute-derived mode io/fs reports
+// for it would refuse reads on every file of a read-only volume.
+func recordedModeDenies(path string, flag int) error {
+	mode, ok := winmode.Get(path)
+	if !ok {
+		return nil
+	}
+	// The owner class is the one asked about, as in [Runner.access]: the
+	// shell is nearly always the owner of a file it has just chmod'ed, and
+	// resolving the real class would cost a token lookup per redirection.
+	var want fs.FileMode
+	switch flag & (os.O_RDONLY | os.O_WRONLY | os.O_RDWR) {
+	case os.O_WRONLY:
+		want = 0o200
+	case os.O_RDWR:
+		want = 0o600
+	default:
+		want = 0o400
+	}
+	if mode.Perm()&want == want {
+		return nil
+	}
+	// The same errno a denying ACL would have produced, so the diagnostic
+	// and the exit status are indistinguishable from the enforced case.
+	return &os.PathError{Op: "open", Path: path, Err: syscall.ERROR_ACCESS_DENIED}
 }
 
 func openPathAt(ctx context.Context, dir, path string, flag int, perm os.FileMode) (io.ReadWriteCloser, error) {

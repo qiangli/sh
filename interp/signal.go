@@ -548,18 +548,32 @@ func parseHardIgnore(s string) map[string]bool {
 	return set
 }
 
-// hardIgnoreEnvValue serialises the signals this runner has set to real
-// SIG_IGN for the BashyHardIgnoreEnv bridge, so a child shell we exec treats
-// them as ignored-on-entry. Returns "" when none are ignored.
+// hardIgnoreEnvValue serialises the signals this runner ignores for the
+// BashyHardIgnoreEnv bridge, so a child shell we exec treats them as
+// ignored-on-entry. Returns "" when none are ignored.
+//
+// Both kinds of ignore go across, because execve does not distinguish
+// them: a signal this shell set to SIG_IGN with `trap ” SIG` and one that
+// was already SIG_IGN when the shell started (its own startupIgnored, from
+// a parent that did the same) are both SIG_IGN in the process the exec
+// replaces, and both are inherited. Carrying only the first would lose an
+// inherited ignore at the second hop of a chain of execs.
 func (r *Runner) hardIgnoreEnvValue() string {
 	r.sigMu.Lock()
 	defer r.sigMu.Unlock()
-	if len(r.sigIgnored) == 0 {
+	if len(r.sigIgnored) == 0 && len(r.startupIgnored) == 0 {
 		return ""
 	}
-	names := make([]string, 0, len(r.sigIgnored))
-	for name := range r.sigIgnored {
-		names = append(names, name)
+	seen := make(map[string]bool, len(r.sigIgnored)+len(r.startupIgnored))
+	names := make([]string, 0, len(r.sigIgnored)+len(r.startupIgnored))
+	for _, set := range []map[string]bool{r.sigIgnored, r.startupIgnored} {
+		for name := range set {
+			if seen[name] {
+				continue
+			}
+			seen[name] = true
+			names = append(names, name)
+		}
 	}
 	sort.Strings(names)
 	return strings.Join(names, ",")

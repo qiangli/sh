@@ -24,3 +24,12 @@ func Get(string) (fs.FileMode, bool) { return 0, false }
 func Set(string, fs.FileMode) error {
 	return errors.New("winmode: modes are recorded in an ACL only on windows")
 }
+
+// IsOwner reports that nothing is known about path's owner, always: see
+// [Supported]. Everywhere but Windows a file's owner is a uid that stat(2)
+// reports and the caller compares against geteuid itself.
+func IsOwner(string) (bool, bool) { return false, false }
+
+// InGroup reports that nothing is known about path's group, always: see
+// [IsOwner].
+func InGroup(string) (bool, bool) { return false, false }
