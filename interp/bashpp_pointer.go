@@ -323,6 +323,12 @@ func (r *Runner) bashPPAddress(expr syntax.BashPPExpr) (result *bashPPPointer, e
 				ptr.elem = sel.fieldType
 				return ptr, nil
 			}
+			// The index has already run. A missing or unsupported pointer
+			// carrier must not fall through and evaluate it a second time.
+			if parent == nil {
+				return nil, errBashPPNilDereference
+			}
+			return nil, fmt.Errorf("BASHPP-EPOINTER-TARGET: indexed value has no interpreter pointer storage")
 		}
 	}
 
