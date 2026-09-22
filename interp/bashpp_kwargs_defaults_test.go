@@ -55,7 +55,14 @@ printf '%s:%d:%s\n' alias.Meta.Name alias.Ports[1] alias.Labels["tier"]
 		{"mutable imported pointer", `import "net/url"
 endpoint, _ := url.Parse("https://example.test/original")
 endpoint.Host = "changed.test"
-`, ""},
+printf '%s\n' endpoint.Host
+`, "changed.test\n"},
+		{"mutable imported pointer alias", `import "net/url"
+endpoint, _ := url.Parse("https://example.test/original")
+alias := endpoint
+alias.Host = "changed.test"
+printf '%s:%s\n' endpoint.Host alias.Host
+`, "changed.test:changed.test\n"},
 	}
 	for _, tc := range positives {
 		t.Run(tc.name, func(t *testing.T) {
@@ -95,6 +102,12 @@ readonly cfg
  cfg["ports"][0] = 8080
 )
 `, "BASHPP-EREADONLY-MUTATION: cannot mutate readonly value \"cfg\" through slice path [\"ports\"][0]\n"},
+		{"imported alias created before readonly", `import "net/url"
+endpoint, _ := url.Parse("https://example.test/original")
+alias := endpoint
+readonly endpoint
+alias.Host = "changed.test"
+`, "BASHPP-EREADONLY-MUTATION: cannot mutate readonly value \"endpoint\" through alias \"alias\" and path .Host\n"},
 		{"imported", `import "net/url"
 endpoint, _ := url.Parse("https://example.test/original")
 readonly endpoint
