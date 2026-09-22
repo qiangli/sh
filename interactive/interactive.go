@@ -28,6 +28,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 
@@ -35,6 +36,7 @@ import (
 	"golang.org/x/term"
 
 	"mvdan.cc/sh/v3/interp"
+	"mvdan.cc/sh/v3/pathconv"
 	"mvdan.cc/sh/v3/syntax"
 )
 
@@ -234,6 +236,7 @@ func Run(ctx context.Context, opts Options) error {
 	if histLimit == 0 {
 		histLimit = 1000
 	}
+	histFile := historyFilePath(r.Dir, opts.HistoryFile, runtime.GOOS == "windows")
 	interruptPrompt := opts.InterruptPrompt
 	if interruptPrompt == "" {
 		interruptPrompt = "^C"
@@ -257,7 +260,7 @@ func Run(ctx context.Context, opts Options) error {
 
 	cfg := &readline.Config{
 		Prompt:            ps1(),
-		HistoryFile:       opts.HistoryFile,
+		HistoryFile:       histFile,
 		HistoryLimit:      histLimit,
 		HistorySearchFold: opts.HistorySearchFold,
 		InterruptPrompt:   interruptPrompt,
@@ -284,7 +287,7 @@ func Run(ctx context.Context, opts Options) error {
 		// probing, so echo + line editing work over the pipe pair on every
 		// platform. (Ctrl-R reverse search is the one readline feature not
 		// carried over.)
-		return runAssumedTTY(ctx, opts, r, stdin, stdout, stderr, lang, ps1, ps2, onRunError)
+		return runAssumedTTY(ctx, opts, histFile, r, stdin, stdout, stderr, lang, ps1, ps2, onRunError)
 	}
 
 	rl, err := readline.NewFromConfig(cfg)
@@ -443,14 +446,14 @@ func bindTTY(cfg *readline.Config, stdin io.Reader) bool {
 // apart from the editor. Command stdout/stderr go straight to the runner's
 // own writers (the slave fd), not through x/term — exactly as the readline
 // path leaves interp writing to the PTY slave directly.
-func runAssumedTTY(ctx context.Context, opts Options, r *interp.Runner, stdin io.Reader, stdout, stderr io.Writer, lang syntax.LangVariant, ps1, ps2 func() string, onRunError func(error)) error {
+func runAssumedTTY(ctx context.Context, opts Options, histFile string, r *interp.Runner, stdin io.Reader, stdout, stderr io.Writer, lang syntax.LangVariant, ps1, ps2 func() string, onRunError func(error)) error {
 	// The far end is raw, so Ctrl-C arrives as a 0x03 byte; x/term maps that
 	// to the same io.EOF it returns for Ctrl-D, which would exit the shell.
 	// Strip it from the line-editing input so Ctrl-C is a no-op while
 	// editing — during a running command interp reads the raw fd directly,
 	// so the command still sees its own Ctrl-C.
 	t := term.NewTerminal(rwAdapter{r: ctrlCFilter{r: stdin}, w: stdout}, ps1())
-	if h := newFileHistory(opts.HistoryFile, opts.HistoryLimit); h != nil {
+	if h := newFileHistory(histFile, opts.HistoryLimit); h != nil {
 		t.History = h
 	}
 	applySize := func() {
@@ -600,6 +603,22 @@ func (f ctrlCFilter) Read(p []byte) (int, error) {
 		}
 		return n, err
 	}
+}
+
+// historyFilePath is the history file as the line editor opens it. The
+// option arrives in the shell's spelling — bashy hands over $HISTFILE, which
+// a script sets to `$TMPDIR/newhistory-$$` and the shell's own `history -w`
+// resolves through its path conversion (/tmp is the host temp directory on
+// Windows). readline and [newFileHistory] open the file with plain os calls,
+// for which `/tmp/x` is the drive-relative C:\tmp\x: the saved lines never
+// loaded, so Ctrl-R found nothing (history.tests, history4.sub). Convert
+// once, here, the way the interpreter does for its own opens; every other
+// host returns the path unchanged.
+func historyFilePath(dir, path string, windows bool) string {
+	if path == "" {
+		return ""
+	}
+	return pathconv.ToOSMode(dir, path, windows)
 }
 
 // fileHistory is an x/term History that mirrors readline's persistent
