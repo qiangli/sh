@@ -235,7 +235,7 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 		if s.embeds != bashPPEmbedIdentity(req.EmbedDecls) {
 			return errors.New("gosource: embed declarations changed after native dependency initialization")
 		}
-		if s.companions != bashPPNativeCompanionIdentity(req.CompanionFiles, req.NativeFuncs, req.CompanionTrampolines) {
+		if s.companions != bashPPNativeCompanionIdentity(req.CompanionFiles, req.NativeFuncs, req.CompanionTrampolines, req.CompanionUnmappedFrames) {
 			return errors.New("gosource: native companions changed after native dependency initialization")
 		}
 		if s.cgo != bashPPCgoIdentity(req.CgoPackages) {
@@ -490,7 +490,7 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 	s.imports = bridgeImportIdentity(req.Imports)
 	s.locals = bashPPLocalTypeIdentity(req.LocalTypes)
 	s.embeds = bashPPEmbedIdentity(req.EmbedDecls)
-	s.companions = bashPPNativeCompanionIdentity(req.CompanionFiles, req.NativeFuncs, req.CompanionTrampolines)
+	s.companions = bashPPNativeCompanionIdentity(req.CompanionFiles, req.NativeFuncs, req.CompanionTrampolines, req.CompanionUnmappedFrames)
 	s.cgo = bashPPCgoIdentity(req.CgoPackages)
 	s.instances = bashPPImportedInstanceIdentity(req.Instances)
 	go func() {
@@ -740,6 +740,7 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 	}
 	sort.Strings(ordered)
 	var imports, symbols, typeEntries strings.Builder
+	var companionSymbols, unmappedFrames, forcing strings.Builder
 	importAliases := map[string]string{}
 	materialised := map[string]bool{}
 	for _, local := range req.LocalTypes {
@@ -836,6 +837,9 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 						symbol = name
 					}
 					fmt.Fprintf(&symbols, "%q: reflect.ValueOf(%s.%s),\n", symbol, alias, name)
+					if bashPPForcesCollection(path, name) {
+						fmt.Fprintf(&forcing, "%q: true,\n", symbol)
+					}
 				}
 				used = true
 			case *types.Var:
@@ -970,6 +974,7 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 		if !syntax.BashPPValidIdent(fn.Name) {
 			return "", fmt.Errorf("gosource: invalid native companion function %q", fn.Name)
 		}
+		fmt.Fprintf(&companionSymbols, "%q: true,\n", fn.Name)
 		params, results, err := bashPPNativeFuncSignatureImports(fn.Params, fn.Results, importAliases)
 		if err != nil {
 			return "", err
@@ -1006,6 +1011,11 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 			fmt.Fprintf(&symbols, "%q: reflect.ValueOf(__bashpp_cgo_%d_%s),\n", pkg.Alias+"."+symbol.Name, pi, symbol.Name)
 		}
 	}
+	// The frames the runtime has no pointer map for. Their names are reported
+	// back in the refusal a forced collection gets while one of them is live.
+	for _, name := range req.CompanionUnmappedFrames {
+		fmt.Fprintf(&unmappedFrames, "%q,\n", name)
+	}
 	codecs, err := bashPPLocalCodecsGo(localTypes)
 	if err != nil {
 		return "", err
@@ -1016,6 +1026,9 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 	source = strings.Replace(source, "//SYMBOLS", symbols.String(), 1)
 	source = strings.Replace(source, "//TYPES", typeEntries.String(), 1)
 	source = strings.Replace(source, "//LOCALTYPES", locals.String(), 1)
+	source = strings.Replace(source, "//COMPANIONSYMBOLS", companionSymbols.String(), 1)
+	source = strings.Replace(source, "//UNMAPPEDFRAMES", unmappedFrames.String(), 1)
+	source = strings.Replace(source, "//FORCESGC", forcing.String(), 1)
 	return source, nil
 }
 
@@ -1024,12 +1037,13 @@ func bashPPEmbedIdentity(decls []bashPPEmbedDecl) string {
 	return string(data)
 }
 
-func bashPPNativeCompanionIdentity(files []string, funcs []bashPPNativeFuncDecl, trampolines []bashPPCompanionTrampoline) string {
+func bashPPNativeCompanionIdentity(files []string, funcs []bashPPNativeFuncDecl, trampolines []bashPPCompanionTrampoline, unmapped []string) string {
 	data, _ := json.Marshal(struct {
-		Files       []string
-		Funcs       []bashPPNativeFuncDecl
-		Trampolines []bashPPCompanionTrampoline
-	}{files, funcs, trampolines})
+		Files          []string
+		Funcs          []bashPPNativeFuncDecl
+		Trampolines    []bashPPCompanionTrampoline
+		UnmappedFrames []string
+	}{files, funcs, trampolines, unmapped})
 	return string(data)
 }
 
@@ -1267,4 +1281,18 @@ func (s *bashPPNativeSession) retainedCallbacks() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.retained
+}
+
+// bashPPForcesCollection reports an imported function that starts a collection
+// cycle whatever the pacing says. While an unmapped companion frame is live the
+// helper holds collection off, and these are the calls that would defeat that;
+// the helper serialises them against that window rather than crashing in it.
+func bashPPForcesCollection(path, name string) bool {
+	switch path {
+	case "runtime":
+		return name == "GC"
+	case "runtime/debug":
+		return name == "FreeOSMemory" || name == "SetGCPercent" || name == "SetMemoryLimit"
+	}
+	return false
 }
