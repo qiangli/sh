@@ -6741,6 +6741,46 @@ wait $REFLECT_PID >/dev/null 2>&1 || { status=$?; echo "status:$status"; }
 	}
 }
 
+func TestCoprocInProcessReflectorCancellationClosesPipes(t *testing.T) {
+	t.Parallel()
+
+	src := `
+coproc REFLECT { reflect; }
+echo flop >&${REFLECT[1]}
+read LINE <&${REFLECT[0]}
+echo "$LINE"
+kill $REFLECT_PID
+wait $REFLECT_PID >/dev/null 2>&1 || echo "status:$?"
+`
+	file := parse(t, nil, src)
+	var stdout, stderr concBuffer
+	r, err := interp.New(
+		interp.StdIO(nil, &stdout, &stderr),
+		interp.ExecHandler(func(ctx context.Context, args []string) error {
+			if args[0] != "reflect" {
+				return fmt.Errorf("unexpected command %q", args[0])
+			}
+			hc := interp.HandlerCtx(ctx)
+			_, err := io.Copy(hc.Stdout, hc.Stdin)
+			return err
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), runnerRunTimeout)
+	defer cancel()
+	if err := r.Run(ctx, file); err != nil {
+		t.Fatalf("run: %v; stdout=%q stderr=%q", err, stdout.String(), stderr.String())
+	}
+	if got, want := stdout.String(), "flop\nstatus:143\n"; got != want {
+		t.Fatalf("stdout = %q, want %q; stderr=%q", got, want, stderr.String())
+	}
+	if got := stderr.String(); got != "" {
+		t.Fatalf("stderr = %q, want empty", got)
+	}
+}
+
 func TestRunAliasExpandedSourceLineCallerContext(t *testing.T) {
 	const setup = "shopt -s expand_aliases\nset -o posix\nalias short='probe )'\n"
 	const source = setup + "echo \"$( short \"\n"

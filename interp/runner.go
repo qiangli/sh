@@ -8367,7 +8367,17 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		// runs into bg.pid (via publishBgPid). `kill $COPROC_PID` resolves
 		// the synthetic pid to that real child so the signal reaches it.
 		bgCtx, cancel := r.backgroundContext(ctx)
-		bg.cancel = cancel
+		// A custom in-process command can be blocked in an ordinary io.Copy
+		// which context cancellation cannot interrupt. Coprocs are streams,
+		// not terminals: close both parent pipe ends as part of cancellation
+		// so a blocked reader sees EOF and a blocked writer sees a broken pipe.
+		// This is also the correct mechanism for the noninteractive xcase and
+		// cat commands in bash's coproc fixture; no ConPTY is involved.
+		bg.cancel = func() {
+			pr.Close()
+			pw2.Close()
+			cancel()
+		}
 		bgCtx = context.WithValue(bgCtx, bgProcCtxKey{}, bg)
 		go func() {
 			defer r2.closeDirFile()

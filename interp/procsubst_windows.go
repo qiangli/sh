@@ -39,13 +39,17 @@ import (
 // every later open reads end-of-stream. That is exactly what bash's own
 // procsub test pins: five reads of one `<(date)` print 1, 0, 0, 0, 0.
 //
-// This is that rule, not a replay. The name keeps
-// [procSubstPipeListeners] instances waiting, so a second open never finds
-// them all busy; the *first* connection to arrive is the substitution's
-// stream and is handed to the runner, and every connection after it is hung
-// up unwritten, which the client reads as EOF. An open that reads nothing
-// therefore costs nothing, and an open that reads gets either the whole body
-// (it was first) or end-of-stream (it was not) — never an error.
+// This is that rule, not a replay. The name starts with
+// [procSubstPipeListeners] instances waiting, and each completed
+// ConnectNamedPipe creates its replacement before the accepted connection is
+// handled. The number is overlap tolerance, not a lifetime open limit: making
+// it larger without replenishing would merely move ERROR_PIPE_BUSY to a later
+// open. The *first* connection to arrive is the substitution's stream and is
+// handed to the runner; every connection after it is hung up unwritten, which
+// the client reads as EOF. This applies equally when the consumer is another
+// process which opens the path itself. An open gets either the remaining
+// stream (all of it for the first reader) or end-of-stream once drained —
+// never a replay.
 //
 // Hanging up means closing the instance, never DisconnectNamedPipe: a
 // disconnect leaves the client's next read with ERROR_PIPE_NOT_CONNECTED,
@@ -91,11 +95,9 @@ type procSubstNamedPipe struct {
 	stopped   bool
 }
 
-// procSubstPipeListeners is how many server instances of one substitution's
-// name wait for a connection at a time. More than one so that a consumer
-// which opens the path twice in a row — a stat followed by the open it was
-// checking, say — never finds every instance busy in the window where the
-// accept loop is replacing the one it just took.
+// procSubstPipeListeners is the number of listener chains kept warm for one
+// substitution name. Every chain replenishes itself on connection; this value
+// only covers overlapping opens while that replacement is being created.
 const procSubstPipeListeners = 2
 
 func (r *Runner) newProcSubstPipe(substWrites bool) (procSubstPipe, error) {
@@ -124,6 +126,10 @@ func (r *Runner) newProcSubstPipe(substWrites bool) (procSubstPipe, error) {
 		if err == nil {
 			p.first = h
 			procSubstPipeRegister(p.name)
+			if err := p.startServing(); err != nil {
+				p.cleanup()
+				return nil, fmt.Errorf("cannot serve named pipe: %v", err)
+			}
 			return p, nil
 		}
 		// FILE_FLAG_FIRST_PIPE_INSTANCE reports a name collision as
@@ -172,7 +178,6 @@ func connectInstance(h windows.Handle) error {
 // Close also releases the handle, as it always did. Both directions take it:
 // the substitution's own end is the first connection either way.
 func (p *procSubstNamedPipe) connect() (*os.File, error) {
-	p.startServing()
 	select {
 	case h := <-p.winner:
 		return os.NewFile(uintptr(h), p.shellPath), nil
@@ -185,91 +190,81 @@ func (p *procSubstNamedPipe) openWriter() (*os.File, error) { return p.connect()
 
 func (p *procSubstNamedPipe) openReader() (*os.File, error) { return p.connect() }
 
-func (p *procSubstNamedPipe) startServing() {
+func (p *procSubstNamedPipe) startServing() error {
 	p.mu.Lock()
 	start := !p.serving && !p.stopped
 	p.serving = start
 	p.mu.Unlock()
-	if start {
-		go p.serve()
+	if !start {
+		return nil
 	}
+	for range procSubstPipeListeners {
+		if err := p.startListener(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-// serve keeps [procSubstPipeListeners] instances of the name waiting for a
-// connection, and decides what each connection that arrives observes: the
-// first is the substitution's stream, every later one is end-of-stream.
-//
-// Which instance a client lands on is the kernel's choice, so the decision
-// is made on the order connections are *accepted*, never on the identity of
-// the instance that took one.
-func (p *procSubstNamedPipe) serve() {
-	connected := make(chan windows.Handle)
-	pending := 0
-	for {
-		for pending < procSubstPipeListeners {
-			h, ok := p.newListener()
-			if !ok {
-				break
-			}
-			pending++
-			go func() {
-				err := connectInstance(h)
-				p.mu.Lock()
-				p.listening--
-				p.mu.Unlock()
-				if err != nil {
-					windows.CloseHandle(h)
-					connected <- windows.InvalidHandle
-					return
-				}
-				connected <- h
-			}()
-		}
-		if pending == 0 {
-			return
-		}
-		h := <-connected
-		pending--
-
-		p.mu.Lock()
-		stopped := p.stopped
-		claim := !stopped && !p.claimed && h != windows.InvalidHandle
-		if claim {
-			p.claimed = true
-		}
-		p.mu.Unlock()
-
-		switch {
-		case h == windows.InvalidHandle:
-			// That instance failed; the loop replaces it.
-		case claim:
-			p.winner <- h // buffered, and filled at most once
-		default:
-			// A later open observes the stream at its end: hang up
-			// without writing, which the client reads as EOF. Closing,
-			// not disconnecting — see the type's doc.
-			windows.CloseHandle(h)
-		}
-		if stopped {
-			// cleanup is releasing the listeners; take what they report
-			// and let the name go.
-			for ; pending > 0; pending-- {
-				if h := <-connected; h != windows.InvalidHandle {
-					windows.CloseHandle(h)
-				}
-			}
-			return
-		}
+// startListener creates an instance and begins its blocking accept. It is
+// called synchronously after each successful ConnectNamedPipe, before that
+// connection is classified, so a fast external consumer does not exhaust a
+// fixed pool merely by opening the path repeatedly.
+func (p *procSubstNamedPipe) startListener() error {
+	h, ok, err := p.newListener()
+	if err != nil || !ok {
+		return err
 	}
+	go p.accept(h)
+	return nil
+}
+
+func (p *procSubstNamedPipe) accept(h windows.Handle) {
+	err := connectInstance(h)
+	p.mu.Lock()
+	p.listening--
+	stopped := p.stopped
+	p.mu.Unlock()
+	if err != nil {
+		windows.CloseHandle(h)
+		if !stopped {
+			_ = p.startListener()
+		}
+		return
+	}
+	if stopped {
+		windows.CloseHandle(h)
+		return
+	}
+
+	// Replenish this listener chain before handing off or hanging up the
+	// connection which consumed it. The other warm chain covers the small
+	// CreateNamedPipe scheduling window.
+	_ = p.startListener()
+
+	p.mu.Lock()
+	stopped = p.stopped
+	claim := !stopped && !p.claimed
+	if claim {
+		p.claimed = true
+	}
+	p.mu.Unlock()
+	if claim {
+		p.winner <- h // buffered, and filled at most once
+		return
+	}
+	// A later open observes the stream at its end: closing the server handle
+	// gives the client EOF. DisconnectNamedPipe would surface an error instead.
+	windows.CloseHandle(h)
 }
 
 // newListener creates one more instance and counts it in, unless cleanup has
 // already run.
-func (p *procSubstNamedPipe) newListener() (windows.Handle, bool) {
+func (p *procSubstNamedPipe) newListener() (windows.Handle, bool, error) {
 	p.mu.Lock()
 	if p.stopped {
 		p.mu.Unlock()
-		return windows.InvalidHandle, false
+		return windows.InvalidHandle, false, nil
 	}
 	h := p.first
 	p.first = windows.InvalidHandle
@@ -278,17 +273,17 @@ func (p *procSubstNamedPipe) newListener() (windows.Handle, bool) {
 	if h == windows.InvalidHandle {
 		var err error
 		if h, err = p.createInstance(false); err != nil {
-			return windows.InvalidHandle, false
+			return windows.InvalidHandle, false, err
 		}
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.stopped {
 		windows.CloseHandle(h)
-		return windows.InvalidHandle, false
+		return windows.InvalidHandle, false, nil
 	}
 	p.listening++
-	return h, true
+	return h, true, nil
 }
 
 func (p *procSubstNamedPipe) cleanup() {

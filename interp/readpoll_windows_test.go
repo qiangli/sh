@@ -6,12 +6,42 @@
 package interp
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"testing"
 	"time"
 )
+
+// Here-input is a materialised, delete-pending file before hdocServe returns.
+// This is the ordering `read -t .001 a <<<abcde` depends on: the deadline
+// probes bytes, not a writer goroutine or undocumented pipe capacity.
+func TestWindowsHereDocReadyBeforeServeReturns(t *testing.T) {
+	body := []byte("abcde\n")
+	f, err := hdocServe(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if windowsHandleKindOf(f) != winHandleOther {
+		t.Fatal("here-document must be a regular file, not a pipe")
+	}
+	if !windowsReadReadyNow(f) {
+		t.Fatal("short here-document was not ready when hdocServe returned")
+	}
+	if _, err := os.Stat(f.Name()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("here-document temp path still exists: %v", err)
+	}
+	got, err := io.ReadAll(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, body) {
+		t.Fatalf("read %q, want %q", got, body)
+	}
+}
 
 // An anonymous pipe is the handle Go's runtime poller refuses, so
 // SetReadDeadline cannot call its read off; the peek-based probe is what
