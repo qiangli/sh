@@ -71,7 +71,7 @@ func (r *Runner) goSourceChannelCapacity(expr syntax.BashPPExpr, word *syntax.Wo
 	return int(n), nil
 }
 func (r *Runner) goSourceMakeNativeChannel(typ *syntax.BashPPChanType, expr syntax.BashPPExpr, word *syntax.Word, declared ...syntax.BashPPTypeExpr) (*bashPPCell, bool, error) {
-	if !r.bashPPGoSource || typ == nil || !r.goSourceNativeChannelElement(typ.Element, map[string]bool{}) {
+	if !r.bashPPGoSource || typ == nil || typ.LocalDomain || !r.goSourceNativeChannelElement(typ.Element, map[string]bool{}) {
 		return nil, false, nil
 	}
 	capacity, err := r.goSourceChannelCapacity(expr, word)

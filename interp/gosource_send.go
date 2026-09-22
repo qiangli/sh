@@ -67,7 +67,7 @@ func (r *Runner) goSourceChannelOperand(expr syntax.BashPPExpr, word *syntax.Wor
 		return cell.channel, true
 	}
 	if typ != nil && cell.vr.Kind == expand.String && cell.vr.Str == "" {
-		if r.goSourceNativeChannelElement(typ.Element, map[string]bool{}) {
+		if !typ.LocalDomain && r.goSourceNativeChannelElement(typ.Element, map[string]bool{}) {
 			value := bashPPBridgeValue{Kind: "nil", Type: goSourceNativeChannelTypeText(typ)}
 			return &bashPPChannel{native: &value}, true
 		}
