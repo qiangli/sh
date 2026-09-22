@@ -90,6 +90,13 @@ type bashPPToolchain struct {
 	// instantiations; see bashpp_sprint165_runtime_instantiations.go.
 	instantiations *bashPPInstantiationIndex
 	localTypes     *bashPPLocalTypeCache
+	// requestEnv and runtimeEnv are the immutable process environments used to
+	// start a live dependency session. Once that session is connected, later
+	// bridge requests only service callbacks; rebuilding the Runner's shell
+	// environment for each callback is both unused and disproportionately hot
+	// for image encoders. closeGoSourceBridge clears these with the session.
+	requestEnv []string
+	runtimeEnv []string
 }
 
 type bashPPGoReview struct {
@@ -464,8 +471,15 @@ func (nativeBashPPEvaluator) Values(ctx context.Context, req bashPPEvalRequest) 
 }
 
 func (r *Runner) bashPPEvalRequest() (bashPPEvalRequest, error) {
-	env := nativeExecEnv(environStrings(r.writeEnv))
-	runtimeEnv := env
+	env := r.bashPPTools.requestEnv
+	runtimeEnv := r.bashPPTools.runtimeEnv
+	connected := r.bashPPTools.bridge != nil && r.bashPPTools.bridge.conn != nil
+	if !connected || env == nil {
+		env = nativeExecEnv(environStrings(r.writeEnv))
+	}
+	if !connected || runtimeEnv == nil {
+		runtimeEnv = env
+	}
 	if r.bashPPTools.goBinary == "" {
 		identity, err := bashPPGoIdentity()
 		if err != nil {
@@ -491,7 +505,16 @@ func (r *Runner) bashPPEvalRequest() (bashPPEvalRequest, error) {
 		importPath, testMain = r.bashPPTools.importPath, r.bashPPTools.testMain
 	}
 	if r.bashPPGoSource {
-		runtimeEnv = nativeExecEnv(r.bashPPGoSourceEnvironment())
+		if !connected || runtimeEnv == nil {
+			runtimeEnv = nativeExecEnv(r.bashPPGoSourceEnvironment())
+		}
+	}
+	// The worker receives these only while it starts. After begin has connected
+	// it, no later request reads either environment: preserving the first
+	// session values is therefore correct even if an original callback mutates
+	// the shell environment while it runs.
+	if r.bashPPGoSource && !connected {
+		r.bashPPTools.requestEnv, r.bashPPTools.runtimeEnv = env, runtimeEnv
 	}
 	embedDecls, sourceDir := r.bashPPGoSourceEmbedRequest()
 	return bashPPEvalRequest{CallbackOwner: r, CallbackDepth: r.bashPPTools.callbackDepth, LocalTypes: r.bashPPLocalTypeDescriptors(), Instances: r.bashPPImportedInstances(), RuntimeEnv: runtimeEnv, ModuleDir: moduleDir, ImportPath: importPath, TestMain: testMain, Argv: append([]string{r.filename}, r.Params...), Bridge: r.bashPPTools.bridge, Go: r.bashPPTools.goBinary, Dir: r.Dir, Env: env, Stdin: r.stdin,
