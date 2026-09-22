@@ -8,7 +8,6 @@ description: When a reflected method handle can callback into interpreter-owned 
 status: candidate
 source:
     tool: codex-gpt5.6-sol-w53-a
-    host: dragon
     episode: weave-issue-53
 created: "2026-09-22T01:37:19Z"
 ---

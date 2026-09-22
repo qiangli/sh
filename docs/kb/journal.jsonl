@@ -31,5 +31,5 @@
 {"op":"add","slug":"go-error-adapts-only-the-public-callable-surface","id":"01a0c204-3429-7182-8b5a-037c9533e0e1","tool":"codex-gpt-5.5-c","host":"dragon","episode":"weave-issue-3","at":"2026-09-21T03:30:50.537858Z"}
 {"op":"add","slug":"foreign-error-opt-in-belongs-in-generated-wrappers","id":"01a0c25d-7a1e-7b08-8d6e-067b52ee1373","tool":"codex-gpt-5.5-j","host":"dragon","episode":"weave-issue-10","at":"2026-09-21T05:08:21.151424Z"}
 {"op":"note-add","slug":"b14-bounded-process-line-substrate-landed-bashpplineprocess","id":"01a0c27a-29a2-7dcf-880f-372bf2715255","tool":"claude-opus4.8-m","host":"dragon","episode":"weave-issue-13","at":"2026-09-21T05:39:41.091566Z"}
-{"op":"add","slug":"keep-variadic-spread-slices-on-the-typed-call-path","id":"01a0c6a7-13e0-76fd-a73e-bd21a008041c","tool":"codex-gpt5.6-sol-w43-q","host":"dragon","episode":"weave-issue-43","at":"2026-09-22T01:07:13.505325Z"}
-{"op":"add","slug":"bind-reflected-callback-provenance-to-handle-identity","id":"01a0c6c2-a40b-791f-9dca-93481223b800","tool":"codex-gpt5.6-sol-w53-a","host":"dragon","episode":"weave-issue-53","at":"2026-09-22T01:37:19.884254Z"}
+{"op":"add","slug":"keep-variadic-spread-slices-on-the-typed-call-path","id":"01a0c6a7-13e0-76fd-a73e-bd21a008041c","tool":"codex-gpt5.6-sol-w43-q","episode":"weave-issue-43","at":"2026-09-22T01:07:13.505325Z"}
+{"op":"add","slug":"bind-reflected-callback-provenance-to-handle-identity","id":"01a0c6c2-a40b-791f-9dca-93481223b800","tool":"codex-gpt5.6-sol-w53-a","episode":"weave-issue-53","at":"2026-09-22T01:37:19.884254Z"}

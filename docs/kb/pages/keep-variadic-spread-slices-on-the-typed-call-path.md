@@ -8,7 +8,6 @@ description: When a Go-source call result is consumed as a value, route ellipsis
 status: candidate
 source:
     tool: codex-gpt5.6-sol-w43-q
-    host: dragon
     episode: weave-issue-43
 created: "2026-09-22T01:07:13Z"
 ---
