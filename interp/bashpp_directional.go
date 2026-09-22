@@ -32,6 +32,12 @@ func (r *Runner) bashPPCheckChannelArgs(fn *bashPPFunc, params []bashPPParam, ch
 		if i < len(cells) && r.goSourceNativeChannelFits(cells[i], required) {
 			continue
 		}
+		// An untyped nil argument acquires the parameter's channel type at
+		// binding time. It has no channel capability to inspect, just as a bare
+		// nil result has none before result-context coercion below.
+		if r.bashPPGoSource && i < len(cells) && cells[i] != nil && cells[i].declType == nil && cells[i].interfaceValue != nil && cells[i].interfaceValue.nilIface {
+			continue
+		}
 		var channel *bashPPChannel
 		if i < len(channels) {
 			channel = channels[i]

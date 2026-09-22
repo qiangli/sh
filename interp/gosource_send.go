@@ -206,6 +206,14 @@ func (r *Runner) goSourceChannelValueCell(expr syntax.BashPPExpr) (*bashPPCell, 
 	}
 	switch x := expr.(type) {
 	case *syntax.BashPPCall:
+		if len(x.Fun) == 1 && len(x.ArgExprs) == 1 && r.bashPPFuncs[x.Fun[0].Value] == nil {
+			target := &syntax.BashPPNamedType{Name: x.Fun[0], TypeArgs: x.TypeArgs}
+			if _, declared := r.bashPPTypes[x.Fun[0].Value]; declared {
+				if _, channelType := r.bashPPUnderlyingType(target).(*syntax.BashPPChanType); channelType {
+					return r.goSourceConvertedChannelCell(x.ArgExprs[0], target)
+				}
+			}
+		}
 		if len(x.Fun) != 1 || x.Fun[0].Value != "make" || x.ArgType == nil {
 			return nil, false, nil
 		}
@@ -235,6 +243,11 @@ func (r *Runner) goSourceChannelValueCell(expr syntax.BashPPExpr) (*bashPPCell, 
 		}
 	case *syntax.BashPPParenExpr:
 		return r.goSourceChannelValueCell(x.X)
+	case *syntax.BashPPConvertExpr:
+		target := r.bashPPConvertTarget(x)
+		if _, channelType := r.bashPPUnderlyingType(target).(*syntax.BashPPChanType); channelType {
+			return r.goSourceConvertedChannelCell(x.X, target)
+		}
 	case *syntax.BashPPDerefExpr:
 		// `*&c` and `*p` name the channel the pointer addresses. A channel lives
 		// on its cell's side field, not in the value storage a generic deref
@@ -259,6 +272,31 @@ func (r *Runner) goSourceChannelValueCell(expr syntax.BashPPExpr) (*bashPPCell, 
 		return cell, true, nil
 	}
 	return nil, false, nil
+}
+
+// goSourceConvertedChannelCell changes only a channel's static type. The
+// underlying capability remains the same; dependency-owned channels ask the
+// native session to perform the conversion so defined and directional type
+// identity is retained there as well.
+func (r *Runner) goSourceConvertedChannelCell(expr syntax.BashPPExpr, target syntax.BashPPTypeExpr) (*bashPPCell, bool, error) {
+	cell, handled, err := r.goSourceChannelValueCell(expr)
+	if err != nil || !handled || cell == nil {
+		return cell, handled, err
+	}
+	if native, ok := r.goSourceNativeChannel(cell); ok {
+		bound, err := r.bashPPNativeTypeRequest("channel-bind", target, *native)
+		if err != nil {
+			return nil, true, err
+		}
+		cell = goSourceNativeValueCell(bound)
+	} else {
+		cell = bashPPCopyAssignmentCell(cell)
+	}
+	cell.declType = target
+	if named, ok := target.(*syntax.BashPPNamedType); ok {
+		cell.typeName = named.Name.Value
+	}
+	return cell, true, nil
 }
 
 // Go send panics unwind through the original interpreted defer stack. The

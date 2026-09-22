@@ -57,10 +57,13 @@ func (r *Runner) goSourceChannelDeclaration(d *syntax.BashPPDecl) bool {
 		r.exit.fatal(fmt.Errorf("channel initializer returned no value"))
 		return true
 	}
-	if native, ok := r.goSourceNativeChannel(cell); ok {
+	if native, ok := r.goSourceNativeChannel(cell); ok && native.Kind != "nil" {
 		// Channel assignment may narrow direction or introduce a defined
 		// type. Preserve that static type when the value crosses an interface
 		// boundary, while retaining the exact same underlying Go channel.
+		// A zero channel has no underlying identity to convert and may mention
+		// a local element type that the dependency need never materialise. Its
+		// declaration cell already carries the authoritative static type.
 		bound, err := r.bashPPNativeTypeRequest("channel-bind", d.DeclTypeExpr, *native)
 		if err != nil {
 			r.exit.fatal(err)
