@@ -252,10 +252,21 @@ func openPathAt(ctx context.Context, dir, path string, flag int, perm os.FileMod
 }
 
 // modifiedSinceAccessed reports whether the file's mtime is strictly
-// greater than its atime — bash's `-N FILE` test operator. atime is not
-// portably available off unix; report false.
+// greater than its atime — bash's `-N FILE` test operator.
+//
+// os.Stat preserves the native FILE_BASIC_INFORMATION timestamps in
+// Win32FileAttributeData. Use those values directly, as Cygwin does when it
+// fills st_atim and st_mtim. In particular, do not manufacture an access time
+// when NTFS last-access updates are disabled: the last access time recorded by
+// the filesystem is still the only truthful value available to a POSIX shell.
 func modifiedSinceAccessed(info os.FileInfo) bool {
-	return false
+	stat, ok := info.Sys().(*syscall.Win32FileAttributeData)
+	if !ok {
+		return false
+	}
+	atime := uint64(stat.LastAccessTime.HighDateTime)<<32 | uint64(stat.LastAccessTime.LowDateTime)
+	mtime := uint64(stat.LastWriteTime.HighDateTime)<<32 | uint64(stat.LastWriteTime.LowDateTime)
+	return mtime > atime
 }
 
 func prepareBackgroundJobCmd(ctx context.Context, cmd *exec.Cmd) {}
