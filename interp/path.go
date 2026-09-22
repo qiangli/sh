@@ -4,6 +4,7 @@
 package interp
 
 import (
+	"io/fs"
 	"runtime"
 	"strings"
 
@@ -115,6 +116,12 @@ func nativeExecEnv(env []string) []string {
 }
 
 func nativeExecEnvMode(env []string, windows bool) []string {
+	return nativeExecEnvMountsMode(pathconv.CurrentMounts(), env, windows)
+}
+
+// nativeExecEnvMountsMode is [nativeExecEnvMode] with an explicit mount
+// table, so the virtual root (/bin, /tmp) can be exercised on any host.
+func nativeExecEnvMountsMode(m *pathconv.Mounts, env []string, windows bool) []string {
 	if !windows {
 		return env
 	}
@@ -141,9 +148,11 @@ func nativeExecEnvMode(env []string, windows bool) []string {
 		} else {
 			switch {
 			case strings.EqualFold(name, "PATH"):
-				conv = nativeExecPathList(value)
+				conv = nativeExecPathListMounts(m, value)
 			case windowsPathEnvNames[strings.ToUpper(name)]:
-				conv = pathconv.NativePath(value)
+				// Through the mounts so TMPDIR=/tmp reaches a native
+				// child as %TEMP%.
+				conv = pathconv.NativePathMounts(m, value)
 			default:
 				continue
 			}
@@ -162,17 +171,41 @@ func nativeExecEnvMode(env []string, windows bool) []string {
 	return out
 }
 
-// nativeExecPathList converts each MSYS-form element of a ;-separated PATH,
-// keeping the other elements and the separators as they are. Unlike
-// [pathconv.NativePathList] it never re-splits on ':' — the shell's PATH is
-// already ;-separated on Windows, and a stray colon must not mangle it.
-func nativeExecPathList(value string) string {
+// nativeExecPathListMounts converts each element of the shell's PATH to
+// native form for a child: the list is split with [pathconv.SplitPathList]
+// (';' when present, else the POSIX ':' with native drive paths re-joined),
+// MSYS-form and mounted elements (/c/x, /bin, /usr/bin) become native
+// directories, and the result is ';'-separated. Other elements stay as
+// they are.
+func nativeExecPathListMounts(m *pathconv.Mounts, value string) string {
 	if !strings.Contains(value, "/") {
 		return value
 	}
-	elems := strings.Split(value, ";")
-	for i, e := range elems {
-		elems[i] = pathconv.NativePath(e)
-	}
-	return strings.Join(elems, ";")
+	return pathconv.NativePathListMounts(m, value)
 }
+
+// decodeDirEntries hands globbing the POSIX spelling of directory entries
+// on Windows: a name stored as a\uf03ab (the Cygwin/MSYS encoding of a:b
+// that [pathconv.ToOS] writes) is decoded so the shell word, its sort
+// order and pattern matching see the character the script used. Entries
+// without an encoded rune are returned as they are.
+func decodeDirEntries(entries []fs.DirEntry, windows bool) []fs.DirEntry {
+	if !windows {
+		return entries
+	}
+	for i, e := range entries {
+		name := e.Name()
+		if decoded := pathconv.DecodeSpecialMode(name, true); decoded != name {
+			entries[i] = decodedDirEntry{DirEntry: e, name: decoded}
+		}
+	}
+	return entries
+}
+
+// decodedDirEntry is an fs.DirEntry whose Name is the decoded spelling.
+type decodedDirEntry struct {
+	fs.DirEntry
+	name string
+}
+
+func (d decodedDirEntry) Name() string { return d.name }

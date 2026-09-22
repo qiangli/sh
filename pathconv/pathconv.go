@@ -57,8 +57,20 @@ func ToOS(dir, path string) string {
 	return ToOSMode(dir, path, runtime.GOOS == "windows")
 }
 
-// ToOSMode is [ToOS] with an explicit windows mode.
+// ToOSMode is [ToOS] with an explicit windows mode. It consults
+// [CurrentMounts], so on a non-Windows host windows mode applies the plain
+// drive rules.
 func ToOSMode(dir, path string, windows bool) string {
+	return ToOSMountsMode(CurrentMounts(), dir, path, windows)
+}
+
+// ToOSMountsMode is [ToOSMode] with an explicit mount table, so a virtual
+// root can be exercised on any host. Precedence: device/UNC passthrough,
+// native X:\…, /dev/null, the longest explicit mount other than "/", the
+// drive forms (/c, /mnt/c), the "/" mount, and finally the drive-relative
+// fallback that prepends dir's volume. Characters NTFS refuses in a
+// filename are encoded per [EncodeSpecialMode] on the way out.
+func ToOSMountsMode(m *Mounts, dir, path string, windows bool) string {
 	if !windows || path == "" {
 		return path
 	}
@@ -68,23 +80,40 @@ func ToOSMode(dir, path string, windows bool) string {
 	if len(path) >= 2 && isSlash(path[0]) && isSlash(path[1]) {
 		return path
 	}
+	if isNativeDrivePath(path) {
+		return clean(EncodeSpecialMode(path, true))
+	}
+	if path == "/dev/null" {
+		return "NUL"
+	}
+	if native, rest, ok := m.lookupPosix(path, false); ok {
+		return clean(mountNative(native, rest))
+	}
 	if p, ok := normalizeOperand(path); ok {
 		return p
 	}
-	if len(path) >= 2 && isDriveLetter(path[0]) && path[1] == ':' {
-		return clean(path)
-	}
 	if drive, rest, ok := DrivePath(path); ok {
-		return clean(string(drive) + ":" + rest)
+		return clean(string(drive) + ":" + EncodeSpecialMode(rest, true))
+	}
+	if native, rest, ok := m.lookupPosix(path, true); ok {
+		return clean(mountNative(native, rest))
 	}
 	if !strings.HasPrefix(path, "/") && !strings.HasPrefix(path, `\`) {
-		return path
+		return EncodeSpecialMode(path, true)
 	}
 	vol := volumeName(dir)
 	if vol == "" {
 		vol = "C:"
 	}
-	return clean(vol + path)
+	return clean(vol + EncodeSpecialMode(path, true))
+}
+
+// isNativeDrivePath reports whether path is spelled with a drive prefix:
+// "C:", "C:\x" or "C:/x". "a:b" is not one — the colon is a character in a
+// filename, which [EncodeSpecialMode] maps for NTFS.
+func isNativeDrivePath(path string) bool {
+	return len(path) >= 2 && isDriveLetter(path[0]) && path[1] == ':' &&
+		(len(path) == 2 || isSlash(path[2]))
 }
 
 // FromOS converts a native path into the shell's spelling: on Windows
@@ -94,26 +123,100 @@ func FromOS(path string) string {
 	return FromOSMode(path, runtime.GOOS == "windows")
 }
 
-// FromOSMode is [FromOS] with an explicit windows mode.
+// FromOSMode is [FromOS] with an explicit windows mode; it consults
+// [CurrentMounts].
 func FromOSMode(path string, windows bool) string {
+	return FromOSMountsMode(CurrentMounts(), path, windows)
+}
+
+// FromOSMountsMode is [FromOSMode] with an explicit mount table: the
+// longest mount whose native directory prefixes path wins, then the drive
+// rule (C:\Users\x -> /c/Users/x, C:\ -> /c). Characters encoded by
+// [EncodeSpecialMode] are decoded.
+func FromOSMountsMode(m *Mounts, path string, windows bool) string {
 	if !windows || path == "" {
 		return path
 	}
+	if posix, ok := m.FromOS(path); ok {
+		return DecodeSpecialMode(posix, true)
+	}
 	p := strings.ReplaceAll(path, `\`, "/")
 	if len(p) >= 2 && isDriveLetter(p[0]) && p[1] == ':' {
-		rest := p[2:]
-		if rest == "" {
-			rest = "/"
-		} else if rest[0] != '/' {
+		rest := strings.TrimRight(p[2:], "/")
+		if rest != "" && rest[0] != '/' {
 			rest = "/" + rest
 		}
 		drive := p[0]
 		if 'A' <= drive && drive <= 'Z' {
 			drive += 'a' - 'A'
 		}
-		return "/" + string(drive) + rest
+		return DecodeSpecialMode("/"+string(drive)+rest, true)
 	}
-	return p
+	return DecodeSpecialMode(p, true)
+}
+
+// specialBase is the private-use code point Cygwin and MSYS add to a
+// character NTFS refuses in a filename, so a mixed userland agrees on the
+// on-disk spelling of `a:b`.
+const specialBase = 0xF000
+
+// EncodeSpecialMode maps the characters NTFS forbids in a filename
+// (: * ? " < > |) inside path components to U+F000+char, the Cygwin/MSYS
+// convention. A drive colon ("C:", "C:\x") and a device/UNC-prefixed path
+// (\\.\x, //server/share) are left alone. Off Windows the path is returned
+// unchanged.
+func EncodeSpecialMode(path string, windows bool) string {
+	if !windows || path == "" {
+		return path
+	}
+	if len(path) >= 2 && isSlash(path[0]) && isSlash(path[1]) {
+		return path
+	}
+	if !strings.ContainsAny(path, `:*?"<>|`) {
+		return path
+	}
+	start := 0
+	if isNativeDrivePath(path) {
+		start = 2
+	}
+	var b strings.Builder
+	b.Grow(len(path) + 8)
+	b.WriteString(path[:start])
+	for _, r := range path[start:] {
+		switch r {
+		case ':', '*', '?', '"', '<', '>', '|':
+			b.WriteRune(specialBase + r)
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+// DecodeSpecialMode reverses [EncodeSpecialMode]: every rune in
+// U+F000..U+F0FF becomes the character it stands for. Off Windows the path
+// is returned unchanged.
+func DecodeSpecialMode(path string, windows bool) string {
+	if !windows || path == "" {
+		return path
+	}
+	if !strings.ContainsFunc(path, isSpecialRune) {
+		return path
+	}
+	var b strings.Builder
+	b.Grow(len(path))
+	for _, r := range path {
+		if isSpecialRune(r) {
+			b.WriteByte(byte(r - specialBase))
+		} else {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+func isSpecialRune(r rune) bool {
+	return r >= specialBase && r <= specialBase+0xFF
 }
 
 // JoinAbs resolves path against dir and converts the result to the host's
@@ -134,6 +237,11 @@ func JoinAbsMode(dir, path string, windows bool) string {
 		// relative executable or file after a cd is "not found". Resolve the
 		// directory to its OS form first.
 		dir = ToOSMode(dir, dir, windows)
+	}
+	if windows {
+		// Encode before joining: filepath.Clean must never see a colon that
+		// is not the drive's.
+		path = EncodeSpecialMode(path, true)
 	}
 	if !windows || runtime.GOOS == "windows" {
 		return filepath.Join(dir, path)
@@ -199,21 +307,17 @@ func DriveOf(path string) (drive byte, ok bool) {
 	return 0, false
 }
 
-// normalizeOperand maps the two POSIX pseudo-operands every script uses in
-// its first hour to their Windows equivalents: /dev/null -> NUL and
-// /tmp[/...] -> the host temp directory. Only the forward-slash POSIX
-// spelling counts — `\tmp\x` is a drive-relative native path. Anything else
-// is left to the regular conversions.
+// normalizeOperand maps /tmp[/...] to the host temp directory when no
+// mount table says otherwise. Only the forward-slash POSIX spelling counts —
+// `\tmp\x` is a drive-relative native path. Anything else is left to the
+// regular conversions.
 func normalizeOperand(path string) (string, bool) {
-	if path == "/dev/null" {
-		return "NUL", true
-	}
 	if strings.HasPrefix(path, "/tmp") && (len(path) == 4 || path[4] == '/') {
 		rest := path[4:]
 		if rest == "" {
 			return clean(TempDir()), true
 		}
-		return clean(TempDir() + rest), true
+		return clean(TempDir() + EncodeSpecialMode(rest, true)), true
 	}
 	return "", false
 }
@@ -222,46 +326,19 @@ func normalizeOperand(path string) (string, bool) {
 // to its native backslash form; anything else is returned unchanged. Only
 // the forward-slash form counts: a value holding a colon is never a single
 // MSYS path, and \c\… is a drive-relative native path a child can already
-// open.
+// open. See [NativePathMounts] for the mount-aware form.
 func NativePath(value string) string {
-	if len(value) < 2 || value[0] != '/' || strings.Contains(value, ":") {
-		return value
-	}
-	drive, rest, ok := DrivePath(value)
-	if !ok {
-		return value
-	}
-	return string(drive) + ":" + strings.ReplaceAll(rest, "/", `\`)
+	return NativePathMounts(nil, value)
 }
 
 // NativePathList converts a path list into native form: each MSYS/WSL-form
 // element is converted via [NativePath], and a `:`-separated shell-form
 // list becomes `;`-separated. A list that already uses `;` keeps its
-// separators, and a value containing native drive paths (whose `:` would be
-// mis-split) is returned unchanged.
+// separators, and a native drive path cut by the `:` split ("C:\x") is
+// re-joined, so a value of native paths is returned unchanged. See
+// [NativePathListMounts] for the mount-aware form.
 func NativePathList(value string) string {
-	if strings.Contains(value, ";") {
-		elems := strings.Split(value, ";")
-		for i, e := range elems {
-			elems[i] = NativePath(e)
-		}
-		return strings.Join(elems, ";")
-	}
-	if !strings.Contains(value, ":") {
-		return NativePath(value)
-	}
-	elems := strings.Split(value, ":")
-	for _, e := range elems {
-		// A single-letter element means the split cut a native drive path
-		// ("C:\x" -> "C", "\x"); the value is already native, leave it.
-		if len(e) == 1 && isDriveLetter(e[0]) {
-			return value
-		}
-	}
-	for i, e := range elems {
-		elems[i] = NativePath(e)
-	}
-	return strings.Join(elems, ";")
+	return NativePathListMounts(nil, value)
 }
 
 func clean(path string) string {

@@ -386,7 +386,11 @@ func (r *Runner) updateExpandOpts() {
 	} else {
 		r.ecfg.ReadDir2 = func(s string) ([]fs.DirEntry, error) {
 			s = shellPathJoinAbs(r.Dir, s)
-			return r.readDirHandler(r.handlerCtx(r.ectx, handlerKindReadDir, todoPos), s)
+			entries, err := r.readDirHandler(r.handlerCtx(r.ectx, handlerKindReadDir, todoPos), s)
+			// Names NTFS could not store verbatim (a:b) come back in
+			// their Cygwin encoding; globbing must see the script's
+			// spelling.
+			return decodeDirEntries(entries, runtime.GOOS == "windows"), err
 		}
 		r.ecfg.IsSearchable = func(s string) bool {
 			s = shellPathJoinAbs(r.Dir, s)

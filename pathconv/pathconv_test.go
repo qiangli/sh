@@ -200,7 +200,9 @@ func TestFromOSModeWindows(t *testing.T) {
 	}{
 		{`C:\Users\x`, `/c/Users/x`},
 		{`C:/Users/x`, `/c/Users/x`},
-		{`d:`, `/d/`},
+		{`d:`, `/d`},
+		{`C:\`, `/c`},
+		{`C:\Users\x\`, `/c/Users/x`},
 		{`\\server\share`, `//server/share`},
 		{`rel\path`, `rel/path`},
 	}

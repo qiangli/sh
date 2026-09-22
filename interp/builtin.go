@@ -1294,7 +1294,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			// PWD is an ordinary shell variable and can be reassigned without
 			// changing the shell's logical current-directory state. Keep that
 			// state in r.Dir, as cd does, rather than trusting the variable.
-			pwd = shellPathFromOS(r.Dir)
+			pwd = r.logicalDir()
 		} else {
 			var err error
 			// Physical mode is defined by the invocation's actual working
@@ -3395,7 +3395,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			case a == "-p":
 				perLine = true
 			case a == "-c":
-				r.dirStack = append(r.dirStack[:0], r.Dir)
+				r.dirStack = append(r.dirStack[:0], r.logicalDir())
 				return exit
 			case a == "-l":
 				// no-op; we don't shorten paths.
@@ -6695,7 +6695,11 @@ func setDirStackTopFirst(r *Runner, topFirst []string) {
 // the logical value only when it is absolute and contains no dot or dot-dot
 // pathname components; otherwise pwd must fall back to physical resolution.
 func validLogicalPWD(pwd string) bool {
-	if !shellPathAbs(pwd) {
+	return validLogicalPWDMode(pwd, runtime.GOOS == "windows")
+}
+
+func validLogicalPWDMode(pwd string, windows bool) bool {
+	if !shellPathAbsMode(pwd, windows) {
 		return false
 	}
 	for _, component := range strings.Split(pwd, "/") {
@@ -7053,7 +7057,7 @@ func (r *Runner) compgenCommands(ctx context.Context, pos syntax.Pos) []string {
 	for n := range r.alias {
 		add(n)
 	}
-	for _, dir := range filepath.SplitList(r.writeEnv.Get("PATH").String()) {
+	for _, dir := range pathconv.SplitPathList(r.writeEnv.Get("PATH").String(), runtime.GOOS == "windows") {
 		if dir == "" {
 			dir = "."
 		}
@@ -7721,6 +7725,9 @@ func (r *Runner) changeDir(ctx context.Context, cmd, path string, physical ...bo
 		r.errf("%sPWD: readonly variable\n", r.bashErrPrefix(r.curStmtPos))
 		return 1
 	}
+	// The logical name bash records: the operand's own POSIX spelling for
+	// a non-physical cd, the resolved path otherwise. On Unix this is apath.
+	logical := r.cdLogicalPWD(path, apath, phys)
 	r.replaceDirFile(apath)
 	r.Dir = apath
 	if runtime.GOOS == "windows" {
@@ -7730,13 +7737,114 @@ func (r *Runner) changeDir(ctx context.Context, cmd, path string, physical ...bo
 	// dir so `pushd`/`popd`/`dirs` see the cd's effect. Bash treats
 	// the topmost dirStack entry as the live "current dir".
 	if len(r.dirStack) > 0 {
-		r.dirStack[len(r.dirStack)-1] = apath
+		r.dirStack[len(r.dirStack)-1] = logical
 	}
 	// bash keeps both PWD and OLDPWD exported across every cd (they show
 	// up in `env` and in child process environments).
 	r.setExportedVarString("OLDPWD", r.envGet("PWD"))
-	r.setExportedVarString("PWD", shellPathFromOS(apath))
+	r.setExportedVarString("PWD", logical)
 	return 0
+}
+
+// logicalDir is the shell's current directory in the spelling `pwd` and
+// `dirs` print. On Unix it is r.Dir. On Windows r.Dir is native, so the
+// POSIX spelling comes from $PWD when that still names r.Dir (a cd through
+// a mount keeps the operand's spelling: /bin stays /bin although the
+// directory is root\usr\bin), and from the mounts otherwise.
+func (r *Runner) logicalDir() string {
+	if runtime.GOOS != "windows" {
+		return r.Dir
+	}
+	return logicalDirMode(pathconv.CurrentMounts(), r.envGet("PWD"), r.Dir, true)
+}
+
+func logicalDirMode(m *pathconv.Mounts, pwd, dir string, windows bool) string {
+	if !windows {
+		return dir
+	}
+	if posixSpelled(pwd) && validLogicalPWDMode(pwd, true) &&
+		sameNativePath(pathconv.ToOSMountsMode(m, dir, pwd, true), dir) {
+		return pwd
+	}
+	return pathconv.FromOSMountsMode(m, dir, true)
+}
+
+// cdLogicalPWD is the PWD a successful cd records for operand, whose
+// resolved directory is apath. On Unix it is apath. On Windows a logical
+// cd keeps the operand's POSIX spelling, normalized the way bash's
+// sh_canonpath does (pure string handling of . and ..): `cd /tmp` records
+// /tmp rather than the native temp directory, a relative operand is
+// appended to the current logical directory, and a physical cd or a
+// natively spelled operand maps apath back through the mounts.
+func (r *Runner) cdLogicalPWD(operand, apath string, physical bool) string {
+	if runtime.GOOS != "windows" {
+		return apath
+	}
+	return cdLogicalPWDMode(pathconv.CurrentMounts(), r.logicalDir(), operand, apath, physical, true)
+}
+
+func cdLogicalPWDMode(m *pathconv.Mounts, cur, operand, apath string, physical, windows bool) string {
+	if !windows {
+		return apath
+	}
+	if !physical {
+		switch {
+		case posixSpelled(operand):
+			return canonPosixPath(operand)
+		case cur != "" && posixSpelled(cur) && !nativeSpelled(operand):
+			return canonPosixPath(cur + "/" + operand)
+		}
+	}
+	return pathconv.FromOSMountsMode(m, apath, true)
+}
+
+// posixSpelled reports whether path is an absolute path in the shell's
+// POSIX spelling: it starts with / and uses no backslash.
+func posixSpelled(path string) bool {
+	return strings.HasPrefix(path, "/") && !strings.Contains(path, `\`)
+}
+
+// nativeSpelled reports whether path carries a native Windows spelling: a
+// drive prefix or a backslash.
+func nativeSpelled(path string) bool {
+	if strings.Contains(path, `\`) {
+		return true
+	}
+	_, ok := pathconv.DriveOf(path)
+	return ok
+}
+
+// canonPosixPath normalizes an absolute POSIX path as a string, like bash's
+// sh_canonpath: repeated slashes collapse, . is dropped, .. removes the
+// previous component (never above /), and no trailing slash remains.
+func canonPosixPath(path string) string {
+	var parts []string
+	for part := range strings.SplitSeq(path, "/") {
+		switch part {
+		case "", ".":
+		case "..":
+			if len(parts) > 0 {
+				parts = parts[:len(parts)-1]
+			}
+		default:
+			parts = append(parts, part)
+		}
+	}
+	return "/" + strings.Join(parts, "/")
+}
+
+// sameNativePath reports whether two native paths name the same directory
+// as NTFS sees it: case-insensitively, with / and \ alike and a trailing
+// separator ignored.
+func sameNativePath(a, b string) bool {
+	norm := func(p string) string {
+		p = strings.ReplaceAll(p, "/", `\`)
+		if len(p) > 1 {
+			p = strings.TrimRight(p, `\`)
+		}
+		return p
+	}
+	return strings.EqualFold(norm(a), norm(b))
 }
 
 // resolveCdPath resolves a pathname for cd/pushd/popd by walking each
@@ -7745,24 +7853,14 @@ func (r *Runner) changeDir(ctx context.Context, cmd, path string, physical ...bo
 // handling relative paths. This matches `bash --posix` behaviour: non-existing
 // or non-directory intermediate components cause an immediate error.
 func (r *Runner) resolveCdPath(ctx context.Context, path string, physical bool) (string, error) {
-	// On Windows, map a drive/MSYS path (/c/foo, C:\foo) to an OS path and, when
-	// it is absolute, resolve it directly — the POSIX base="/" + split/join below
-	// does not understand Windows drive roots (filepath.IsAbs("/c/x") is false).
+	// On Windows, map a drive/MSYS/mounted path (/c/foo, C:\foo, /usr) to an
+	// OS path and, when it is absolute, resolve it directly — the POSIX
+	// base="/" + split/join below does not understand Windows drive roots
+	// (filepath.IsAbs("/c/x") is false).
 	if runtime.GOOS == "windows" {
-		if osp := shellPathToOSMode(r.Dir, path, true); filepath.IsAbs(osp) {
-			info, err := r.stat(ctx, osp)
-			if err != nil {
-				return "", err
-			}
-			if !info.IsDir() {
-				return "", fmt.Errorf("Not a directory")
-			}
-			if physical {
-				if resolved, err := filepath.EvalSymlinks(osp); err == nil {
-					osp = resolved
-				}
-			}
-			return osp, nil
+		stat := func(p string) (fs.FileInfo, error) { return r.stat(ctx, p) }
+		if osp, ok, err := resolveCdPathWindows(pathconv.CurrentMounts(), r.Dir, path, physical, stat, evalPhysicalPath); ok {
+			return osp, err
 		}
 	}
 	// Determine the base directory for relative paths.
@@ -7800,6 +7898,37 @@ func (r *Runner) resolveCdPath(ctx context.Context, path string, physical bool) 
 		}
 	}
 	return filepath.Clean(current), nil
+}
+
+// resolveCdPathWindows resolves an absolute cd operand on Windows through
+// the mount table: ok is false when the operand is relative (the caller's
+// component walk applies). A missing extensionless target is retried with
+// .exe so `cd /bin/sh` reports Not a directory, the error bash gives, when
+// only sh.exe exists. stat and eval are seams so the logic runs on any
+// host.
+func resolveCdPathWindows(m *pathconv.Mounts, dir, path string, physical bool,
+	stat func(string) (fs.FileInfo, error), eval func(string) (string, error),
+) (osp string, ok bool, err error) {
+	osp = pathconv.ToOSMountsMode(m, dir, path, true)
+	if !pathconv.IsAbsMode(osp, true) {
+		return "", false, nil
+	}
+	info, err := stat(osp)
+	if err != nil {
+		info, err = statExeFallback(stat, osp, err, true)
+		if err != nil {
+			return "", true, err
+		}
+	}
+	if !info.IsDir() {
+		return "", true, fmt.Errorf("Not a directory")
+	}
+	if physical {
+		if resolved, err := eval(osp); err == nil {
+			osp = resolved
+		}
+	}
+	return osp, true, nil
 }
 
 func evalPhysicalPath(path string) (string, error) {
