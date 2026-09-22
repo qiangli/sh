@@ -309,7 +309,19 @@ func (r *Runner) bashPPRangeCollection(ctx context.Context, rng *syntax.BashPPRa
 		if cell.vr.Kind == expand.Object && bashPPCellMeta(cell) != nil {
 			return r.bashPPRangeCollectionValue(ctx, rng, cell.vr.Obj, bashPPCellMeta(cell))
 		}
-		if cell.channel != nil || cell.vr.Kind == expand.Object {
+		if native, ok := r.goSourceNativeChannel(cell); ok {
+			r.goSourceRangeNativeChannel(ctx, rng, native)
+			return true
+		}
+		if cell.channel != nil {
+			if cell.channelOwner != r.bashPPConcurrent {
+				r.bashPPRangeError(rng, "Go channel belongs to another task group")
+				return true
+			}
+			r.bashPPRangeChannel(ctx, rng, cell.channel)
+			return true
+		}
+		if cell.vr.Kind == expand.Object {
 			return false
 		}
 		return r.bashPPRangeScalarValue(ctx, rng, r.bashPPScalarFromCell(cell))

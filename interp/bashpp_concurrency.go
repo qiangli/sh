@@ -1605,6 +1605,13 @@ func (r *Runner) bashPPRange(ctx context.Context, rng *syntax.BashPPRange) {
 	if !ok {
 		return
 	}
+	r.bashPPRangeChannel(ctx, rng, c)
+}
+
+// bashPPRangeChannel consumes an already evaluated channel operand. Keeping
+// this separate is important for `range f()`: the call result carries channel
+// identity which must not be flattened to its scalar handle and re-evaluated.
+func (r *Runner) bashPPRangeChannel(ctx context.Context, rng *syntax.BashPPRange, c *bashPPChannel) {
 	if len(rng.Names) > 1 {
 		r.errf("BASHPP-ERANGE-TYPE: channel range permits at most one iteration variable\n")
 		r.exit = exitStatus{code: 2}
