@@ -1046,6 +1046,19 @@ func bashPPBridgeTypeText(typ syntax.BashPPTypeExpr) string {
 	switch t := typ.(type) {
 	case *syntax.BashPPChanType:
 		return goSourceNativeChannelTypeText(t)
+	case *syntax.BashPPNamedType:
+		if len(t.TypeArgs) == 0 {
+			return t.Name.Value
+		}
+		args := make([]string, len(t.TypeArgs))
+		for i, arg := range t.TypeArgs {
+			args[i] = bashPPBridgeTypeText(arg.ArgType)
+		}
+		return t.Name.Value + "[" + strings.Join(args, ",") + "]"
+	case *syntax.BashPPPointerType:
+		return "*" + bashPPBridgeTypeText(t.Element)
+	case *syntax.BashPPFuncType:
+		return "func(" + bashPPBridgeFieldsText(t.Params) + ")(" + bashPPBridgeFieldsText(t.Results) + ")"
 	case *syntax.BashPPStructType:
 		var fields []string
 		for _, field := range t.Fields {
@@ -1074,6 +1087,17 @@ func bashPPBridgeTypeText(typ syntax.BashPPTypeExpr) string {
 		if len(t.Methods) == 0 && len(t.Elems) == 0 {
 			return "interface{}"
 		}
+		elems := bashPPInterfaceElems(t)
+		members := make([]string, 0, len(elems))
+		for _, elem := range elems {
+			if elem.Method != nil {
+				method := elem.Method
+				members = append(members, method.Name.Value+"("+bashPPBridgeFieldsText(method.Params)+")("+bashPPBridgeFieldsText(method.Results)+")")
+			} else if elem.Embedded != nil {
+				members = append(members, bashPPBridgeTypeText(elem.Embedded))
+			}
+		}
+		return "interface{" + strings.Join(members, ";") + "}"
 	case *syntax.BashPPCollectionType:
 		if t.Kind == "map" {
 			return "map[" + bashPPBridgeTypeText(t.Key) + "]" + bashPPBridgeTypeText(t.Element)
@@ -1085,6 +1109,25 @@ func bashPPBridgeTypeText(typ syntax.BashPPTypeExpr) string {
 		return "[" + length + "]" + bashPPBridgeTypeText(t.Element)
 	}
 	return bashPPTypeText(typ)
+}
+
+func bashPPBridgeFieldsText(fields []*syntax.BashPPField) string {
+	var values []string
+	for _, field := range fields {
+		text := "<inferred>"
+		if field.FieldTypeExpr != nil {
+			text = bashPPBridgeTypeText(field.FieldTypeExpr)
+		} else if field.FieldType != nil {
+			text = field.FieldType.Value
+		}
+		if field.Variadic() {
+			text = "..." + text
+		}
+		for range max(len(field.Names), 1) {
+			values = append(values, text)
+		}
+	}
+	return strings.Join(values, ",")
 }
 
 func (r *Runner) bashPPBridgeCell(cell *bashPPCell) (bashPPBridgeValue, error) {
@@ -1114,7 +1157,7 @@ func (r *Runner) bashPPBridgeCell(cell *bashPPCell) (bashPPBridgeValue, error) {
 	if cell.pointer {
 		value, err := r.bashPPBridgePointerValue(cell.pointerValue)
 		if value.Type == "" {
-			value.Type = bashPPTypeText(cell.declType)
+			value.Type = bashPPBridgeTypeText(cell.declType)
 		}
 		return value, err
 	}

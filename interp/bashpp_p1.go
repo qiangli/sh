@@ -397,6 +397,13 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 			if carrier, ok := r.bashPPGoSourceCollectionCarrier(value, meta); ok {
 				vr = carrier
 			}
+		} else if d.InitExpr == nil {
+			// A bare function declaration has a typed nil zero value. Keep the
+			// same native descriptor used for zero-valued aggregate elements so
+			// reflect sees the declared function type rather than a shell string.
+			if value, meta, ok := r.goSourceNilCallableOrChannel(d.DeclTypeExpr); ok {
+				vr, valueMeta = expand.NewObject(value), meta
+			}
 		}
 	}
 	// A declaration which shadows an exported shell variable inherits the
