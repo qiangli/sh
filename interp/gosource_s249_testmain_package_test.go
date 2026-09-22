@@ -272,6 +272,159 @@ func main() {
 	}
 }
 
+// The upstream internal/types/errors package test's actual failing shape:
+// the external test package ranges over a dependency-owned interface slice
+// (`file.Decls`, a native []ast.Decl) and shadows the loop variable through a
+// comma-ok type assertion on it (`decl, ok := decl.(*ast.GenDecl)`), then
+// again over the element's own interface slice (`spec.(*ast.ValueSpec)`),
+// before its callback reaches t.Run and asserts the dot-imported Error. Every
+// element of an interface-typed native sequence must bind as an interface
+// value, not as a bare handle that merely spells the interface type.
+func TestGoSourceS249PackageTestMainRangesNativeInterfaceElements(t *testing.T) {
+	lib := gosource.PackageSpec{Path: "example.com/lib", Sources: []gosource.Source{s249Source("lib.go", `package lib
+
+type Code int
+
+const (
+	// _ is unused.
+	_ Code = iota
+
+	// Alpha is the first code.
+	//
+	// Example:
+	//  var _ = missing
+	Alpha
+)
+`)}}
+	xtest := gosource.PackageSpec{Path: "example.com/lib_test", Sources: []gosource.Source{s249Source("lib_test.go", `package lib_test
+
+import (
+	"go/ast"
+	"go/constant"
+	"go/parser"
+	"go/token"
+	"strings"
+	"testing"
+
+	. "go/types"
+)
+
+const codesSource = "package lib\n\ntype Code int\n\nconst (\n\t// _ is unused.\n\t_ Code = iota\n\n\t// Alpha is the first code.\n\t//\n\t// Example:\n\t//  var _ = missing\n\tAlpha\n)\n"
+
+func TestCodeExamples(t *testing.T) {
+	seen := 0
+	walkCodes(t, func(name string, value int, spec *ast.ValueSpec) {
+		t.Run(name, func(t *testing.T) {
+			examples := strings.Split(spec.Doc.Text(), "Example:")
+			for i := 1; i < len(examples); i++ {
+				err := checkExample(t, strings.TrimSpace(examples[i]))
+				if err == nil {
+					t.Fatalf("no error in example #%d", i)
+				}
+				typerr, ok := err.(Error)
+				if !ok {
+					t.Fatalf("not a types.Error: %v", err)
+				}
+				if typerr.Msg == "" || value != 1 {
+					t.Errorf("%s: example #%d gave %q for code %d", name, i, typerr.Msg, value)
+				}
+				seen++
+			}
+		})
+	})
+	if seen != 1 {
+		t.Fatalf("checked %d examples, want 1", seen)
+	}
+}
+
+func walkCodes(t *testing.T, f func(string, int, *ast.ValueSpec)) {
+	t.Helper()
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "codes.go", codesSource, parser.ParseComments|parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conf := Config{}
+	info := &Info{
+		Types: make(map[ast.Expr]TypeAndValue),
+		Defs:  make(map[*ast.Ident]Object),
+		Uses:  make(map[*ast.Ident]Object),
+	}
+	_, err = conf.Check("lib", fset, []*ast.File{file}, info)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, decl := range file.Decls {
+		decl, ok := decl.(*ast.GenDecl)
+		if !ok || decl.Tok != token.CONST {
+			continue
+		}
+		for _, spec := range decl.Specs {
+			spec, ok := spec.(*ast.ValueSpec)
+			if !ok || len(spec.Names) == 0 {
+				continue
+			}
+			obj := info.ObjectOf(spec.Names[0])
+			if named, ok := obj.Type().(*Named); ok && named.Obj().Name() == "Code" {
+				codename := spec.Names[0].Name
+				value := int(constant.Val(obj.(*Const).Val()).(int64))
+				f(codename, value, spec)
+			}
+		}
+	}
+}
+
+func checkExample(t *testing.T, example string) error {
+	t.Helper()
+	fset := token.NewFileSet()
+	if !strings.HasPrefix(example, "package") {
+		example = "package p\n\n" + example
+	}
+	file, err := parser.ParseFile(fset, "example.go", example, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conf := Config{FakeImportC: true}
+	_, err = conf.Check("example", fset, []*ast.File{file}, nil)
+	return err
+}
+`)}}
+	driver := s249Source("_testmain.go", `package main
+
+import (
+	"os"
+	"testing"
+	"testing/internal/testdeps"
+
+	_ "example.com/lib"
+	_xtest "example.com/lib_test"
+)
+
+var tests = []testing.InternalTest{{"TestCodeExamples", _xtest.TestCodeExamples}}
+var benchmarks = []testing.InternalBenchmark{}
+var fuzzTargets = []testing.InternalFuzzTarget{}
+var examples = []testing.InternalExample{}
+
+func init() {
+	testdeps.ModulePath = "example.com/lib"
+	testdeps.ImportPath = "example.com/lib"
+}
+
+func main() {
+	m := testing.MainStart(testdeps.TestDeps{}, tests, benchmarks, fuzzTargets, examples)
+	os.Exit(m.Run())
+}
+`)
+
+	got, err := runS249PackageTestMain(t, []gosource.Source{driver}, []gosource.PackageSpec{lib, xtest})
+	if err != nil {
+		t.Fatalf("Runner: %v; stderr: %s", err, got.stderr)
+	}
+	if want := (s249GoSourceOutcome{stdout: "PASS\n"}); got != want {
+		t.Fatalf("Runner %+v; want %+v", got, want)
+	}
+}
+
 func TestGoSourceS249PackageTestMainRequiresAuthenticatedFact(t *testing.T) {
 	driver := s249Source("_testmain.go", `package main
 
