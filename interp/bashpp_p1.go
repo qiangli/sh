@@ -1132,15 +1132,20 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 				return
 			}
 			name := d.Lhs[0].Value
-			r.bashPPDeclareName(name, expand.NewObject(value))
-			cell := r.bashPPScope.lookup(name)
-			cell.object = &bashPPObjectIdentity{owner: name, collection: meta}
+			cell := r.goSourceCollectionReadCell(d.Expr, value, meta)
+			r.bashPPDeclareName(name, cell.vr)
+			target := r.bashPPScope.lookup(name)
+			*target = *cell
+			if target.vr.Kind != expand.Object {
+				return
+			}
+			target.object = &bashPPObjectIdentity{owner: name, collection: meta}
 			if root, rootOK := bashPPCollectionRoot(d.Expr); rootOK {
 				if source := r.bashPPScope.lookup(root); source != nil && source.object != nil {
-					cell.object = source.object
+					target.object = source.object
 				}
 			}
-			cell.valueMeta = meta
+			target.valueMeta = meta
 			return
 		}
 		if _, ok := d.Expr.(*syntax.BashPPSelectorExpr); ok {
