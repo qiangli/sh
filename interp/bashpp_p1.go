@@ -571,12 +571,17 @@ func bashPPNamedTypeBase(typ syntax.BashPPTypeExpr) string {
 // dependencies retain their ordinary runtime behavior.
 func (r *Runner) bashPPValidatePackageInitOrder(file *syntax.File) bool {
 	type topDecl struct {
-		index int
+		index    int
+		constant bool
 	}
 	decls := make(map[string]topDecl)
 	for index, stmt := range file.Stmts {
 		if decl, ok := stmt.Cmd.(*syntax.BashPPDecl); ok && (decl.Site == syntax.StartVar || decl.Site == syntax.StartConst) {
-			decls[decl.Name.Value] = topDecl{index: index}
+			decls[decl.Name.Value] = topDecl{index: index, constant: decl.Site == syntax.StartConst}
+		} else if group, ok := stmt.Cmd.(*syntax.BashPPConstGroup); ok {
+			for _, spec := range group.Specs {
+				decls[spec.Name.Value] = topDecl{index: index, constant: true}
+			}
 		}
 	}
 	for index, stmt := range file.Stmts {
@@ -599,7 +604,7 @@ func (r *Runner) bashPPValidatePackageInitOrder(file *syntax.File) bool {
 				return true
 			}
 			dependency, declared := decls[ident.Name.Value]
-			if declared && dependency.index >= index {
+			if declared && dependency.index >= index && !dependency.constant {
 				r.errf("%sBASHPP-EINIT-ORDER: initializer for %s depends on %s before it is initialized; dependency reordering across shell statements is unsupported\n",
 					r.bashErrPrefix(ident.Pos()), decl.Name.Value, ident.Name.Value)
 				r.exit = exitStatus{code: 2}

@@ -124,6 +124,15 @@ func (r *Runner) bashPPConstGroup(ctx context.Context, group *syntax.BashPPConst
 			return
 		}
 		cell := r.bashPPScope.lookup(spec.Name.Value)
+		if scalar.value != nil {
+			cell.exactScalar = scalar.value
+		} else if value, evalErr := r.bashPPEvalScalarExpr(expr); evalErr == nil {
+			// Typed grouped constants travel through the declaration conversion
+			// path above, but their constant identity is still the exact value of
+			// the source expression. Keep it beside the rendered shell spelling;
+			// a rational ExactString such as 3/2 is not a Go literal.
+			cell.exactScalar = value.value
+		}
 		if effective.DeclTypeExpr != nil {
 			cell.declType = effective.DeclTypeExpr
 			base := bashPPNamedTypeBase(effective.DeclTypeExpr)
