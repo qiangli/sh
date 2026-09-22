@@ -11,9 +11,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
@@ -93,37 +91,20 @@ func (r *Runner) access(ctx context.Context, path string, mode uint32) error {
 		}
 	case access_X_OK:
 		if !winmode.Recorded(info) {
-			// No mode was ever recorded for this file — it was created by
-			// something that does not speak POSIX modes, which on Windows
-			// is most things. Cygwin's rule for exactly this case: a file
-			// is executable if Windows would run it by extension, or if it
-			// begins with `#!` or `MZ`. Anything else is a data file.
-			if m.IsDir() || r.hasPathExt(path) || hasExecutableMagic(path) {
-				return nil
-			}
-			return fmt.Errorf("file is not executable")
+			// Nothing ever recorded a mode for this file, so there is no
+			// POSIX opinion to honour: it was created by one of the many
+			// Windows programs that do not have one, or extracted from an
+			// archive by one. Windows will attempt to run any file, and so
+			// does this shell — which is what it did before modes could be
+			// recorded at all. Only a mode somebody actually set can take
+			// execute permission away.
+			return nil
 		}
 		if m&0o100 == 0 {
 			return fmt.Errorf("file is not executable")
 		}
 	}
 	return nil
-}
-
-// hasPathExt reports whether path ends in one of the PATHEXT extensions —
-// the rule Windows itself uses to decide what it will run, and the one the
-// exec lookup and the test applet both apply.
-func (r *Runner) hasPathExt(path string) bool {
-	ext := strings.ToLower(filepath.Ext(path))
-	if ext == "" {
-		return false
-	}
-	for _, e := range pathExtsMode(r.writeEnv, true) {
-		if e == ext {
-			return true
-		}
-	}
-	return false
 }
 
 // unTestOwnOrGrp panics. Under Unix, it implements the -O and -G unary tests,
