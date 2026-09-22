@@ -100,7 +100,14 @@ func (r *Runner) bashPPApplyUpdate(target syntax.BashPPExpr, op string, rhs synt
 	}
 	value, kind, err := r.bashPPUpdateResult(op, left, right)
 	if err != nil {
-		r.bashPPUpdateError(pos, "OP", err.Error())
+		// A runtime fault raised while computing the result (integer divide or
+		// remainder by zero under GoSource) has already started a recoverable
+		// panic and handed back the interrupted sentinel. Propagate it so a
+		// deferred recover sees it and the target stays unmodified, rather than
+		// reporting a spurious OP diagnostic.
+		if !errors.Is(err, errBashPPScalarInterrupted) {
+			r.bashPPUpdateError(pos, "OP", err.Error())
+		}
 		return
 	}
 	if err := r.bashPPWriteUpdatePointer(ptr, value, kind); err != nil {
@@ -164,7 +171,11 @@ func (r *Runner) bashPPApplySliceUpdate(target *syntax.BashPPIndexExpr, collecti
 	}
 	value, _, err := r.bashPPUpdateResult(op, left, right)
 	if err != nil {
-		r.bashPPUpdateError(pos, "OP", err.Error())
+		// See bashPPApplyUpdate: an in-flight divide/remainder-by-zero panic
+		// must reach a deferred recover and leave the slice element untouched.
+		if !errors.Is(err, errBashPPScalarInterrupted) {
+			r.bashPPUpdateError(pos, "OP", err.Error())
+		}
 		return
 	}
 	elements[i] = value
@@ -270,7 +281,12 @@ func (r *Runner) bashPPApplyMapUpdate(target *syntax.BashPPIndexExpr, collection
 	}
 	value, _, err := r.bashPPUpdateResult(op, left, right)
 	if err != nil {
-		r.bashPPUpdateError(pos, "OP", err.Error())
+		// See bashPPApplyUpdate: an in-flight divide/remainder-by-zero panic must
+		// reach a deferred recover and leave the map slot uninserted (test/
+		// fixedbugs/issue22881.go: the RHS panics before the map insert starts).
+		if !errors.Is(err, errBashPPScalarInterrupted) {
+			r.bashPPUpdateError(pos, "OP", err.Error())
+		}
 		return
 	}
 	if _, err := r.bashPPSprint165MapStore(mapping, meta, key, keyMeta, collection.Key, value, nil); err != nil {
