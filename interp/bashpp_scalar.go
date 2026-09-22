@@ -1806,6 +1806,10 @@ func (r *Runner) bashPPConvertScalar(typ string, x bashPPScalar) (bashPPScalar, 
 			return converted, err
 		}
 		if bashPPIntegerType(typ) && (x.value.Kind() == constant.Int || x.value.Kind() == constant.Float) {
+			if r.bashPPGoSource && r.bashPPConvertHashQY && x.runtime && x.value.Kind() == constant.Float {
+				integer := r.bashPPRuntimeFloatToIntegerQY(typ, x)
+				return bashPPScalar{value: integer, typ: typ, runtime: true}, nil
+			}
 			integer := constant.ToInt(x.value)
 			if r.bashPPGoSource && x.runtime {
 				if x.value.Kind() == constant.Float {
@@ -1826,6 +1830,118 @@ func (r *Runner) bashPPConvertScalar(typ string, x bashPPScalar) (bashPPScalar, 
 		}
 	}
 	return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-CONVERT: cannot convert %s to %s", x.value.Kind(), typ)
+}
+
+func bashPPGoFlagsConvertHashQY(flags string) bool {
+	fields, ok := bashPPGoFlagsFields(flags)
+	if !ok {
+		return false
+	}
+	// cmd/go applies repeated per-package flags in order, with the last
+	// matching value winning. We intentionally support only the unscoped
+	// command-line-package form used by convert5.go. Package patterns require
+	// the go command's package matcher and must not silently become global.
+	selected := ""
+	for _, field := range fields {
+		if strings.HasPrefix(field, "-gcflags=") {
+			value := strings.TrimPrefix(field, "-gcflags=")
+			if value != "" && !strings.HasPrefix(value, "-") {
+				// Package-scoped lists require package matching, including
+				// possibly overriding an earlier unscoped value. They are
+				// outside this limited carrier; never retain a stale policy.
+				return false
+			}
+			selected = value
+		}
+	}
+	return selected == "-d=converthash=qy"
+}
+
+// bashPPGoFlagsFields follows cmd/internal/quoted.Split, which is the parser
+// cmd/go uses for GOFLAGS: quotes are recognized only around a complete field
+// and their contents are not unescaped.
+func bashPPGoFlagsFields(value string) ([]string, bool) {
+	var fields []string
+	for len(value) > 0 {
+		for len(value) > 0 && strings.ContainsRune(" \t\n\r", rune(value[0])) {
+			value = value[1:]
+		}
+		if value == "" {
+			break
+		}
+		if value[0] == '\'' || value[0] == '"' {
+			quote := value[0]
+			value = value[1:]
+			end := strings.IndexByte(value, quote)
+			if end < 0 {
+				return nil, false
+			}
+			fields = append(fields, value[:end])
+			value = value[end+1:]
+			continue
+		}
+		end := strings.IndexAny(value, " \t\n\r")
+		if end < 0 {
+			fields = append(fields, value)
+			break
+		}
+		fields = append(fields, value[:end])
+		value = value[end:]
+	}
+	return fields, true
+}
+
+// bashPPRuntimeFloatToIntegerQY implements only the conversion implementation
+// selected by cmd/compile's -d=converthash=qy policy. The ordinary path above
+// remains unchanged when that runner-local policy is absent.
+func (r *Runner) bashPPRuntimeFloatToIntegerQY(typ string, x bashPPScalar) constant.Value {
+	bits, signed := bashPPIntegerWidth(typ)
+	boundBits, boundSigned := bits, signed
+	if bits < 32 {
+		boundBits, boundSigned = 64, true
+		source := x.typ
+		if shape, ok := r.bashPPUnderlyingType(&syntax.BashPPNamedType{Name: &syntax.Lit{Value: source}}).(*syntax.BashPPNamedType); ok && shape.Name != nil {
+			source = shape.Name.Value
+		}
+		if source == "float32" {
+			boundBits = 32
+		}
+	}
+	minimum, maximum := bashPPIntegerBounds(boundBits, boundSigned)
+	var integer constant.Value
+	if x.hasNonFinite {
+		switch {
+		case math.IsNaN(x.nonFinite):
+			integer = maximum
+		case math.Signbit(x.nonFinite):
+			integer = minimum
+		default:
+			integer = maximum
+		}
+	} else {
+		integer = constant.BinaryOp(constant.Num(x.value), token.QUO_ASSIGN, constant.Denom(x.value))
+		if constant.Compare(integer, token.LSS, minimum) {
+			integer = minimum
+		} else if constant.Compare(integer, token.GTR, maximum) {
+			integer = maximum
+		}
+	}
+	return bashPPWrapInteger(typ, integer)
+}
+
+func bashPPIntegerBounds(bits int, signed bool) (constant.Value, constant.Value) {
+	limit := new(big.Int).Lsh(big.NewInt(1), uint(bits))
+	minimum := new(big.Int)
+	maximum := new(big.Int).Sub(new(big.Int).Set(limit), big.NewInt(1))
+	if signed {
+		limit.Rsh(limit, 1)
+		minimum.Neg(new(big.Int).Set(limit))
+		maximum.Sub(new(big.Int).Set(limit), big.NewInt(1))
+	}
+	makeValue := func(value *big.Int) constant.Value {
+		return constant.MakeFromLiteral(value.String(), token.INT, 0)
+	}
+	return makeValue(minimum), makeValue(maximum)
 }
 
 func (r *Runner) bashPPConvertGoSourceStringToUint64(typ string, x bashPPScalar) (bashPPScalar, bool, error) {
