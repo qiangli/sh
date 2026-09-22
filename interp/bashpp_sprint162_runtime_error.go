@@ -4,6 +4,7 @@
 package interp
 
 import (
+	"fmt"
 	"go/constant"
 	"strconv"
 	"strings"
@@ -279,7 +280,13 @@ func (r *Runner) goSourceLinkedPackageName(tag string) string {
 		if name == nil || goSourceLinkedPackage(name.Value) != tag {
 			continue
 		}
-		if source, ok := r.bashPPGoSourceFile.SourceAt(stmt.Pos()); ok {
+		// Linked declarations can have synthesized statement/keyword positions.
+		// The declaration identifier retains its original source position.
+		pos := name.Pos()
+		if !pos.IsValid() {
+			pos = stmt.Pos()
+		}
+		if source, ok := r.bashPPGoSourceFile.SourceAt(pos); ok && source.Package != "" {
 			return source.Package
 		}
 	}
@@ -383,26 +390,35 @@ func (r *Runner) bashPPPanicValueText(value any, fallback string) string {
 // goSourceTypeAssertionFailure spells the failure of `x.(T)` from the
 // operand's static type, its interface value and the asserted type; for an
 // interface T the missing method is the first one the dynamic type lacks.
-func (r *Runner) goSourceTypeAssertionFailure(static syntax.BashPPTypeExpr, iv *bashPPInterfaceValue, asserted syntax.BashPPTypeExpr, assertIface *syntax.BashPPInterfaceType) string {
+func (r *Runner) goSourceTypeAssertionFailure(static syntax.BashPPTypeExpr, iv *bashPPInterfaceValue, asserted syntax.BashPPTypeExpr, assertIface *syntax.BashPPInterfaceType) (string, error) {
 	var dynamic syntax.BashPPTypeExpr
 	if iv != nil && !iv.nilIface {
 		dynamic = iv.dynamic
 	}
 	missing := ""
 	if assertIface != nil && dynamic != nil {
-		if err := r.bashPPImplements(dynamic, assertIface); err != nil {
-			text := err.Error()
-			if i := strings.LastIndex(text, "missing method "); i >= 0 {
-				missing = strings.TrimSuffix(text[i+len("missing method "):], ")")
+		methods, err := r.bashPPInterfaceMethodSet("interface", assertIface, make(map[string]bool))
+		if err != nil {
+			return "", err
+		}
+		implementationErr := r.bashPPImplements(dynamic, assertIface)
+		if implementationErr != nil {
+			text := implementationErr.Error()
+			// Admission already resolved the actual method set and its signatures.
+			// Preserve its failing method, never substitute the first required method.
+			for _, name := range methods.order {
+				if strings.HasPrefix(text, "BASHPP-EINTERFACE-MISSING:") && strings.HasSuffix(text, "(missing method "+name+")") ||
+					strings.HasPrefix(text, "BASHPP-EINTERFACE-SIGNATURE:") && strings.HasSuffix(text, " method "+name+" has wrong signature") {
+					missing = name
+					break
+				}
 			}
 		}
 		if missing == "" {
-			if methods, err := r.bashPPInterfaceMethodSet("interface", assertIface, make(map[string]bool)); err == nil && len(methods.order) > 0 {
-				missing = methods.order[0]
-			}
+			return "", fmt.Errorf("BASHPP-EASSERT-DIAGNOSTIC: cannot identify the failing interface method: %v", implementationErr)
 		}
 	}
-	return r.goSourceTypeAssertionText(static, dynamic, asserted, missing)
+	return r.goSourceTypeAssertionText(static, dynamic, asserted, missing), nil
 }
 
 // bashPPPanicArgument settles the value and printed text of an original Go

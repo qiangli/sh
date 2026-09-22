@@ -323,3 +323,60 @@ func runGoSourceMultiPackage(t *testing.T, name, mainSrc, importPath, depName, d
 	}
 	return out.String(), errout.String()
 }
+
+// A satisfied first method must never be blamed for a later absent method
+// or a later method whose signature differs. Check both declaration orders.
+func TestS243TypeAssertionReportsActualFailingMethod(t *testing.T) {
+	for _, methods := range []string{"A(); Z(int)", "Z(int); A()"} {
+		for _, z := range []string{"", "func (T) Z() {}"} {
+			t.Run(methods+z, func(t *testing.T) {
+				mainSrc := `package main
+import ("fmt"; "./p")
+func main() {
+ defer func() { fmt.Println(recover()) }()
+ var v any = p.T{}
+ _ = v.(p.I)
+}`
+				depSrc := "package p\ntype T struct{}\nfunc (T) A() {}\n" + z + "\ntype I interface { " + methods + " }\n"
+				out, stderr := runGoSourceMultiPackage(t, "s243missingmethod", mainSrc, "test/p", "p.go", depSrc)
+				qt.Assert(t, qt.Equals(stderr, ""))
+				qt.Assert(t, qt.Equals(out, "interface conversion: p.T is not p.I: missing method Z\n"))
+			})
+		}
+	}
+}
+
+func TestS243TypeAssertionAcceptsAllMethods(t *testing.T) {
+	const mainSrc = `package main
+import ("fmt"; "./p")
+func main() { var v any = p.T{}; x := v.(p.I); x.A(); x.Z(1); fmt.Println("ok") }
+`
+	const depSrc = `package p
+type T struct{}
+func (T) A() {}
+func (T) Z(int) {}
+type I interface { Z(int); A() }
+`
+	out, stderr := runGoSourceMultiPackage(t, "s243allmethods", mainSrc, "test/p", "p.go", depSrc)
+	qt.Assert(t, qt.Equals(stderr, ""))
+	qt.Assert(t, qt.Equals(out, "ok\n"))
+}
+
+// Known empty method sets still raise Go's recoverable assertion panic. The
+// required methods are deliberately out of lexical order to verify that the
+// first missing method is selected from the actual (empty) method set.
+func TestS243TypeAssertionKnownEmptyMethodSets(t *testing.T) {
+	for _, expr := range []string{"[]int{}", "map[int]int{}", "[1]int{}", "func() {}", "make(chan int)", "struct{}{}", "1", "true"} {
+		t.Run(expr, func(t *testing.T) {
+			differGoSource(t, `package main
+import "fmt"
+type I interface { Z(); A() }
+func main() {
+ defer func() { fmt.Println(recover()) }()
+ var x any = `+expr+`
+ _ = x.(I)
+}
+`, nil, "")
+		})
+	}
+}

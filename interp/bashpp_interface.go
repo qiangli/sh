@@ -9,6 +9,7 @@ import (
 	"go/constant"
 	"go/types"
 	"regexp"
+	"sort"
 	"strings"
 
 	"mvdan.cc/sh/v3/expand"
@@ -318,6 +319,9 @@ func (r *Runner) bashPPImplements(actual syntax.BashPPTypeExpr, iface *syntax.Ba
 		if err != nil {
 			return err
 		}
+		if r.bashPPGoSource {
+			sort.Strings(expectedSet.order)
+		}
 		for _, name := range expectedSet.order {
 			expected := expectedSet.byName[name]
 			actualMethod, found := actualSet.byName[name]
@@ -335,11 +339,27 @@ func (r *Runner) bashPPImplements(actual syntax.BashPPTypeExpr, iface *syntax.Ba
 	// embedded fields, which is what the selection below walks.
 	typeName, _ := bashPPInterfaceMethodOwner(actual)
 	if typeName == "" && !bashPPStructLiteralOwner(actual) {
+		// These unnamed concrete types have an empty method set by definition;
+		// this is an evidenced missing method, not an unmodeled bridge failure.
+		if r.bashPPGoSource && bashPPKnownEmptyMethodSet(actual) {
+			methods, err := r.bashPPInterfaceMethodSet("interface", iface, make(map[string]bool))
+			if err != nil {
+				return err
+			}
+			if len(methods.order) == 0 {
+				return nil
+			}
+			sort.Strings(methods.order)
+			return fmt.Errorf("BASHPP-EINTERFACE-MISSING: %s does not implement interface (missing method %s)", bashPPTypeText(actual), methods.order[0])
+		}
 		return fmt.Errorf("BASHPP-EINTERFACE-IMPOSSIBLE: %s cannot implement interface", bashPPTypeText(actual))
 	}
 	expectedSet, err := r.bashPPInterfaceMethodSet("interface", iface, make(map[string]bool))
 	if err != nil {
 		return err
+	}
+	if r.bashPPGoSource {
+		sort.Strings(expectedSet.order)
 	}
 	for _, name := range expectedSet.order {
 		expected := expectedSet.byName[name]
@@ -443,6 +463,24 @@ func bashPPInstantiatedMethodSignature(fn *bashPPFunc, receiver syntax.BashPPTyp
 	bindings := bashPPMethodTypeBindings(fn, receiver)
 	return bashPPFieldsSignature(bashPPSubstituteFields(fn.decl.Params, bindings)) + "->" +
 		bashPPFieldsSignature(bashPPSubstituteFields(fn.decl.Results, bindings))
+}
+
+// Only structural types whose empty method set follows from their syntax are
+// admitted here. Named types and struct literals may carry promoted methods;
+// their existing method resolution remains authoritative.
+func bashPPKnownEmptyMethodSet(typ syntax.BashPPTypeExpr) bool {
+	switch t := typ.(type) {
+	case *syntax.BashPPCollectionType:
+		return t.Kind == "slice" || t.Kind == "map" || t.Kind == "array"
+	case *syntax.BashPPChanType, *syntax.BashPPFuncType:
+		return true
+	case *syntax.BashPPPointerType:
+		switch t.Element.(type) {
+		case *syntax.BashPPCollectionType, *syntax.BashPPChanType, *syntax.BashPPFuncType, *syntax.BashPPInterfaceType, *syntax.BashPPPointerType:
+			return true
+		}
+	}
+	return false
 }
 
 func bashPPInterfaceMethodOwner(typ syntax.BashPPTypeExpr) (string, bool) {
@@ -1055,7 +1093,11 @@ func (r *Runner) bashPPTypeAssertCell(assert *syntax.BashPPTypeAssertExpr, comma
 			return []string{zero.vr.Str, "false"}, zero, nil
 		}
 		if r.bashPPGoSource {
-			return nil, nil, r.bashPPRaiseRuntimeError(bashPPRuntimeTypeAssert, r.goSourceTypeAssertionFailure(cell.declType, iv, assert.Assert, assertIface))
+			message, err := r.goSourceTypeAssertionFailure(cell.declType, iv, assert.Assert, assertIface)
+			if err != nil {
+				return nil, nil, err
+			}
+			return nil, nil, r.bashPPRaiseRuntimeError(bashPPRuntimeTypeAssert, message)
 		}
 		return nil, nil, fmt.Errorf("BASHPP-EASSERT-FAIL: interface value has dynamic type %s, not %s", bashPPTypeText(iv.dynamic), bashPPTypeText(assert.Assert))
 	}
