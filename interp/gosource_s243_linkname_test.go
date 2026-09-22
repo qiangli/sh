@@ -90,3 +90,31 @@ func main(){ _ = linked }
 		t.Fatalf("missing target was not truthfully refused: program=%v stderr=%q", program != nil, stderr.String())
 	}
 }
+
+func TestS243LinknameUnsupportedStorageRefuses(t *testing.T) {
+	for name, body := range map[string]string{
+		"missing-unsafe": "import \"./a\"\n//go:linkname linked test/a.S\nvar linked string\n",
+		"initializer":    "import (_ \"unsafe\"; \"./a\")\n//go:linkname linked test/a.S\nvar linked = mark()\nfunc mark() string {println(\"initializer\");return \"bad\"}\n",
+		"different-type": "import (_ \"unsafe\"; \"./a\")\n//go:linkname linked test/a.S\nvar linked int\n",
+		"duplicate":      "import (_ \"unsafe\"; \"./a\")\n//go:linkname linked test/a.S\n//go:linkname linked test/a.Other\nvar linked string\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			source := "package main\n" + body + "func main(){_ = a.Get;println(linked)}"
+			program, err := gosource.Load([]gosource.Source{{Name: "main.go", Data: []byte(source)}}, gosource.Options{RunMain: true, ImportBase: "test", Packages: []gosource.PackageSpec{{Path: "test/a", Sources: []gosource.Source{{Name: "a.go", Data: []byte("package a;var S string;var Other string;func Get()string{return S}")}}}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var output bytes.Buffer
+			r, err := interp.New(interp.Lang(syntax.LangBashPP), interp.StdIO(nil, &output, &output))
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			err = r.Run(ctx, program.File)
+			if err == nil || !strings.Contains(output.String(), "linkname") || strings.Contains(output.String(), "\ninitializer\n") {
+				t.Fatalf("err=%v output=%q", err, output.String())
+			}
+		})
+	}
+}
