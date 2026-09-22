@@ -211,17 +211,26 @@ func (r *Runner) goSourceDynamicTypeIdentity(typ syntax.BashPPTypeExpr) string {
 	typ = r.bashPPCanonicalAssignableType(typ)
 	switch t := typ.(type) {
 	case *syntax.BashPPNamedType:
-		if t.Name.Value == "byte" {
+		name := t.Name.Value
+		if name == "byte" {
 			return "uint8"
 		}
-		if t.Name.Value == "rune" {
+		if name == "rune" {
 			return "int32"
+		}
+		if len(t.TypeArgs) > 0 {
+			args := make([]string, len(t.TypeArgs))
+			for i, arg := range t.TypeArgs {
+				args[i] = r.goSourceDynamicTypeIdentity(arg.ArgType)
+			}
+			name += "[" + strings.Join(args, ", ") + "]"
 		}
 		// A function-local declaration is its own type; see
 		// bashpp_sprint162_type_scope.go.
 		if scope, known := r.goSourceLocalTypeScope(t); known && scope != "" {
-			return bashPPTypeText(typ) + "·" + scope
+			return name + "·" + scope
 		}
+		return name
 	case *syntax.BashPPPointerType:
 		return "*" + r.goSourceDynamicTypeIdentity(t.Element)
 	case *syntax.BashPPCollectionType:

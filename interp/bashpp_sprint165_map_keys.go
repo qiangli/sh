@@ -92,7 +92,12 @@ func (r *Runner) bashPPSprint165MapKey(value any, meta *bashPPCollectionMeta, ty
 			inner = bashPPBuiltinExactScalarValue(cell.vr.String(), r.bashPPScalarFromCell(cell))
 		}
 		key, nonreflexive, err := r.bashPPSprint165MapKey(inner, innerMeta, dynamic)
-		key.typ = bashPPTypeText(dynamic)
+		// An interface-keyed map hashes the represented value together with its
+		// dynamic Go type. In particular, instantiated arguments retain the
+		// complete identity of anonymous structs (including tags) and local
+		// named types; the display-oriented type text intentionally abbreviates
+		// those shapes and is therefore not a map-key identity.
+		key.typ = r.goSourceDynamicTypeIdentity(dynamic)
 		return key, nonreflexive, err
 	}
 

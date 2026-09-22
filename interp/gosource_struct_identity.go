@@ -43,6 +43,10 @@ func (r *Runner) goSourceStructIdentity(x *syntax.BashPPStructType) string {
 			b.WriteString(r.goSourceFieldIdentity(name, pkg))
 			b.WriteString(" ")
 			b.WriteString(typ)
+			if field.Tag != nil {
+				b.WriteString(" ")
+				b.WriteString(field.Tag.Value)
+			}
 			b.WriteString(" embedded")
 			continue
 		}
