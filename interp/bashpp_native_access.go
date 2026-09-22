@@ -16,6 +16,7 @@ import (
 	"context"
 	"fmt"
 	"go/constant"
+	"strings"
 
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
@@ -120,6 +121,15 @@ func (r *Runner) bashPPNativeAccess(ctx context.Context, op string, base bashPPB
 	}
 	values, err := r.bashPPNativeRequest(ctx, req, bashPPBridgeRequest{Op: op, Selector: selector, Receiver: &base, Args: args})
 	if err != nil {
+		// A checked access performed by the dependency can fault after a
+		// multi-result call has supplied its native aggregate. Materialize only
+		// a worker-reported Go runtime panic here, at the access boundary, so
+		// recover sees the same value as it does for interpreter-owned slices.
+		// Bridge and arity errors remain ordinary errors.
+		if message, ok := goSourceNativeRuntimePanic(err); ok {
+			r.goSourceRuntimePanic(message)
+			return bashPPBridgeValue{}, errBashPPScalarInterrupted
+		}
 		// The dependency's own nil-pointer fault on a structured read is
 		// the nil dereference Go's runtime raises — a recoverable
 		// runtime.Error, not a diagnostic (Sprint 165 runtime-2).
@@ -132,6 +142,21 @@ func (r *Runner) bashPPNativeAccess(ctx context.Context, op string, base bashPPB
 		return bashPPBridgeValue{}, fmt.Errorf("gosource: native %s returned %d values", op, len(values))
 	}
 	return values[0], nil
+}
+
+func goSourceNativeRuntimePanic(err error) (string, bool) {
+	if err == nil {
+		return "", false
+	}
+	message := strings.TrimPrefix(err.Error(), "native dependency panic: ")
+	// Native index and slice helpers report the runtime's suffix without its
+	// display prefix. Reconstitute only those two checked-access forms before
+	// asking the common runtime-value classifier to materialize the panic.
+	if strings.HasPrefix(message, "index out of range") || strings.HasPrefix(message, "slice bounds out of range") {
+		message = bashPPRuntimeErrorMessage + message
+	}
+	_, ok := bashPPRuntimeErrorPayload(message)
+	return message, ok
 }
 
 // bashPPNativeIndex evaluates base[index] in the dependency process.
