@@ -283,6 +283,12 @@ func (s *bashPPGoSourceScope) command(cmd syntax.Command) {
 			for _, result := range cmd.ResultExprs {
 				s.expr(result)
 			}
+		} else if cmd.Call != nil {
+			s.call(cmd.Call)
+		} else if cmd.Expr != nil {
+			s.expr(cmd.Expr)
+		} else if cmd.FuncLit != nil {
+			s.funcLit(cmd.FuncLit)
 		} else {
 			s.words(cmd.Results)
 		}
