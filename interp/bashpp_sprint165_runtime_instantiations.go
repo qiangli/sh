@@ -107,7 +107,7 @@ func bashPPInstantiationClosure(file *syntax.File) (map[string]*syntax.BashPPNam
 	for _, stmt := range file.Stmts {
 		switch d := stmt.Cmd.(type) {
 		case *syntax.BashPPDecl:
-			if d.Site == syntax.StartTypeDecl && len(d.TypeParams) > 0 && d.DeclTypeExpr != nil && !d.Alias && d.Name != nil {
+			if d.Site == syntax.StartTypeDecl && len(d.TypeParams) > 0 && d.DeclTypeExpr != nil && d.Name != nil {
 				generics[d.Name.Value] = d
 				continue
 			}

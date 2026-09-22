@@ -151,7 +151,7 @@ func (r *Runner) bashPPBuildLocalTypeDescriptors() ([]bashPPLocalType, map[strin
 			identities[name] = d.GoTypeIdentity
 			aliases[name] = d.Alias
 		}
-		if d, ok := node.(*syntax.BashPPDecl); ok && d.Site == syntax.StartTypeDecl && len(d.TypeParams) > 0 && d.DeclTypeExpr != nil && !d.Alias {
+		if d, ok := node.(*syntax.BashPPDecl); ok && d.Site == syntax.StartTypeDecl && len(d.TypeParams) > 0 && d.DeclTypeExpr != nil {
 			if _, exists := generics[d.Name.Value]; exists {
 				ambiguous[d.Name.Value] = true
 			}
@@ -183,7 +183,7 @@ func (r *Runner) bashPPBuildLocalTypeDescriptors() ([]bashPPLocalType, map[strin
 	scopedNames := map[string]string{}
 	for key := range scopedDecls {
 		scopedNames[key] = bashPPScopedLocalName(key)
-		if d := scopedDecls[key].decl; len(d.TypeParams) > 0 && !d.Alias {
+		if d := scopedDecls[key].decl; len(d.TypeParams) > 0 {
 			generics[scopedNames[key]] = d
 		}
 	}
@@ -191,7 +191,7 @@ func (r *Runner) bashPPBuildLocalTypeDescriptors() ([]bashPPLocalType, map[strin
 		delete(declared, name)
 		delete(generics, name)
 		if d := packageLevel[name]; d != nil && !bashPPHelperReserved[name] {
-			if len(d.TypeParams) > 0 && !d.Alias {
+			if len(d.TypeParams) > 0 {
 				generics[name] = d
 			} else if len(d.TypeParams) == 0 {
 				declared[name] = d.DeclTypeExpr
@@ -406,7 +406,12 @@ func (r *Runner) bashPPBuildLocalTypeDescriptors() ([]bashPPLocalType, map[strin
 			public.Name = bashPPTypeText(named)
 			identity = &public
 		}
-		materialised := bashPPLocalType{Name: name, Identity: identity, Decl: decl, WireType: wire, Callback: named.Name.Value, Methods: mirrored, refs: local.refs}
+		// An instantiated generic alias has the identity of its substituted
+		// target, not of its declaration. It still needs a registry entry under
+		// the linked package's flattened spelling: that is the spelling the
+		// interpreter transports to a dependency helper. Mark it as an alias so
+		// it cannot overwrite the target's reflection identity.
+		materialised := bashPPLocalType{Name: name, Identity: identity, Alias: base.Alias, Decl: decl, WireType: wire, Callback: named.Name.Value, Methods: mirrored, refs: local.refs}
 		for _, method := range methods[named.Name.Value] {
 			seen := false
 			for _, m := range materialised.Methods {
