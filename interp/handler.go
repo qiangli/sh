@@ -4,6 +4,7 @@
 package interp
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -250,13 +251,13 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			execDir = runnerExecDir(hc.runner, execDir)
 			lookupDir = shellPathFromOS(execDir)
 		}
+		// CreateProcess does not consider extensionless files executable,
+		// but bash does: it attempts execve and then applies its ENOEXEC
+		// script fallback. findExecutable tries the bare name after the
+		// PATHEXT list for exactly that reason, so there is no second,
+		// unfiltered lookup here — one would run the files the executable
+		// rule just refused (exec3.sub's `exec ./x.sh`, a 0644 file).
 		path, err := LookPathDir(lookupDir, hc.Env, args[0])
-		if err != nil && runtime.GOOS == "windows" {
-			// CreateProcess does not consider extensionless files executable,
-			// but bash does: it attempts execve and then applies its ENOEXEC
-			// script fallback. Find the file without PATHEXT filtering here.
-			path, err = lookPathDir(lookupDir, hc.Env, args[0], findFile)
-		}
 		if err != nil {
 			err = shellVisibleLookupError(err, lookupDir, hc.Dir)
 			if hc.runner != nil && hc.runner.bashCompatErrors {
@@ -966,6 +967,44 @@ func winHasExt(file string) bool {
 	return strings.LastIndexAny(file, `:\/`) < i
 }
 
+// windowsExecutableFile reports whether a file Windows can see is one the
+// shell may run. Windows has no execute bit — os.Chmod only toggles the
+// read-only attribute, so a `chmod +x` leaves nothing a stat can read back
+// — and the rule is the one Cygwin applies on a filesystem without POSIX
+// ACLs: an extension Windows itself runs (PATHEXT), a name with no
+// extension at all (how a POSIX tool or script is spelled), or a file whose
+// first bytes say it is a program or a script. exec3.sub writes `echo bar`
+// into x.sh with a plain redirect and wants `exec ./x.sh` refused, the way
+// a 0644 file is refused on Unix.
+func windowsExecutableFile(target string, exts []string) bool {
+	if !winHasExt(target) {
+		return true
+	}
+	lower := strings.ToLower(target)
+	for _, e := range exts {
+		if strings.HasSuffix(lower, e) {
+			return true
+		}
+	}
+	return hasExecutableMagic(target)
+}
+
+// hasExecutableMagic reports whether a file begins with a run-me marker: a
+// #! shebang, or the MZ (DOS/PE) or \x7fELF image header.
+func hasExecutableMagic(target string) bool {
+	f, err := os.Open(target)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	var buf [4]byte
+	n, _ := io.ReadFull(f, buf[:])
+	head := buf[:n]
+	return bytes.HasPrefix(head, []byte("#!")) ||
+		bytes.HasPrefix(head, []byte("MZ")) ||
+		bytes.HasPrefix(head, []byte("\x7fELF"))
+}
+
 // findExecutable returns the path to an existing executable file.
 func findExecutable(dir, file string, exts []string) (string, error) {
 	if len(exts) == 0 {
@@ -973,8 +1012,14 @@ func findExecutable(dir, file string, exts []string) (string, error) {
 		return checkStat(dir, file, true)
 	}
 	if winHasExt(file) {
-		if file, err := checkStat(dir, file, true); err == nil {
-			return file, nil
+		if found, err := checkStat(dir, file, true); err == nil {
+			if !windowsExecutableFile(lookupStatPath(dir, found), exts) {
+				// Stop here rather than falling through to the PATHEXT
+				// loop: the caller must see EACCES (126), not the "not
+				// found" that would become `command not found` (127).
+				return "", fmt.Errorf("permission denied")
+			}
+			return found, nil
 		}
 	}
 	for _, e := range exts {
