@@ -11,12 +11,15 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
 	"golang.org/x/sys/windows"
 	"mvdan.cc/sh/v3/syntax"
+	"mvdan.cc/sh/v3/winmode"
 )
 
 func mkfifo(path string, mode uint32) error {
@@ -60,9 +63,19 @@ func refreshFileTimesNow(file *os.File, path string) error {
 	return os.Chtimes(path, now, now)
 }
 
-// access attempts to emulate [unix.Access] on Windows.
-// Windows seems to have a different system of permissions than Unix,
-// so for now just rely on what [io/fs.FileInfo] gives us.
+// access emulates [unix.Access] on Windows, which has no such call and no
+// POSIX mode bits to answer it from.
+//
+// The mode it reads comes from [DefaultStatHandler], which substitutes the
+// mode recorded in the file's ACL (see [winmode]) when chmod put one there.
+// That is the whole reason `chmod a-r f; test -r f` can answer correctly
+// here, and it is what keeps this builtin's answer identical to the chmod
+// and test applets' — they read the same ACL.
+//
+// With no recorded mode the r and w bits are still the read-only attribute
+// io/fs derives them from, and executability is not a mode question at all:
+// Windows runs a file because of its extension, so -x falls back to the
+// PATHEXT rule the exec lookup uses. A directory is searchable.
 func (r *Runner) access(ctx context.Context, path string, mode uint32) error {
 	info, err := r.lstat(ctx, path)
 	if err != nil {
@@ -79,11 +92,33 @@ func (r *Runner) access(ctx context.Context, path string, mode uint32) error {
 			return fmt.Errorf("file is not writable")
 		}
 	case access_X_OK:
+		if !winmode.Recorded(info) {
+			if m.IsDir() || r.hasPathExt(path) {
+				return nil
+			}
+			return fmt.Errorf("file is not executable")
+		}
 		if m&0o100 == 0 {
 			return fmt.Errorf("file is not executable")
 		}
 	}
 	return nil
+}
+
+// hasPathExt reports whether path ends in one of the PATHEXT extensions —
+// the rule Windows itself uses to decide what it will run, and the one the
+// exec lookup and the test applet both apply.
+func (r *Runner) hasPathExt(path string) bool {
+	ext := strings.ToLower(filepath.Ext(path))
+	if ext == "" {
+		return false
+	}
+	for _, e := range pathExtsMode(r.writeEnv, true) {
+		if e == ext {
+			return true
+		}
+	}
+	return false
 }
 
 // unTestOwnOrGrp panics. Under Unix, it implements the -O and -G unary tests,

@@ -21,6 +21,7 @@ import (
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/pathconv"
 	"mvdan.cc/sh/v3/syntax"
+	"mvdan.cc/sh/v3/winmode"
 )
 
 // HandlerCtx returns the [HandlerContext] value stored in ctx,
@@ -1329,28 +1330,54 @@ type StatHandlerFunc func(ctx context.Context, name string, followSymlinks bool)
 
 // DefaultStatHandler returns the [StatHandlerFunc] used by default.
 // It makes use of [os.Stat] and [os.Lstat], depending on followSymlinks.
+//
+// This is the shell's one reader of a POSIX mode. Windows has no mode bits,
+// so a mode set by chmod lives in the file's ACL ([winmode]) and io/fs
+// cannot see it: os.Stat reports 0666 or 0444 off the read-only attribute
+// and nothing else. Substituting the recorded mode here rather than at each
+// predicate is what makes `test -x`, `test -r`, `test -g` and every other
+// caller of FileInfo.Mode agree with each other, and with the chmod that
+// wrote the mode. Everywhere but Windows this is the identity.
 func DefaultStatHandler() StatHandlerFunc {
 	windows := runtime.GOOS == "windows"
+	lstat, stat := recordedMode(os.Lstat), recordedMode(os.Stat)
 	return func(ctx context.Context, path string, followSymlinks bool) (fs.FileInfo, error) {
 		if info, ok := devTTYStat(path); ok {
 			return info, nil
 		}
 		path = shellPathJoinAbs(handlerDir(ctx), path)
 		if !followSymlinks {
-			info, err := os.Lstat(path)
+			info, err := lstat(path)
 			if err != nil {
-				return statExeFallback(os.Lstat, path, err, windows)
+				return statExeFallback(lstat, path, err, windows)
 			}
 			return info, nil
 		}
-		info, err := os.Stat(path)
+		info, err := stat(path)
 		if err != nil {
 			info, err = statLongPath(path, err)
 			if err != nil {
-				return statExeFallback(os.Stat, path, err, windows)
+				return statExeFallback(stat, path, err, windows)
 			}
 		}
 		return info, nil
+	}
+}
+
+// recordedMode wraps a stat function so that the mode recorded in a file's
+// ACL, if there is one, replaces the mode the platform derived from the
+// file attributes. It wraps the .exe retry too, so an extensionless path
+// that resolves to path.exe reports the mode recorded for the .exe.
+func recordedMode(stat func(string) (fs.FileInfo, error)) func(string) (fs.FileInfo, error) {
+	if !winmode.Supported {
+		return stat
+	}
+	return func(path string) (fs.FileInfo, error) {
+		info, err := stat(path)
+		if err != nil {
+			return info, err
+		}
+		return winmode.Apply(path, info), nil
 	}
 }
 

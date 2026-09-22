@@ -19,6 +19,7 @@ import (
 	"mvdan.cc/sh/v3/internal"
 	"mvdan.cc/sh/v3/pattern"
 	"mvdan.cc/sh/v3/syntax"
+	"mvdan.cc/sh/v3/winmode"
 )
 
 // arithErrMsg returns the bash 5.3 wording for an arithmetic-
@@ -366,7 +367,11 @@ func (r *Runner) binTest(ctx context.Context, op syntax.BinTestOperator, x, y st
 		if err1 != nil || err2 != nil {
 			return false
 		}
-		return os.SameFile(info1, info2)
+		// winmode.SameFile, not os.SameFile: on Windows the stat
+		// handler hands back a FileInfo carrying the file's recorded
+		// mode, and os.SameFile recognizes only the type os.Stat
+		// returns — it would answer false for a file and itself.
+		return winmode.SameFile(info1, info2)
 	case syntax.TsEql, syntax.TsNeq, syntax.TsLeq, syntax.TsGeq, syntax.TsLss, syntax.TsGtr:
 		// Classic `test` / `[`: validate operand is an integer
 		// and emit bash's "integer expected" diagnostic via the
@@ -596,6 +601,11 @@ func bashStrmatch(pat, str string) bool {
 	return err == nil && matcher(str)
 }
 
+// statMode reports whether the file's mode has every bit in mode set. The
+// mode comes from the stat handler, which on Windows substitutes the mode
+// recorded in the file's ACL — so -u, -g and -k answer for the setuid,
+// setgid and sticky bits chmod last wrote there, rather than for bits the
+// platform can never report. See [DefaultStatHandler].
 func (r *Runner) statMode(ctx context.Context, name string, mode os.FileMode) bool {
 	info, err := r.stat(ctx, name)
 	return err == nil && info.Mode()&mode != 0
