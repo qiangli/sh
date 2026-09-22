@@ -7647,7 +7647,10 @@ func (r *Runner) readLineFrom(ctx context.Context, stdin io.Reader, raw bool, de
 				}
 			}()
 		}
-	} else {
+	} else if _, timeoutAware := stdin.(*timeoutFileReader); !timeoutAware {
+		// timeoutFileReader owns the context check and deliberately probes
+		// readiness once after a deadline. Checking ctx here would prevent
+		// already-buffered input from winning over a tiny read timeout.
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()

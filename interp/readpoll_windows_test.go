@@ -16,8 +16,9 @@ import (
 )
 
 // Here-input is a materialised, delete-pending file before hdocServe returns.
-// This is the ordering `read -t .001 a <<<abcde` depends on: the deadline
-// probes bytes, not a writer goroutine or undocumented pipe capacity.
+// This is the ordering Bash 5.3 tests/read2.sub:56,
+// `read -t .001 a <<<abcde`, depends on: the deadline probes bytes, not a
+// writer goroutine or undocumented pipe capacity. Its output is read.right:65.
 func TestWindowsHereDocReadyBeforeServeReturns(t *testing.T) {
 	body := []byte("abcde\n")
 	f, err := hdocServe(body)
