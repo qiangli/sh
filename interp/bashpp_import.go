@@ -83,9 +83,10 @@ type bashPPToolchain struct {
 	eval          bashPPEvaluator
 	bridge        *bashPPNativeSession
 	callbackDepth int
-	moduleDir     string
-	importPath    string
-	testMain      bool
+
+	moduleDir  string
+	importPath string
+	testMain   bool
 	// instantiations is the per-file closure of reached generic
 	// instantiations; see bashpp_sprint165_runtime_instantiations.go.
 	instantiations *bashPPInstantiationIndex

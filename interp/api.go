@@ -241,6 +241,12 @@ type Runner struct {
 	// it lets ordinary assignment dispatch give bare identifier expressions
 	// their Go meaning without changing shell assignments elsewhere.
 	bashPPFuncActive int
+	// bashPPCallbackReturnDepth is the exact Go-form function depth of the
+	// mirrored method invocation currently being serviced by this runner. It is
+	// invocation state, not toolchain/session state: subshells and Go tasks must
+	// start with zero so a callback marker cannot authorize an unrelated return
+	// in a cloned runner.
+	bashPPCallbackReturnDepth int
 	// bashPPShadowedTypes records the type declarations executed inside Go-form
 	// function bodies that shadow a registry entry, so the frame that leaves
 	// restores what it shadowed; see [Runner.bashPPShadowLocalType].

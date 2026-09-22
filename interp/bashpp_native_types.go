@@ -38,6 +38,10 @@ func (r *Runner) bashPPNativeTypeRequest(op string, typ syntax.BashPPTypeExpr, a
 	return values[0], nil
 }
 func (r *Runner) bashPPNativeComposite(lit *syntax.BashPPCompositeLit, address bool) (bashPPBridgeValue, error) {
+	return r.bashPPNativeCompositeAtBoundary(lit, address, false)
+}
+
+func (r *Runner) bashPPNativeCompositeAtBoundary(lit *syntax.BashPPCompositeLit, address, returnBoundary bool) (bashPPBridgeValue, error) {
 	value := bashPPBridgeValue{Kind: "struct", Type: r.bashPPBridgeTypeIdentity(lit.LitType), Fields: map[string]bashPPBridgeValue{}}
 	// Go allows either every field keyed or none; the positional form —
 	// color.RGBA{c, c, 255, 255} — is filled in the dependency's own field
@@ -62,6 +66,10 @@ func (r *Runner) bashPPNativeComposite(lit *syntax.BashPPCompositeLit, address b
 	}
 	if len(value.Elements) > 0 && len(value.Fields) > 0 {
 		return value, fmt.Errorf("gosource: imported struct literal mixes keyed and positional fields")
+	}
+	if returnBoundary && !address {
+		value.deferredNativeComposite = true
+		return value, nil
 	}
 	op := "construct"
 	if address {

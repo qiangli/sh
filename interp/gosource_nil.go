@@ -17,6 +17,15 @@ func (r *Runner) goSourceExpectedCell(cell *bashPPCell, expected syntax.BashPPTy
 		return cell, nil
 	}
 	cell = bashPPCopyAssignmentCell(cell)
+	// A native composite carrying explicit mirrored-method return provenance is
+	// decoded by the worker at this declared result type. That decode performs
+	// the authoritative reflect assignability check, avoiding a redundant
+	// construct and interface-admission round trip. No callback-local value can
+	// acquire this marker.
+	if value, ok := cell.vr.Obj.(*bashPPBridgeValue); ok && value != nil && value.deferredNativeComposite && r.bashPPNativeType(expected) {
+		cell.declType = expected
+		return cell, nil
+	}
 	if cell.declType == nil && cell.interfaceValue != nil && cell.interfaceValue.nilIface {
 		if _, iface := r.bashPPInterfaceType(expected); iface {
 			cell.declType = expected
