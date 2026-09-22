@@ -56,6 +56,19 @@ func (r *Runner) goSourceChannelOperand(expr syntax.BashPPExpr, word *syntax.Wor
 		r.bashPPGoSendError(expr, fmt.Errorf("channel cannot cross a shell-copy boundary"))
 		return nil, false
 	}
+	if typ != nil && typ.LocalDomain {
+		if value, ok := cell.vr.Obj.(*bashPPBridgeValue); ok && value != nil && value.Kind == "nil" {
+			// Assigning nil to a channel keeps its static allocation domain. A
+			// native-shaped nil descriptor has no handle or session authority;
+			// treating it as native would manufacture a mixed select after an
+			// otherwise entirely local channel is disabled with c = nil.
+			nilChannel := newBashPPChannel(bashPPTypeText(typ.Element), 0)
+			nilChannel.ch = nil
+			nilChannel.closing = nil
+			nilChannel.element = typ.Element
+			return nilChannel, true
+		}
+	}
 	if native, ok := r.goSourceNativeChannel(cell); ok {
 		return &bashPPChannel{native: native}, true
 	}

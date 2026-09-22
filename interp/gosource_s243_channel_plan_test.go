@@ -25,6 +25,12 @@ func main(){ c:=make(chan int,1); c<-7; select { case v:=<-c: fmt.Println(v); ca
 		"close-nil-cancel-and-nonselected-sender": `package main
 import "fmt"
 func main(){ c:=make(chan int,1); var stop chan struct{}; c<-4; select { case v:=<-c: fmt.Println(v); case c<-9: panic("losing sender"); case <-stop: panic("nil cancellation arm") }; close(c); _,ok:=<-c; fmt.Println(ok) }`,
+		"assigned-nil-keeps-local-domain": `package main
+import "fmt"
+func main(){ a:=make(chan int,1); b:=make(chan int,1); b<-7; a=nil; select { case <-a: panic("nil ready"); case v:=<-b: fmt.Println(v) } }`,
+		"ranged-channel-keeps-capability": `package main
+import "fmt"
+func main(){ channels:=[]chan bool{make(chan bool,1)}; for _,c:=range channels { c<-true }; fmt.Println(<-channels[0]) }`,
 	} {
 		t.Run(name, func(t *testing.T) { typedSendThreeModes(t, source) })
 	}
@@ -59,6 +65,18 @@ func TestS243OriginalPowserChannelDomains(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Run(name, func(t *testing.T) { typedSendThreeModes(t, string(source)) })
+	}
+}
+
+func TestS243OriginalChannelDomainRegressions(t *testing.T) {
+	for _, name := range []string{"chan/select.go", "chanlinear.go"} {
+		source, err := os.ReadFile(filepath.Join(runtime.GOROOT(), "test", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Run(name, func(t *testing.T) {
+			typedSendThreeModes(t, string(source))
+		})
 	}
 }
 

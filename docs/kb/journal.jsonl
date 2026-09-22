@@ -33,3 +33,4 @@
 {"op":"note-add","slug":"b14-bounded-process-line-substrate-landed-bashpplineprocess","id":"01a0c27a-29a2-7dcf-880f-372bf2715255","tool":"claude-opus4.8-m","host":"dragon","episode":"weave-issue-13","at":"2026-09-21T05:39:41.091566Z"}
 {"op":"add","slug":"keep-variadic-spread-slices-on-the-typed-call-path","id":"01a0c6a7-13e0-76fd-a73e-bd21a008041c","tool":"codex-gpt5.6-sol-w43-q","episode":"weave-issue-43","at":"2026-09-22T01:07:13.505325Z"}
 {"op":"add","slug":"bind-reflected-callback-provenance-to-handle-identity","id":"01a0c6c2-a40b-791f-9dca-93481223b800","tool":"codex-gpt5.6-sol-w53-a","episode":"weave-issue-53","at":"2026-09-22T01:37:19.884254Z"}
+{"op":"add","slug":"preserve-channel-allocation-domains-through-identity-free-values","id":"01a0c94b-3069-728c-9a2f-81ccc12b058b","tool":"codex-gpt5.6-sol-w173-q","host":"dragon","episode":"weave-issue-173","at":"2026-09-22T13:25:43.146061Z"}
