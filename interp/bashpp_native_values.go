@@ -1051,9 +1051,11 @@ func (r *Runner) bashPPBindNativeValue(name string, value bashPPBridgeValue) {
 	cell.object = &bashPPObjectIdentity{owner: name}
 	cell.typeName = value.Type
 	if value.Interface != "" {
-		cell.declType = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.Interface}}
-		payload := &bashPPCell{vr: expand.NewObject(&copy)}
-		cell.interfaceValue = &bashPPInterfaceValue{nilIface: value.Kind == "nil", cell: payload, dynamic: &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.Type}}}
+		// Use the same typed transport boundary as native expression results.
+		// Array dynamic types need their shape and copied value contents;
+		// a synthetic named type such as "[4]int32" is not a declaration.
+		typed := r.goSourceNativeValueCell(value)
+		cell.declType, cell.interfaceValue = typed.declType, typed.interfaceValue
 	}
 }
 
