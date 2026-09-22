@@ -25,6 +25,11 @@ type bashPPPointer struct {
 	target *bashPPCell
 	path   []bashPPPointerStep
 	elem   syntax.BashPPTypeExpr
+	// A zero-origin slice expression can name the same storage as its operand
+	// while presenting a shorter length to a slice-to-array-pointer conversion.
+	// The address walk evaluates and validates that view exactly once.
+	sliceView bool
+	sliceLen  int
 }
 
 func bashPPPointerMeta(typ syntax.BashPPTypeExpr) *bashPPCollectionMeta {
@@ -153,12 +158,6 @@ func (r *Runner) bashPPSliceToArrayPointer(conv *syntax.BashPPConvertExpr, targe
 		return nil, false, nil
 	}
 	value, meta, _, err := ptr.read()
-	if _, sliced := operand.(*syntax.BashPPSliceExpr); sliced {
-		// bashPPAddress records the storage at the start of a zero-origin
-		// slice view. Validate the conversion against the view's length and
-		// shape, not the (possibly longer) slice stored in its parent cell.
-		value, meta, err = r.bashPPReadExpr(operand)
-	}
 	if err != nil || meta == nil || meta.kind != "slice" {
 		return nil, false, nil
 	}
@@ -170,8 +169,12 @@ func (r *Runner) bashPPSliceToArrayPointer(conv *syntax.BashPPConvertExpr, targe
 	if seq == nil {
 		return nil, true, nil
 	}
-	if len(seq) < n {
-		message := fmt.Sprintf("runtime error: cannot convert slice with length %d to array or pointer to array with length %d", len(seq), n)
+	length := len(seq)
+	if ptr.sliceView {
+		length = ptr.sliceLen
+	}
+	if length < n {
+		message := fmt.Sprintf("runtime error: cannot convert slice with length %d to array or pointer to array with length %d", length, n)
 		if r.bashPPGoSource {
 			return nil, true, r.bashPPRaiseRuntimeError("runtime.errorString", message)
 		}
@@ -432,19 +435,33 @@ func (r *Runner) bashPPAddress(expr syntax.BashPPExpr) (result *bashPPPointer, e
 			return nil
 		case *syntax.BashPPSliceExpr:
 			// A zero-origin slice view shares the address of its first element
-			// with the operand. That is sufficient for Go's conversion from
-			// s[:n] to *[N]T. An offset view needs an address-path offset of its
-			// own and stays explicitly unsupported here.
-			if x.Low != nil {
-				low, err := r.bashPPCollectionIndex(x.Low)
-				if err != nil {
-					return err
-				}
-				if low.value != 0 {
-					return fmt.Errorf("BASHPP-ENONADDRESSABLE: offset slice address is not supported")
-				}
+			// with the operand. Evaluate the operand first and then all bounds
+			// once, in Go order. The conversion consumes the recorded view length
+			// instead of reading the slice expression a second time.
+			if err := descend(x.X); err != nil {
+				return err
 			}
-			return descend(x.X)
+			value, viewMeta, _, err := ptr.read()
+			if err != nil {
+				return err
+			}
+			sequence, ok := value.([]any)
+			if !ok && value != nil {
+				return fmt.Errorf("BASHPP-ECOLLECTION-SLICE: value is not sliceable")
+			}
+			if viewMeta == nil || viewMeta.kind != "slice" {
+				return fmt.Errorf("BASHPP-ECOLLECTION-SLICE: value is not sliceable")
+			}
+			low, high, _, err := r.bashPPSliceBounds(x, len(sequence), cap(sequence), true)
+			if err != nil {
+				return err
+			}
+			if low != 0 {
+				return fmt.Errorf("BASHPP-ENONADDRESSABLE: offset slice address is not supported")
+			}
+			ptr.sliceView = true
+			ptr.sliceLen = high
+			return nil
 		default:
 			return fmt.Errorf("BASHPP-ENONADDRESSABLE: operand is not addressable")
 		}

@@ -59,6 +59,42 @@ func main() {
 	qt.Assert(t, qt.Equals(stderr, "abXd\n"))
 }
 
+// Slice bounds in a slice-to-array-pointer conversion are evaluated once in
+// Go order. The shortened view controls the conversion length, while the
+// resulting pointer continues to alias the operand's backing storage.
+func TestS219PointerSliceBoundsOnceAndAlias(t *testing.T) {
+	src := `package main
+var calls int
+func low() int { calls = calls*10 + 1; return 0 }
+func high() int { calls = calls*10 + 2; return 4 }
+func main() {
+	b := []byte("abcdef")
+	p := (*[4]byte)(b[low():high()])
+	p[1] = 'X'
+	println(calls, string(b))
+}`
+	out, stderr, err := runGoSource(t, "s219-pointer-slice-bounds-once", src)
+	qt.Assert(t, qt.IsNil(err), qt.Commentf("stderr: %s", stderr))
+	qt.Assert(t, qt.Equals(out, ""))
+	qt.Assert(t, qt.Equals(stderr, "12 aXcdef\n"))
+}
+
+func TestS219PointerSliceHighControlsConversionLength(t *testing.T) {
+	src := `package main
+func low() int { println("low"); return 0 }
+func high() int { println("high"); return 4 }
+func main() {
+	b := []byte("abcdef")
+	_ = (*[5]byte)(b[low():high()])
+}`
+	_, stderr, err := runGoSource(t, "s219-pointer-slice-high-length", src)
+	qt.Assert(t, qt.IsNotNil(err))
+	qt.Assert(t, qt.Equals(strings.Count(stderr, "low\n"), 1), qt.Commentf("stderr: %s", stderr))
+	qt.Assert(t, qt.Equals(strings.Count(stderr, "high\n"), 1), qt.Commentf("stderr: %s", stderr))
+	qt.Assert(t, qt.IsTrue(strings.Contains(stderr, "cannot convert slice with length 4")),
+		qt.Commentf("stderr: %s", stderr))
+}
+
 // unsafe.Pointer reinterpretation is intentionally outside this mechanism.
 // Keep the boundary loud instead of accidentally treating its integer-like
 // carrier as interpreter-owned typed storage.
