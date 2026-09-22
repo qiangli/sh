@@ -13,6 +13,13 @@ func (r *Runner) goSourceChannelType(expected syntax.BashPPTypeExpr) (*syntax.Ba
 	if !r.bashPPGoSource || expected == nil {
 		return nil, false
 	}
+	// Collection shapes already carry their element as a structured type.
+	// The common []chan T append path therefore needs no named-type walk;
+	// avoiding it also avoids constructing the walk's cycle-detection map for
+	// every appended element. Named channel types still resolve below.
+	if typ, ok := expected.(*syntax.BashPPChanType); ok {
+		return typ, true
+	}
 	typ, ok := r.bashPPUnderlyingType(expected).(*syntax.BashPPChanType)
 	return typ, ok
 }
