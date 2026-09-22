@@ -145,6 +145,13 @@ func (r *Runner) bashPPConvertComplex(typ string, x bashPPScalar) (bashPPScalar,
 	if !r.bashPPGoSource {
 		return bashPPScalar{}, fmt.Errorf("BASHPP-ECOMPLEX-UNSUPPORTED: complex values require Go source")
 	}
+	if x.hasNonFiniteComplex {
+		value := x.nonFiniteComplex
+		if typ == "complex64" {
+			value = complex128(complex64(value))
+		}
+		return bashPPNonFiniteComplexScalar(value, typ), nil
+	}
 	if x.value.Kind() != constant.Int && x.value.Kind() != constant.Float && x.value.Kind() != constant.Complex {
 		return bashPPScalar{}, fmt.Errorf("cannot convert %s to %s", x.value.Kind(), typ)
 	}
@@ -238,7 +245,7 @@ func (r *Runner) bashPPComplexBuiltinValues(name string, args []bashPPScalar) (b
 		return bashPPScalar{}, fmt.Errorf("%s requires complex argument", name)
 	}
 	typ := ""
-	if a.typ != "" && a.runtime {
+	if a.typ != "" {
 		underlying, ok := r.bashPPUnderlyingType(&syntax.BashPPNamedType{Name: &syntax.Lit{Value: a.typ}}).(*syntax.BashPPNamedType)
 		if !ok {
 			return bashPPScalar{}, fmt.Errorf("%s requires complex argument", name)

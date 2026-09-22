@@ -71,3 +71,33 @@ func TestS219ComplexRealTypedIntRejectedByChecker(t *testing.T) {
 		t.Fatal("Go checker accepted real(x) for typed int x")
 	}
 }
+
+func TestS219ComplexNonFiniteOperatorsAndTypedConstants(t *testing.T) {
+	source := `package main
+import (
+	"fmt"
+	"math"
+)
+type namedComplex complex128
+const c64 complex64 = 1 + 2i
+var calls int
+func once() complex128 {
+	calls++
+	return complex(math.Inf(1), math.NaN())
+}
+func main() {
+	fmt.Printf("%T %T %v %v\n", real(c64), imag(c64), real('a'), imag('a'))
+	q := once()
+	fmt.Println(real(-q), math.IsNaN(imag(+q)), q == q, q != q, calls)
+	n := namedComplex(q)
+	fmt.Println(math.IsInf(real(n), 0), math.IsNaN(imag(n)))
+}`
+	out, stderr, err := runGoSource(t, "s219-complex-boundaries", source)
+	if err != nil {
+		t.Fatalf("Runner: %v stdout=%q stderr=%q", err, out, stderr)
+	}
+	want := "float32 float32 97 0\n-Inf true false true 1\ntrue true\n"
+	if out != want || stderr != "" {
+		t.Fatalf("stdout=%q stderr=%q; want %q", out, stderr, want)
+	}
+}

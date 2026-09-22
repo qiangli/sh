@@ -89,9 +89,6 @@ func (r *Runner) bashPPEvalScalarExpr(expr syntax.BashPPExpr) (result bashPPScal
 			return bashPPScalar{}, fmt.Errorf("BASHPP-ECOMPLEX-UNSUPPORTED: complex values require Go source")
 		}
 		value, err := bashPPBasicScalar(x)
-		if r.bashPPGoSource && x.Kind == "CHAR" {
-			value.typ = "rune"
-		}
 		return value, err
 	case *syntax.BashPPCall:
 		if r.bashPPGoSource && bashPPRecoverExpr(x) && r.bashPPFuncs["recover"] == nil && (r.bashPPScope == nil || r.bashPPScope.lookup("recover") == nil) {
@@ -230,7 +227,7 @@ func (r *Runner) bashPPEvalScalarExpr(expr syntax.BashPPExpr) (result bashPPScal
 		// `IteratorFunc[int](it)`: a function value converted to a named
 		// function type keeps its handle and takes the name, which is what
 		// its methods are then resolved on.
-		if target := r.bashPPConvertTarget(x); target != nil && v.value.Kind() == constant.String {
+		if target := r.bashPPConvertTarget(x); target != nil && v.value != nil && v.value.Kind() == constant.String {
 			if _, ok := r.bashPPUnderlyingType(target).(*syntax.BashPPFuncType); ok {
 				if _, closure := r.bashPPClosure(constant.StringVal(v.value)); closure {
 					return bashPPScalar{value: v.value, typ: bashPPTypeText(target), runtime: true}, nil
@@ -794,6 +791,13 @@ func bashPPScalarStorageString(value bashPPScalar) string {
 }
 
 func (r *Runner) bashPPUnaryScalar(op token.Token, x bashPPScalar) (bashPPScalar, error) {
+	if r.bashPPGoSource && x.hasNonFiniteComplex && (op == token.ADD || op == token.SUB) {
+		value := x.nonFiniteComplex
+		if op == token.SUB {
+			value = -value
+		}
+		return bashPPNonFiniteComplexScalar(value, x.typ), nil
+	}
 	if r.bashPPGoSource && x.hasNonFinite && (op == token.ADD || op == token.SUB) {
 		value := x.nonFinite
 		if op == token.SUB {
@@ -906,6 +910,17 @@ func (r *Runner) bashPPBinaryScalar(op token.Token, left, right bashPPScalar) (b
 		leftBool, rightBool := constant.BoolVal(left.value), constant.BoolVal(right.value)
 		return r.bashPPTypedScalarResult(constant.MakeBool(op == token.LAND && leftBool && rightBool || op == token.LOR && (leftBool || rightBool)), resultType, left.runtime || right.runtime)
 	case token.EQL, token.NEQ, token.LSS, token.LEQ, token.GTR, token.GEQ:
+		if left.hasNonFiniteComplex || right.hasNonFiniteComplex {
+			lf, lok := bashPPScalarComplex128(left)
+			rf, rok := bashPPScalarComplex128(right)
+			if lok && rok && (op == token.EQL || op == token.NEQ) {
+				ok := lf == rf
+				if op == token.NEQ {
+					ok = !ok
+				}
+				return bashPPScalar{value: constant.MakeBool(ok)}, nil
+			}
+		}
 		if left.hasNonFinite || right.hasNonFinite {
 			lf, lok := bashPPScalarFloat64(left)
 			rf, rok := bashPPScalarFloat64(right)
@@ -1318,6 +1333,9 @@ func (r *Runner) bashPPComparableExpr(expr syntax.BashPPExpr) (bashPPComparableV
 		}
 		if value.hasNonFinite {
 			return bashPPComparableValue{value: value.nonFinite}, nil
+		}
+		if value.hasNonFiniteComplex {
+			return bashPPComparableValue{value: value.nonFiniteComplex}, nil
 		}
 		return bashPPComparableValue{value: bashPPScalarAny(value.value)}, nil
 	}
