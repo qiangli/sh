@@ -182,10 +182,20 @@ func nativeExecEnvMountsMode(m *pathconv.Mounts, env []string, windows bool) []s
 		}
 		out[i] = name + "=" + conv
 	}
-	if out == nil {
-		return env
+	res := env
+	if out != nil {
+		res = out
 	}
-	return out
+	// Exported names that collide under Windows' case folding cannot all
+	// survive os/exec's dedupe, so the full case-sensitive set rides along
+	// in [bashyCasedEnv] for a child shell to restore.
+	if marker := casedEnvMarker(res); marker != "" {
+		if out == nil {
+			res = append([]string(nil), env...)
+		}
+		res = setExecEnvValue(res, bashyCasedEnv, marker)
+	}
+	return res
 }
 
 // nativeExecPathListMounts converts each element of the shell's PATH to

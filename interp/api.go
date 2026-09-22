@@ -3275,6 +3275,14 @@ func (r *Runner) Reset() {
 	if r.writeEnv.Get(bashyParentPIDEnv).IsSet() {
 		r.delVar(bashyParentPIDEnv)
 	}
+	// A Windows parent whose exported names collide under case folding
+	// hands the full case-sensitive set through [bashyCasedEnv]; give
+	// those variables their exact names back, then hide the bridge like
+	// the handoffs above.
+	if vr := r.writeEnv.Get(bashyCasedEnv); vr.IsSet() {
+		r.adoptCasedEnv(vr.String())
+		r.delVar(bashyCasedEnv)
+	}
 	if !r.writeEnv.Get("HOME").IsSet() {
 		home, _ := os.UserHomeDir()
 		r.setVarString("HOME", shellPathFromOS(home))
