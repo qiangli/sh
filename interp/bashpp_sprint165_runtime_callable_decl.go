@@ -4,7 +4,6 @@
 package interp
 
 import (
-	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
 )
 
@@ -16,18 +15,42 @@ import (
 // call through the variable found no function and fell through to the
 // dependency dispatch (`unknown imported symbol or method: fn`). A
 // non-callable initializer reports false and keeps the scalar path.
-func (r *Runner) goSourceCallableDeclValue(expr syntax.BashPPExpr) (expand.Variable, bool) {
-	switch expr.(type) {
+func (r *Runner) goSourceCallableDeclValue(expr syntax.BashPPExpr) (*bashPPCell, bool) {
+	switch x := expr.(type) {
 	case *syntax.BashPPIdent, *syntax.BashPPSelectorExpr, *syntax.BashPPParenExpr:
+	case *syntax.BashPPCall:
+		fn, ok := r.goSourceFuncValueCallee(x)
+		if !ok {
+			return nil, false
+		}
+		results := bashppResultTypeExprs(fn.results())
+		if len(results) != 1 {
+			return nil, false
+		}
+		if _, ok := r.bashPPUnderlyingType(results[0]).(*syntax.BashPPFuncType); !ok {
+			return nil, false
+		}
+		cells, err := r.goSourceCallResultCells(x, fn)
+		if err != nil || len(cells) != 1 {
+			return nil, false
+		}
+		cell := cells[0]
+		if cell.declType == nil {
+			cell.declType = r.bashPPBindTypeExpr(results[0])
+		}
+		if r.bashPPFuncTypedCell(cell) {
+			return cell, true
+		}
+		return nil, false
 	default:
-		return expand.Variable{}, false
+		return nil, false
 	}
 	cell, handled, err := r.goSourceCallableCell(expr)
 	if !handled || err != nil || cell == nil {
-		return expand.Variable{}, false
+		return nil, false
 	}
 	if _, closure := r.bashPPClosure(cell.vr.Str); !closure {
-		return expand.Variable{}, false
+		return nil, false
 	}
-	return cell.vr, true
+	return cell, true
 }

@@ -271,6 +271,7 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 	// The visible scalar stays in the ordinary shell variable below; the named
 	// type and pointer bits are attached to its lexical cell after declaration.
 	vr := r.bashPPValue(ctx, d.Init)
+	var callableDeclCell *bashPPCell
 	if lit, ok := d.InitExpr.(*syntax.BashPPFuncLit); ok {
 		_, vr = r.bashPPMakeClosure(lit)
 	} else if r.bashPPGoSource && d.Site == syntax.StartVar && d.InitExpr != nil {
@@ -278,7 +279,8 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 		// value spelled by name binds the same closure `fn := f` binds; see
 		// bashpp_sprint165_runtime_panic.go.
 		if callable, ok := r.goSourceCallableDeclValue(d.InitExpr); ok {
-			vr = callable
+			callableDeclCell = callable
+			vr = callable.vr
 		}
 	}
 	if typed, handled, err := r.bashPPTypedScalarDeclValue(d); handled {
@@ -403,6 +405,12 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 		r.errf("%s%v\n", r.bashErrPrefix(d.Pos()), err)
 		r.exit = exitStatus{code: 2}
 		return
+	}
+	if callableDeclCell != nil {
+		target := r.bashPPScope.lookup(name)
+		exported := target.vr.Exported
+		*target = *bashPPCopyAssignmentCell(callableDeclCell)
+		target.vr.Exported = exported
 	}
 	if r.bashPPGoSource && d.Site == syntax.StartConst && d.InitExpr != nil {
 		if value, err := r.bashPPEvalScalarExpr(d.InitExpr); err == nil {
