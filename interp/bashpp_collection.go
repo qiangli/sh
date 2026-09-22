@@ -711,6 +711,13 @@ func (r *Runner) bashPPEvalElement(expr syntax.BashPPExpr, expected syntax.BashP
 		if err != nil {
 			return nil, nil, err
 		}
+		// A call returning a function value — `[]func(){Assert[int]()}`,
+		// `[]RO{Bad()}` — transports its closure handle in the result cell's
+		// scalar slot. Bind it to the func-typed element before the typed
+		// check would reject the handle as a plain scalar.
+		if stored, claimed, err := r.bashPPCollectionFuncElement(value, expected); claimed {
+			return stored, nil, err
+		}
 		if bridged, bridgedMeta, claimed, err := r.bashPPCollectionBridgeValue(value, expected); claimed {
 			return bridged, bridgedMeta, err
 		}
@@ -840,19 +847,14 @@ func (r *Runner) bashPPEvalElement(expr syntax.BashPPExpr, expected syntax.BashP
 		if err != nil {
 			return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-ELEMENT: %v", err)
 		}
-		signature, ok := r.bashPPUnderlyingType(expected).(*syntax.BashPPFuncType)
-		if !ok {
+		if _, ok := r.bashPPUnderlyingType(expected).(*syntax.BashPPFuncType); !ok {
 			return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-ELEMENT: cannot use function as %s", bashPPTypeText(expected))
 		}
-		candidate, ok := r.bashPPClosure(cell.vr.Str)
-		if !ok {
+		stored, claimed, err := r.bashPPCollectionFuncElement(cell.vr.Str, expected)
+		if !claimed {
 			return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-ELEMENT: function value is unavailable")
 		}
-		bound, status := r.bashPPContextualFuncValue(candidate, signature)
-		if status != bashPPBindOK {
-			return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-ELEMENT: function does not match %s", bashPPTypeText(expected))
-		}
-		return r.bashPPStoreFunc(bound).Str, nil, nil
+		return stored, nil, err
 	}
 	scalar, err := r.bashPPEvalScalarExpr(expr)
 	if err != nil {
@@ -864,6 +866,51 @@ func (r *Runner) bashPPEvalElement(expr syntax.BashPPExpr, expected syntax.BashP
 		return nil, nil, err
 	}
 	return value, nil, nil
+}
+
+// bashPPCollectionFuncElement claims a closure handle for a func-typed
+// collection element. The value is the handle string a function value travels
+// as — the scalar slot of a call's result cell, an appended parameter's cell,
+// a named callable — and the element type's underlying signature is what it
+// must satisfy. It reports claimed=false when either side is not a function,
+// leaving the scalar paths to describe the mismatch.
+//
+// A closure that is already instantiated — `Assert[int]()` returned
+// `assert[To]` at To=int — carries every type argument it needs and is an
+// ordinary function value; its substituted signature is compared directly
+// rather than re-inferred from a context that mentions no parameter. A
+// still-generic declaration is instantiated from the element type as it is
+// for a func-typed parameter. The original handle is kept when binding did
+// not produce a new closure, so appending a function value does not grow the
+// closure table.
+func (r *Runner) bashPPCollectionFuncElement(value any, expected syntax.BashPPTypeExpr) (any, bool, error) {
+	signature, ok := r.bashPPUnderlyingType(expected).(*syntax.BashPPFuncType)
+	if !ok {
+		return nil, false, nil
+	}
+	handle, ok := value.(string)
+	if !ok {
+		return nil, false, nil
+	}
+	candidate, ok := r.bashPPClosure(handle)
+	if !ok {
+		return nil, false, nil
+	}
+	mismatch := fmt.Errorf("BASHPP-ECOLLECTION-ELEMENT: function does not match %s", bashPPTypeText(expected))
+	if bashPPFullyInstantiated(candidate, candidate.typeParams()) {
+		if !bashPPSignatureMatches(candidate.params(), candidate.results(), signature) {
+			return nil, true, mismatch
+		}
+		return handle, true, nil
+	}
+	bound, status := r.bashPPContextualFuncValue(candidate, signature)
+	if status != bashPPBindOK {
+		return nil, true, mismatch
+	}
+	if bound == candidate {
+		return handle, true, nil
+	}
+	return r.bashPPStoreFunc(bound).Str, true, nil
 }
 
 // bashPPContextualCollectionValue restores the destination-driven conversion
