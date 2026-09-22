@@ -95,6 +95,59 @@ func main() {
 		qt.Commentf("stderr: %s", stderr))
 }
 
+func TestS219PointerNestedSliceViewLengthCapacity(t *testing.T) {
+	src := `package main
+func main() {
+	b := []byte("abcdef")
+	v := b[:4:4][:]
+	println(len(v), cap(v))
+	p := (*[4]byte)(b[:4:4][:])
+	p[3] = 'X'
+	println(string(b))
+}`
+	out, stderr, err := runGoSource(t, "s219-pointer-nested-slice-view", src)
+	qt.Assert(t, qt.IsNil(err), qt.Commentf("stderr: %s", stderr))
+	qt.Assert(t, qt.Equals(out, ""))
+	qt.Assert(t, qt.Equals(stderr, "4 4\nabcXef\n"))
+}
+
+func TestS219PointerSliceBoundsCaptureOriginalBacking(t *testing.T) {
+	src := `package main
+var b []byte
+var original []byte
+func high() int {
+	b = []byte("uvwxyz")
+	return 4
+}
+func main() {
+	b = []byte("abcdef")
+	original = b
+	p := (*[4]byte)(b[:high()])
+	p[1] = 'X'
+	println(string(original), string(b))
+}`
+	out, stderr, err := runGoSource(t, "s219-pointer-bounds-rebind", src)
+	qt.Assert(t, qt.IsNil(err), qt.Commentf("stderr: %s", stderr))
+	qt.Assert(t, qt.Equals(out, ""))
+	qt.Assert(t, qt.Equals(stderr, "aXcdef uvwxyz\n"))
+}
+
+func TestS219PointerSliceConversionSurvivesRebind(t *testing.T) {
+	src := `package main
+func main() {
+	b := []byte("abcdef")
+	original := b
+	p := (*[4]byte)(b[:4])
+	b = []byte("uvwxyz")
+	p[2] = 'X'
+	println(string(original), string(b))
+}`
+	out, stderr, err := runGoSource(t, "s219-pointer-post-conversion-rebind", src)
+	qt.Assert(t, qt.IsNil(err), qt.Commentf("stderr: %s", stderr))
+	qt.Assert(t, qt.Equals(out, ""))
+	qt.Assert(t, qt.Equals(stderr, "abXdef uvwxyz\n"))
+}
+
 // unsafe.Pointer reinterpretation is intentionally outside this mechanism.
 // Keep the boundary loud instead of accidentally treating its integer-like
 // carrier as interpreter-owned typed storage.
