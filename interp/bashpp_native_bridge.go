@@ -816,6 +816,20 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 			return "", err
 		}
 		localTypes[i].Decl = mapped
+		if localTypes[i].GenericDecl != "" {
+			mapped, err = bashPPNativeDeclImports(localTypes[i].GenericDecl, importAliases)
+			if err != nil {
+				return "", err
+			}
+			localTypes[i].GenericDecl = mapped
+		}
+		if localTypes[i].PublicType != "" {
+			mapped, err = bashPPNativeTypeImports(localTypes[i].PublicType, importAliases)
+			if err != nil {
+				return "", err
+			}
+			localTypes[i].PublicType = mapped
+		}
 		// Mirrored signatures name imported types the same way the original
 		// program did; the helper knows them only by its own generated aliases.
 		methods := append([]bashPPLocalMethod(nil), localTypes[i].Methods...)

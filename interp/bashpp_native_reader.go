@@ -117,3 +117,26 @@ func bashPPNativeTypeImports(decl string, aliases map[string]string) (string, er
 	}
 	return out.String(), nil
 }
+
+func bashPPNativeDeclImports(decl string, aliases map[string]string) (string, error) {
+	file, err := parser.ParseFile(token.NewFileSet(), "generated.go", "package main\n"+decl, 0)
+	if err != nil {
+		return "", err
+	}
+	ast.Inspect(file, func(node ast.Node) bool {
+		if sel, ok := node.(*ast.SelectorExpr); ok {
+			if id, ok := sel.X.(*ast.Ident); ok && aliases[id.Name] != "" {
+				id.Name = aliases[id.Name]
+			}
+		}
+		return true
+	})
+	var out bytes.Buffer
+	for _, item := range file.Decls {
+		if err := format.Node(&out, token.NewFileSet(), item); err != nil {
+			return "", err
+		}
+		out.WriteByte('\n')
+	}
+	return out.String(), nil
+}

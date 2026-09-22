@@ -17,6 +17,14 @@ import (
 
 // Sprint: #243; Story: #672; Story-ID: fa5b3cf5a929
 
+func TestS243OriginalIssue49547GenericTypeFormatting(t *testing.T) {
+	source, err := os.ReadFile(filepath.Join(runtime.GOROOT(), "test", "typeparam", "issue49547.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	typedSendThreeModes(t, string(source))
+}
+
 // Two local generic declarations with the same source name are distinct
 // dynamic types. Their public reflection spelling remains the declared name.
 func TestS243LocalGenericInterfaceIdentity(t *testing.T) {

@@ -49,8 +49,12 @@ type bashPPLocalMethod struct {
 // Decl is the generated Go type body; it is structural, so the dependency's
 // reflect view has exactly the original field names and element types.
 type bashPPLocalType struct {
-	Identity       *syntax.BashPPTypeIdentity
-	Name           string
+	Identity *syntax.BashPPTypeIdentity
+	Name     string
+	// PublicType is the real helper type expression for a package-level
+	// generic instantiation. Name remains its private registry key.
+	PublicType     string
+	GenericDecl    string
 	Alias          bool
 	WireType       string
 	Decl           string
@@ -136,6 +140,12 @@ func (r *Runner) bashPPBuildLocalTypeDescriptors() ([]bashPPLocalType, map[strin
 	instantiations := map[string]*syntax.BashPPNamedType{}
 	var spelled []*syntax.BashPPNamedType
 	var anonymous []syntax.BashPPTypeExpr
+	packageGenerics := map[string]*syntax.BashPPDecl{}
+	for _, stmt := range r.bashPPGoSourceFile.Stmts {
+		if d, ok := stmt.Cmd.(*syntax.BashPPDecl); ok && d.Site == syntax.StartTypeDecl && d.Name != nil && len(d.TypeParams) > 0 && !d.Alias {
+			packageGenerics[d.Name.Value] = d
+		}
+	}
 	syntax.Walk(r.bashPPGoSourceFile, func(node syntax.Node) bool {
 		if d, ok := node.(*syntax.BashPPDecl); ok && d.Site == syntax.StartTypeDecl && d.Name.Value == "_" {
 			// A blank declaration introduces no type name to register. Keep
@@ -345,6 +355,7 @@ func (r *Runner) bashPPBuildLocalTypeDescriptors() ([]bashPPLocalType, map[strin
 		wires = append(wires, wire)
 	}
 	sort.Strings(wires)
+	emittedGenerics := map[string]bool{}
 	for _, wire := range wires {
 		named := instantiations[wire]
 		base := generics[named.Name.Value]
@@ -412,6 +423,20 @@ func (r *Runner) bashPPBuildLocalTypeDescriptors() ([]bashPPLocalType, map[strin
 		// interpreter transports to a dependency helper. Mark it as an alias so
 		// it cannot overwrite the target's reflection identity.
 		materialised := bashPPLocalType{Name: name, Identity: identity, Alias: base.Alias, Decl: decl, WireType: wire, Callback: named.Name.Value, Methods: mirrored, refs: local.refs}
+		// A package-level defined generic with no mirrored methods can retain its
+		// actual declaration in the helper. The generated name is then only an
+		// alias and registry key, so fmt and reflect see F[Arg], never the key.
+		// Generic aliases deliberately retain the structural path repaired by
+		// 15455fc6; local generics retain their lexical-identity materialisation.
+		if !base.Alias && packageGenerics[named.Name.Value] == base && len(methods[named.Name.Value]) == 0 && !bashPPHelperReserved[named.Name.Value] {
+			if genericDecl, publicType, ok := local.genericDeclaration(base, named); ok {
+				materialised.PublicType = publicType
+				if !emittedGenerics[named.Name.Value] {
+					materialised.GenericDecl = genericDecl
+					emittedGenerics[named.Name.Value] = true
+				}
+			}
+		}
 		for _, method := range methods[named.Name.Value] {
 			seen := false
 			for _, m := range materialised.Methods {
@@ -492,6 +517,57 @@ func (r *Runner) bashPPBuildLocalTypeDescriptors() ([]bashPPLocalType, map[strin
 		out[i].Methods = methods
 	}
 	return out, scopedNames
+}
+
+// genericDeclaration renders a package-level generic declaration and one
+// concrete instantiation. It succeeds only when the constraints, body, and
+// arguments are all expressible exactly in the native helper.
+func (l *bashPPLocalTypeSet) genericDeclaration(base *syntax.BashPPDecl, instance *syntax.BashPPNamedType) (string, string, bool) {
+	if base == nil || base.Name == nil || len(base.TypeParams) == 0 || len(instance.TypeArgs) == 0 {
+		return "", "", false
+	}
+	bindings := make(map[string]string)
+	var groups []string
+	for _, group := range base.TypeParams {
+		if group == nil || len(group.Names) == 0 || group.Constraint == nil {
+			return "", "", false
+		}
+		for _, name := range group.Names {
+			bindings[name.Value] = name.Value
+		}
+	}
+	oldSubst := l.subst
+	l.subst = bindings
+	defer func() { l.subst = oldSubst }()
+	for _, group := range base.TypeParams {
+		constraint, ok := l.source(group.Constraint, 0)
+		if !ok {
+			return "", "", false
+		}
+		names := make([]string, len(group.Names))
+		for i, name := range group.Names {
+			names[i] = name.Value
+		}
+		groups = append(groups, strings.Join(names, ", ")+" "+constraint)
+	}
+	body, ok := l.source(base.DeclTypeExpr, 0)
+	if !ok {
+		return "", "", false
+	}
+	l.subst = oldSubst
+	args := make([]string, len(instance.TypeArgs))
+	for i, arg := range instance.TypeArgs {
+		rendered, ok := l.source(arg.ArgType, 0)
+		if !ok {
+			return "", "", false
+		}
+		args[i] = rendered
+	}
+	if len(args) != len(bindings) {
+		return "", "", false
+	}
+	name := base.Name.Value
+	return "type " + name + "[" + strings.Join(groups, ", ") + "] " + body + "\n", name + "[" + strings.Join(args, ", ") + "]", true
 }
 
 // bashPPLocalTypeSet is the original program's own type namespace as the
@@ -946,6 +1022,9 @@ func (l *bashPPLocalTypeSet) signature(spec *syntax.BashPPMethodSpec, depth int)
 // protocol code; the original body stays interpreted on the other side of the
 // callback.
 func bashPPLocalTypeGo(local bashPPLocalType) string {
+	if local.PublicType != "" {
+		return local.GenericDecl + "type " + local.Name + " = " + local.PublicType + "\n"
+	}
 	var b strings.Builder
 	alias := ""
 	if local.Alias {
@@ -1062,7 +1141,7 @@ func (r *Runner) bashPPBridgeResolvableArrayType(typ syntax.BashPPTypeExpr, coll
 func bashPPLocalTypeIdentity(locals []bashPPLocalType) string {
 	var b strings.Builder
 	for _, local := range locals {
-		fmt.Fprintf(&b, "%s|%s|%t|%s|%s|", local.Name, local.Decl, local.Alias, local.WireType, local.Callback)
+		fmt.Fprintf(&b, "%s|%s|%s|%s|%t|%s|%s|", local.Name, local.PublicType, local.GenericDecl, local.Decl, local.Alias, local.WireType, local.Callback)
 		fmt.Fprintf(&b, "%v|", local.Identity)
 		for _, method := range local.Methods {
 			fmt.Fprintf(&b, "%s:%t:%t:%t:%v:%v,", method.Name, method.Pointer, method.ReaderLocalBuffer, method.General, method.Params, method.Results)
