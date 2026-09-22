@@ -43,16 +43,17 @@ func (r *Runner) bashPPComplexShortDecl(d *syntax.BashPPShortDecl) bool {
 		return true
 	}
 	if v.typ == "" {
-		switch v.value.Kind() {
+		switch v.kind() {
 		case constant.Complex:
 			v.typ = "complex128"
 		case constant.Float:
 			v.typ = "float64"
 		}
 	}
-	r.bashPPDeclareName(d.Lhs[0].Value, expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarString(v.value)})
+	r.bashPPDeclareName(d.Lhs[0].Value, expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarStorageString(v)})
 	cell := r.bashPPScope.lookup(d.Lhs[0].Value)
-	cell.scalarKind = v.value.Kind()
+	cell.scalarKind = v.kind()
+	cell.nonFiniteComplex, cell.hasNonFiniteComplex = v.nonFiniteComplex, v.hasNonFiniteComplex
 	cell.typeName = v.typ
 	return true
 }
@@ -73,7 +74,7 @@ func bashPPScalarComplex128(v bashPPScalar) (complex128, bool) {
 }
 
 func bashPPNonFiniteComplexScalar(value complex128, typ string) bashPPScalar {
-	return bashPPScalar{value: bashPPComplexConstant(0), typ: typ, runtime: true, nonFiniteComplex: value, hasNonFiniteComplex: true}
+	return bashPPScalar{typ: typ, runtime: true, nonFiniteComplex: value, hasNonFiniteComplex: true}
 }
 
 func bashPPNonFiniteComplexText(text string) (complex128, bool) {
@@ -88,7 +89,7 @@ func bashPPNonFiniteComplexText(text string) (complex128, bool) {
 // constant.BinaryOp for runtime multiplication would incorrectly keep exact
 // products until the final addition and can change cancellation results.
 func (r *Runner) bashPPComplexRuntimeOp(op token.Token, left, right bashPPScalar, typ string) (bashPPScalar, bool, error) {
-	if !r.bashPPGoSource || !(left.runtime || right.runtime) || (left.value.Kind() != constant.Complex && right.value.Kind() != constant.Complex) {
+	if !r.bashPPGoSource || !(left.runtime || right.runtime) || (left.kind() != constant.Complex && right.kind() != constant.Complex) {
 		return bashPPScalar{}, false, nil
 	}
 	if op != token.ADD && op != token.SUB && op != token.MUL && op != token.QUO {
@@ -230,11 +231,14 @@ func (r *Runner) bashPPComplexBuiltinValues(name string, args []bashPPScalar) (b
 		return result, err
 	}
 	a := args[0]
-	if a.value.Kind() != constant.Complex && !a.hasNonFiniteComplex {
+	// The spec treats every untyped numeric constant as untyped complex for
+	// real and imag. A typed non-complex operand remains invalid.
+	if !a.hasNonFiniteComplex && (a.value.Kind() != constant.Complex &&
+		(a.runtime || a.value.Kind() != constant.Int && a.value.Kind() != constant.Float)) {
 		return bashPPScalar{}, fmt.Errorf("%s requires complex argument", name)
 	}
 	typ := ""
-	if a.typ != "" {
+	if a.typ != "" && a.runtime {
 		underlying, ok := r.bashPPUnderlyingType(&syntax.BashPPNamedType{Name: &syntax.Lit{Value: a.typ}}).(*syntax.BashPPNamedType)
 		if !ok {
 			return bashPPScalar{}, fmt.Errorf("%s requires complex argument", name)

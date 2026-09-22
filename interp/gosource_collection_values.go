@@ -297,6 +297,12 @@ func (r *Runner) goSourceCollectionReadCell(expr syntax.BashPPExpr, value any, m
 	if meta == nil {
 		switch v := value.(type) {
 		case string:
+			if special, ok := bashPPNonFiniteComplexText(v); ok && r.bashPPStringCarriesComplex(cell.declType, v) {
+				cell.nonFiniteComplex, cell.hasNonFiniteComplex = special, true
+				cell.typeName = bashPPTypeText(cell.declType)
+				cell.scalarKind = constant.Complex
+				break
+			}
 			// A large unsigned element stored as its decimal spelling keeps the
 			// integer identity of its declared type: leave the scalar kind
 			// unset so bashPPScalarFromCell reconstructs it as the integer it

@@ -320,14 +320,14 @@ func (value bashPPBridgeValue) scalar() (bashPPScalar, error) {
 }
 func bridgeScalar(value bashPPScalar) (bashPPBridgeValue, error) {
 	out := bashPPBridgeValue{Type: value.typ}
-	if value.value == nil {
-		return out, fmt.Errorf("gosource: absent scalar value")
-	}
 	if value.hasNonFinite {
 		return bashPPBridgeValue{Kind: "float", Type: value.typ, Text: strconv.FormatFloat(value.nonFinite, 'g', -1, 64)}, nil
 	}
 	if value.hasNonFiniteComplex {
 		return bashPPBridgeValue{Kind: "complex", Type: value.typ, Text: strconv.FormatComplex(value.nonFiniteComplex, 'g', -1, 128)}, nil
+	}
+	if value.value == nil {
+		return out, fmt.Errorf("gosource: absent scalar value")
 	}
 	switch value.value.Kind() {
 	case constant.String:
@@ -1023,7 +1023,7 @@ func (r *Runner) bashPPBindNativeValue(name string, value bashPPBridgeValue) {
 	if err == nil {
 		r.bashPPDeclareName(name, expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarStorageString(scalar)})
 		cell := r.bashPPScope.lookup(name)
-		cell.scalarKind = scalar.value.Kind()
+		cell.scalarKind = scalar.kind()
 		cell.negativeZero = scalar.negativeZero
 		cell.nonFinite, cell.hasNonFinite = scalar.nonFinite, scalar.hasNonFinite
 		cell.nonFiniteComplex, cell.hasNonFiniteComplex = scalar.nonFiniteComplex, scalar.hasNonFiniteComplex

@@ -30,6 +30,16 @@ type bashPPScalar struct {
 	hasNonFiniteComplex bool
 }
 
+func (v bashPPScalar) kind() constant.Kind {
+	if v.hasNonFiniteComplex {
+		return constant.Complex
+	}
+	if v.value == nil {
+		return constant.Unknown
+	}
+	return v.value.Kind()
+}
+
 // bashPPEvalScalarExpr consumes syntax's typed tree. Parsing belongs solely
 // to syntax; this package evaluates the tree it was handed.
 func (r *Runner) bashPPEvalScalarExpr(expr syntax.BashPPExpr) (result bashPPScalar, failure error) {
@@ -60,7 +70,11 @@ func (r *Runner) bashPPEvalScalarExpr(expr syntax.BashPPExpr) (result bashPPScal
 	if conversion, ok := expr.(*syntax.BashPPConvertExpr); ok && r.bashPPGoSource {
 		if target := r.bashPPConvertTarget(conversion); target != nil {
 			if named, ok := target.(*syntax.BashPPNamedType); ok && named.Name != nil {
-				_, localConversion = r.bashPPTypes[named.Name.Value]
+				if _, local := r.bashPPTypes[named.Name.Value]; local {
+					underlying, _ := r.bashPPUnderlyingType(target).(*syntax.BashPPNamedType)
+					localConversion = underlying != nil && underlying.Name != nil &&
+						(underlying.Name.Value == "complex64" || underlying.Name.Value == "complex128")
+				}
 			}
 		}
 	}
@@ -425,6 +439,8 @@ func (r *Runner) bashPPExprScalarType(expr syntax.BashPPExpr) syntax.BashPPTypeE
 		if x.Kind == "STRING" {
 			return &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "string"}}
 		}
+	case *syntax.BashPPCompositeLit:
+		return x.LitType
 	case *syntax.BashPPAddressExpr:
 		// `&v` is a pointer to v's type; a later `*&v` deref must recover v's
 		// declared type, not fall back to its predeclared base. Without this the
@@ -520,6 +536,18 @@ func (r *Runner) bashPPScalarFromCell(cell *bashPPCell) bashPPScalar {
 	}
 	text := cell.vr.String()
 	value := bashPPScalar{}
+	if r.bashPPGoSource && cell.scalarKind != constant.String {
+		typ := cell.typeName
+		if typ == "" {
+			typ = bashPPTypeText(cell.declType)
+		}
+		if underlying, ok := r.bashPPUnderlyingType(&syntax.BashPPNamedType{Name: &syntax.Lit{Value: typ}}).(*syntax.BashPPNamedType); ok &&
+			underlying.Name != nil && (underlying.Name.Value == "complex64" || underlying.Name.Value == "complex128") {
+			if special, ok := bashPPNonFiniteComplexText(text); ok {
+				return bashPPNonFiniteComplexScalar(special, typ)
+			}
+		}
+	}
 	// A float struct field or element written from a NaN or infinity keeps
 	// only the storage spelling; the cell flag above is set for variables.
 	if r.bashPPGoSource && cell.scalarKind != constant.String {
@@ -1925,7 +1953,7 @@ func (r *Runner) bashPPScalarFuncCall(call *syntax.BashPPCall) (bashPPScalar, er
 		return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-CALL: scalar result metadata missing")
 	}
 	result := r.bashPPScalarFromCell(r.bashPPResultCells[0])
-	if result.value == nil || result.value.Kind() == constant.Unknown {
+	if result.kind() == constant.Unknown {
 		return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-OPERAND: call result is not a scalar")
 	}
 	return result, nil
