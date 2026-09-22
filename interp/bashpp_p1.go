@@ -371,6 +371,9 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 			}
 			if meta != nil {
 				vr, valueMeta = expand.NewObject(value), meta
+				if carrier, ok := r.bashPPGoSourceCollectionCarrier(value, meta); ok {
+					vr = carrier
+				}
 			}
 		} else if isStruct {
 			value, meta := r.bashPPZeroValue(d.DeclTypeExpr)
@@ -381,6 +384,9 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 				meta.typ = d.DeclTypeExpr
 			}
 			vr, valueMeta = expand.NewObject(value), meta
+			if carrier, ok := r.bashPPGoSourceCollectionCarrier(value, meta); ok {
+				vr = carrier
+			}
 		}
 	}
 	// A declaration which shadows an exported shell variable inherits the
@@ -1668,6 +1674,15 @@ func (r *Runner) bashPPValidateReusedShortValue(target, candidate *bashPPCell) e
 		actual = candidate.valueMeta.typ
 	}
 	if actual != nil {
+		if r.bashPPInferredArrayAssignable(candidate.valueMeta, target.declType) {
+			// Assignment gives an inferred literal the destination's concrete
+			// array identity. Keep the payload metadata in step with the cell;
+			// later indexing and bridge calls must never observe [...]T.
+			candidate.valueMeta.kind = "array"
+			candidate.valueMeta.typ = target.declType
+			candidate.declType = target.declType
+			return nil
+		}
 		if !r.bashPPTypeAssignable(actual, target.declType) {
 			return fmt.Errorf("BASHPP-EASSIGN-TYPE: cannot assign %s to %s", bashPPTypeText(actual), bashPPTypeText(target.declType))
 		}

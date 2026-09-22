@@ -1420,6 +1420,19 @@ func bashPPNilComparableZero(value any, meta *bashPPCollectionMeta) bool {
 	if value == nil {
 		return true
 	}
+	// Collection zero values use typed nil payloads so expand.Object can keep
+	// them distinct from an absent/invalid object. Recover their nilness here
+	// without conflating an allocated empty slice or map with nil.
+	if meta != nil {
+		switch meta.kind {
+		case "slice":
+			sequence, ok := value.([]any)
+			return ok && sequence == nil
+		case "map":
+			mapping, ok := value.(map[string]any)
+			return ok && mapping == nil
+		}
+	}
 	if native, ok := value.(*bashPPBridgeValue); ok && native != nil && native.Kind == "nil" {
 		return true
 	}
