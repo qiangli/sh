@@ -20,12 +20,19 @@ func (r *Runner) goSourceMakeChannelCell(declared syntax.BashPPTypeExpr, expr sy
 	if err != nil {
 		return nil, err
 	}
+	// The runtime's own refusal of the storage actually allocated must unwind
+	// as the recoverable runtime panic makechan reports in the original
+	// program, never as a host panic out of the interpreter's own allocation.
+	channel, err := newBashPPChannelChecked(bashPPTypeText(typ.Element), capacity)
+	if err != nil {
+		r.bashPPRaise(err.Error())
+		return nil, errBashPPScalarInterrupted
+	}
 	group := r.bashPPConcurrency(r.ectx)
 	handle, err := newBashPPChannelCapability()
 	if err != nil {
 		return nil, fmt.Errorf("make(chan): cannot allocate capability: %w", err)
 	}
-	channel := newBashPPChannel(bashPPTypeText(typ.Element), capacity)
 	channel.element = typ.Element
 	group.mu.Lock()
 	group.chans[handle] = channel

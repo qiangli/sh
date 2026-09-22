@@ -44,6 +44,25 @@ func newBashPPChannel(elem string, capacity int) *bashPPChannel {
 	return c
 }
 
+// newBashPPChannelChecked turns the Go runtime's own refusal of the channel
+// storage this interpreter allocates into an error, so the gosource
+// allocation path can raise the same recoverable runtime panic the original
+// program sees. Only the runtime's makechan refusal message is translated;
+// anything else the allocation panics with is not ours to interpret and keeps
+// panicking.
+func newBashPPChannelChecked(elem string, capacity int) (c *bashPPChannel, err error) {
+	defer func() {
+		if failure := recover(); failure != nil {
+			if message := fmt.Sprint(failure); message == "makechan: size out of range" {
+				err = errors.New(message)
+				return
+			}
+			panic(failure)
+		}
+	}()
+	return newBashPPChannel(elem, capacity), nil
+}
+
 func (c *bashPPChannel) beginSend() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()

@@ -116,9 +116,9 @@ func (r *Runner) bashPPReportNilDereference() {
 //
 //   - The elements are read through the pointer at each iteration rather
 //     than from a copy, since ranging a pointer never copies the array.
-//   - With at most one iteration variable, len(*p) is a constant and the
-//     spec says the range expression is not evaluated at all, so a nil p
-//     ranges its indices without faulting. With two, *p is evaluated and a
+//   - With no non-blank value iteration variable, len(*p) is a constant and
+//     the spec says the range expression is not evaluated at all, so a nil p
+//     ranges its indices without faulting. With one, *p is evaluated and a
 //     nil p is the nil dereference it always was.
 //
 // It reports whether the operand was such a pointer; anything else is left
@@ -137,7 +137,12 @@ func (r *Runner) goSourceRangePointerArray(ctx context.Context, rng *syntax.Bash
 	}
 	ptr, _ := value.(*bashPPPointer)
 	if ptr == nil {
-		if len(rng.Names) > 1 {
+		// A second iteration variable that is not blank demands the elements,
+		// so a nil p is the dereference fault it always was. With the value
+		// blank (or absent) no element is ever read: len(*p) is a constant and
+		// the spec says the range expression is not evaluated, so the loop
+		// still walks the array's fixed index length over a nil pointer.
+		if len(rng.Names) > 1 && rng.Names[1].Value != "_" {
 			r.goSourceRuntimeFault(errBashPPNilDereference)
 			return true
 		}
