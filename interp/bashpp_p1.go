@@ -549,6 +549,9 @@ func (r *Runner) bashPPConstantScalarExpr(expr syntax.BashPPExpr, targetBase str
 	case *syntax.BashPPConvertExpr:
 		return r.bashPPConstantScalarExpr(x.X, targetBase)
 	case *syntax.BashPPSelectorExpr:
+		if !r.bashPPGoSource {
+			return false
+		}
 		ident, ok := x.X.(*syntax.BashPPIdent)
 		if !ok {
 			return false
