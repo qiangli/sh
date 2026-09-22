@@ -191,6 +191,12 @@ func (r *Runner) bashPPBuiltinInt(name string, arg bashPPBuiltinArg) (int, bool)
 }
 
 func (r *Runner) bashPPBuiltinElement(arg bashPPBuiltinArg, expected syntax.BashPPTypeExpr) (any, *bashPPCollectionMeta, bool) {
+	// append/copy are evaluated after their collection operand has established
+	// the element type, but a generic body's syntax can still spell that type as
+	// its parameter. Bind the destination here and keep arg.cell/arg.meta as the
+	// source of truth; converting the argument text would lose map-range keys
+	// and structured or reference identity.
+	expected = r.bashPPBindTypeExpr(expected)
 	// append into an interface slice performs an interface assignment, not a
 	// scalar conversion. Keep the source cell so the interface element retains
 	// its dynamic type and callable/channel/structured side channels for later

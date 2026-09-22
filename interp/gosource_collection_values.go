@@ -112,7 +112,7 @@ func (r *Runner) goSourceBuiltinTupleArgs(call *syntax.BashPPCall) ([]bashPPBuil
 	return args, true, nil
 }
 
-func (r *Runner) goSourceCollectionCallValue(expr syntax.BashPPExpr) (any, *bashPPCollectionMeta, bool, error) {
+func (r *Runner) goSourceCollectionCallValue(expr syntax.BashPPExpr, expected syntax.BashPPTypeExpr) (any, *bashPPCollectionMeta, bool, error) {
 	if !r.bashPPGoSource {
 		return nil, nil, false, nil
 	}
@@ -132,7 +132,13 @@ func (r *Runner) goSourceCollectionCallValue(expr syntax.BashPPExpr) (any, *bash
 	if cell.vr.Kind == expand.Object {
 		return cell.vr.Obj, bashPPCellMeta(cell), true, nil
 	}
-	return bashPPScalarAny(r.bashPPScalarFromCell(cell).value), nil, true, nil
+	// Use the call result cell's scalar carrier, then apply the collection's
+	// concrete destination. A generic zero result can have textual shell
+	// storage ("0") even though its declared result is the active T; treating
+	// that text as a string loses the result cell's numeric value.
+	scalar := r.bashPPScalarFromCell(cell)
+	value := bashPPBuiltinExactScalarValue(cell.vr.Str, scalar)
+	return r.bashPPContextualCollectionValue(value, expected), nil, true, nil
 }
 
 func (r *Runner) goSourceMapCommaDecl(d *syntax.BashPPShortDecl) bool {
