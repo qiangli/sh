@@ -1296,6 +1296,22 @@ func bashPPCompareValuesWithRunner(r *Runner, left any, leftMeta *bashPPCollecti
 		}
 	}
 	if leftMeta == nil && rightMeta == nil {
+		// The Go checker already established compatible operand types. A
+		// contextual integer constant and a float returned by a call can
+		// arrive here in different scalar storage types; compare their
+		// numeric values without evaluating either expression again.
+		if r != nil && r.bashPPGoSource {
+			switch l := left.(type) {
+			case float64:
+				if n, ok := right.(int); ok {
+					return l == float64(n), nil
+				}
+			case int:
+				if n, ok := right.(float64); ok {
+					return float64(l) == n, nil
+				}
+			}
+		}
 		return bashPPCompareScalarAny(left, right)
 	}
 	if bashPPPointerComparable(leftMeta) || bashPPPointerComparable(rightMeta) {
