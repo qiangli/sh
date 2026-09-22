@@ -545,12 +545,15 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 			for i := range reply.Values {
 				if reply.Values[i].Kind == "handle" {
 					reply.Values[i].Session = s.id
+					if reply.Values[i].Origin != 0 && reply.Values[i].Function {
+						reply.Values[i].Callbacks = true
+					}
 					// Only a result of a request that actually CARRIED an
 					// original callback may retain one. A request merely
 					// parked as a callback server for the session — every
 					// request once a retained handler is registered — hands
 					// its callbacks to nothing and marks nothing.
-					if requestHasCallbacks(req, q) && !synchronousFunctionCallback(req, q) && !bashPPTypeDescriptorResult(req, q) {
+					if requestHasCallbacks(req, q) && !synchronousFunctionCallback(req, q) && !bashPPTypeDescriptorResult(req, q) && !reflectedMethodValueOf(req, q) {
 						reply.Values[i].Callbacks = true
 					}
 				}

@@ -831,7 +831,7 @@ func bashPPLocalTypeGo(local bashPPLocalType) string {
 		}
 		if method.Name == "Read" {
 			fmt.Fprintf(&b, `func (bpprecv %s) Read(p []byte)(int,error) {
- recv:=structural(reflect.ValueOf(bpprecv));recv.CallArgs=[]value{encode(reflect.ValueOf(p))}
+ recv:=callbackReceiver(reflect.ValueOf(bpprecv));recv.CallArgs=[]value{encode(reflect.ValueOf(p))}
  if %t { recv.CallArgs=append(recv.CallArgs,value{Kind:"reader-buffer",ReaderBuffer:append([]byte(nil),p[:cap(p)]...),ReaderLength:len(p)}) }
  out,err:=callback(%q,recv);if err!=nil{panic(err)}
  if len(out)==3 { if out[2].Kind!="reader-buffer" || len(out[2].ReaderBuffer)!=cap(p){panic(fmt.Errorf("original Read buffer writeback mismatch"))};copy(p[:cap(p)],out[2].ReaderBuffer);out=out[:2] }
@@ -845,7 +845,7 @@ func bashPPLocalTypeGo(local bashPPLocalType) string {
 			continue
 		}
 		fmt.Fprintf(&b, `func (bpprecv %s) %s() string {
- out, err := callback(%q, structural(reflect.ValueOf(bpprecv)))
+ out, err := callback(%q, callbackReceiver(reflect.ValueOf(bpprecv)))
  if err != nil { return callbackFailed(err) }
  if len(out) != 1 || out[0].Kind != "string" { return callbackFailed(fmt.Errorf("original %s.%s did not answer one string")) }
  return out[0].Text
@@ -877,7 +877,7 @@ func bashPPLocalMethodGo(typeName, receiver string, method bashPPLocalMethod) st
 	}
 	selector := typeName + "." + method.Name
 	fmt.Fprintf(&b, "func (bpprecv %s) %s(%s)%s {\n", receiver, method.Name, strings.Join(params, ", "), results)
-	b.WriteString(" recv:=structural(reflect.ValueOf(bpprecv))\n")
+	b.WriteString(" recv:=callbackReceiver(reflect.ValueOf(bpprecv))\n")
 	if len(encoded) > 0 {
 		fmt.Fprintf(&b, " recv.CallArgs=[]value{%s}\n", strings.Join(encoded, ","))
 	}
