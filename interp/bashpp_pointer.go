@@ -765,13 +765,25 @@ func bashPPStoreCellValue(cell *bashPPCell, value any, meta *bashPPCollectionMet
 	}
 	cell.pointer, cell.pointerValue, cell.nilPointer = false, nil, false
 	if meta != nil {
-		cell.vr, cell.valueMeta = expand.NewObject(value), meta
+		// Collection payloads are interpreter-owned typed storage. They may
+		// legitimately contain values which cannot cross the shell's JSON object
+		// boundary (complex numbers, functions, channels, and native handles).
+		// expand.NewObject validates that public boundary and replaces such a
+		// payload with expand.invalidObject, which destroys the value while its
+		// collection metadata still claims the original shape. Keep trusted
+		// collection storage verbatim; expansion still applies ObjectString when
+		// a value actually crosses into an ordinary shell word.
+		cell.vr, cell.valueMeta = bashPPCollectionVariable(value), meta
 		if cell.object == nil {
 			cell.object = &bashPPObjectIdentity{collection: meta}
 		}
 		return
 	}
 	cell.vr = expand.Variable{Set: true, Kind: expand.String, Str: fmt.Sprint(value)}
+}
+
+func bashPPCollectionVariable(value any) expand.Variable {
+	return expand.Variable{Set: true, Kind: expand.Object, Obj: value}
 }
 
 func (r *Runner) bashPPBindPointerExpr(name string, expr syntax.BashPPExpr) bool {

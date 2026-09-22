@@ -528,7 +528,7 @@ func (r *Runner) bashPPDeclareRangeValue(name string, value any, typ syntax.Bash
 		return
 	}
 	if meta != nil {
-		r.bashPPDeclareName(name, expand.NewObject(value))
+		r.bashPPDeclareName(name, bashPPCollectionVariable(value))
 		cell := r.bashPPScope.lookup(name)
 		cell.object = &bashPPObjectIdentity{owner: name, collection: meta}
 		cell.valueMeta = meta

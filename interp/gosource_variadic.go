@@ -44,7 +44,7 @@ func (r *Runner) goSourceBindVariadic(param bashPPParam, args []string, cells []
 	}
 	meta := &bashPPCollectionMeta{kind: "slice", typ: typ, sequence: metas}
 	r.bashPPScope.entries[param.name] = &bashPPCell{
-		vr:        expand.NewObject(sequence),
+		vr:        bashPPCollectionVariable(sequence),
 		object:    &bashPPObjectIdentity{collection: meta},
 		valueMeta: meta,
 		declType:  typ,

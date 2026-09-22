@@ -380,20 +380,20 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 				return
 			}
 			if meta != nil {
-				vr, valueMeta = expand.NewObject(value), meta
+				vr, valueMeta = bashPPCollectionVariable(value), meta
 				if carrier, ok := r.bashPPGoSourceCollectionCarrier(value, meta); ok {
 					vr = carrier
 				}
 			}
 		} else if isStruct {
 			value, meta := r.bashPPZeroValue(d.DeclTypeExpr)
-			vr, valueMeta = expand.NewObject(value), meta
+			vr, valueMeta = bashPPCollectionVariable(value), meta
 		} else if collection, ok := shape.(*syntax.BashPPCollectionType); ok {
 			value, meta := r.bashPPZeroValue(collection)
 			if meta != nil {
 				meta.typ = d.DeclTypeExpr
 			}
-			vr, valueMeta = expand.NewObject(value), meta
+			vr, valueMeta = bashPPCollectionVariable(value), meta
 			if carrier, ok := r.bashPPGoSourceCollectionCarrier(value, meta); ok {
 				vr = carrier
 			}
@@ -1156,7 +1156,7 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 				r.bashPPDeclarePointerRead(name, value, meta)
 			} else if meta != nil {
 				value, meta = bashPPCopyArrayValue(value, meta)
-				r.bashPPDeclareName(name, expand.NewObject(value))
+				r.bashPPDeclareName(name, bashPPCollectionVariable(value))
 				cell := r.bashPPScope.lookup(name)
 				cell.object = &bashPPObjectIdentity{owner: name, collection: meta}
 				if root, rootOK := bashPPCollectionRoot(d.Expr); rootOK {
@@ -1464,7 +1464,7 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 						value, meta = bashPPCopyArrayValue(value, meta)
 						identity = source.object
 					}
-					vr := expand.NewObject(value)
+					vr := bashPPCollectionVariable(value)
 					r.bashPPDeclareName(name, vr)
 					cell := r.bashPPScope.lookup(name)
 					if identity == nil {

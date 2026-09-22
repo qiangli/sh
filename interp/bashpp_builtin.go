@@ -420,7 +420,7 @@ func (r *Runner) bashPPRunValueBuiltin(name string, c *syntax.BashPPCall) (*bash
 		if len(seq) > oldCap {
 			identity = &bashPPObjectIdentity{collection: meta}
 		}
-		return &bashPPCell{vr: expand.NewObject(seq), object: identity, valueMeta: meta, declType: args[0].meta.typ}, true
+		return &bashPPCell{vr: bashPPCollectionVariable(seq), object: identity, valueMeta: meta, declType: args[0].meta.typ}, true
 
 	case "copy":
 		if len(args) != 2 || c.Ellipsis.IsValid() {
@@ -546,7 +546,7 @@ func (r *Runner) bashPPRunValueBuiltin(name string, c *syntax.BashPPCall) (*bash
 			}
 			value := make(map[string]any)
 			meta := &bashPPCollectionMeta{kind: "map", typ: typ, mapping: make(map[string]*bashPPCollectionMeta), mapKeys: make(map[bashPPMapKey]*bashPPMapEntry)}
-			return &bashPPCell{vr: expand.NewObject(value), object: &bashPPObjectIdentity{collection: meta}, valueMeta: meta, declType: typ}, true
+			return &bashPPCell{vr: bashPPCollectionVariable(value), object: &bashPPObjectIdentity{collection: meta}, valueMeta: meta, declType: typ}, true
 		}
 		if len(args) < 2 {
 			r.bashPPBuiltinArity(name, "a slice type and length, with optional capacity", len(args))
@@ -591,7 +591,7 @@ func (r *Runner) bashPPRunValueBuiltin(name string, c *syntax.BashPPCall) (*bash
 		// bashpp_collection_growth.go.
 		r.bashPPZeroSpareCapacity(value, children, shape.Element)
 		meta := &bashPPCollectionMeta{kind: "slice", typ: typ, sequence: children}
-		return &bashPPCell{vr: expand.NewObject(value), object: &bashPPObjectIdentity{collection: meta}, valueMeta: meta, declType: typ}, true
+		return &bashPPCell{vr: bashPPCollectionVariable(value), object: &bashPPObjectIdentity{collection: meta}, valueMeta: meta, declType: typ}, true
 
 	case "min", "max":
 		if len(args) == 0 || c.Ellipsis.IsValid() {
