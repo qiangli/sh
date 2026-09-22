@@ -597,6 +597,37 @@ func (r *Runner) bashPPSliceArrayPointerValue(ptr *bashPPPointer, value any, met
 	return sequence[:n], &converted, nil
 }
 
+// bashPPWriteSliceArrayPointer writes a whole array through a pointer made by
+// converting a slice. The pointer's target cell is the captured slice header;
+// replacing that cell would detach the pointer from its backing storage.
+// rhs has already been evaluated with array value semantics, so copying it
+// element-by-element also provides Go's copy-before-write overlap behavior.
+func (r *Runner) bashPPWriteSliceArrayPointer(ptr *bashPPPointer, rhs any, rhsMeta *bashPPCollectionMeta) (bool, error) {
+	if !r.bashPPGoSource || ptr == nil || ptr.target == nil || len(ptr.path) != 0 {
+		return false, nil
+	}
+	targetMeta := bashPPCellMeta(ptr.target)
+	if targetMeta == nil || targetMeta.kind != "slice" {
+		return false, nil
+	}
+	array, ok := r.bashPPUnderlyingType(ptr.elem).(*syntax.BashPPCollectionType)
+	if !ok || array.Kind != "array" || array.Length == nil {
+		return false, nil
+	}
+	n, err := r.bashPPArrayLength(array.Length.Value)
+	if err != nil {
+		return true, err
+	}
+	target, targetOK := ptr.target.vr.Obj.([]any)
+	source, sourceOK := rhs.([]any)
+	if !targetOK || !sourceOK || len(target) < n || len(source) != n || len(targetMeta.sequence) < n || rhsMeta == nil || len(rhsMeta.sequence) < n {
+		return true, fmt.Errorf("BASHPP-EPOINTER-TARGET: pointer array storage no longer names collection storage")
+	}
+	copy(target[:n], source)
+	copy(targetMeta.sequence[:n], rhsMeta.sequence[:n])
+	return true, nil
+}
+
 func bashPPScalarValue(text string) any {
 	v := bashPPScalarFromString(text).value
 	switch v.Kind() {
@@ -792,6 +823,13 @@ func (r *Runner) bashPPDerefAssign(target *syntax.BashPPDerefExpr, rhs syntax.Ba
 		return
 	}
 	if len(ptr.path) == 0 {
+		if handled, err := r.bashPPWriteSliceArrayPointer(ptr, value, meta); handled {
+			if err != nil {
+				r.errf("%v\n", err)
+				r.exit.code = 2
+			}
+			return
+		}
 		bashPPStoreCellValue(ptr.target, value, meta)
 		return
 	}

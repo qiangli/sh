@@ -309,6 +309,9 @@ func (r *Runner) bashPPRangeCollection(ctx context.Context, rng *syntax.BashPPRa
 		if cell.vr.Kind == expand.Object && bashPPCellMeta(cell) != nil {
 			return r.bashPPRangeCollectionValue(ctx, rng, cell.vr.Obj, bashPPCellMeta(cell))
 		}
+		if cell.pointer {
+			return r.goSourceRangePointerArray(ctx, rng, cell.pointerValue, bashPPPointerMeta(cell.declType))
+		}
 		if native, ok := r.goSourceNativeChannel(cell); ok {
 			r.goSourceRangeNativeChannel(ctx, rng, native)
 			return true
