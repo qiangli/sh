@@ -156,6 +156,32 @@ func (r *Runner) bashPPBindAssign(a *syntax.BashPPAssign) *syntax.BashPPAssign {
 	return &cp
 }
 
+func (r *Runner) bashPPBindIncDec(s *syntax.BashPPIncDec) *syntax.BashPPIncDec {
+	if s == nil || len(r.bashPPTypeParamArgs) == 0 {
+		return s
+	}
+	target := r.bashPPBindExprs(s.Target)
+	if target == s.Target {
+		return s
+	}
+	cp := *s
+	cp.Target = target
+	return &cp
+}
+
+func (r *Runner) bashPPBindUpdate(s *syntax.BashPPUpdate) *syntax.BashPPUpdate {
+	if s == nil || len(r.bashPPTypeParamArgs) == 0 {
+		return s
+	}
+	target, value := r.bashPPBindExprs(s.Target), r.bashPPBindExprs(s.Value)
+	if target == s.Target && value == s.Value {
+		return s
+	}
+	cp := *s
+	cp.Target, cp.Value = target, value
+	return &cp
+}
+
 func (r *Runner) bashPPBindReturn(s *syntax.BashPPReturn) *syntax.BashPPReturn {
 	if s == nil || len(r.bashPPTypeParamArgs) == 0 {
 		return s

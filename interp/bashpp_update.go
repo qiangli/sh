@@ -220,6 +220,10 @@ func (r *Runner) bashPPApplyMapUpdate(target *syntax.BashPPIndexExpr, collection
 		return
 	}
 	if parent == nil {
+		if r.bashPPGoSource {
+			r.goSourceRuntimePanic("assignment to entry in nil map")
+			return
+		}
 		r.bashPPUpdateError(target.Pos(), "WRITE", "BASHPP-ENIL-MAP: assignment to nil map")
 		return
 	}
