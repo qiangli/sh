@@ -88,6 +88,11 @@ func (r *Runner) bashPPBridgeCall(ctx context.Context, call *syntax.BashPPCall) 
 	if values, claimed, err := r.goSourceUnsafeStringCall(call); claimed {
 		return values, err
 	}
+	// unsafe.Slice over a native indexed pointer must remain in the dependency
+	// process so the resulting slice keeps the exact mapped backing store.
+	if values, claimed, err := r.goSourceUnsafeSliceCall(call); claimed {
+		return values, err
+	}
 	// Stack introspection reads the interpreter's own frames; see
 	// bashpp_sprint162_nilptr2_stack.go.
 	if values, claimed, err := r.goSourceRuntimeStackCall(call); claimed {
@@ -106,6 +111,34 @@ func (r *Runner) bashPPBridgeCall(ctx context.Context, call *syntax.BashPPCall) 
 		return nil, errBashPPScalarInterrupted
 	}
 	return r.bashPPNativeRequest(ctx, req, q)
+}
+
+func (r *Runner) goSourceUnsafeSliceCall(call *syntax.BashPPCall) ([]bashPPBridgeValue, bool, error) {
+	if !r.bashPPGoSource || call == nil || len(call.Fun) != 2 || call.Fun[1].Value != "Slice" || r.bashPPImports[call.Fun[0].Value] != "unsafe" || len(call.ArgExprs) != 2 || call.Ellipsis.IsValid() {
+		return nil, false, nil
+	}
+	address, ok := call.ArgExprs[0].(*syntax.BashPPAddressExpr)
+	if !ok {
+		return nil, false, nil
+	}
+	index, ok := address.X.(*syntax.BashPPIndexExpr)
+	if !ok || !r.bashPPNativeExpr(index.X) {
+		return nil, false, nil
+	}
+	ptr, _, err := r.bashPPNativeIndexedPointer(index)
+	if err != nil {
+		return nil, true, err
+	}
+	length, err := r.bashPPEvalScalarExpr(call.ArgExprs[1])
+	if err != nil {
+		return nil, true, err
+	}
+	count, ok := constant.Int64Val(constant.ToInt(length.value))
+	if !ok || count < 0 {
+		return nil, true, fmt.Errorf("runtime error: unsafe.Slice: len out of range")
+	}
+	value, err := r.bashPPNativeAccess(r.ectx, "unsafe-slice", ptr, "", bashPPBridgeValue{Kind: "int", Text: fmt.Sprint(count)})
+	return []bashPPBridgeValue{value}, true, err
 }
 
 // bashPPReflectValueReceiver gives the reviewed reflect.ValueOf(local) path an
@@ -421,6 +454,15 @@ func (r *Runner) bashPPBridgeExpr(expr syntax.BashPPExpr) (bashPPBridgeValue, er
 			iv, _ := r.bashPPRecoverInterfaceValue()
 			return r.bashPPBridgeCell(&bashPPCell{declType: &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "any"}}, interfaceValue: iv})
 		}
+		if values, claimed, err := r.goSourceUnsafeSliceCall(x); claimed {
+			if err != nil {
+				return bashPPBridgeValue{}, err
+			}
+			if len(values) != 1 {
+				return bashPPBridgeValue{}, fmt.Errorf("unsafe.Slice returned %d values", len(values))
+			}
+			return values[0], nil
+		}
 		if r.bashPPBridgeHandles(x) {
 			values, err := r.bashPPBridgeCall(r.ectx, x)
 			if err != nil {
@@ -531,6 +573,14 @@ func (r *Runner) bashPPBridgeExpr(expr syntax.BashPPExpr) (bashPPBridgeValue, er
 		if lit, ok := x.X.(*syntax.BashPPCompositeLit); ok && r.bashPPNativeType(lit.LitType) {
 			return r.bashPPNativeComposite(lit, true)
 		}
+		// An indexed element of a dependency-owned slice is addressable in
+		// that dependency. Preserve that address instead of trying to build an
+		// interpreter pointer over the (deliberately opaque) native handle.
+		if index, ok := x.X.(*syntax.BashPPIndexExpr); ok {
+			if value, handled, err := r.bashPPNativeIndexedPointer(index); handled {
+				return value, err
+			}
+		}
 		ptr, err := r.bashPPPointerExprValue(x)
 		if err != nil {
 			return bashPPBridgeValue{}, err
@@ -580,6 +630,26 @@ func (r *Runner) bashPPBridgeExpr(expr syntax.BashPPExpr) (bashPPBridgeValue, er
 	}
 	value, err = r.bashPPBridgeDefinedScalar(value)
 	return bashPPBridgeInstantiatedScalar(value, r.bashPPExprScalarType(expr)), err
+}
+
+// bashPPNativeIndexedPointer returns the dependency-owned address of one
+// indexed slice element. The worker performs the bounds check and returns a
+// pointer handle whose reflect.Value points into the original slice backing
+// store; no interpreter-side copy or writeback is involved.
+func (r *Runner) bashPPNativeIndexedPointer(index *syntax.BashPPIndexExpr) (bashPPBridgeValue, bool, error) {
+	if !r.bashPPGoSource || index == nil || !r.bashPPNativeExpr(index.X) {
+		return bashPPBridgeValue{}, false, nil
+	}
+	base, err := r.bashPPBridgeExpr(index.X)
+	if err != nil {
+		return bashPPBridgeValue{}, true, err
+	}
+	key, err := r.bashPPBridgeExpr(index.Index)
+	if err != nil {
+		return bashPPBridgeValue{}, true, err
+	}
+	value, err := r.bashPPNativeAccess(r.ectx, "index-pointer", base, "", key)
+	return value, true, err
 }
 
 // bashPPBridgeFloatText normalises one shell-held float, including the exact

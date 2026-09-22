@@ -15,6 +15,7 @@ import (
  "strconv"
  "sync"
  "time"
+ "unsafe"
  bppTextTemplate "text/template"
  bppTemplateParse "text/template/parse"
 //IMPORTS
@@ -364,6 +365,19 @@ func access(rv reflect.Value,q request)([]value,string){
   if n<0||n>=rv.Len(){return nil,fmt.Sprintf("index out of range [%d] with length %d",n,rv.Len())}
   if rv.Kind()==reflect.String{return []value{encode(reflect.ValueOf(rv.String()[n]))},""}
   return []value{encode(rv.Index(n))},""
+ case "index-pointer":
+  if len(q.Args)!=1{return nil,"index-pointer requires one operand"}
+  if rv.Kind()!=reflect.Slice{return nil,"index-pointer is not defined on "+rv.Type().String()}
+  n,err:=strconv.Atoi(q.Args[0].Text);if err!=nil{return nil,"index is not an integer"}
+  if n<0||n>=rv.Len(){return nil,fmt.Sprintf("index out of range [%d] with length %d",n,rv.Len())}
+  element:=rv.Index(n);if !element.CanAddr(){return nil,"indexed value is not addressable"}
+  return []value{encode(element.Addr())},""
+ case "unsafe-slice":
+  if len(q.Args)!=1{return nil,"unsafe-slice requires a length"}
+  if rv.Kind()!=reflect.Pointer||rv.IsNil(){return nil,"unsafe.Slice: ptr is nil"}
+  n,err:=strconv.Atoi(q.Args[0].Text);if err!=nil||n<0{return nil,"unsafe.Slice: len out of range"}
+  array:=reflect.NewAt(reflect.ArrayOf(n,rv.Type().Elem()),unsafe.Pointer(rv.Pointer())).Elem()
+  return []value{encode(array.Slice(0,n))},""
  case "slice":
   if (len(q.Args)!=2&&len(q.Args)!=3){return nil,"slice requires two or three bounds"}
   switch rv.Kind(){case reflect.String,reflect.Slice,reflect.Array:default:return nil,"slice is not defined on "+rv.Type().String()}
@@ -461,7 +475,7 @@ func dispatch(q request)(reply response){
  if q.Op=="var-set" {if len(q.Args)!=1{reply.Error="native variable writes require one value";return};slot:=symbols[q.Selector];if !slot.IsValid()||!slot.CanSet(){reply.Error="unknown or read-only imported variable: "+q.Selector;return};v,err:=decode(q.Args[0],slot.Type());if err!=nil{reply.Error=err.Error();return};slot.Set(v);return}
  fn:=symbols[q.Selector+q.Instance]
  if q.Receiver!=nil {receiver,err:=decode(*q.Receiver,nil);if err!=nil{reply.Error=err.Error();return}
-  switch q.Op {case "deref","len","cap","index","slice","field","field-set","member","method-type","receiver_field","byte-set","kind","keys":reply.Values,reply.Error=access(receiver,q);return}
+  switch q.Op {case "deref","len","cap","index","index-pointer","unsafe-slice","slice","field","field-set","member","method-type","receiver_field","byte-set","kind","keys":reply.Values,reply.Error=access(receiver,q);return}
   if q.Selector==""&&receiver.Kind()==reflect.Func{fn=receiver}else{fn=memberMethod(receiver,q.Selector)}}
  if q.Op=="new" {typ:=resolveType(q.Selector);if typ==nil{reply.Error="unregistered bridge type "+strconv.Quote(q.Selector);return};reply.Values=[]value{encode(reflect.New(typ).Elem())};return}
  if !fn.IsValid(){reply.Error="unknown imported symbol or method: "+q.Selector+q.Instance;return}

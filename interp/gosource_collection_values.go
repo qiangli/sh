@@ -121,8 +121,19 @@ func (r *Runner) goSourceCollectionCallValue(expr syntax.BashPPExpr, expected sy
 	if !r.bashPPGoSource {
 		return nil, nil, false, nil
 	}
-	if _, ok := expr.(*syntax.BashPPCall); !ok {
+	call, ok := expr.(*syntax.BashPPCall)
+	if !ok {
 		return nil, nil, false, nil
+	}
+	if values, claimed, err := r.goSourceUnsafeSliceCall(call); claimed {
+		if err != nil {
+			return nil, nil, true, err
+		}
+		if len(values) != 1 {
+			return nil, nil, true, fmt.Errorf("unsafe.Slice returned %d values", len(values))
+		}
+		value, meta, bridged, err := r.bashPPCollectionBridgeValue(&values[0], expected)
+		return value, meta, bridged, err
 	}
 	cell, err := r.goSourceValueCell(expr)
 	if err != nil {
