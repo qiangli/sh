@@ -311,9 +311,9 @@ func (r *Runner) goSourceValueSwitch(sw *syntax.BashPPSwitch) (int, bool) {
 // conversion — `(func())(nil)`, `(*T)(nil)`, `[]byte(nil)` — when it is
 // handed to a dependency: a nil of that type, carried as the typed nil the
 // bridge already transports for a nil callback.
-func (r *Runner) goSourceTypedNilBridgeValue(expr syntax.BashPPExpr) (bashPPBridgeValue, bool) {
+func (r *Runner) goSourceTypedNilBridgeValue(expr syntax.BashPPExpr) (bashPPBridgeValue, bool, error) {
 	if !r.bashPPGoSource {
-		return bashPPBridgeValue{}, false
+		return bashPPBridgeValue{}, false, nil
 	}
 	for {
 		paren, ok := expr.(*syntax.BashPPParenExpr)
@@ -324,13 +324,17 @@ func (r *Runner) goSourceTypedNilBridgeValue(expr syntax.BashPPExpr) (bashPPBrid
 	}
 	conversion, ok := expr.(*syntax.BashPPConvertExpr)
 	if !ok || !goSourceNilLiteral(conversion.X) {
-		return bashPPBridgeValue{}, false
+		return bashPPBridgeValue{}, false, nil
 	}
 	target := r.bashPPConvertTarget(conversion)
 	if target == nil || !r.goSourceNilableType(target) {
-		return bashPPBridgeValue{}, false
+		return bashPPBridgeValue{}, false, nil
 	}
-	return bashPPBridgeValue{Kind: "nil", Type: bashPPBridgeTypeText(r.bashPPCanonicalAssignableType(target))}, true
+	if r.goSourceUnsafePointerType(target) {
+		value, err := r.bashPPNativeTypeRequest("new", target)
+		return value, true, err
+	}
+	return bashPPBridgeValue{Kind: "nil", Type: bashPPBridgeTypeText(r.bashPPCanonicalAssignableType(target))}, true, nil
 }
 
 // goSourceNilInterfaceSource is the source cell of the untyped nil an
