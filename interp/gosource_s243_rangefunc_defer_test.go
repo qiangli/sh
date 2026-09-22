@@ -6,10 +6,23 @@
 package interp_test
 
 import (
+	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/go-quicktest/qt"
 )
+
+// range4.go ends with testcalls1, whose iter3 iterator accepts the defined
+// yield type iter3YieldFunc. Keep the upstream fixture unmodified so admission
+// of that named function type is exercised together with all preceding range
+// protocol checks in interpreted, compiled, and lowered modes.
+func TestGoSourceRange4OriginalThreeModes(t *testing.T) {
+	source, err := os.ReadFile(filepath.Join(runtime.GOROOT(), "test", "range4.go"))
+	qt.Assert(t, qt.IsNil(err))
+	typedSendThreeModes(t, string(source))
+}
 
 // Sprint 243 Story #673 (f24307569417): a defer executed inside a
 // range-over-function body binds to the ENCLOSING function, not to the yield

@@ -39,7 +39,7 @@ func (r *Runner) goSourceIteratorYield(fn *bashPPFunc) (*syntax.BashPPFuncType, 
 	if len(params) != 1 || params[0].variadic {
 		return nil, fmt.Errorf("iterator callback must accept one yield function")
 	}
-	yield, ok := params[0].typ.(*syntax.BashPPFuncType)
+	yield, ok := r.bashPPUnderlyingType(params[0].typ).(*syntax.BashPPFuncType)
 	if !ok || bashppResultCount(yield.Results) != 1 || len(bashppParams(yield.Results)) != 1 ||
 		bashPPTypeText(r.bashPPUnderlyingType(bashppParams(yield.Results)[0].typ)) != "bool" {
 		return nil, fmt.Errorf("iterator yield must return one bool")
