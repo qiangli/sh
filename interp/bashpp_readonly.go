@@ -385,6 +385,24 @@ func (r *Runner) bashPPTupleAssign(assign *syntax.BashPPAssign) {
 			candidates[i] = candidate
 			continue
 		}
+		// A call used as one member of a parallel assignment still produces a
+		// Go value, not merely its scalar spelling. In particular, `p, q =
+		// makep(1), makep(2)` must retain each returned pointer's storage
+		// identity. Evaluate the call once through the common value-cell path;
+		// the candidate snapshot below is committed only after every RHS has
+		// succeeded, preserving parallel-assignment ordering and atomicity.
+		if _, call := expr.(*syntax.BashPPCall); call && r.bashPPGoSource {
+			candidate, err := r.goSourceValueCell(expr)
+			if err != nil {
+				if !errors.Is(err, errBashPPScalarInterrupted) {
+					r.errf("%s%v\n", r.bashErrPrefix(expr.Pos()), err)
+					r.exit = exitStatus{code: 2}
+				}
+				return
+			}
+			candidates[i] = bashPPCopyAssignmentCell(candidate)
+			continue
+		}
 		// `flag = true`: the predeclared booleans are identifiers with no
 		// cell; unless a variable shadows them they are the constants the
 		// scalar evaluator below knows.

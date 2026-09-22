@@ -163,3 +163,55 @@ func main() {
 	qt.Assert(t, qt.IsTrue(strings.Contains(stderr, "BASHPP-")),
 		qt.Commentf("stderr: %s", stderr))
 }
+
+func TestS219PointerTargetParallelCallResults(t *testing.T) {
+	src := `package main
+var calls int
+func escaped(x int) *int { calls++; var v int; v = x; return &v }
+func main() {
+	p, q := escaped(1), escaped(2)
+	p, q = escaped(3), escaped(4)
+	*p = 7
+	println(*p, *q, calls)
+}`
+	out, stderr, err := runGoSource(t, "s219-pointer-target-parallel-calls", src)
+	qt.Assert(t, qt.IsNil(err), qt.Commentf("stderr: %s", stderr))
+	qt.Assert(t, qt.Equals(out, ""))
+	qt.Assert(t, qt.Equals(stderr, "7 4 4\n"))
+}
+
+func TestS219PointerTargetGenericDefinedArrayPointer(t *testing.T) {
+	src := `package main
+type Token *[4]byte
+func take[T interface{ ~*[4]byte }](buf []byte) T { return T(buf[:4]) }
+func main() {
+	buf := []byte("abcd")
+	t := take[Token](buf)
+	t[1] = 'Z'
+	println(string(buf))
+}`
+	out, stderr, err := runGoSource(t, "s219-pointer-target-generic-array", src)
+	qt.Assert(t, qt.IsNil(err), qt.Commentf("stderr: %s", stderr))
+	qt.Assert(t, qt.Equals(out, ""))
+	qt.Assert(t, qt.Equals(stderr, "aZcd\n"))
+}
+
+func TestS219PointerTargetLaterPackageStorage(t *testing.T) {
+	src := `package main
+func addr() *int { return &g }
+var g int
+func main() { p := addr(); *p = 9; println(g) }`
+	out, stderr, err := runGoSource(t, "s219-pointer-target-later-global", src)
+	qt.Assert(t, qt.IsNil(err), qt.Commentf("stderr: %s", stderr))
+	qt.Assert(t, qt.Equals(out, ""))
+	qt.Assert(t, qt.Equals(stderr, "9\n"))
+}
+
+func TestS219PointerTargetNilGenericArrayPointer(t *testing.T) {
+	src := `package main
+type Token *[1]byte
+func main() { var buf []byte; p := Token(buf); p[0] = 1 }`
+	_, stderr, err := runGoSource(t, "s219-pointer-target-nil-array", src)
+	qt.Assert(t, qt.IsNotNil(err))
+	qt.Assert(t, qt.StringContains(stderr, "nil pointer dereference"))
+}
