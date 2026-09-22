@@ -1385,6 +1385,9 @@ func (r *Runner) bashPPStructuredArgCell(w *syntax.Word, expr syntax.BashPPExpr)
 			cell.typeName = named.Name.Value
 		}
 		bashPPStoreCellValue(cell, value, meta)
+		if carrier, ok := r.bashPPGoSourceCollectionCarrier(value, meta); ok {
+			cell.vr = carrier
+		}
 		return cell, nil
 	case *syntax.BashPPTypeAssertExpr:
 		// `return v.(I)`, `f(v.(T))`: an assertion yields the asserted cell —
@@ -1410,6 +1413,9 @@ func (r *Runner) bashPPStructuredArgCell(w *syntax.Word, expr syntax.BashPPExpr)
 			cell.typeName = named.Name.Value
 		}
 		bashPPStoreCellValue(cell, value, meta)
+		if carrier, ok := r.bashPPGoSourceCollectionCarrier(value, meta); ok {
+			cell.vr = carrier
+		}
 		return cell, nil
 	}
 	if id, ok := expr.(*syntax.BashPPIdent); ok && r.bashPPScope != nil {

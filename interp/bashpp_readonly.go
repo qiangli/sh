@@ -462,7 +462,11 @@ func bashPPCopyAssignmentCell(source *bashPPCell) *bashPPCell {
 	copyCell := *source
 	if source.vr.Kind == expand.Object && source.vr.Obj != nil && source.object != nil && bashPPValueMeta(bashPPCellMeta(source)) {
 		value, meta := bashPPCopyArrayValue(source.vr.Obj, bashPPCellMeta(source))
-		copyCell.vr = expand.NewObject(value)
+		// The source already crossed the object boundary with authenticated
+		// array/struct metadata. Preserve that carrier while replacing its
+		// payload with the value copy: re-entering expand.NewObject would reject
+		// legal Go values such as an array containing Inf as invalid JSON.
+		copyCell.vr.Obj = value
 		copyCell.valueMeta = meta
 	}
 	return &copyCell
