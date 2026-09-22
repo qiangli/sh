@@ -146,6 +146,16 @@ func validateLocalTransport(req bashPPEvalRequest, q bashPPBridgeRequest) error 
 	if reflectedMethodValueOf(req, q) {
 		return nil
 	}
+	// A reviewed synchronous methods-driven consumer over origin-bearing
+	// references (bashpp_native_transfer.go): the origin pointee is the one
+	// native copy, mirrored callbacks bind the original storage and re-decode
+	// the pointee on reply, and a native write through the pointee returns on
+	// the pointer writeback. Only the template consumer dispatches natively —
+	// it additionally proves its parsed tree free of functions and
+	// sub-templates before its data crosses.
+	if nativeSharedReferenceConsumer(req, q) && q.Receiver != nil && nativeTemplateExecuteProven(req, q) {
+		return nil
+	}
 	if functionCallbacks && !synchronousFunctionCallback(req, q) && !retainedFunctionCallback(req, q) {
 		return fmt.Errorf("gosource: asynchronous or retained original function callbacks are unsupported for %s", q.Selector)
 	}

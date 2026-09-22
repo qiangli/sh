@@ -274,6 +274,14 @@ func prepareNativeSliceBuffers(req bashPPEvalRequest, q *bashPPBridgeRequest) er
 		if !nativeSliceReadOnly(callable) && nativeSliceTransferable(req, q) {
 			return nil
 		}
+		// A slice reachable only through an origin-bearing pointer handed to a
+		// reviewed methods-driven consumer is not a detached copy: the origin
+		// pointee is reconciled after every callback and on return
+		// (bashpp_native_transfer.go), so the callbacks and the consumer read
+		// one storage. validateLocalTransport still rules on the request.
+		if hasSlice && !hasDirectSlice && nativeSharedReferenceConsumer(req, *q) {
+			return nil
+		}
 		return fmt.Errorf("gosource: original callback with copied slice references is unsupported")
 	}
 	if nativeSliceCallable(req, *q) == "*text/template.Template.Execute" {

@@ -225,3 +225,85 @@ func bashPPRebindTransferredCell(cell *bashPPCell, value bashPPBridgeValue) {
 	copy := value
 	*cell = bashPPCell{vr: expand.NewObject(&copy), object: cell.object, typeName: value.Type}
 }
+
+// Sprint: #247; Story: #673; Story-ID: f24307569417
+//
+// Shared reference provenance for a synchronous methods-driven consumer.
+//
+// The general refusal on dependency mutation exists because a decoded copy of
+// interpreter storage has no write-back contract: a native write to the copy
+// would be invisible to the original, and an original callback would run
+// against storage the copy no longer matches. Both halves of that hazard are
+// closed for an argument that crosses as an ORIGIN-BEARING POINTER handed to a
+// reviewed consumer that keeps every data access inside the call:
+//
+//   - ownership: the worker binds the origin to one stable native pointee
+//     (originalPointers), so every native read the consumer makes goes through
+//     the same storage the session reconciles — not an anonymous copy;
+//   - callback coherence: a mirrored method callback binds the ORIGINAL
+//     interpreter storage (bashPPNativeCallback resolves the origin to the
+//     original pointer cell), and the callback reply re-decodes the receiver
+//     into the origin's native pointee, so the consumer never observes a
+//     pointee that is stale against an effect its own callback performed;
+//   - write-back: a native write the consumer itself makes through the pointee
+//     is detected against the last reconciled snapshot and transported back by
+//     the pointer writeback (PtrUpdates), so no dependency write is dropped.
+//
+// The one admitted operation is text/template's synchronous execution over a
+// worker-inspected callback-free tree. It does not retain the data argument;
+// field reads and niladic method calls remain inside the parked request. Every
+// other consumer keeps the refusal.
+
+// nativeSharedReferenceConsumer reports a reviewed synchronous consumer whose
+// every interpreter-owned reference argument carries original identity. The
+// template consumer additionally requires the worker-inspected function-free
+// template proof, which needs a bridge round trip and therefore runs in
+// nativeTemplateExecuteProven.
+func nativeSharedReferenceConsumer(req bashPPEvalRequest, q bashPPBridgeRequest) bool {
+	if q.Op != "call" {
+		return false
+	}
+	switch nativeSliceCallable(req, q) {
+	case "*text/template.Template.Execute":
+		// Execute(wr, data): the writer must already be the dependency's own
+		// storage; only the data argument may carry original identity.
+		if q.Receiver == nil || q.Receiver.Kind != "handle" || len(q.Args) != 2 || !bashPPDependencyOwnedWriter(q.Args[:1]) {
+			return false
+		}
+	default:
+		return false
+	}
+	shared := false
+	for _, arg := range q.Args {
+		if bridgeValueDependencyOwned(arg) {
+			continue
+		}
+		// An origin-bearing pointer is the one interpreter-owned shape with a complete
+		// ownership/write-back story; anything else — a detached copy of a
+		// slice, struct or map, a bare callback — keeps the refusal.
+		if arg.Kind == "pointer" && arg.Origin != 0 {
+			shared = true
+			continue
+		}
+		return false
+	}
+	return shared
+}
+
+// nativeTemplateExecuteProven adds the template consumer's remaining proof: a
+// parsed tree free of function identifiers and template invocations, verified
+// by the worker against the very template the handle names. Field access on
+// the data pointee reads the origin-bound storage the session reconciles, and
+// a niladic method spelling runs the mirrored original body — both coherent
+// under the invariants above. A function or sub-template is an escape the
+// review does not cover.
+func nativeTemplateExecuteProven(req bashPPEvalRequest, q bashPPBridgeRequest) bool {
+	if nativeSliceCallable(req, q) != "*text/template.Template.Execute" || req.CallbackOwner == nil {
+		return false
+	}
+	values, err := req.CallbackOwner.bashPPNativeRequest(req.CallbackOwner.ectx, req, bashPPBridgeRequest{Op: "template-readonly", Receiver: q.Receiver})
+	if err != nil {
+		return false
+	}
+	return len(values) == 1 && values[0].Kind == "bool" && values[0].Text == "true"
+}
