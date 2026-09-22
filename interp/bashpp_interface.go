@@ -343,6 +343,13 @@ func (r *Runner) bashPPImplements(actual syntax.BashPPTypeExpr, iface *syntax.Ba
 	}
 	for _, name := range expectedSet.order {
 		expected := expectedSet.byName[name]
+		// Native and original candidates at the same shallowest depth
+		// make a promoted method ambiguous before interface admission.
+		if !goSourceUnexportedName(name) {
+			if _, _, ambiguous := r.bashPPResolveNativeEmbeddedSelection(actual, name, false); ambiguous {
+				return fmt.Errorf("BASHPP-EINTERFACE-MISSING: %s does not implement interface (ambiguous method %s)", bashPPTypeText(actual), name)
+			}
+		}
 		// An unexported method is looked up as the interface's package
 		// spells it: main's `m` is not lib's.
 		sel := r.bashPPResolveSelectionIn(actual, name, true, false, expected.pkg)

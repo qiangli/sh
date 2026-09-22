@@ -323,8 +323,8 @@ func main() {
 }
 `
 	_, stderr, err = runS219(t, ambiguousSrc)
-	qt.Assert(t, qt.IsNotNil(err))
-	qt.Assert(t, qt.StringContains(stderr, "BASHPP-ESELECTOR-AMBIGUOUS"))
+	qt.Assert(t, qt.IsNil(err), qt.Commentf("stderr=%q", stderr))
+	qt.Assert(t, qt.Equals(stderr, "false\n"))
 }
 
 func TestS219PointerFieldLocalSelectorPath(t *testing.T) {
