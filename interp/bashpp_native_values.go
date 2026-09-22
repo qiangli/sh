@@ -259,6 +259,7 @@ func (r *Runner) bashPPPrepareNativeCall(ctx context.Context, call *syntax.BashP
 		q.Args = append(q.Args, value)
 	}
 	q.argCells = r.bashPPNativeArgCells(call.ArgExprs, q.Args)
+	q.transferProof = call.ExclusiveSliceArgs
 	return q, nil
 }
 func (r *Runner) bashPPBridgeScalar(expr syntax.BashPPExpr) (bashPPScalar, bool, error) {

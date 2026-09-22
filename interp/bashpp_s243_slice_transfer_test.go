@@ -30,6 +30,7 @@ func transferRequest(t *testing.T) (bashPPEvalRequest, bashPPBridgeRequest) {
 		{Kind: "handle", Type: "testing/internal/testdeps.TestDeps", NativeType: "testing/internal/testdeps.TestDeps", Session: "session", Handle: 5},
 	}}
 	q.argCells = make([]*bashPPCell, 5)
+	q.transferProof = []bool{false, true, true, true, true}
 	for i, typ := range []string{"[]testing.InternalTest", "[]testing.InternalBenchmark", "[]testing.InternalFuzzTarget", "[]testing.InternalExample"} {
 		var view []any
 		var elements []bashPPBridgeValue
@@ -68,6 +69,10 @@ func TestS243SliceTransferRefusesWeakerShapes(t *testing.T) {
 		"no generated test main fact":   func(req *bashPPEvalRequest, q *bashPPBridgeRequest) { req.TestMain = false },
 		"call site in a linked package": func(req *bashPPEvalRequest, q *bashPPBridgeRequest) { q.sourceProgram = false },
 		"slice is not the bare binding": func(req *bashPPEvalRequest, q *bashPPBridgeRequest) { q.argCells[1] = nil },
+		"frontend ownership is absent":  func(req *bashPPEvalRequest, q *bashPPBridgeRequest) { q.transferProof[1] = false },
+		"same binding is repeated": func(req *bashPPEvalRequest, q *bashPPBridgeRequest) {
+			q.argCells[2] = q.argCells[1]
+		},
 		"element is an original pointer": func(req *bashPPEvalRequest, q *bashPPBridgeRequest) {
 			q.Args[1].Elements[0] = bashPPBridgeValue{Kind: "pointer", Type: "*main.T", Origin: 7, Elements: []bashPPBridgeValue{{Kind: "struct", Type: "main.T"}}}
 		},

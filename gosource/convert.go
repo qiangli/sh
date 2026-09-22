@@ -1301,6 +1301,7 @@ func (c *converter) funlit(x *ast.FuncLit) *s.BashPPFuncLit {
 }
 func (c *converter) call(x *ast.CallExpr) *s.BashPPCall {
 	out := &s.BashPPCall{GoRuntime: c.info.Types[x].Value == nil, Lparen: c.pos(x.Lparen), Rparen: c.pos(x.Rparen), Ellipsis: c.pos(x.Ellipsis), ResultFuncType: c.functionValueType(x)}
+	out.ExclusiveSliceArgs = c.exclusiveSliceArgs(x)
 	isInstantiation := func(e ast.Expr) bool {
 		var base ast.Expr
 		var args []ast.Expr
@@ -1383,6 +1384,70 @@ func (c *converter) call(x *ast.CallExpr) *s.BashPPCall {
 		out.ArgExprs = append(out.ArgExprs, c.expr(a))
 	}
 	return out
+}
+
+// exclusiveSliceArgs proves the narrow ownership shape used by generated
+// test drivers: a package variable initialized directly from a fresh slice
+// literal and used exactly once in the entire package, as this bare argument.
+// Counting the checker object rather than spellings rejects aliases, address
+// taking, closure capture, reassignment, append/subslice operands, and a
+// duplicate argument. Parentheses do not create an alias.
+func (c *converter) exclusiveSliceArgs(call *ast.CallExpr) []bool {
+	var proven []bool
+	for i, arg := range call.Args {
+		id, ok := ast.Unparen(arg).(*ast.Ident)
+		if !ok {
+			continue
+		}
+		obj, ok := c.info.Uses[id].(*types.Var)
+		if !ok || obj.Pkg() == nil || obj.Parent() != obj.Pkg().Scope() {
+			continue
+		}
+		fresh := false
+		for _, file := range c.files {
+			for _, decl := range file.Decls {
+				gen, ok := decl.(*ast.GenDecl)
+				if !ok || gen.Tok != token.VAR {
+					continue
+				}
+				for _, spec := range gen.Specs {
+					value, ok := spec.(*ast.ValueSpec)
+					if !ok || len(value.Names) != len(value.Values) {
+						continue
+					}
+					for j, name := range value.Names {
+						if c.info.Defs[name] != obj {
+							continue
+						}
+						lit, ok := ast.Unparen(value.Values[j]).(*ast.CompositeLit)
+						if !ok || c.info.Types[lit].Type == nil {
+							continue
+						}
+						_, fresh = c.info.Types[lit].Type.Underlying().(*types.Slice)
+					}
+				}
+			}
+		}
+		if !fresh {
+			continue
+		}
+		uses := 0
+		soleUse := false
+		for ident, used := range c.info.Uses {
+			if used == obj {
+				uses++
+				soleUse = ident == id
+			}
+		}
+		if uses != 1 || !soleUse {
+			continue
+		}
+		if proven == nil {
+			proven = make([]bool, len(call.Args))
+		}
+		proven[i] = true
+	}
+	return proven
 }
 
 // selectorValue lowers a selector without treating an instantiated generic

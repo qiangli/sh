@@ -87,9 +87,10 @@ type bashPPBridgeRequest struct {
 	// the dependency as the storage of record rather than as a copy; the
 	// worker answers each with a handle on that same slice (Transferred) and
 	// argCells[i] is the interpreter binding the transfer rebinds to it. See
-	// bashpp_native_transfer.go. argCells and sourceProgram are host-only.
+	// bashpp_native_transfer.go. argCells, transferProof and sourceProgram are host-only.
 	Transfers     []int `json:"transfers,omitempty"`
 	argCells      []*bashPPCell
+	transferProof []bool
 	sourceProgram bool   // the call site is in the program package itself
 	ID            uint64 `json:"id"`
 	Op            string `json:"op"`

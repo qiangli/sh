@@ -842,6 +842,11 @@ type BashPPCall struct {
 	// original words for legacy consumers. Walk, printing, and evaluation use
 	// ArgExprs rather than walking/evaluating both representations.
 	ArgExprs []BashPPExpr
+	// ExclusiveSliceArgs records arguments whose backing array is proven by
+	// the Go front end to have no surviving program alias at this call. The
+	// proof is deliberately per call and per argument; consumers must still
+	// require their own authority before transferring storage.
+	ExclusiveSliceArgs []bool
 	// ArgType records the first argument where a predeclared function accepts a
 	// type rather than a value. Today only make populates it.
 	// Keeping it on the positioned call avoids re-parsing source in interp.

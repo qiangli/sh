@@ -21,12 +21,12 @@ package interp
 // observes the dependency's retained backing, and an element write through
 // it is refused by the handle path rather than silently diverging. What the
 // transfer needs is therefore an exclusivity proof for the backing array. The
-// one source of that proof today is the backend-asserted fact that the
-// program is cmd/go's generated test main (GoSourceIdentity, never inferred
-// from a file name or a ".test" suffix): cmd/go's testmain template binds each
-// descriptor slice to a package-level variable of the program package whose
-// only use is the MainStart argument, so no alias survives the call by
-// construction. A call site outside the program package (the test package's
+// proof is produced by the Go front end after inspecting the whole package:
+// a package variable must be initialized by a fresh slice literal and its
+// checker object must occur exactly once, as this bare call argument. The
+// backend-asserted test-main fact is separate required authority and is never
+// inferred from a file name or suffix. A call site outside the program package
+// (the test package's
 // own sources run under the same fact), an argument that is not the bare
 // binding, and an element that is itself interpreter-owned storage (a
 // pointer, a nested slice or map, a local struct, a bare callback) keep the
@@ -136,6 +136,7 @@ func nativeSliceTransferable(req bashPPEvalRequest, q *bashPPBridgeRequest) bool
 		return false
 	}
 	var transfers []int
+	seenCells := make(map[*bashPPCell]bool)
 	for i := range q.Args {
 		arg := q.Args[i]
 		if nestedNativeSliceView(arg) {
@@ -147,6 +148,13 @@ func nativeSliceTransferable(req bashPPEvalRequest, q *bashPPBridgeRequest) bool
 		if i >= len(q.argCells) || q.argCells[i] == nil {
 			return false
 		}
+		if i >= len(q.transferProof) || !q.transferProof[i] {
+			return false
+		}
+		if seenCells[q.argCells[i]] {
+			return false
+		}
+		seenCells[q.argCells[i]] = true
 		for _, elem := range arg.Elements {
 			if !bridgeValueDependencyOwned(elem) {
 				return false

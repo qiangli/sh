@@ -140,20 +140,13 @@ func TestGoSourceS243GeneratedTestMainReportsFailure(t *testing.T) {
 	}
 }
 
-// After the transfer the program's bindings ARE the retained backing: reads
-// through them (len, index, a field of an element) observe the slices M
-// holds, before and after M.Run consumed them.
-func TestGoSourceS243GeneratedTestMainRetainsAliases(t *testing.T) {
+// Any later read is another use of the package object, so the front end does
+// not certify exclusive transfer. This is intentionally stricter than trying
+// to rebind one known alias while another spelling might survive.
+func TestGoSourceS243GeneratedTestMainReadAfterTransferIsRefused(t *testing.T) {
 	source := strings.Replace(s243GeneratedDriver, "\tos.Exit(m.Run())\n",
 		"\tfmt.Println(len(tests), len(benchmarks), tests[1].Name)\n\tcode := m.Run()\n\tfmt.Println(len(tests), tests[0].Name, code)\n\tos.Exit(code)\n", 1)
-	got, err := runGoSourceTestMain(t, source, true)
-	if err != nil {
-		t.Fatalf("Runner: %v; stderr: %s", err, got.stderr)
-	}
-	want := goSourceOutcome{stdout: "2 0 TestBeta\nalpha ran\nbeta ran\nPASS\n2 TestAlpha 0\n"}
-	if got != want {
-		t.Fatalf("Runner %+v; want %+v", got, want)
-	}
+	refusedGoSourceTestMain(t, source, "original callback with copied slice references is unsupported")
 }
 
 // refusedGoSourceTestMain runs source under the fact and requires the run to
@@ -171,6 +164,40 @@ func refusedGoSourceTestMain(t *testing.T, source, refusal string) {
 	}
 	if strings.Contains(got.stdout, "PASS") || strings.Contains(got.stdout, "ran") {
 		t.Fatalf("the program ran past the refusal: %+v", got)
+	}
+}
+
+func TestGoSourceS243WholePackageSliceOwnershipProof(t *testing.T) {
+	for name, source := range map[string]string{
+		"fresh single use": `package main; var tests = []int{1}; func sink(...[]int){}; func main(){ sink(tests) }`,
+		"alias":            `package main; var tests = []int{1}; func sink(...[]int){}; func main(){ saved := tests; _ = saved; sink(tests) }`,
+		"closure":          `package main; var tests = []int{1}; func sink(...[]int){}; func main(){ saved := func() int{return len(tests)}; _ = saved; sink(tests) }`,
+		"duplicate":        `package main; var tests = []int{1}; func sink(...[]int){}; func main(){ sink(tests, tests) }`,
+		"subslice":         `package main; var tests = []int{1}; func sink(...[]int){}; func main(){ sink(tests[:]) }`,
+		"append":           `package main; var tests = []int{1}; func sink(...[]int){}; func main(){ sink(append(tests, 2)) }`,
+		"reassignment":     `package main; var tests = []int{1}; func sink(...[]int){}; func main(){ tests = nil; sink(tests) }`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			program, err := gosource.Parse(strings.NewReader(source), name+".go", gosource.Options{RunMain: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var proof []bool
+			syntax.Walk(program.File, func(node syntax.Node) bool {
+				call, ok := node.(*syntax.BashPPCall)
+				if ok && len(call.Fun) == 1 && call.Fun[0].Value == "sink" {
+					proof = call.ExclusiveSliceArgs
+				}
+				return true
+			})
+			got := len(proof) > 0 && proof[0]
+			if want := name == "fresh single use"; got != want {
+				t.Fatalf("exclusive proof = %v, want %v (all args %v)", got, want, proof)
+			}
+			if name == "duplicate" && len(proof) > 1 && proof[1] {
+				t.Fatalf("second duplicate argument was certified: %v", proof)
+			}
+		})
 	}
 }
 
@@ -195,6 +222,22 @@ func TestGoSourceS243GeneratedTestMainTransferNegatives(t *testing.T) {
 		}
 		refusedGoSourceTestMain(t, source, copied)
 	})
+	for name, rewrite := range map[string]func(string) string{
+		"aliased backing": func(source string) string {
+			return strings.Replace(source, "func main() {", "func main() {\n\tsaved := tests\n\t_ = saved", 1)
+		},
+		"closure alias": func(source string) string {
+			return strings.Replace(source, "func main() {", "func main() {\n\tsaved := func() int { return len(tests) }\n\t_ = saved", 1)
+		},
+		"append result": func(source string) string {
+			return strings.Replace(source, "testdeps.TestDeps{}, tests,", "testdeps.TestDeps{}, append(tests),", 1)
+		},
+		"reassignment": func(source string) string {
+			return strings.Replace(source, "func main() {", "func main() {\n\ttests = append(tests)", 1)
+		},
+	} {
+		t.Run(name, func(t *testing.T) { refusedGoSourceTestMain(t, rewrite(s243GeneratedDriver), copied) })
+	}
 	t.Run("interpreter-owned elements stay refused", func(t *testing.T) {
 		refusedGoSourceTestMain(t, `package main
 
