@@ -29,7 +29,13 @@ func bashPPSprint162ComplexCollectionText(value any) bool {
 // Go's recoverable runtime panic. Static constant bounds remain the checker's
 // responsibility and never reach this evaluator path.
 func (r *Runner) bashPPSprint162CollectionBoundsPanic(expr syntax.BashPPExpr, index bashPPCollectionIndexValue, length int) error {
-	message := fmt.Sprintf("runtime error: index out of range [%s] with length %d", index.text, length)
+	message := fmt.Sprintf("runtime error: index out of range [%s]", index.text)
+	// Go's runtime deliberately omits the collection length for a negative
+	// index. Keep the exact wide index spelling in both forms; conversion to a
+	// host int only happens after this bounds check succeeds.
+	if !index.less(bashPPCollectionIndexInt(0)) {
+		message += fmt.Sprintf(" with length %d", length)
+	}
 	pos := syntax.Pos{}
 	if expr != nil {
 		pos = expr.Pos()
