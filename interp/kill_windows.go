@@ -124,9 +124,12 @@ func (r *Runner) notifyForegroundSignalDeath(w io.Writer, pos syntax.Pos, pid in
 	}
 }
 
-// continueIfStopped is a no-op on Windows: this runner cannot suspend a
-// process on this platform, so there is nothing to resume.
-func continueIfStopped(pid int) {}
+// continueIfStopped resumes a process this shell suspended for a stop
+// signal, best-effort. Errors are swallowed because the process may already
+// be running or gone, as in kill_unix.go.
+func continueIfStopped(pid int) {
+	_ = resumeProcess(pid)
+}
 
 func jobSignalPid(bg *bgProc) int {
 	return int(bg.pid.Load())
