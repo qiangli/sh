@@ -289,6 +289,44 @@ func (r *Runner) bashPPAddress(expr syntax.BashPPExpr) (result *bashPPPointer, e
 	if lit, ok := expr.(*syntax.BashPPCompositeLit); ok {
 		return r.bashPPCompositeAddress(lit)
 	}
+	// A map element itself is never addressable, but a pointer stored in a map
+	// still points at addressable storage. Go therefore permits m[k].field when
+	// m's element type is *T. Resolve that pointer value once and continue the
+	// address path from its pointee; do not try to take the map element's
+	// address. Keeping this case here also leaves m[k].field rejected when the
+	// element is a non-pointer struct.
+	if selector, ok := expr.(*syntax.BashPPSelectorExpr); ok && r.bashPPGoSource {
+		if index, indexed := selector.X.(*syntax.BashPPIndexExpr); indexed {
+			indexedType, typed := r.goSourceStaticExprType(index)
+			if _, pointerElement := r.bashPPUnderlyingType(indexedType).(*syntax.BashPPPointerType); !typed || !pointerElement {
+				goto ordinaryAddress
+			}
+			parent, _, readErr := r.bashPPReadExpr(index)
+			if readErr != nil {
+				return nil, readErr
+			}
+			if base, pointerElement := parent.(*bashPPPointer); pointerElement {
+				if base == nil {
+					return nil, errBashPPNilDereference
+				}
+				sel := r.bashPPResolveField(base.elem, selector.Sel.Value)
+				if sel.ambiguous || len(sel.edges) == 0 {
+					return nil, bashPPSelectionError(base.elem, selector.Sel.Value, sel)
+				}
+				ptr := &bashPPPointer{target: base.target, path: append([]bashPPPointerStep(nil), base.path...)}
+				for i, edge := range sel.edges {
+					ptr.path = append(ptr.path, bashPPPointerStep{field: edge.name})
+					if edge.pointer && i+1 < len(sel.edges) {
+						ptr.path = append(ptr.path, bashPPPointerStep{deref: true})
+					}
+				}
+				ptr.elem = sel.fieldType
+				return ptr, nil
+			}
+		}
+	}
+
+ordinaryAddress:
 	root, ok := bashPPCollectionRoot(expr)
 	if !ok || r.bashPPScope == nil {
 		return nil, fmt.Errorf("BASHPP-ENONADDRESSABLE: operand is not addressable")
