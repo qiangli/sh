@@ -1,7 +1,7 @@
 // Copyright (c) 2017, Andrey Nering <andrey.nering@gmail.com>
 // See LICENSE for licensing information
 
-//go:build !unix && !windows
+//go:build windows
 
 package interp
 
