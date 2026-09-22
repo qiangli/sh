@@ -174,6 +174,104 @@ func main() {
 	}
 }
 
+// The upstream internal/types/errors package test shape: inside a t.Run
+// callback, an interpreted helper re-assigns the dot-imported
+// (*Config).Check error result into its existing `err error` and returns it.
+// The caller compares that error with nil, asserts it to the dot-imported
+// go/types.Error struct, and reads an unexported field through reflect.
+func TestGoSourceS249PackageTestMainDotImportedMethodError(t *testing.T) {
+	xtest := gosource.PackageSpec{Path: "example.com/lib_test", Sources: []gosource.Source{s249Source("lib_test.go", `package lib_test
+
+import (
+	"go/ast"
+	"go/importer"
+	"go/parser"
+	"go/token"
+	. "go/types"
+	"reflect"
+	"strings"
+	"testing"
+)
+
+func walkCodes(t *testing.T, f func(string, int)) {
+	t.Helper()
+	f("MissingName", 1)
+}
+
+func readCode(err Error) int {
+	v := reflect.ValueOf(err)
+	return int(v.FieldByName("go116code").Int())
+}
+
+func checkExample(t *testing.T, example string) error {
+	t.Helper()
+	fset := token.NewFileSet()
+	if !strings.HasPrefix(example, "package") {
+		example = "package p\n\n" + example
+	}
+	file, err := parser.ParseFile(fset, "example.go", example, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conf := Config{
+		FakeImportC: true,
+		Importer:    importer.Default(),
+	}
+	_, err = conf.Check("example", fset, []*ast.File{file}, nil)
+	return err
+}
+
+func TestErrorCodeExamples(t *testing.T) {
+	walkCodes(t, func(name string, value int) {
+		t.Run(name, func(t *testing.T) {
+			examples := []string{"", "var _ = missing"}
+			for i := 1; i < len(examples); i++ {
+				example := strings.TrimSpace(examples[i])
+				err := checkExample(t, example)
+				if err == nil {
+					t.Fatalf("no error in example #%d", i)
+				}
+				typerr, ok := err.(Error)
+				if !ok {
+					t.Fatalf("not a types.Error: %v", err)
+				}
+				if got := readCode(typerr); got <= 0 {
+					t.Errorf("%s: example #%d returned code %d (%s), want > 0", name, i, got, err)
+				}
+			}
+		})
+	})
+}
+`)}}
+	driver := s249Source("_testmain.go", `package main
+
+import (
+	"os"
+	"testing"
+	"testing/internal/testdeps"
+	_xtest "example.com/lib_test"
+)
+
+var tests = []testing.InternalTest{{"TestErrorCodeExamples", _xtest.TestErrorCodeExamples}}
+var benchmarks = []testing.InternalBenchmark{}
+var fuzzTargets = []testing.InternalFuzzTarget{}
+var examples = []testing.InternalExample{}
+
+func main() {
+	m := testing.MainStart(testdeps.TestDeps{}, tests, benchmarks, fuzzTargets, examples)
+	os.Exit(m.Run())
+}
+`)
+
+	got, err := runS249PackageTestMain(t, []gosource.Source{driver}, []gosource.PackageSpec{xtest})
+	if err != nil {
+		t.Fatalf("Runner: %v; stderr: %s", err, got.stderr)
+	}
+	if want := (s249GoSourceOutcome{stdout: "PASS\n"}); got != want {
+		t.Fatalf("Runner %+v; want %+v", got, want)
+	}
+}
+
 func TestGoSourceS249PackageTestMainRequiresAuthenticatedFact(t *testing.T) {
 	driver := s249Source("_testmain.go", `package main
 
