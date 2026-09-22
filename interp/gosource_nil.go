@@ -332,7 +332,7 @@ func (r *Runner) goSourceNilCallableOrChannel(typ syntax.BashPPTypeExpr) (any, *
 	}
 	switch r.bashPPUnderlyingType(typ).(type) {
 	case *syntax.BashPPFuncType, *syntax.BashPPChanType:
-		value := &bashPPBridgeValue{Kind: "nil", Type: bashPPBridgeTypeText(r.bashPPCanonicalAssignableType(typ))}
+		value := &bashPPBridgeValue{Kind: "nil", Type: r.bashPPBridgeTypeIdentity(r.bashPPCanonicalAssignableType(typ))}
 		return value, &bashPPCollectionMeta{kind: "native", typ: typ}, true
 	}
 	return nil, nil, false

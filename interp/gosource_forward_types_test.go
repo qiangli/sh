@@ -111,6 +111,14 @@ func TestGoSourceForwardTypeDeclarationsThreeModes(t *testing.T) {
 	}
 }
 
+// A type declared inside a function body is not a package declaration, so
+// pre-registration must not hoist it: the package `seen` prints before the
+// declaration and the local `seen` after it, each under its own bridge
+// identity (Sprint 243, bashpp_s243_scoped_local_types.go).
+func TestGoSourceForwardTypeRegistryLocalTypeNotHoisted(t *testing.T) {
+	differGoSource(t, "package main;import \"fmt\";type seen struct{n int};func main(){fmt.Println(seen{1});type seen struct{s string};fmt.Println(seen{\"x\"})}\n", nil, "")
+}
+
 // Pre-registration must widen nothing but package scope. Each of these is
 // rejected for a reason that survives it. Rejection may come from the type
 // checker or from the runtime; what matters is that neither name is quietly
@@ -120,14 +128,6 @@ func TestGoSourceForwardTypeRegistryRejects(t *testing.T) {
 		source string
 		want   []string
 	}{
-		// A type declared inside a function body is not a package declaration,
-		// so pre-registration must not hoist it. The runtime has no lexical
-		// type namespace, so the reused spelling is refused outright rather
-		// than conflated with the package type.
-		"local_type_not_hoisted": {
-			`package main;import "fmt";type seen struct{n int};func main(){fmt.Println(seen{1});type seen struct{s string};fmt.Println(seen{"x"})}`,
-			[]string{"unregistered bridge type", "redeclared"},
-		},
 		// Infinite value layouts, now reachable because both names resolve.
 		"mutual_value_recursion": {
 			`package main;type a struct{b b};type b struct{a a};func main(){}`,

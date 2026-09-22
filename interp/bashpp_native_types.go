@@ -28,7 +28,7 @@ func (r *Runner) bashPPNativeTypeRequest(op string, typ syntax.BashPPTypeExpr, a
 	if err != nil {
 		return bashPPBridgeValue{}, err
 	}
-	values, err := r.bashPPNativeRequest(r.ectx, req, bashPPBridgeRequest{Op: op, Selector: bashPPBridgeTypeText(typ), Args: args})
+	values, err := r.bashPPNativeRequest(r.ectx, req, bashPPBridgeRequest{Op: op, Selector: r.bashPPBridgeTypeIdentity(typ), Args: args})
 	if err != nil {
 		return bashPPBridgeValue{}, err
 	}
@@ -38,7 +38,7 @@ func (r *Runner) bashPPNativeTypeRequest(op string, typ syntax.BashPPTypeExpr, a
 	return values[0], nil
 }
 func (r *Runner) bashPPNativeComposite(lit *syntax.BashPPCompositeLit, address bool) (bashPPBridgeValue, error) {
-	value := bashPPBridgeValue{Kind: "struct", Type: bashPPBridgeTypeText(lit.LitType), Fields: map[string]bashPPBridgeValue{}}
+	value := bashPPBridgeValue{Kind: "struct", Type: r.bashPPBridgeTypeIdentity(lit.LitType), Fields: map[string]bashPPBridgeValue{}}
 	// Go allows either every field keyed or none; the positional form —
 	// color.RGBA{c, c, 255, 255} — is filled in the dependency's own field
 	// order, which only the dependency knows.
@@ -90,7 +90,7 @@ func (r *Runner) bashPPNativeDeclaration(d *syntax.BashPPDecl) bool {
 		return true
 	}
 	if _, iface := r.bashPPInterfaceType(d.DeclTypeExpr); iface {
-		value.Interface = bashPPBridgeTypeText(d.DeclTypeExpr)
+		value.Interface = r.bashPPBridgeTypeIdentity(d.DeclTypeExpr)
 	}
 	if d.Name.Value != "_" {
 		r.bashPPBindNativeValue(d.Name.Value, value)

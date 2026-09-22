@@ -821,7 +821,7 @@ func (r *Runner) bashPPBridgeCollection(value any, meta *bashPPCollectionMeta, t
 	if meta != nil && meta.typ != nil {
 		typ = meta.typ
 	}
-	result := bashPPBridgeValue{Type: bashPPBridgeTypeText(typ)}
+	result := bashPPBridgeValue{Type: r.bashPPBridgeTypeIdentity(typ)}
 	switch value := value.(type) {
 	case *bashPPBridgeValue:
 		if value == nil || !r.bashPPGoSource {
@@ -854,14 +854,14 @@ func (r *Runner) bashPPBridgeCollection(value any, meta *bashPPCollectionMeta, t
 		// in its declared type. The dependency's reflect-based type resolver only
 		// parses a concrete length, so emit the realised element count instead.
 		if inferredArray {
-			result.Type = "[" + strconv.Itoa(len(value)) + "]" + bashPPBridgeTypeText(collection.Element)
+			result.Type = "[" + strconv.Itoa(len(value)) + "]" + r.bashPPBridgeTypeIdentity(collection.Element)
 		}
 		// A named array type the helper does not materialise — its length is a
 		// constant name or expression the helper cannot evaluate — still has a
 		// realised length here. Transport the structural spelling the resolver
 		// can parse, exactly like the inferred-length form above.
 		if result.Kind == "array" && !inferredArray && r.bashPPGoSource && !r.bashPPBridgeResolvableArrayType(typ, collection) {
-			result.Type = "[" + strconv.Itoa(len(value)) + "]" + bashPPBridgeTypeText(collection.Element)
+			result.Type = "[" + strconv.Itoa(len(value)) + "]" + r.bashPPBridgeTypeIdentity(collection.Element)
 		}
 		if r.bashPPGoSource && result.Kind == "slice" {
 			result.sliceView = &bashPPNativeSlice{view: value, meta: meta, typ: typ}
@@ -1045,30 +1045,53 @@ func (r *Runner) bashPPBindNativeValue(name string, value bashPPBridgeValue) {
 	}
 }
 
+// bashPPBridgeTypeScope spells a named type by the identity the helper
+// registered for its declaration, or reports false to keep the bare name.
+// The runner's scope resolves a function-local declaration whose name is
+// reused elsewhere in the program (bashpp_s243_scoped_local_types.go).
+type bashPPBridgeTypeScope func(*syntax.BashPPNamedType) (string, bool)
+
 func bashPPBridgeTypeText(typ syntax.BashPPTypeExpr) string {
+	return bashPPBridgeTypeTextIn(typ, nil)
+}
+
+// bashPPBridgeTypeIdentity is bashPPBridgeTypeText under this runner's
+// lexical type scope: a reference to a function-local named type whose
+// name the program reuses is spelled as the helper name registered for
+// exactly that declaration.
+func (r *Runner) bashPPBridgeTypeIdentity(typ syntax.BashPPTypeExpr) string {
+	return bashPPBridgeTypeTextIn(typ, r.bashPPScopedLocalTypeName)
+}
+
+func bashPPBridgeTypeTextIn(typ syntax.BashPPTypeExpr, scope bashPPBridgeTypeScope) string {
 	switch t := typ.(type) {
 	case *syntax.BashPPChanType:
-		return goSourceNativeChannelTypeText(t)
+		return goSourceNativeChannelTypeTextIn(t, scope)
 	case *syntax.BashPPNamedType:
 		if len(t.TypeArgs) == 0 {
+			if scope != nil {
+				if name, ok := scope(t); ok {
+					return name
+				}
+			}
 			return t.Name.Value
 		}
 		args := make([]string, len(t.TypeArgs))
 		for i, arg := range t.TypeArgs {
-			args[i] = bashPPBridgeTypeText(arg.ArgType)
+			args[i] = bashPPBridgeTypeTextIn(arg.ArgType, scope)
 		}
 		return t.Name.Value + "[" + strings.Join(args, ",") + "]"
 	case *syntax.BashPPPointerType:
-		return "*" + bashPPBridgeTypeText(t.Element)
+		return "*" + bashPPBridgeTypeTextIn(t.Element, scope)
 	case *syntax.BashPPFuncType:
-		return "func(" + bashPPBridgeFieldsText(t.Params) + ")(" + bashPPBridgeFieldsText(t.Results) + ")"
+		return "func(" + bashPPBridgeFieldsTextIn(t.Params, scope) + ")(" + bashPPBridgeFieldsTextIn(t.Results, scope) + ")"
 	case *syntax.BashPPStructType:
 		var fields []string
 		for _, field := range t.Fields {
 			// An embedded field spells only its element type, exactly as the
 			// original wrote it; the helper materialises the same embedding.
 			if field.Embedded {
-				text := bashPPBridgeTypeText(field.FieldTypeExpr)
+				text := bashPPBridgeTypeTextIn(field.FieldTypeExpr, scope)
 				if field.Tag != nil {
 					text += " " + field.Tag.Value
 				}
@@ -1079,7 +1102,7 @@ func bashPPBridgeTypeText(typ syntax.BashPPTypeExpr) string {
 			for i, name := range field.Names {
 				names[i] = name.Value
 			}
-			text := strings.Join(names, ",") + " " + bashPPBridgeTypeText(field.FieldTypeExpr)
+			text := strings.Join(names, ",") + " " + bashPPBridgeTypeTextIn(field.FieldTypeExpr, scope)
 			if field.Tag != nil {
 				text += " " + field.Tag.Value
 			}
@@ -1095,31 +1118,35 @@ func bashPPBridgeTypeText(typ syntax.BashPPTypeExpr) string {
 		for _, elem := range elems {
 			if elem.Method != nil {
 				method := elem.Method
-				members = append(members, method.Name.Value+"("+bashPPBridgeFieldsText(method.Params)+")("+bashPPBridgeFieldsText(method.Results)+")")
+				members = append(members, method.Name.Value+"("+bashPPBridgeFieldsTextIn(method.Params, scope)+")("+bashPPBridgeFieldsTextIn(method.Results, scope)+")")
 			} else if elem.Embedded != nil {
-				members = append(members, bashPPBridgeTypeText(elem.Embedded))
+				members = append(members, bashPPBridgeTypeTextIn(elem.Embedded, scope))
 			}
 		}
 		return "interface{" + strings.Join(members, ";") + "}"
 	case *syntax.BashPPCollectionType:
 		if t.Kind == "map" {
-			return "map[" + bashPPBridgeTypeText(t.Key) + "]" + bashPPBridgeTypeText(t.Element)
+			return "map[" + bashPPBridgeTypeTextIn(t.Key, scope) + "]" + bashPPBridgeTypeTextIn(t.Element, scope)
 		}
 		length := ""
 		if t.Length != nil {
 			length = t.Length.Value
 		}
-		return "[" + length + "]" + bashPPBridgeTypeText(t.Element)
+		return "[" + length + "]" + bashPPBridgeTypeTextIn(t.Element, scope)
 	}
 	return bashPPTypeText(typ)
 }
 
 func bashPPBridgeFieldsText(fields []*syntax.BashPPField) string {
+	return bashPPBridgeFieldsTextIn(fields, nil)
+}
+
+func bashPPBridgeFieldsTextIn(fields []*syntax.BashPPField, scope bashPPBridgeTypeScope) string {
 	var values []string
 	for _, field := range fields {
 		text := "<inferred>"
 		if field.FieldTypeExpr != nil {
-			text = bashPPBridgeTypeText(field.FieldTypeExpr)
+			text = bashPPBridgeTypeTextIn(field.FieldTypeExpr, scope)
 		} else if field.FieldType != nil {
 			text = field.FieldType.Value
 		}
@@ -1153,14 +1180,14 @@ func (r *Runner) bashPPBridgeCell(cell *bashPPCell) (bashPPBridgeValue, error) {
 		if err == nil && r.bashPPGoSource {
 			// A typed nil dynamic value is still a nonnil interface. Range
 			// copies and argument/result cells must retain that static wrapper.
-			value.Interface = bashPPBridgeTypeText(cell.declType)
+			value.Interface = r.bashPPBridgeTypeIdentity(cell.declType)
 		}
 		return value, err
 	}
 	if cell.pointer {
 		value, err := r.bashPPBridgePointerValue(cell.pointerValue)
 		if value.Type == "" {
-			value.Type = bashPPBridgeTypeText(cell.declType)
+			value.Type = r.bashPPBridgeTypeIdentity(cell.declType)
 		}
 		return value, err
 	}

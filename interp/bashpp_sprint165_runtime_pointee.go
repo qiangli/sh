@@ -22,7 +22,7 @@ func (r *Runner) goSourceInterfacePointee(ptr *bashPPPointer) (bashPPBridgeValue
 	if _, iface := r.bashPPInterfaceType(target.declType); !iface || target.pointer || target.vr.Kind == expand.Object {
 		return bashPPBridgeValue{}, false, nil
 	}
-	text := bashPPBridgeTypeText(target.declType)
+	text := r.bashPPBridgeTypeIdentity(target.declType)
 	if target.interfaceValue == nil || target.interfaceValue.nilIface {
 		return bashPPBridgeValue{Kind: "nil", Type: text, Interface: text}, true, nil
 	}

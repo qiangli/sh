@@ -18,7 +18,7 @@ func main() {}
 		t.Fatal(err)
 	}
 	r := &Runner{bashPPGoSourceFile: program.File}
-	descriptors := r.bashPPBuildLocalTypeDescriptors()
+	descriptors, _ := r.bashPPBuildLocalTypeDescriptors()
 	named, nested := false, false
 	for _, descriptor := range descriptors {
 		if descriptor.Name == "_" {

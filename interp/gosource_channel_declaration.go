@@ -50,7 +50,7 @@ func (r *Runner) goSourceChannelDeclaration(d *syntax.BashPPDecl) bool {
 	if _, ok := r.bashPPUnderlyingType(d.DeclTypeExpr).(*syntax.BashPPChanType); !ok {
 		return false
 	}
-	cell := goSourceNativeValueCell(bashPPBridgeValue{Kind: "nil", Type: bashPPBridgeTypeText(d.DeclTypeExpr)})
+	cell := goSourceNativeValueCell(bashPPBridgeValue{Kind: "nil", Type: r.bashPPBridgeTypeIdentity(d.DeclTypeExpr)})
 	cell.declType = d.DeclTypeExpr
 	if d.InitExpr != nil && !goSourceNilLiteral(d.InitExpr) {
 		value, err := r.goSourceValueCell(d.InitExpr)

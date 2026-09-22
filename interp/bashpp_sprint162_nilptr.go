@@ -346,7 +346,7 @@ func (r *Runner) goSourceTypedNilBridgeValue(expr syntax.BashPPExpr) (bashPPBrid
 		value, err := r.bashPPNativeTypeRequest("new", target)
 		return value, true, err
 	}
-	return bashPPBridgeValue{Kind: "nil", Type: bashPPBridgeTypeText(r.bashPPCanonicalAssignableType(target))}, true, nil
+	return bashPPBridgeValue{Kind: "nil", Type: r.bashPPBridgeTypeIdentity(r.bashPPCanonicalAssignableType(target))}, true, nil
 }
 
 // goSourceNilInterfaceSource is the source cell of the untyped nil an

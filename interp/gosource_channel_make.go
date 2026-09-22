@@ -84,7 +84,7 @@ func (r *Runner) goSourceMakeNativeChannel(typ *syntax.BashPPChanType, expr synt
 	}
 	selector := goSourceNativeChannelTypeText(typ)
 	if len(declared) > 0 {
-		selector = bashPPBridgeTypeText(declared[0])
+		selector = r.bashPPBridgeTypeIdentity(declared[0])
 	}
 	values, err := r.bashPPNativeRequest(r.bashPPTaskContext(r.ectx), req, bashPPBridgeRequest{Op: "channel-make", Selector: selector, Args: []bashPPBridgeValue{{Kind: "int", Type: "int", Text: strconv.Itoa(capacity)}}})
 	if err != nil {
@@ -193,6 +193,10 @@ func (r *Runner) goSourceRangeNativeChannel(ctx context.Context, rng *syntax.Bas
 }
 
 func goSourceNativeChannelTypeText(typ *syntax.BashPPChanType) string {
+	return goSourceNativeChannelTypeTextIn(typ, nil)
+}
+
+func goSourceNativeChannelTypeTextIn(typ *syntax.BashPPChanType, scope bashPPBridgeTypeScope) string {
 	prefix := "chan "
 	if typ.Direction == "recv" {
 		prefix = "<-chan "
@@ -200,7 +204,7 @@ func goSourceNativeChannelTypeText(typ *syntax.BashPPChanType) string {
 	if typ.Direction == "send" {
 		prefix = "chan<- "
 	}
-	return prefix + bashPPBridgeTypeText(typ.Element)
+	return prefix + bashPPBridgeTypeTextIn(typ.Element, scope)
 }
 func (r *Runner) goSourceReceiveAssign(assign *syntax.BashPPAssign) bool {
 	if !r.bashPPGoSource || len(assign.Names) != 2 || len(assign.ValueExprs) != 1 {

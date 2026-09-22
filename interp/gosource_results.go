@@ -57,7 +57,7 @@ func (r *Runner) goSourceNativeAssignCall(ctx context.Context, assign *syntax.Ba
 				// The source was typechecked, and the dependency returned its
 				// actual dynamic value. Keep nil-interface vs typed-nil identity
 				// while retaining the destination's static interface type.
-				value.Interface = bashPPBridgeTypeText(target.declType)
+				value.Interface = r.bashPPBridgeTypeIdentity(target.declType)
 				cells[i] = r.goSourceNativeValueCell(value)
 				payload := bashPPCopyAssignmentCell(cells[i])
 				cells[i].interfaceValue = &bashPPInterfaceValue{nilIface: value.Kind == "nil", cell: payload, dynamic: bashPPBridgeDynamicType(value.Type)}

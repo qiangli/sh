@@ -232,9 +232,9 @@ func (r *Runner) bashPPNilCollectionBridge(meta *bashPPCollectionMeta, typ synta
 		if kind == "inferred-array" {
 			kind = "array"
 		}
-		return bashPPBridgeValue{Kind: kind, Type: bashPPBridgeTypeText(typ), Elements: []bashPPBridgeValue{}}, true
+		return bashPPBridgeValue{Kind: kind, Type: r.bashPPBridgeTypeIdentity(typ), Elements: []bashPPBridgeValue{}}, true
 	case "map":
-		return bashPPBridgeValue{Kind: "map", Type: bashPPBridgeTypeText(typ), Entries: []bashPPBridgeEntry{}}, true
+		return bashPPBridgeValue{Kind: "map", Type: r.bashPPBridgeTypeIdentity(typ), Entries: []bashPPBridgeEntry{}}, true
 	}
 	return bashPPBridgeValue{}, false
 }

@@ -50,36 +50,44 @@ func TestGoSourceTypeRegistryThreeModes(t *testing.T) {
 	}
 }
 
-// These valid Go programs deliberately exceed the represented lexical type
-// namespace. They must fail before a dependency can observe conflated types.
-func TestGoSourceTypeRegistryRejectsAmbiguousScope(t *testing.T) {
+// A reused local type name denotes distinct Go types per scope. Each
+// function-local declaration is registered under its own helper identity
+// and a package-level one keeps the plain name (Sprint 243, story 674,
+// bashpp_s243_scoped_local_types.go), so these valid programs run as native
+// Go does instead of being refused for a conflated namespace.
+func TestGoSourceTypeRegistryScopedLocalTypes(t *testing.T) {
 	for name, source := range map[string]string{
-		"local_local":   `package main;import "fmt";func one(){type point struct{X int};fmt.Println(point{1})};func two(){type point struct{X int};fmt.Println(point{2})};func main(){one();two()}`,
-		"package_local": `package main;import "fmt";type point struct{X int};func main(){type point struct{X int};fmt.Println(point{1})}`,
+		"local_local":   "package main;import \"fmt\";func one(){type point struct{X int};fmt.Println(point{1})};func two(){type point struct{X int};fmt.Println(point{2})};func main(){one();two()}\n",
+		"package_local": "package main;import \"fmt\";type point struct{X int};func main(){type point struct{X int};fmt.Println(point{1})}\n",
 	} {
-		t.Run(name, func(t *testing.T) {
-			program, err := gosource.Parse(strings.NewReader(source), "ambiguous.go", gosource.Options{RunMain: true})
-			if err != nil {
-				t.Fatal(err)
-			}
-			var out, errout bytes.Buffer
-			runner, err := interp.New(interp.Lang(syntax.LangBashPP), interp.Dir(t.TempDir()), interp.StdIO(nil, &out, &errout))
-			if err != nil {
-				t.Fatal(err)
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			err = runner.Run(ctx, program.File)
-			if err == nil {
-				t.Fatalf("ambiguous types accepted: %q", out.String())
-			}
-			diagnostic := err.Error() + errout.String()
-			if !strings.Contains(diagnostic, "unregistered bridge type") && !strings.Contains(diagnostic, "redeclared") {
-				t.Fatalf("unexpected failure: %v stderr=%q", err, errout.String())
-			}
-			if out.Len() != 0 {
-				t.Fatalf("dependency observed ambiguous type: %q", out.String())
-			}
-		})
+		t.Run(name, func(t *testing.T) { differGoSource(t, source, nil, "") })
+	}
+}
+
+// A reused generic type name is still outside the represented namespace:
+// it must fail before a dependency can observe conflated instantiations.
+func TestGoSourceTypeRegistryRejectsAmbiguousGeneric(t *testing.T) {
+	source := "package main;import \"fmt\";func one(){type box[T any] struct{V T};fmt.Println(box[int]{1})};func two(){type box[T any] struct{V T};fmt.Println(box[int]{2})};func main(){one();two()}\n"
+	program, err := gosource.Parse(strings.NewReader(source), "ambiguous.go", gosource.Options{RunMain: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out, errout bytes.Buffer
+	runner, err := interp.New(interp.Lang(syntax.LangBashPP), interp.Dir(t.TempDir()), interp.StdIO(nil, &out, &errout))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	err = runner.Run(ctx, program.File)
+	if err == nil {
+		t.Fatalf("ambiguous generic types accepted: %q", out.String())
+	}
+	diagnostic := err.Error() + errout.String()
+	if !strings.Contains(diagnostic, "unregistered bridge type") && !strings.Contains(diagnostic, "redeclared") {
+		t.Fatalf("unexpected failure: %v stderr=%q", err, errout.String())
+	}
+	if out.Len() != 0 {
+		t.Fatalf("dependency observed ambiguous type: %q", out.String())
 	}
 }
