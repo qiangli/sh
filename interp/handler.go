@@ -989,6 +989,16 @@ func findExecutable(dir, file string, exts []string) (string, error) {
 			return file, nil
 		}
 	}
+	if !winHasExt(file) {
+		// A name with no extension at all is not a Windows program, but it
+		// is how a POSIX tool or script is spelled, and execFileWithExt is
+		// already willing to run one: type5.sub does `touch e; chmod +x e`
+		// and then wants `type -p e` to report it. PATHEXT has had its turn
+		// above, so a foo.exe beside a plain foo still wins.
+		if _, err := checkStat(dir, file, true); err == nil {
+			return file, nil
+		}
+	}
 	return "", fmt.Errorf("not found")
 }
 
@@ -1067,14 +1077,12 @@ func lookPathDirMode(cwd string, env expand.Environ, file string, find findAny, 
 		case "", ".":
 			// Bash reports a command found via an empty or "." PATH
 			// element as "./name" (findcmd.c). filepath.Join(".", name)
-			// would clean the "./" away, so build it directly; this also
-			// guarantees the result carries a slash, which `type -p`/`-P`
-			// and command-path output rely on.
-			if windows {
-				path = lookPathJoin(".", file, windows)
-			} else {
-				path = "./" + file
-			}
+			// would clean the "./" away, so build it directly — on Windows
+			// too, where lookPathJoin ends up in filepath.Join and did
+			// exactly that: type5.sub sets PATH= and wants `type -p e` to
+			// print "./e", not "e". This also guarantees the result carries
+			// a slash, which `type -p`/`-P` and command-path output rely on.
+			path = "./" + file
 		default:
 			path = lookPathJoin(elem, file, windows)
 		}
