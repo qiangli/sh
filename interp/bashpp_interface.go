@@ -40,6 +40,7 @@ type bashPPInterfaceValue struct {
 
 type bashPPInterfaceMethod struct {
 	spec *syntax.BashPPMethodSpec
+	name string
 	sig  string
 	// pkg is the linked-package tag of the declared interface the method
 	// is spelled in; see gosource_method_package.go. An unexported method
@@ -50,6 +51,15 @@ type bashPPInterfaceMethod struct {
 type bashPPInterfaceMethods struct {
 	byName map[string]bashPPInterfaceMethod
 	order  []string
+}
+
+// bashPPInterfaceMethodKey keeps private methods from distinct linked packages
+// distinct. Exported methods have no package-qualified identity in Go.
+func bashPPInterfaceMethodKey(name, pkg string) string {
+	if goSourceUnexportedName(name) {
+		return pkg + "\x00" + name
+	}
+	return name
 }
 
 func (r *Runner) bashPPInterfaceType(typ syntax.BashPPTypeExpr) (*syntax.BashPPInterfaceType, bool) {
@@ -194,18 +204,19 @@ func (r *Runner) bashPPInterfaceMethodSet(name string, iface *syntax.BashPPInter
 			return nil, fmt.Errorf("BASHPP-EINTERFACE-METHOD: interface %s has invalid method name", name)
 		}
 		method := spec.Name.Value
+		key := bashPPInterfaceMethodKey(method, pkg)
 		sig := bashPPMethodSpecSignature(spec)
 		if direct[method] {
 			return nil, fmt.Errorf("BASHPP-EINTERFACE-DUPLICATE: interface %s declares method %s more than once", name, spec.Name.Value)
 		}
 		direct[method] = true
-		if existing, found := set.byName[method]; found && existing.sig != sig {
+		if existing, found := set.byName[key]; found && existing.sig != sig {
 			return nil, fmt.Errorf("BASHPP-EINTERFACE-CONFLICT: interface %s has conflicting method %s", name, method)
 		}
-		if _, found := set.byName[method]; !found {
-			set.order = append(set.order, method)
+		if _, found := set.byName[key]; !found {
+			set.order = append(set.order, key)
 		}
-		set.byName[method] = bashPPInterfaceMethod{spec: spec, sig: sig, pkg: pkg}
+		set.byName[key] = bashPPInterfaceMethod{spec: spec, name: method, sig: sig, pkg: pkg}
 	}
 	return set, nil
 }
@@ -322,10 +333,11 @@ func (r *Runner) bashPPImplements(actual syntax.BashPPTypeExpr, iface *syntax.Ba
 		if r.bashPPGoSource {
 			sort.Strings(expectedSet.order)
 		}
-		for _, name := range expectedSet.order {
-			expected := expectedSet.byName[name]
-			actualMethod, found := actualSet.byName[name]
-			if !found || goSourceUnexportedName(name) && actualMethod.pkg != expected.pkg {
+		for _, key := range expectedSet.order {
+			expected := expectedSet.byName[key]
+			name := expected.name
+			actualMethod, found := actualSet.byName[key]
+			if !found {
 				return fmt.Errorf("BASHPP-EINTERFACE-MISSING: %s does not implement interface (missing method %s)", bashPPTypeText(actual), name)
 			}
 			if actualMethod.sig != expected.sig && !r.bashPPAliasedSignatureEqual(actualMethod.spec.Params, actualMethod.spec.Results, expected.spec.Params, expected.spec.Results) {
@@ -350,7 +362,7 @@ func (r *Runner) bashPPImplements(actual syntax.BashPPTypeExpr, iface *syntax.Ba
 				return nil
 			}
 			sort.Strings(methods.order)
-			return fmt.Errorf("BASHPP-EINTERFACE-MISSING: %s does not implement interface (missing method %s)", bashPPTypeText(actual), methods.order[0])
+			return fmt.Errorf("BASHPP-EINTERFACE-MISSING: %s does not implement interface (missing method %s)", bashPPTypeText(actual), methods.byName[methods.order[0]].name)
 		}
 		return fmt.Errorf("BASHPP-EINTERFACE-IMPOSSIBLE: %s cannot implement interface", bashPPTypeText(actual))
 	}
@@ -361,8 +373,9 @@ func (r *Runner) bashPPImplements(actual syntax.BashPPTypeExpr, iface *syntax.Ba
 	if r.bashPPGoSource {
 		sort.Strings(expectedSet.order)
 	}
-	for _, name := range expectedSet.order {
-		expected := expectedSet.byName[name]
+	for _, key := range expectedSet.order {
+		expected := expectedSet.byName[key]
+		name := expected.name
 		// Native and original candidates at the same shallowest depth
 		// make a promoted method ambiguous before interface admission.
 		if !goSourceUnexportedName(name) {

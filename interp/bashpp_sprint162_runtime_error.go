@@ -132,7 +132,8 @@ func (r *Runner) bashPPRuntimeErrorImplements(actual syntax.BashPPTypeExpr, ifac
 	if err != nil {
 		return err
 	}
-	for _, name := range methods.order {
+	for _, key := range methods.order {
+		name := methods.byName[key].name
 		if name != "Error" && name != "RuntimeError" {
 			return &bashPPRuntimeErrorMissingMethod{typ: bashPPTypeText(actual), method: name}
 		}
@@ -406,7 +407,8 @@ func (r *Runner) goSourceTypeAssertionFailure(static syntax.BashPPTypeExpr, iv *
 			text := implementationErr.Error()
 			// Admission already resolved the actual method set and its signatures.
 			// Preserve its failing method, never substitute the first required method.
-			for _, name := range methods.order {
+			for _, key := range methods.order {
+				name := methods.byName[key].name
 				if strings.HasPrefix(text, "BASHPP-EINTERFACE-MISSING:") && strings.HasSuffix(text, "(missing method "+name+")") ||
 					strings.HasPrefix(text, "BASHPP-EINTERFACE-SIGNATURE:") && strings.HasSuffix(text, " method "+name+" has wrong signature") {
 					missing = name

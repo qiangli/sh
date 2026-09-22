@@ -77,7 +77,14 @@ func (r *Runner) bashPPResolveNativeEmbeddedSelection(root syntax.BashPPTypeExpr
 			if iface, ok := r.bashPPInterfaceType(node.typ); ok {
 				set, err := r.bashPPInterfaceMethodSet(bashPPTypeText(node.typ), iface, make(map[string]bool))
 				if err == nil {
-					if _, found := set.byName[name]; found {
+					found := false
+					for _, method := range set.byName {
+						if method.name == name {
+							found = true
+							break
+						}
+					}
+					if found {
 						pending[depth] = append(pending[depth], candidate{})
 					}
 				}

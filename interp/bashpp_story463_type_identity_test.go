@@ -303,10 +303,15 @@ type I interface { Foo(int) }`
 // helper package and runs main, returning stdout and stderr.
 func runGoSourceMultiPackage(t *testing.T, name, mainSrc, importPath, depName, depSrc string) (string, string) {
 	t.Helper()
+	return runGoSourcePackageSet(t, name, mainSrc, []gosource.PackageSpec{{Path: importPath, Sources: []gosource.Source{{Name: depName, Data: []byte(depSrc)}}}})
+}
+
+func runGoSourcePackageSet(t *testing.T, name, mainSrc string, packages []gosource.PackageSpec) (string, string) {
+	t.Helper()
 	prog, err := gosource.Load([]gosource.Source{{Name: name + ".go", Data: []byte(mainSrc)}}, gosource.Options{
 		RunMain:    true,
 		ImportBase: "test",
-		Packages:   []gosource.PackageSpec{{Path: importPath, Sources: []gosource.Source{{Name: depName, Data: []byte(depSrc)}}}},
+		Packages:   packages,
 	})
 	if err != nil {
 		t.Fatalf("gosource.Load: %v", err)

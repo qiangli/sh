@@ -71,7 +71,10 @@ func (r *Runner) goSourceInterfacePackage(iface *syntax.BashPPInterfaceType) str
 			return goSourceLinkedPackage(name)
 		}
 	}
-	return ""
+	// A method in an interface literal belongs to the package containing the
+	// literal too. Flattening preserves its source position even though there
+	// is no named declaration from which to recover a hygiene marker.
+	return r.goSourcePackageAt(iface.Pos())
 }
 
 // goSourceMethodSpecPackage reports the package of an interface method spec

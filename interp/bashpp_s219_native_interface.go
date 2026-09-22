@@ -111,8 +111,9 @@ func (r *Runner) goSourceNativeImplements(cell *bashPPCell, dynamic syntax.BashP
 // does not have is missing, a member whose reported Go type is not the
 // expected signature is wrong. It returns nil when every method matches.
 func (r *Runner) goSourceNativeMethodSetMismatch(value bashPPBridgeValue, spelled string, expected *bashPPInterfaceMethods) error {
-	for _, name := range expected.order {
-		method := expected.byName[name]
+	for _, key := range expected.order {
+		method := expected.byName[key]
+		name := method.name
 		// reflect never reports an unexported method, and a dependency type
 		// cannot declare one in the interface's package anyway.
 		if goSourceUnexportedName(name) {
