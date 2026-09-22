@@ -1158,18 +1158,33 @@ func (r *Runner) bashPPTypeSwitch(ctx context.Context, sw *syntax.BashPPSwitch) 
 		leaveArm := r.bashPPPushScope()
 		if len(decl.Lhs) == 1 {
 			name := decl.Lhs[0].Value
+			source := cell
+			arm := sw.Arms[armIndex]
+			// The implicit variable has the asserted type only in a case with
+			// exactly one non-nil type. In default, case nil, and cases listing
+			// multiple types it has the switch expression's interface type and
+			// value. Keeping that interface carrier is what preserves the
+			// dynamic type for a later assertion or native call such as fmt.%T.
+			if caseType, ok := bashPPSingleTypeSwitchCase(arm); ok {
+				_, asserted, assertErr := r.bashPPTypeAssertCell(&syntax.BashPPTypeAssertExpr{Assert: caseType}, false, cell)
+				if assertErr != nil {
+					r.exit.fatal(assertErr)
+					leaveArm()
+					return
+				}
+				source = asserted
+			}
 			vr := expand.Variable{Set: true, Kind: expand.String}
-			if iv != nil && !iv.nilIface && iv.cell != nil {
-				vr = iv.cell.vr
+			if source != nil {
+				vr = source.vr
 			}
 			r.bashPPDeclareName(name, vr)
 			target := r.bashPPScope.lookup(name)
-			if target != nil && iv != nil && !iv.nilIface && iv.cell != nil {
-				source := iv.cell
-				target.typeName = source.typeName
-				target.declType = source.declType
-				target.pointer, target.nilPointer, target.pointerValue = source.pointer, source.nilPointer, source.pointerValue
-				target.object, target.valueMeta = source.object, source.valueMeta
+			if target != nil && source != nil {
+				bound := *source
+				bound.vr.ReadOnly = false
+				bound.constant = false
+				*target = bound
 			}
 		}
 		r.stmts(ctx, sw.Arms[armIndex].Stmts)
@@ -1188,6 +1203,23 @@ func (r *Runner) bashPPTypeSwitch(ctx context.Context, sw *syntax.BashPPSwitch) 
 			return
 		}
 	}
+}
+
+func bashPPSingleTypeSwitchCase(arm *syntax.BashPPSwitchArm) (syntax.BashPPTypeExpr, bool) {
+	if len(arm.Types)+len(arm.Exprs) != 1 {
+		return nil, false
+	}
+	if len(arm.Types) == 1 {
+		if named, ok := arm.Types[0].(*syntax.BashPPNamedType); ok && named.Name.Value == "nil" {
+			return nil, false
+		}
+		return arm.Types[0], true
+	}
+	id, ok := arm.Exprs[0].(*syntax.BashPPIdent)
+	if !ok || id.Name.Value == "nil" {
+		return nil, false
+	}
+	return &syntax.BashPPNamedType{Name: id.Name}, true
 }
 
 func typeCaseMatches(r *Runner, iv *bashPPInterfaceValue, expr syntax.BashPPExpr) bool {
