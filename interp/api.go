@@ -30,6 +30,7 @@ import (
 
 	"golang.org/x/term"
 	"mvdan.cc/sh/v3/expand"
+	"mvdan.cc/sh/v3/pathconv"
 	"mvdan.cc/sh/v3/polyglot"
 	"mvdan.cc/sh/v3/syntax"
 )
@@ -3021,8 +3022,10 @@ func (r *Runner) Reset() {
 			r.execHandler = mw(r.execHandler)
 		}
 		// Fill tempDir; only need to do this once given that Env will not change.
-		if dir := r.Env.Get("TMPDIR").String(); filepath.IsAbs(dir) {
-			r.tempDir = dir
+		// TMPDIR may be spelled the POSIX way (/tmp, /c/Users/x/tmp) on
+		// Windows; resolve it to the native directory the way an operand is.
+		if dir := r.Env.Get("TMPDIR").String(); pathconv.IsAbs(dir) {
+			r.tempDir = shellPathToOS(r.Dir, dir)
 		} else {
 			r.tempDir = os.TempDir()
 		}
@@ -3272,7 +3275,9 @@ func (r *Runner) Reset() {
 		r.startTime = time.Now()
 	}
 
-	r.dirStack = append(r.dirStack, r.Dir)
+	// The stack holds the logical spelling `dirs` prints; on Unix that is
+	// r.Dir itself.
+	r.dirStack = append(r.dirStack, shellPathFromOS(r.Dir))
 
 	// A restricted shell (set via `-r`/`--restricted`/`rbash` before the
 	// first Reset) freezes PATH, SHELL, ENV, and BASH_ENV. The opts were

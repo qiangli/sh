@@ -121,7 +121,7 @@ func TestShellPathWindowsFromOSTranslation(t *testing.T) {
 		path string
 		want string
 	}{
-		{name: "drive root", path: `C:\`, want: "/c/"},
+		{name: "drive root", path: `C:\`, want: "/c"},
 		{name: "drive path", path: `C:\Users\Lern`, want: "/c/Users/Lern"},
 		{name: "lowercase drive", path: `d:\work\repo`, want: "/d/work/repo"},
 		{name: "mixed slash drive", path: `E:/tmp/file`, want: "/e/tmp/file"},

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"mvdan.cc/sh/v3/expand"
+	"mvdan.cc/sh/v3/pathconv"
 	"mvdan.cc/sh/v3/syntax"
 )
 
@@ -926,6 +927,13 @@ func findExecutable(dir, file string, exts []string) (string, error) {
 	for _, e := range exts {
 		f := file + e
 		if f, err := checkStat(dir, f, true); err == nil {
+			if strings.HasPrefix(file, "/") {
+				// A POSIX-spelled operand (/bin/sh) keeps its spelling
+				// when the hit came through PATHEXT: `type -t /bin/sh`
+				// prints file and `hash -p /bin/sh` records what bash
+				// records; os/exec appends the extension itself.
+				return file, nil
+			}
 			return f, nil
 		}
 	}
@@ -1009,10 +1017,7 @@ func lookPathDirMode(cwd string, env expand.Environ, file string, find findAny, 
 }
 
 func splitLookPath(path string, windows bool) []string {
-	if windows && runtime.GOOS != "windows" {
-		return strings.Split(path, ";")
-	}
-	return filepath.SplitList(path)
+	return pathconv.SplitPathList(path, windows)
 }
 
 func lookPathHasPath(file string, windows bool) bool {
@@ -1023,6 +1028,15 @@ func lookPathHasPath(file string, windows bool) bool {
 }
 
 func lookPathJoin(dir, file string, windows bool) string {
+	if windows && strings.HasPrefix(dir, "/") {
+		// A POSIX-spelled PATH element (/bin, /usr/bin) yields a
+		// POSIX-spelled hit (/bin/sh): the mounts resolve it when it is
+		// stat'ed or executed, and `type -p`/`hash` echo it as bash does.
+		if strings.HasSuffix(dir, "/") {
+			return dir + file
+		}
+		return dir + "/" + file
+	}
 	if !windows || runtime.GOOS == "windows" {
 		return filepath.Join(dir, file)
 	}
@@ -1232,18 +1246,58 @@ type StatHandlerFunc func(ctx context.Context, name string, followSymlinks bool)
 // DefaultStatHandler returns the [StatHandlerFunc] used by default.
 // It makes use of [os.Stat] and [os.Lstat], depending on followSymlinks.
 func DefaultStatHandler() StatHandlerFunc {
+	windows := runtime.GOOS == "windows"
 	return func(ctx context.Context, path string, followSymlinks bool) (fs.FileInfo, error) {
 		path = shellPathJoinAbs(handlerDir(ctx), path)
 		if !followSymlinks {
-			return os.Lstat(path)
-		} else {
-			info, err := os.Stat(path)
+			info, err := os.Lstat(path)
 			if err != nil {
-				return statLongPath(path, err)
+				return statExeFallback(os.Lstat, path, err, windows)
 			}
 			return info, nil
 		}
+		info, err := os.Stat(path)
+		if err != nil {
+			info, err = statLongPath(path, err)
+			if err != nil {
+				return statExeFallback(os.Stat, path, err, windows)
+			}
+		}
+		return info, nil
 	}
+}
+
+// exeRetryPath returns path+".exe" when a missing path could be the
+// extensionless spelling of a Windows executable: the last component has
+// no extension and the path does not end in a separator.
+func exeRetryPath(path string) (string, bool) {
+	if path == "" || winHasExt(path) {
+		return "", false
+	}
+	if last := path[len(path)-1]; last == '/' || last == '\\' || last == ':' {
+		return "", false
+	}
+	return path + ".exe", true
+}
+
+// statExeFallback gives a stat of an extensionless path Cygwin's .exe
+// transparency on Windows: when path does not exist but path.exe does,
+// the .exe's info is returned, so `[ -x /bin/sh ]`, `cd /bin/sh` (Not a
+// directory) and `cp /bin/sh .` see the file the way bash's scripts
+// expect. Any other error, and every non-Windows host, returns err as is.
+func statExeFallback(stat func(string) (fs.FileInfo, error), path string, err error, windows bool) (fs.FileInfo, error) {
+	if !windows || !errors.Is(err, fs.ErrNotExist) {
+		return nil, err
+	}
+	exe, ok := exeRetryPath(path)
+	if !ok {
+		return nil, err
+	}
+	info, exeErr := stat(exe)
+	if exeErr != nil {
+		return nil, err
+	}
+	return info, nil
 }
 
 func handlerDir(ctx context.Context) string {
