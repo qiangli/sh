@@ -220,6 +220,44 @@ func (r *Runner) bashPPAppendSlice(seq []any, metas []*bashPPCollectionMeta, ele
 	return grownSeq, grownMetas
 }
 
+// bashPPAppendTypedSlice is the storage-level append operation for a typed
+// slice. Ordinary elements retain the dense carrier and therefore retain the
+// exact values (including callable handles) that bashPPAppendSlice stores.
+// A logical carrier is accepted only for a proven zero-size element type; its
+// elements have no value state to store, so only the Go slice header changes.
+//
+// additional is separate from len(values) because a spread from a logical
+// zero-size slice can contribute many elements without materialising any
+// carrier values. false reports the growslice length-overflow condition; the
+// builtin boundary must raise Go's "runtime error: growslice: len out of
+// range" panic so recover observes the usual runtime.Error value.
+func (r *Runner) bashPPAppendTypedSlice(seq []any, meta *bashPPCollectionMeta, elem syntax.BashPPTypeExpr, additional int, values []any, children []*bashPPCollectionMeta) ([]any, *bashPPCollectionMeta, bool) {
+	oldLen := bashPPSequenceLen(meta, seq)
+	if additional < 0 || additional > int(^uint(0)>>1)-oldLen {
+		return seq, meta, false
+	}
+	if bashPPLogicalSequence(meta) {
+		shape, ok := r.bashPPGoShapeType(elem, 0)
+		if !ok || shape.Size() != 0 || len(values) != 0 || len(children) != 0 {
+			return seq, meta, false
+		}
+		newLen := oldLen + additional
+		newCap := bashPPSequenceCap(meta, seq)
+		if newLen > newCap {
+			// Go's growslice uses cap=newLen for zero-size elements.
+			newCap = newLen
+		}
+		bashPPSetSequenceShape(meta, newLen, newCap)
+		return seq, meta, true
+	}
+	if additional != len(values) || len(values) != len(children) {
+		return seq, meta, false
+	}
+	seq, meta.sequence = r.bashPPAppendSlice(seq, meta.sequence, elem, values, children)
+	bashPPSetSequenceShape(meta, len(seq), cap(seq))
+	return seq, meta, true
+}
+
 // bashPPNilCollectionBridge describes a nil slice or map to the dependency
 // bridge. A nil slice keeps its declared type and prints as the empty slice it
 // compares equal to nil about, so it crosses as its own kind with no elements

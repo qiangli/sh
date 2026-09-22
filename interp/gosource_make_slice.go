@@ -100,3 +100,16 @@ func goSourceAllocateSlice(length, capacity int) (values []any, children []*bash
 	}()
 	return make([]any, length, capacity), make([]*bashPPCollectionMeta, length, capacity), nil
 }
+
+func (r *Runner) goSourceAllocateTypedSlice(element syntax.BashPPTypeExpr, length, capacity int) (values []any, children []*bashPPCollectionMeta, logical bool, err error) {
+	shape, ok := r.bashPPGoShapeType(element, 0)
+	if !ok || shape.Size() != 0 {
+		values, children, err = goSourceAllocateSlice(length, capacity)
+		return values, children, false, err
+	}
+	values, children, err = goSourceAllocateSlice(length, capacity)
+	if err == nil {
+		return values, children, false, nil
+	}
+	return nil, nil, true, nil
+}

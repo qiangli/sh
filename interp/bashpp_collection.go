@@ -22,9 +22,14 @@ type bashPPCollectionMeta struct {
 	kind     string
 	typ      syntax.BashPPTypeExpr
 	sequence []*bashPPCollectionMeta
-	mapping  map[string]*bashPPCollectionMeta
-	mapKeys  map[bashPPMapKey]*bashPPMapEntry
-	mapNonce uint64
+	// sequenceLen/sequenceCap let a slice carry its Go length and capacity
+	// independently from the dense interpreter carrier. Zero values mean the
+	// ordinary []any representation is authoritative.
+	sequenceLen int
+	sequenceCap int
+	mapping     map[string]*bashPPCollectionMeta
+	mapKeys     map[bashPPMapKey]*bashPPMapEntry
+	mapNonce    uint64
 	// interfaceValue preserves the dynamic type and value of an interface
 	// stored inside a collection or struct. The JSON-shaped payload alone can
 	// only retain its printable shell value.
@@ -40,6 +45,35 @@ type bashPPCollectionMeta struct {
 
 func bashPPArrayMeta(meta *bashPPCollectionMeta) bool {
 	return meta != nil && (meta.kind == "array" || meta.kind == "inferred-array")
+}
+
+func bashPPSequenceLen(meta *bashPPCollectionMeta, dense []any) int {
+	if meta != nil && meta.sequenceLen != 0 {
+		return meta.sequenceLen
+	}
+	return len(dense)
+}
+
+func bashPPSequenceCap(meta *bashPPCollectionMeta, dense []any) int {
+	if meta != nil && meta.sequenceCap != 0 {
+		return meta.sequenceCap
+	}
+	return cap(dense)
+}
+
+func bashPPLogicalSequence(meta *bashPPCollectionMeta) bool {
+	return meta != nil && (meta.sequenceLen != 0 || meta.sequenceCap != 0)
+}
+
+func bashPPSetSequenceShape(meta *bashPPCollectionMeta, length, capacity int) {
+	if meta == nil {
+		return
+	}
+	if length == len(meta.sequence) && capacity == cap(meta.sequence) {
+		meta.sequenceLen, meta.sequenceCap = 0, 0
+		return
+	}
+	meta.sequenceLen, meta.sequenceCap = length, capacity
 }
 
 func bashPPValueMeta(meta *bashPPCollectionMeta) bool {
@@ -132,6 +166,7 @@ func bashPPCloneCollectionMeta(meta *bashPPCollectionMeta, seen map[*bashPPColle
 	// capacity as its payload. Preserve that capacity across snapshots so a
 	// later legal re-slice does not outrun its element metadata.
 	out.sequence = make([]*bashPPCollectionMeta, len(meta.sequence), cap(meta.sequence))
+	out.sequenceLen, out.sequenceCap = meta.sequenceLen, meta.sequenceCap
 	for i, child := range meta.sequence[:cap(meta.sequence)] {
 		out.sequence[:cap(out.sequence)][i] = bashPPCloneCollectionMeta(child, seen, cloneCell)
 	}

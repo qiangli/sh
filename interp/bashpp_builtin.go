@@ -440,18 +440,18 @@ func (r *Runner) bashPPRunValueBuiltin(name string, c *syntax.BashPPCall) (*bash
 			return nil, false
 		}
 		seq, _ := args[0].value.([]any)
-		metas := args[0].meta.sequence
-		oldCap := cap(seq)
+		oldLen := bashPPSequenceLen(args[0].meta, seq)
+		oldCap := bashPPSequenceCap(args[0].meta, seq)
 		additional := len(args) - 1
 		stringSpread := false
 		if c.Ellipsis.IsValid() && len(args) == 2 {
 			if text, ok := args[1].value.(string); ok && args[1].meta == nil && args[1].channel == nil && r.bashPPBuiltinByteSlice(shape) {
 				additional, stringSpread = len([]byte(text)), true
 			} else if spread, ok := args[1].value.([]any); ok {
-				additional = len(spread)
+				additional = bashPPSequenceLen(args[1].meta, spread)
 			}
 		}
-		if additional > 0 && len(seq)+additional <= oldCap && !r.bashPPBuiltinMutable(name, args[0]) {
+		if additional > 0 && additional <= oldCap-oldLen && !r.bashPPBuiltinMutable(name, args[0]) {
 			return nil, false
 		}
 		// The appended elements are gathered first so that all three spellings
@@ -475,9 +475,11 @@ func (r *Runner) bashPPRunValueBuiltin(name string, c *syntax.BashPPCall) (*bash
 					r.bashPPBuiltinError("TYPE", "append spread argument must be a compatible slice or string for []byte")
 					return nil, false
 				}
-				other, _ := args[1].value.([]any)
-				added = append(added, other...)
-				addedMetas = append(addedMetas, args[1].meta.sequence...)
+				if !bashPPLogicalSequence(args[1].meta) {
+					other, _ := args[1].value.([]any)
+					added = append(added, other...)
+					addedMetas = append(addedMetas, args[1].meta.sequence...)
+				}
 			}
 		} else {
 			for _, arg := range args[1:] {
@@ -488,11 +490,20 @@ func (r *Runner) bashPPRunValueBuiltin(name string, c *syntax.BashPPCall) (*bash
 				added, addedMetas = append(added, value), append(addedMetas, meta)
 			}
 		}
-		seq, metas = r.bashPPAppendSlice(seq, metas, shape.Element, added, addedMetas)
 		resultType := r.bashPPBindTypeExpr(args[0].meta.typ)
-		meta := &bashPPCollectionMeta{kind: "slice", typ: resultType, sequence: metas}
+		baseMeta := *args[0].meta
+		baseMeta.typ = resultType
+		seq, meta, ok := r.bashPPAppendTypedSlice(seq, &baseMeta, shape.Element, additional, added, addedMetas)
+		if !ok {
+			if r.bashPPGoSource {
+				r.bashPPRaise("runtime error: growslice: len out of range")
+			} else {
+				r.bashPPBuiltinError("SIZE", "append result length is invalid")
+			}
+			return nil, false
+		}
 		identity := args[0].cell.object
-		if len(seq) > oldCap {
+		if bashPPSequenceLen(meta, seq) > oldCap {
 			identity = &bashPPObjectIdentity{collection: meta}
 		}
 		return &bashPPCell{vr: bashPPCollectionVariable(seq), object: identity, valueMeta: meta, declType: resultType}, true
@@ -649,10 +660,16 @@ func (r *Runner) bashPPRunValueBuiltin(name string, c *syntax.BashPPCall) (*bash
 		var children []*bashPPCollectionMeta
 		if r.bashPPGoSource {
 			var err error
-			value, children, err = goSourceAllocateSlice(length, capacity)
+			var logical bool
+			value, children, logical, err = r.goSourceAllocateTypedSlice(shape.Element, length, capacity)
 			if err != nil {
 				r.exit.fatal(err)
 				return nil, false
+			}
+			if logical {
+				meta := &bashPPCollectionMeta{kind: "slice", typ: typ}
+				bashPPSetSequenceShape(meta, length, capacity)
+				return &bashPPCell{vr: bashPPCollectionVariable(value), object: &bashPPObjectIdentity{collection: meta}, valueMeta: meta, declType: typ}, true
 			}
 		} else {
 			value = make([]any, length, capacity)
@@ -852,9 +869,9 @@ func (r *Runner) bashPPBuiltinLength(name string, c *syntax.BashPPCall, args []b
 		return bashPPBuiltinScalarCell(strconv.Itoa(bashPPStorageLen(table))), nil
 	}
 	seq, _ := arg.value.([]any)
-	size := len(seq)
+	size := bashPPSequenceLen(arg.meta, seq)
 	if name == "cap" {
-		size = cap(seq)
+		size = bashPPSequenceCap(arg.meta, seq)
 	}
 	return bashPPBuiltinScalarCell(strconv.Itoa(size)), nil
 }

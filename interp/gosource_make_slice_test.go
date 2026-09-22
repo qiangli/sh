@@ -36,7 +36,7 @@ func TestGoSourceMakeSliceInvalidConstants(t *testing.T) {
 		}
 	}
 }
-func TestGoSourceMakeSliceZeroSizeRepresentationLimit(t *testing.T) {
+func TestGoSourceMakeSliceZeroSizeLogicalRepresentation(t *testing.T) {
 	source := `package main
 func main(){n:=int(1<<59);s:=make([]struct{},0,n);if len(s)!=0 || cap(s)!=n {panic("size")}}`
 	dir := t.TempDir()
@@ -47,7 +47,7 @@ func main(){n:=int(1<<59);s:=make([]struct{},0,n);if len(s)!=0 || cap(s)!=n {pan
 	if want := runNativeOracle(t, dir, path, nil, ""); want.status != 0 {
 		t.Fatalf("native=%+v", want)
 	}
-	if got := runGoSourceRunnerError(t, source); !strings.Contains(got, "slice size exceeds interpreter carrier capacity") || strings.Contains(got, "runtime error:") {
-		t.Fatalf("refusal=%s", got)
+	if got := runGoSourceRunner(t, dir, path, source, nil, ""); got.status != 0 || got.stderr != "" {
+		t.Fatalf("Runner=%+v", got)
 	}
 }
