@@ -124,12 +124,23 @@ func (r *Runner) notifyForegroundSignalDeath(w io.Writer, pos syntax.Pos, pid in
 	}
 }
 
-// continueIfStopped is a no-op on Windows: this runner cannot suspend a
-// process on this platform, so there is nothing to resume.
-func continueIfStopped(pid int) {}
+// continueIfStopped resumes a process this shell suspended for a stop
+// signal, best-effort. Errors are swallowed because the process may already
+// be running or gone, as in kill_unix.go.
+func continueIfStopped(pid int) {
+	_ = resumeProcess(pid)
+}
 
 func jobSignalPid(bg *bgProc) int {
 	return int(bg.pid.Load())
+}
+
+// foregroundContinuePid is the kill target `fg` resumes a job with. Windows
+// has no process groups in the POSIX sense and never records one for a job
+// (recordBackgroundProcessGroup is a no-op there), so `fg` resumes the job's
+// own process, which NtResumeProcess restarts in full.
+func foregroundContinuePid(bg *bgProc) int {
+	return jobSignalPid(bg)
 }
 
 func signalStopsJob(sig killSig) bool { return windowsSignalStopsJob(sig.Num) }

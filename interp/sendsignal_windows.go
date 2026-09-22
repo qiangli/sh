@@ -26,8 +26,9 @@ var terminatedBySignal sync.Map // pid int -> num int
 // (STATUS_PENDING). x/sys/windows does not export it.
 const stillActive = 259
 
-// errStopUnsupported is returned for STOP/TSTP/TTIN/TTOU: suspending another
-// process needs NtSuspendProcess, which is deliberately not wired here.
+// errStopUnsupported is what the job-control signals report on a Windows
+// whose ntdll does not export NtSuspendProcess/NtResumeProcess — the error
+// text `kill` printed for every stop before suspend_windows.go existed.
 var errStopUnsupported = errors.New("stop signals are not supported on this platform")
 
 // sendSignal delivers sig to pid on Windows, where there is no kill(2):
@@ -35,19 +36,22 @@ var errStopUnsupported = errors.New("stop signals are not supported on this plat
 //   - the shell's own pid is raised on the in-process bus, which is how a
 //     background goroutine job's `kill -USR1 $$` reaches the parent's trap;
 //   - signal 0 probes the process for existence (OpenProcess + exit code);
-//   - any other signal is first offered to the target over its bashy signal
-//     pipe (signalserver_windows.go); a sibling bashy runs its trap or takes
-//     its default action from there. A missing pipe means the target is not
-//     a bashy (or does not serve signals);
-//   - otherwise CHLD/URG/WINCH/CONT are successful no-ops (their default
-//     action is not death), the stop signals are unsupported, and every
-//     remaining signal terminates the process with the bashy signal marker
-//     as its exit code after recording the signal for the wait status.
+//   - a signal that may be caught is first offered to the target over its
+//     bashy signal pipe (signalserver_windows.go); a sibling bashy runs its
+//     trap or takes its default action from there. A missing pipe means the
+//     target is not a bashy (or does not serve signals). KILL and the
+//     job-control signals never take this route, see
+//     windowsSignalBypassesPipe;
+//   - otherwise the signal acts on the process itself: STOP/TSTP/TTIN/TTOU
+//     suspend it and CONT resumes it through ntdll (suspend_windows.go),
+//     CHLD/URG/WINCH are successful no-ops (their default action is not
+//     death), and every remaining signal terminates the process with the
+//     bashy signal marker as its exit code after recording the signal for
+//     the wait status.
 //
 // GenerateConsoleCtrlEvent is deliberately not used: it cannot target a
 // single process reliably (group 0 hits the whole console, another group id
 // must be a process-group leader created with CREATE_NEW_PROCESS_GROUP).
-// KILL never goes through the pipe: like on Unix it cannot be caught.
 func sendSignal(pid int, sig killSig) error {
 	num := sig.Num
 	if pid < 0 {
@@ -64,17 +68,19 @@ func sendSignal(pid int, sig killSig) error {
 	if num == 0 {
 		return probeProcess(pid)
 	}
-	if num != windowsSigKILL {
+	if !windowsSignalBypassesPipe(num) {
 		if err := sendSignalPipe(pid, num); err == nil {
 			return nil
 		} else if !errors.Is(err, errNoSignalPipe) {
 			return err
 		}
 	}
-	switch {
-	case windowsSignalStopsJob(num):
-		return errStopUnsupported
-	case windowsSignalDefaultDoesNotTerminate(num):
+	switch windowsSignalActionFor(num) {
+	case windowsActionSuspend:
+		return suspendProcess(pid)
+	case windowsActionResume:
+		return resumeProcess(pid)
+	case windowsActionProbe:
 		return probeProcess(pid)
 	}
 	return terminateProcess(pid, num)

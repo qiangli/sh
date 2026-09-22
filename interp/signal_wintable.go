@@ -143,6 +143,59 @@ func windowsSignalDefaultDoesNotTerminate(num int) bool {
 	return windowsSignalStopsJob(num)
 }
 
+// windowsSignalAction is what sendSignal does to another process once the
+// target's bashy signal pipe has declined the signal, or been skipped. It is
+// defined here, away from the syscalls, so the routing is unit-testable on
+// any host.
+type windowsSignalAction int
+
+const (
+	// windowsActionTerminate ends the process with the signal marker.
+	windowsActionTerminate windowsSignalAction = iota
+	// windowsActionSuspend stops every thread (NtSuspendProcess).
+	windowsActionSuspend
+	// windowsActionResume restarts a stopped process (NtResumeProcess).
+	windowsActionResume
+	// windowsActionProbe only checks that the process is still there: the
+	// signal's default action is neither death nor a state change.
+	windowsActionProbe
+)
+
+// windowsSignalActionFor classifies num for sendSignal.
+func windowsSignalActionFor(num int) windowsSignalAction {
+	switch {
+	case windowsSignalStopsJob(num):
+		return windowsActionSuspend
+	case windowsSignalContinuesJob(num):
+		return windowsActionResume
+	case windowsSignalDefaultDoesNotTerminate(num):
+		return windowsActionProbe
+	}
+	return windowsActionTerminate
+}
+
+// windowsSignalBypassesPipe reports the signals that are never offered to a
+// sibling bashy over its signal pipe (signalserver_windows.go) but always
+// act on the process directly.
+//
+// KILL cannot be caught, as on Unix. The job-control set is excluded for two
+// reasons: a stop is a change of process state rather than an event a
+// program can respond to, and the receiving bashy's default action for an
+// untrapped signal is to exit with the signal marker — delivering STOP down
+// the pipe would kill the job instead of stopping it. CONT must bypass it
+// too, since a suspended process cannot serve its own pipe: the write would
+// block until the very resume it is asking for.
+//
+// The cost is that a sibling bashy's `trap ... TSTP` is not run by another
+// shell's `kill -TSTP`; a self-directed `kill -TSTP $$` still goes through
+// the in-process bus and fires the trap.
+func windowsSignalBypassesPipe(num int) bool {
+	if num == windowsSigKILL {
+		return true
+	}
+	return windowsSignalStopsJob(num) || windowsSignalContinuesJob(num)
+}
+
 // windowsSignalDeathSilent reports the signals whose foreground death bash
 // does not announce (INT and PIPE), see notifyForegroundSignalDeath.
 func windowsSignalDeathSilent(num int) bool {
