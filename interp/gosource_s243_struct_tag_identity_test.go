@@ -53,3 +53,9 @@ func main() {
 	fmt.Println("ok")
 }`)
 }
+
+func TestS243EquivalentStructTagSpelling(t *testing.T) {
+	typedSendThreeModes(t, "package main\ntype K[_ any] struct{}\nfunc main(){\n"+
+		"m:=map[any]int{}; m[K[struct{ X int \"x\" }]{}]=1; m[K[struct{ X int `x` }]{}]=2; if len(m)!=1 {panic(len(m))}\n"+
+		"n:=map[any]int{}; n[K[struct{ int \"x\" }]{}]=1; n[K[struct{ int `x` }]{}]=2; if len(n)!=1 {panic(len(n))}\n}")
+}

@@ -2,6 +2,7 @@ package interp
 
 // Sprint: #153; Story: S153.4; Story-ID: e58cccba74f8
 import (
+	"strconv"
 	"strings"
 
 	"mvdan.cc/sh/v3/syntax"
@@ -45,7 +46,7 @@ func (r *Runner) goSourceStructIdentity(x *syntax.BashPPStructType) string {
 			b.WriteString(typ)
 			if field.Tag != nil {
 				b.WriteString(" ")
-				b.WriteString(field.Tag.Value)
+				b.WriteString(goSourceCanonicalStructTag(field.Tag.Value))
 			}
 			b.WriteString(" embedded")
 			continue
@@ -60,7 +61,7 @@ func (r *Runner) goSourceStructIdentity(x *syntax.BashPPStructType) string {
 		b.WriteString(typ)
 		if field.Tag != nil {
 			b.WriteString(" ")
-			b.WriteString(field.Tag.Value)
+			b.WriteString(goSourceCanonicalStructTag(field.Tag.Value))
 		}
 	}
 	b.WriteString("}")
@@ -150,4 +151,13 @@ func goSourceReflectTypeText(typ syntax.BashPPTypeExpr) string {
 		return "[" + length + "]" + goSourceReflectTypeText(x.Element)
 	}
 	return bashPPTypeText(typ)
+}
+
+// Tags contribute their string value to identity, independently of literal spelling.
+func goSourceCanonicalStructTag(literal string) string {
+	value, err := strconv.Unquote(literal)
+	if err != nil {
+		return literal
+	}
+	return strconv.Quote(value)
 }
