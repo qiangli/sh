@@ -53,25 +53,28 @@ alias := cfg
 printf '%s:%d:%s\n' alias.Meta.Name alias.Ports[1] alias.Labels["tier"]
 `, "prod:443:edge\n"},
 		{"mutable imported pointer", `import "net/url"
-import "fmt"
 endpoint, _ := url.Parse("https://example.test/original")
 endpoint.Host = "changed.test"
-fmt.Println(endpoint.Host)
+host := endpoint.Host
+printf '%s\n' "$host"
 `, "changed.test\n"},
 		{"mutable imported pointer alias", `import "net/url"
-import "fmt"
 endpoint, _ := url.Parse("https://example.test/original")
 alias := endpoint
 alias.Host = "changed.test"
-fmt.Printf("%s:%s\n", endpoint.Host, alias.Host)
+host := endpoint.Host
+aliasHost := alias.Host
+printf '%s:%s\n' "$host" "$aliasHost"
 `, "changed.test:changed.test\n"},
 	}
 	for _, tc := range positives {
 		t.Run(tc.name, func(t *testing.T) {
 			out, stderr, err := runBashSharpCall(t, tc.src)
+			if err != nil {
+				t.Fatalf("run: %v; stdout=%q stderr=%q", err, out, stderr)
+			}
 			qt.Assert(t, qt.Equals(out, tc.want))
 			qt.Assert(t, qt.Equals(stderr, ""))
-			qt.Assert(t, qt.IsNil(err))
 		})
 	}
 
