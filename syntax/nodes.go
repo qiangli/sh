@@ -41,6 +41,10 @@ type SourceFile struct {
 	// alongside positioned source identity so runtime diagnostics can spell a
 	// linked package type as Go does, rather than exposing linker hygiene.
 	Package string
+	// PackagePath is the declared import identity of a linked package. It is
+	// empty for the program package, whose executable frame identity is main
+	// regardless of its command import path.
+	PackagePath string
 
 	// LineDirectives records, in offset order, where a Go line directive in
 	// this input changes the reported filename. Node positions already carry

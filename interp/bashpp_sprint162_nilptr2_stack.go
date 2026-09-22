@@ -107,12 +107,15 @@ func (r *Runner) goSourceStackFile(name string) string {
 // literals of that frame's function.
 func (r *Runner) goSourceFrameFuncName(i int) string {
 	frame := r.callStack[i]
+	if frame.goSourceName != "" {
+		return frame.goSourceName
+	}
 	fn := frame.bashPPFn
 	if fn == nil {
 		return "main." + frame.funcName
 	}
 	if fn.decl != nil {
-		return goSourceDeclFrameName(fn.decl)
+		return r.goSourceDeclFrameName(fn.decl)
 	}
 	// A literal the program declares is named from the source index; one
 	// the index does not know (a body the runtime instantiated) is numbered
@@ -125,6 +128,28 @@ func (r *Runner) goSourceFrameFuncName(i int) string {
 		parent = r.goSourceFrameFuncName(i - 1)
 	}
 	return parent + ".func" + strconv.Itoa(r.goSourceLiteralIndex(fn, i))
+}
+
+// goSourceEnterInitializerFrame supplies the implicit package init frame when
+// a package variable initializer calls an interpreted function. Flattening
+// keeps initializers as positioned top-level declarations, so there is no
+// callable declaration to push; the source position and linked package path
+// are nevertheless authoritative. Synthetic glue calls are unpositioned and
+// therefore do not enter this path.
+func (r *Runner) goSourceEnterInitializerFrame() {
+	if !r.bashPPGoSource || len(r.callStack) != 0 || r.bashPPGoSourceFile == nil || !r.curStmtPos.IsValid() {
+		return
+	}
+	source, ok := r.bashPPGoSourceFile.SourceAt(r.curStmtPos)
+	if !ok || source.PackagePath == "" {
+		return
+	}
+	r.goSourceFrameSeq++
+	r.callStack = append(r.callStack, callFrame{
+		callPos:      r.curStmtPos,
+		seq:          r.goSourceFrameSeq,
+		goSourceName: source.PackagePath + ".init",
+	})
 }
 
 // goSourceLiteralIndex numbers a function literal among the literals of the
