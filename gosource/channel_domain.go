@@ -16,10 +16,13 @@ func channelTypeKey(t types.Type) string {
 	if t == nil {
 		return ""
 	}
-	if _, ok := t.Underlying().(*types.Chan); !ok {
+	ch, ok := t.Underlying().(*types.Chan)
+	if !ok {
 		return ""
 	}
-	return types.TypeString(t, func(p *types.Package) string { return p.Path() })
+	// Named and directional views can share a channel. Group their allocation
+	// domains by the bidirectional underlying shape, conservatively.
+	return types.TypeString(types.NewChan(types.SendRecv, ch.Elem()), func(p *types.Package) string { return p.Path() })
 }
 
 // channelTypeKeys finds channels hidden in tuples and aggregates. Native
@@ -34,6 +37,7 @@ func channelTypeKeys(t types.Type) []string {
 		seen[t] = true
 		if key := channelTypeKey(t); key != "" {
 			keys[key] = true
+			visit(t.Underlying().(*types.Chan).Elem())
 			return
 		}
 		switch x := t.Underlying().(type) {
@@ -49,6 +53,13 @@ func channelTypeKeys(t types.Type) []string {
 		case *types.Struct:
 			for i := 0; i < x.NumFields(); i++ {
 				visit(x.Field(i).Type())
+			}
+		case *types.Signature:
+			visit(x.Params())
+			visit(x.Results())
+		case *types.Interface:
+			for i := 0; i < x.NumMethods(); i++ {
+				visit(x.Method(i).Type())
 			}
 		case *types.Tuple:
 			for i := 0; i < x.Len(); i++ {
@@ -111,9 +122,8 @@ func (c *converter) planLocalChannelTypes() {
 				if o != nil && o.Pkg() != nil && o.Pkg().Path() != c.packagePath {
 					return true
 				}
-				if sig, ok := s.Type().(*types.Signature); ok && sig.Recv() != nil {
-					_, ok = sig.Recv().Type().Underlying().(*types.Interface)
-					return ok
+				if _, ok := s.Recv().Underlying().(*types.Interface); ok {
+					return true
 				}
 				return false
 			}
@@ -156,6 +166,18 @@ func (c *converter) planLocalChannelTypes() {
 	for _, f := range c.files {
 		ast.Inspect(f, func(n ast.Node) bool {
 			switch x := n.(type) {
+			case *ast.Ident:
+				// An imported function or variable can cross through a local
+				// parameter, return value, or aggregate before it is called/read.
+				// Its complete signature/type is a boundary even without a
+				// syntactically direct imported call.
+				if obj := c.info.ObjectOf(x); obj != nil && obj.Pkg() != nil && obj.Pkg().Path() != c.packagePath {
+					mark(obj.Type())
+				}
+			case *ast.TypeAssertExpr:
+				// An opaque interface can conceal a native channel. A checked
+				// assertion reveals its destination type but not its provenance.
+				mark(c.info.TypeOf(x))
 			case *ast.SelectStmt:
 				var first string
 				for _, item := range x.Body.List {

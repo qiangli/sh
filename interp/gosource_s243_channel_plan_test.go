@@ -4,9 +4,12 @@ package interp_test
 
 // Sprint: #243; Story: #674; Story-ID: 63073886bfce
 import (
+	"mvdan.cc/sh/v3/gosource"
+	"mvdan.cc/sh/v3/syntax"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -56,5 +59,50 @@ func TestS243OriginalPowserChannelDomains(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Run(name, func(t *testing.T) { typedSendThreeModes(t, string(source)) })
+	}
+}
+
+func TestS243ChannelDomainIndirectNativeBoundary(t *testing.T) {
+	for name, source := range map[string]string{
+		"function-parameter": `package main
+import ("fmt";"time")
+func choose(after func(time.Duration)<-chan time.Time) {
+ c:=make(chan int,1); c<-7
+ select {case n:=<-c:fmt.Println(n);case <-after(time.Hour):panic("timer")}
+}
+func main(){choose(time.After)}`,
+		"function-field": `package main
+import ("fmt";"time")
+type Factory struct{ f func(time.Duration)<-chan time.Time }
+func main(){factory:=Factory{time.After}; c:=make(chan int,1);c<-7
+ select {case n:=<-c:fmt.Println(n);case <-factory.f(time.Hour):panic("timer")}}
+`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if name != "function-field" {
+				typedSendThreeModes(t, source)
+				return
+			}
+			// Direct calls through a function-valued field have a separate
+			// existing dispatch limitation. Check the allocation certificate
+			// here without claiming that unrelated execution path repaired.
+			program, err := gosource.Parse(strings.NewReader(source), "field.go", gosource.Options{RunMain: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			seen := 0
+			syntax.Walk(program.File, func(node syntax.Node) bool {
+				if typ, ok := node.(*syntax.BashPPChanType); ok {
+					seen++
+					if typ.LocalDomain {
+						t.Error("native function field received local channel certificate")
+					}
+				}
+				return true
+			})
+			if seen == 0 {
+				t.Fatal("no channel types inspected")
+			}
+		})
 	}
 }
