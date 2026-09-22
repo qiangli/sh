@@ -1260,6 +1260,17 @@ func (r *Runner) bashPPComparableExpr(expr syntax.BashPPExpr) (bashPPComparableV
 		if value, ok, err := r.goSourceCompositeComparable(x); ok {
 			return value, err
 		}
+	case *syntax.BashPPBinaryExpr:
+		// A comparison operand may itself be a scalar expression, as in
+		// `x() == (y() == "abc")`. Evaluate it here, while walking the outer
+		// comparison left-to-right. Returning the scalar-only sentinel after
+		// the left call has run makes the caller retry the entire comparison,
+		// evaluating that call twice and breaking Go's source-order rule.
+		value, err := r.bashPPEvalScalarExpr(x)
+		if err != nil {
+			return bashPPComparableValue{}, err
+		}
+		return bashPPComparableValue{value: bashPPScalarAny(value.value)}, nil
 	}
 	return bashPPComparableValue{}, fmt.Errorf("BASHPP-ECOMPARE-SCALAR: scalar")
 }
