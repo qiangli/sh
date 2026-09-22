@@ -21,7 +21,7 @@ func (r *Runner) goSourceConstantCall(call *syntax.BashPPCall) bool {
 		return false
 	}
 	if _, handled, err := r.goSourceUnsafeConstant(call); handled {
-		return err == nil
+		return err == nil && !call.GoRuntime
 	}
 	if len(call.Fun) != 1 {
 		return false
@@ -47,7 +47,8 @@ func (r *Runner) goSourceConstantCall(call *syntax.BashPPCall) bool {
 
 // goSourceUnsafeConstant folds unsafe.Sizeof, Alignof, and Offsetof from the
 // operand's declared type using the linux/amd64 layout used by the upstream
-// harness. The operand is not evaluated, matching Go's constant operators.
+// harness. The operand is not evaluated. Checked nonconstant calls retain
+// runtime arithmetic semantics even after generic instantiation resolves layout.
 func (r *Runner) goSourceUnsafeConstant(call *syntax.BashPPCall) (bashPPScalar, bool, error) {
 	if !r.bashPPGoSource || call == nil || len(call.Fun) != 2 || len(call.ArgExprs) != 1 || r.bashPPImports[call.Fun[0].Value] != "unsafe" {
 		return bashPPScalar{}, false, nil
@@ -77,7 +78,7 @@ func (r *Runner) goSourceUnsafeConstant(call *syntax.BashPPCall) (bashPPScalar, 
 	default:
 		return bashPPScalar{}, false, nil
 	}
-	return bashPPScalar{value: constant.MakeInt64(size), typ: "uintptr"}, true, nil
+	return bashPPScalar{value: constant.MakeInt64(size), typ: "uintptr", runtime: call.GoRuntime}, true, nil
 }
 
 var (

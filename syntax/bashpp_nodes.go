@@ -820,6 +820,10 @@ func (x *BashPPConvertExpr) End() Pos { return posAddCol(x.Rparen, 1) }
 // disambiguator the whole Day-1 set leans on, and it is why `go build ./...`
 // keeps running the Go toolchain while `go worker(a, b)` does not.
 type BashPPCall struct {
+	// GoRuntime records a checked Go call whose result is not a constant.
+	// In particular, unsafe layout calls on type parameters remain runtime
+	// values even after instantiation gives the operand a concrete layout.
+	GoRuntime bool
 	// CalleeExpr preserves computed callees, such as factory().Method.
 	// It is mutually exclusive with Fun and FuncLit.
 	CalleeExpr BashPPExpr

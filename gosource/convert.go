@@ -1280,7 +1280,7 @@ func (c *converter) funlit(x *ast.FuncLit) *s.BashPPFuncLit {
 	return &s.BashPPFuncLit{Kw: c.lit(x.Type.Func, "func"), Params: c.fields(x.Type.Params, false), Results: c.fields(x.Type.Results, false), Lparen: c.pos(x.Type.Params.Opening), Rparen: c.pos(x.Type.Params.Closing), Body: c.block(x.Body)}
 }
 func (c *converter) call(x *ast.CallExpr) *s.BashPPCall {
-	out := &s.BashPPCall{Lparen: c.pos(x.Lparen), Rparen: c.pos(x.Rparen), Ellipsis: c.pos(x.Ellipsis), ResultFuncType: c.functionValueType(x)}
+	out := &s.BashPPCall{GoRuntime: c.info.Types[x].Value == nil, Lparen: c.pos(x.Lparen), Rparen: c.pos(x.Rparen), Ellipsis: c.pos(x.Ellipsis), ResultFuncType: c.functionValueType(x)}
 	isInstantiation := func(e ast.Expr) bool {
 		var base ast.Expr
 		var args []ast.Expr

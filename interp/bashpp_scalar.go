@@ -1007,6 +1007,9 @@ func (r *Runner) bashPPBinaryScalar(op token.Token, left, right bashPPScalar) (b
 		if shiftValue.Kind() != constant.Int {
 			return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-SHIFT: shift count must be an unsigned integer")
 		}
+		if r.bashPPGoSource && right.runtime && constant.Sign(shiftValue) < 0 {
+			return bashPPScalar{}, r.bashPPRaiseRuntimeError(bashPPRuntimeErrorString, bashPPRuntimeErrorMessage+"negative shift amount")
+		}
 		shift, ok := constant.Uint64Val(shiftValue)
 		if !ok {
 			return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-SHIFT: shift count must be an unsigned integer")
