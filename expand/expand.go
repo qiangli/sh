@@ -13,6 +13,7 @@ import (
 	"iter"
 	"os"
 	"os/user"
+	"path"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -5726,9 +5727,25 @@ func globPathAbs(p string) bool {
 }
 
 // globPathJoin joins a glob path element onto base unless it is absolute.
+// The result is the directory the walk reads next, in the shell's spelling:
+// base is $PWD, which on Windows keeps the POSIX form a script typed
+// (/tmp/x, /c/Users/x), and the directory reader converts that on the way
+// in. [filepath.Join] would respell it `\tmp\x\lib`, which is a
+// drive-relative native path (C:\tmp\x\lib) to the converter, not the
+// /tmp mount — so `ls lib/**` after `cd $TMPDIR/x` found nothing and reached
+// ls literally (globstar.tests).
 func globPathJoin(base, p string) string {
+	return globPathJoinMode(base, p, runtime.GOOS == "windows")
+}
+
+// globPathJoinMode is [globPathJoin] with an explicit windows flag: there
+// the join cleans with `/` ([path.Join]), elsewhere with the OS separator.
+func globPathJoinMode(base, p string, windows bool) string {
 	if globPathAbs(p) {
 		return p
+	}
+	if windows {
+		return path.Join(base, p)
 	}
 	return filepath.Join(base, p)
 }
@@ -6288,12 +6305,12 @@ func (cfg *Config) globDir(base, dir string, matcher func(string) bool, wantDir,
 			// does not follow symlinks for each of the directory entries.
 			// ReadDir is somewhat wasteful here, as we only want its error result,
 			// but we could try to reuse its result as per the TODO in [Config.glob].
-			if _, err := cfg.ReadDir2(filepath.Join(fullDir, info.Name())); err != nil {
+			if _, err := cfg.ReadDir2(globPathJoin(fullDir, info.Name())); err != nil {
 				continue
 			}
 		} else if mode.IsDir() {
 			if needSearch {
-				candidate := filepath.Join(fullDir, info.Name())
+				candidate := globPathJoin(fullDir, info.Name())
 				if cfg.IsSearchable != nil {
 					if !cfg.IsSearchable(candidate) {
 						continue
