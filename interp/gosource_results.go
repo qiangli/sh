@@ -51,16 +51,16 @@ func (r *Runner) goSourceNativeAssignCall(ctx context.Context, assign *syntax.Ba
 	}
 	cells := make([]*bashPPCell, len(values))
 	for i, value := range values {
-		cells[i] = goSourceNativeValueCell(value)
+		cells[i] = r.goSourceNativeValueCell(value)
 		if target := r.bashPPScope.lookup(assign.Names[i].Value); target != nil {
 			if _, iface := r.bashPPInterfaceType(target.declType); iface {
 				// The source was typechecked, and the dependency returned its
 				// actual dynamic value. Keep nil-interface vs typed-nil identity
 				// while retaining the destination's static interface type.
 				value.Interface = bashPPBridgeTypeText(target.declType)
-				cells[i] = goSourceNativeValueCell(value)
+				cells[i] = r.goSourceNativeValueCell(value)
 				payload := bashPPCopyAssignmentCell(cells[i])
-				cells[i].interfaceValue = &bashPPInterfaceValue{nilIface: value.Kind == "nil", cell: payload, dynamic: &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.Type}}}
+				cells[i].interfaceValue = &bashPPInterfaceValue{nilIface: value.Kind == "nil", cell: payload, dynamic: bashPPBridgeDynamicType(value.Type)}
 				cells[i].declType = target.declType
 				cells[i].typeName = target.typeName
 			}

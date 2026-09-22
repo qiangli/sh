@@ -436,6 +436,17 @@ func bashPPBridgeDynamicType(name string) syntax.BashPPTypeExpr {
 			Element: bashPPBridgeDynamicType(name[2:]),
 		}
 	}
+	if strings.HasPrefix(name, "[") {
+		if end := strings.IndexByte(name, ']'); end > 1 {
+			if _, err := strconv.ParseUint(name[1:end], 10, 63); err == nil {
+				return &syntax.BashPPCollectionType{
+					Kind:    "array",
+					Length:  &syntax.Lit{Value: name[1:end]},
+					Element: bashPPBridgeDynamicType(name[end+1:]),
+				}
+			}
+		}
+	}
 	if strings.HasPrefix(name, "map[") {
 		end := strings.IndexByte(name, ']')
 		if end > len("map[") {
