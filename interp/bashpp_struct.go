@@ -493,7 +493,9 @@ func (r *Runner) bashPPEvalTypedValue(expr syntax.BashPPExpr, expected syntax.Ba
 		}
 		return value, meta, nil
 	}
-	if _, ok := expr.(*syntax.BashPPSelectorExpr); ok {
+	// A method value — `TearDown: res.teardown` filling a func field — is
+	// the closure the element path binds, not a field to read.
+	if sel, ok := expr.(*syntax.BashPPSelectorExpr); ok && !(sel.MethodValue && r.bashPPGoSource && !r.bashPPNativeExpr(sel.X)) {
 		value, meta, err := r.bashPPReadExpr(expr)
 		if err != nil {
 			return nil, nil, err

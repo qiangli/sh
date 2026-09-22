@@ -324,14 +324,17 @@ func (r *Runner) bashPPImplements(actual syntax.BashPPTypeExpr, iface *syntax.Ba
 			if !found || goSourceUnexportedName(name) && actualMethod.pkg != expected.pkg {
 				return fmt.Errorf("BASHPP-EINTERFACE-MISSING: %s does not implement interface (missing method %s)", bashPPTypeText(actual), name)
 			}
-			if actualMethod.sig != expected.sig {
+			if actualMethod.sig != expected.sig && !r.bashPPAliasedSignatureEqual(actualMethod.spec.Params, actualMethod.spec.Results, expected.spec.Params, expected.spec.Results) {
 				return fmt.Errorf("BASHPP-EINTERFACE-SIGNATURE: %s method %s has wrong signature", bashPPTypeText(actual), name)
 			}
 		}
 		return nil
 	}
+	// A struct literal type — `struct{ S }`, `*struct{ *T }` — has no name
+	// to own methods, but its method set is the promoted set of its
+	// embedded fields, which is what the selection below walks.
 	typeName, _ := bashPPInterfaceMethodOwner(actual)
-	if typeName == "" {
+	if typeName == "" && !bashPPStructLiteralOwner(actual) {
 		return fmt.Errorf("BASHPP-EINTERFACE-IMPOSSIBLE: %s cannot implement interface", bashPPTypeText(actual))
 	}
 	expectedSet, err := r.bashPPInterfaceMethodSet("interface", iface, make(map[string]bool))
@@ -340,7 +343,9 @@ func (r *Runner) bashPPImplements(actual syntax.BashPPTypeExpr, iface *syntax.Ba
 	}
 	for _, name := range expectedSet.order {
 		expected := expectedSet.byName[name]
-		sel := r.bashPPResolveSelection(actual, name, true, false)
+		// An unexported method is looked up as the interface's package
+		// spells it: main's `m` is not lib's.
+		sel := r.bashPPResolveSelectionIn(actual, name, true, false, expected.pkg)
 		if sel.ambiguous || sel.method == nil && sel.interfaceSpec == nil {
 			return fmt.Errorf("BASHPP-EINTERFACE-MISSING: %s does not implement interface (missing method %s)", bashPPTypeText(actual), name)
 		}
@@ -348,6 +353,7 @@ func (r *Runner) bashPPImplements(actual syntax.BashPPTypeExpr, iface *syntax.Ba
 			return fmt.Errorf("BASHPP-EINTERFACE-MISSING: %s does not implement interface (missing method %s)", bashPPTypeText(actual), name)
 		}
 		actualSig := ""
+		var actualParams, actualResults []*syntax.BashPPField
 		if sel.method != nil {
 			// Go 1.27 gives methods their own type parameters but does NOT
 			// give them to interfaces: an interface method may declare none,
@@ -358,14 +364,72 @@ func (r *Runner) bashPPImplements(actual syntax.BashPPTypeExpr, iface *syntax.Ba
 				return fmt.Errorf("BASHPP-EINTERFACE-GENERIC: %s method %s declares type parameters and cannot implement an interface method", bashPPTypeText(actual), name)
 			}
 			actualSig = bashPPInstantiatedMethodSignature(sel.method, sel.receiverType)
+			bindings := bashPPMethodTypeBindings(sel.method, sel.receiverType)
+			actualParams, actualResults = bashPPSubstituteFields(sel.method.decl.Params, bindings), bashPPSubstituteFields(sel.method.decl.Results, bindings)
 		} else {
 			actualSig = bashPPMethodSpecSignature(sel.interfaceSpec)
+			actualParams, actualResults = sel.interfaceSpec.Params, sel.interfaceSpec.Results
 		}
-		if actualSig != expected.sig {
+		if actualSig != expected.sig && !r.bashPPAliasedSignatureEqual(actualParams, actualResults, expected.spec.Params, expected.spec.Results) {
 			return fmt.Errorf("BASHPP-EINTERFACE-SIGNATURE: %s method %s has wrong signature", bashPPTypeText(actual), name)
 		}
 	}
 	return nil
+}
+
+// bashPPStructLiteralOwner reports whether a type is a struct literal or a
+// pointer to one: a type with a method set but no name to own methods.
+func bashPPStructLiteralOwner(typ syntax.BashPPTypeExpr) bool {
+	if pointer, ok := typ.(*syntax.BashPPPointerType); ok {
+		typ = pointer.Element
+	}
+	return bashPPStructLiteralType(typ)
+}
+
+// bashPPAliasedSignatureEqual reports whether two signatures whose texts
+// differ spell the same types once declared aliases are read through:
+// `M1(IntAlias2) Float64` is `M1(Int) float64` when IntAlias2 = IntAlias =
+// Int and Float64 = float64. Only the textual mismatch reaches here, so the
+// alias walk is not on the path of an ordinary identical signature.
+func (r *Runner) bashPPAliasedSignatureEqual(aParams, aResults, bParams, bResults []*syntax.BashPPField) bool {
+	aliases := r.bashPPDeclaredAliasBindings()
+	if len(aliases) == 0 {
+		return false
+	}
+	canonical := func(fields []*syntax.BashPPField) string {
+		text := bashPPFieldsSignature(fields)
+		// An alias may name another alias; the substitution repeats until
+		// the spelling settles, bounded so a cycle cannot spin.
+		for i := 0; i <= len(aliases); i++ {
+			fields = bashPPSubstituteFields(fields, aliases)
+			next := bashPPFieldsSignature(fields)
+			if next == text {
+				break
+			}
+			text = next
+		}
+		return text
+	}
+	return canonical(aParams) == canonical(bParams) && canonical(aResults) == canonical(bResults)
+}
+
+// bashPPDeclaredAliasBindings maps every declared non-generic alias to the
+// type it names, plus the predeclared byte and rune unless the program
+// declares them, in the shape bashPPSubstituteFields reads.
+func (r *Runner) bashPPDeclaredAliasBindings() map[string]syntax.BashPPTypeExpr {
+	out := make(map[string]syntax.BashPPTypeExpr)
+	for name, decl := range r.bashPPTypes {
+		if !decl.alias || decl.typeExpr == nil || len(decl.typeParams) > 0 {
+			continue
+		}
+		out[name] = decl.typeExpr
+	}
+	for name, typ := range bashPPPredeclaredAliasTypes {
+		if _, declared := r.bashPPTypes[name]; !declared {
+			out[name] = typ
+		}
+	}
+	return out
 }
 
 func bashPPInstantiatedMethodSignature(fn *bashPPFunc, receiver syntax.BashPPTypeExpr) string {
