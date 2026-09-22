@@ -436,6 +436,19 @@ func (r *Runner) bashPPEvalTypedValue(expr syntax.BashPPExpr, expected syntax.Ba
 			if errors.As(err, &native) && r.bashPPNativeType(expected) {
 				return r.goSourceNativeAssignedValue(*native.value, expected)
 			}
+			// A nil pointer the dependency minted — reflect.New(...).Elem()
+			// of a pointer type, asserted back out of an interface — is the
+			// nil pointer of the declared type; only a non-nil handle names
+			// storage the interpreter cannot alias (bug510.go).
+			if errors.As(err, &native) && native.value != nil {
+				isNil, nilErr := r.goSourceNativeHandleIsNil(*native.value)
+				if nilErr != nil {
+					return nil, nil, nilErr
+				}
+				if isNil {
+					return nil, bashPPPointerMeta(expected), nil
+				}
+			}
 			return nil, nil, err
 		}
 		actual := r.bashPPPointerExprType(expr, ptr)
@@ -723,6 +736,19 @@ func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (value any, meta *bashPP
 			if err != nil {
 				return nil, nil, err
 			}
+		}
+		// A dependency-owned aggregate reached through an expression that is
+		// not a named local — `caller().frame.Function`, where frame is a
+		// runtime.Frame — keeps its fields in the worker. The named-local
+		// spelling of the same read already goes through bashPPNativeRead;
+		// this is the same member read for the value just produced.
+		if native, ok := value.(*bashPPBridgeValue); ok && native != nil {
+			member, err := r.bashPPNativeAccess(r.ectx, "member", *native, x.Sel.Value)
+			if err != nil {
+				return nil, nil, err
+			}
+			result, err := bashPPNativeReadValue(member)
+			return result, nil, err
 		}
 		if meta == nil || meta.kind != "struct" {
 			return nil, nil, fmt.Errorf("BASHPP-ESELECTOR-TYPE: %s has no fields", bashPPExprText(x.X))

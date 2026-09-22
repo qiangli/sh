@@ -109,6 +109,21 @@ func (r *Runner) bashPPNativeCompare(left syntax.BashPPExpr, op token.Token, rig
 	return r.bashPPNativeCompareValues(lv, op, rv)
 }
 
+// goSourceNativeHandleIsNil reports whether a dependency-owned pointer,
+// which the worker may hand over as a handle even when nil, is the nil
+// pointer. The interface marker is dropped first: the question is about the
+// dynamic value, and a typed nil inside an interface is not a nil interface.
+func (r *Runner) goSourceNativeHandleIsNil(value bashPPBridgeValue) (bool, error) {
+	if value.Kind == "nil" {
+		return true, nil
+	}
+	if value.Kind != "handle" {
+		return false, nil
+	}
+	value.Interface = ""
+	return r.bashPPNativeCompareValues(value, token.EQL, bashPPBridgeValue{Kind: "nil"})
+}
+
 func (r *Runner) bashPPNativeCompareValues(lv bashPPBridgeValue, op token.Token, rv bashPPBridgeValue) (bool, error) {
 	req, err := r.bashPPEvalRequest()
 	if err != nil {

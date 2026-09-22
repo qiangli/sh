@@ -110,3 +110,157 @@ func main() {
 	qt.Assert(t, qt.Equals(out, ""))
 	qt.Assert(t, qt.Equals(stderr, "aXYdef true true\n"))
 }
+
+// A dependency-owned aggregate reached through a call result — `caller().frame`
+// where frame is a runtime.Frame — keeps its fields in the worker, so the
+// trailing selector is the same member read the named-local spelling already
+// performs, and a method called on the call result sees the same value
+// (issue21879.go).
+func TestS243PointerCallRootedNativeField(t *testing.T) {
+	src := `package main
+import "runtime"
+type call struct {
+	frame runtime.Frame
+	n     int
+}
+func caller() call {
+	var pcs [3]uintptr
+	n := runtime.Callers(1, pcs[:])
+	frames := runtime.CallersFrames(pcs[:n])
+	frame, _ := frames.Next()
+	frame, _ = frames.Next()
+	return call{frame: frame, n: 4}
+}
+func (c call) name() string { return c.frame.Function }
+func main() {
+	println(caller().frame.Function)
+	println(caller().name())
+	println(caller().frame.Line > 0, caller().n)
+}`
+	out, stderr, err := runGoSource(t, "s243-pointer-call-rooted-native-field", src)
+	qt.Assert(t, qt.IsNil(err), qt.Commentf("stderr: %s", stderr))
+	qt.Assert(t, qt.Equals(out, ""))
+	qt.Assert(t, qt.Equals(stderr, "main.main\nmain.main\ntrue 4\n"))
+}
+
+// `return x.(T)` whose assertion fails raises the Go panic and unwinds; the
+// interrupt reaching the return statement is not a diagnostic, so a deferred
+// recover in the caller catches the panic and the program exits 0
+// (typeparam/dottype.go). An unrecovered failure is still the panic.
+func TestS243PointerReturnAssertionPanicRecovers(t *testing.T) {
+	src := `package main
+func f[T any](x interface{}) T {
+	return x.(T)
+}
+type I interface{ foo() }
+type myint int
+func (myint) foo() {}
+type myfloat float64
+func (myfloat) foo() {}
+func g[T I](x I) T {
+	return x.(T)
+}
+func plain(x interface{}) int {
+	return x.(int)
+}
+func shouldpanic(name string, x func()) {
+	defer func() {
+		e := recover()
+		if e == nil {
+			panic("didn't panic")
+		}
+		println("recovered", name)
+	}()
+	x()
+}
+func main() {
+	var x interface{} = float64(3)
+	var y I = myfloat(3)
+	println(f[int](int(3)), plain(7), int(g[myint](myint(5))))
+	shouldpanic("generic", func() { f[int](x) })
+	shouldpanic("constrained", func() { g[myint](y) })
+	shouldpanic("plain", func() { plain(x) })
+	shouldpanic("plain-assign", func() { _ = plain(x) })
+	println("done")
+}`
+	out, stderr, err := runGoSource(t, "s243-pointer-return-assert-recover", src)
+	qt.Assert(t, qt.IsNil(err), qt.Commentf("stderr: %s", stderr))
+	qt.Assert(t, qt.Equals(out, ""))
+	qt.Assert(t, qt.Equals(stderr, "3 7 5\nrecovered generic\nrecovered constrained\nrecovered plain\nrecovered plain-assign\ndone\n"))
+
+	unrecovered := `package main
+func plain(x interface{}) int {
+	return x.(int)
+}
+func main() {
+	var x interface{} = float64(3)
+	println("before")
+	println(plain(x))
+	println("after")
+}`
+	_, stderr, err = runGoSource(t, "s243-pointer-return-assert-unrecovered", unrecovered)
+	qt.Assert(t, qt.IsNotNil(err))
+	qt.Assert(t, qt.StringContains(stderr, "before\npanic: interface conversion: interface {} is float64, not int"))
+	qt.Assert(t, qt.Not(qt.StringContains(stderr, "after")))
+	qt.Assert(t, qt.Not(qt.StringContains(stderr, "scalar call interrupted")))
+}
+
+// A dependency result returned from a function declared to yield an interface
+// crosses as the value it is, type name included, so the declared result boxes
+// it with that dynamic type: a nil *map[int]bool minted by reflect asserts as
+// *map[int]bool and not as anything else, and once asserted out it is the nil
+// pointer — equal to nil, storable in a *map[int]bool variable — while the
+// interface that held it is not nil (bug510.go).
+func TestS243PointerNativeReturnBoxesInterface(t *testing.T) {
+	src := `package main
+import "reflect"
+type A = map[int]bool
+func F() interface{} {
+	return reflect.New(reflect.TypeOf((*A)(nil))).Elem().Interface()
+}
+func H() interface{} {
+	return reflect.ValueOf(3).Interface()
+}
+func main() {
+	_, ok := H().(int)
+	println("H int", ok)
+	_, ok = F().(*map[int]bool)
+	println("F ptr", ok)
+	_, ok = F().(*map[int]string)
+	println("F other", ok)
+	_, ok = F().(map[int]bool)
+	println("F elem", ok)
+	v := F()
+	p, ok := v.(*map[int]bool)
+	println("v ptr", ok, p == nil, p != nil, v == nil)
+	var r *map[int]bool = F().(*map[int]bool)
+	var q *map[int]bool
+	println("r nil", r == nil, q == r)
+	r = &map[int]bool{1: true}
+	println("r set", r == nil, (*r)[1])
+}`
+	out, stderr, err := runGoSource(t, "s243-pointer-native-return-boxes", src)
+	qt.Assert(t, qt.IsNil(err), qt.Commentf("stderr: %s", stderr))
+	qt.Assert(t, qt.Equals(out, ""))
+	qt.Assert(t, qt.Equals(stderr, "H int true\nF ptr true\nF other false\nF elem false\nv ptr true true false false\nr nil true true\nr set false true\n"))
+
+	dep := `package a
+import "reflect"
+type A = map[int]bool
+func F() interface{} {
+	return reflect.New(reflect.TypeOf((*A)(nil))).Elem().Interface()
+}`
+	mainSrc := `package main
+import "test/a"
+func main() {
+	_, ok := a.F().(*map[int]bool)
+	if !ok {
+		panic("bad type")
+	}
+	_, other := a.F().(*map[string]bool)
+	println("ok", ok, other)
+}`
+	out, stderr = runGoSourceMultiPackage(t, "s243-pointer-native-return-xpkg", mainSrc, "test/a", "a.go", dep)
+	qt.Assert(t, qt.Equals(out, ""))
+	qt.Assert(t, qt.Equals(stderr, "ok true false\n"))
+}

@@ -2732,7 +2732,13 @@ func (r *Runner) bashPPReturnStmt(ctx context.Context, ret *syntax.BashPPReturn)
 		result := bashPPReturnState{active: true}
 		for _, value := range values {
 			var cell *bashPPCell
-			if scalar, err := value.scalar(); err == nil {
+			if r.bashPPGoSource {
+				// The dependency's result crosses as the value it is —
+				// a nil *map[int]bool from reflect keeps its type name —
+				// so a declared interface result can box it with that
+				// dynamic type and a caller's assertion sees it (bug510).
+				cell = r.goSourceNativeValueCell(value)
+			} else if scalar, err := value.scalar(); err == nil {
 				cell = &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarString(scalar.value)}, scalarKind: scalar.value.Kind(), typeName: value.Type, declType: &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.Type}}}
 			} else {
 				copy := value
@@ -2884,6 +2890,12 @@ func (r *Runner) bashPPReturnScalarExpr(expr syntax.BashPPExpr) {
 	// the cell is the only thing that can carry it across the boundary.
 	structured, structuredErr := r.bashPPStructuredArgCell(nil, expr)
 	if structuredErr != nil {
+		// `return x.(T)` whose assertion fails has raised a Go panic and
+		// is unwinding; the interrupt is not a diagnostic, and reporting
+		// it would exit 2 after a deferred recover has caught the panic.
+		if errors.Is(structuredErr, errBashPPScalarInterrupted) || r.bashPPPanicking() || r.exit.exiting || r.exit.fatalExit {
+			return
+		}
 		r.errf("%v\n", structuredErr)
 		r.exit = exitStatus{code: 2}
 		r.bashPPShortFailureSeq++
