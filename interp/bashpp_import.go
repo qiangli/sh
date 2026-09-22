@@ -84,12 +84,6 @@ type bashPPToolchain struct {
 	bridge        *bashPPNativeSession
 	callbackDepth int
 
-	// callbackReturnDepth is the exact Go-form function depth of a mirrored
-	// method body. It lets return-expression evaluation carry a native
-	// composite structurally to the worker without changing ordinary locals or
-	// nested helper returns executed while the callback is active.
-	callbackReturnDepth int
-
 	moduleDir  string
 	importPath string
 	testMain   bool

@@ -2864,7 +2864,7 @@ func (r *Runner) bashPPReturnScalarExpr(expr syntax.BashPPExpr) {
 	// imported composite to the callback worker's declared reflect result type.
 	// Locals and nested helper returns inside the callback still materialise in
 	// the dependency immediately, preserving their methods and mutations.
-	if r.bashPPGoSource && r.bashPPTools.callbackReturnDepth == r.bashPPFuncActive {
+	if r.bashPPGoSource && r.bashPPCallbackReturnDepth == r.bashPPFuncActive {
 		boundary := expr
 		for {
 			paren, ok := boundary.(*syntax.BashPPParenExpr)
