@@ -124,6 +124,20 @@ func (r *Runner) bashPPConstGroup(ctx context.Context, group *syntax.BashPPConst
 			return
 		}
 		cell := r.bashPPScope.lookup(spec.Name.Value)
+		if scalar.value != nil {
+			cell.exactScalar = scalar.value
+		} else if value, evalErr := r.bashPPEvalScalarExpr(expr); evalErr == nil {
+			// Typed grouped constants travel through the declaration conversion
+			// path above. Preserve the converted constant, including its required
+			// rounding, rather than the untyped source expression.
+			shape := r.bashPPUnderlyingType(effective.DeclTypeExpr)
+			if named, ok := shape.(*syntax.BashPPNamedType); ok {
+				if converted, convertErr := r.bashPPConvertScalar(named.Name.Value, value); convertErr == nil {
+					value = converted
+				}
+			}
+			cell.exactScalar = value.value
+		}
 		if effective.DeclTypeExpr != nil {
 			cell.declType = effective.DeclTypeExpr
 			base := bashPPNamedTypeBase(effective.DeclTypeExpr)
