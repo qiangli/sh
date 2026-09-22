@@ -66,3 +66,29 @@ func TestStory687RecordedModeDeniesOpen(t *testing.T) {
 		}
 	}
 }
+
+// A process-substitution pipe is looked up by name, not by stat'ing it.
+// `. <(cmd)` resolves its operand through checkStat before opening it, and
+// a CreateFile on the pipe name — which is what os.Stat does — would take
+// the consumer's one connection and leave the open to fail with "all pipe
+// instances are busy". No pipe is created here on purpose: the lookup must
+// answer without the filesystem, so it answers without a server too.
+func TestStory687ProcSubstPipeLookupDoesNotConnect(t *testing.T) {
+	for _, path := range []string{
+		windowsProcSubstShellDir + fifoNamePrefix + "deadbeef",
+		windowsProcSubstNativeDir + fifoNamePrefix + "deadbeef",
+	} {
+		got, err := checkStat("", path, false)
+		if err != nil {
+			t.Errorf("checkStat(%q): %v", path, err)
+			continue
+		}
+		if got != path {
+			t.Errorf("checkStat(%q) = %q", path, got)
+		}
+	}
+	// An ordinary missing path is still a miss.
+	if _, err := checkStat("", filepath.Join(t.TempDir(), "gone"), false); err == nil {
+		t.Error("checkStat found a file that is not there")
+	}
+}

@@ -929,11 +929,21 @@ func isBinarySource(content []byte) bool {
 func checkStat(dir, file string, checkExec bool) (string, error) {
 	target := file
 	target = lookupStatPath(dir, target)
-	info, err := os.Stat(target)
-	if err != nil {
-		info, err = statLongPath(target, err)
+	// A Windows process-substitution pipe is answered from its name. It is
+	// not a filesystem node: every CreateFile on \\.\pipe\<name> —
+	// os.Stat's included — takes the consumer's one connection to the
+	// server instance, so `. <(cmd)`, which looks the path up here before
+	// opening it, would eat its own rendezvous and then find the pipe
+	// busy. r.stat sidesteps it the same way.
+	info, ok := procSubstPipeStat(target)
+	if !ok {
+		var err error
+		info, err = os.Stat(target)
 		if err != nil {
-			return "", err
+			info, err = statLongPath(target, err)
+			if err != nil {
+				return "", err
+			}
 		}
 	}
 	m := info.Mode()
