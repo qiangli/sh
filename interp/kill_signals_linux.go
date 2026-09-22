@@ -5,11 +5,7 @@
 
 package interp
 
-import (
-	"fmt"
-
-	"golang.org/x/sys/unix"
-)
+import "golang.org/x/sys/unix"
 
 // killSignals on Linux is the full signal set bash lists for `kill -l`: the
 // standard glibc userland convention (SIGRTMIN=34, SIGRTMAX=64), including the
@@ -45,19 +41,4 @@ func linuxKillSignals() []struct {
 		}{rtSignalName(i, rtmin, rtmax), killSig(i)})
 	}
 	return sigs
-}
-
-// rtSignalName reproduces bash's realtime-signal naming: RTMIN / RTMIN+n in the
-// lower half of [rtmin,rtmax], RTMAX-n / RTMAX in the upper half.
-func rtSignalName(i, rtmin, rtmax int) string {
-	switch {
-	case i == rtmin:
-		return "RTMIN"
-	case i == rtmax:
-		return "RTMAX"
-	case i-rtmin <= (rtmax-rtmin)/2:
-		return fmt.Sprintf("RTMIN+%d", i-rtmin)
-	default:
-		return fmt.Sprintf("RTMAX-%d", rtmax-i)
-	}
 }
