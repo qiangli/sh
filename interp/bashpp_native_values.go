@@ -719,6 +719,9 @@ func (s *bashPPNativeSession) applyNativePointerUpdates(req bashPPEvalRequest, r
 }
 
 func (r *Runner) bashPPWriteBridgePointer(ptr *bashPPPointer, value bashPPBridgeValue) error {
+	if ptr != nil && ptr.unsafeView != nil {
+		return fmt.Errorf("BASHPP-EUNSAFE-WRITE: writes through reinterpreted blank views are unsupported")
+	}
 	if ptr == nil {
 		return errBashPPNilDereference
 	}

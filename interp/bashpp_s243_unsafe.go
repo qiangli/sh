@@ -2,6 +2,8 @@ package interp
 
 import (
 	"fmt"
+	"go/types"
+	"runtime"
 
 	"mvdan.cc/sh/v3/syntax"
 )
@@ -11,7 +13,13 @@ import (
 // blank fields. Go gives those fields real layout but comparisons ignore their
 // stored bytes, so a correctly sized source may be presented as the target's
 // zero value while the pointer continues to retain the original allocation.
+// Writes are refused: a zero-value map must never replace the source storage.
+// Restrict this view to the architecture supported by the surrounding layout
+// constant evaluator, and use gc sizes including trailing zero-field padding.
 func (r *Runner) goSourceUnsafeBlankView(source, target syntax.BashPPTypeExpr) error {
+	if runtime.GOARCH != "amd64" {
+		return fmt.Errorf("BASHPP-EUNSAFE-LAYOUT: blank views require the supported amd64 layout, got %s", runtime.GOARCH)
+	}
 	fields, _, ok := r.bashPPStructFields(target)
 	if !ok {
 		return fmt.Errorf("BASHPP-EUNSAFE-VIEW: target %s is not a supported blank-field struct", bashPPTypeText(target))
@@ -23,7 +31,8 @@ func (r *Runner) goSourceUnsafeBlankView(source, target syntax.BashPPTypeExpr) e
 	}
 	sourceLayout, sourceOK := r.goSourceLayoutType(source, map[string]bool{})
 	targetLayout, targetOK := r.goSourceLayoutType(target, map[string]bool{})
-	if !sourceOK || !targetOK || goSourceAMD64Sizes.Sizeof(sourceLayout) != goSourceAMD64Sizes.Sizeof(targetLayout) || goSourceAMD64Sizes.Alignof(sourceLayout) != goSourceAMD64Sizes.Alignof(targetLayout) {
+	sizes := types.SizesFor("gc", runtime.GOARCH)
+	if !sourceOK || !targetOK || sizes == nil || sizes.Sizeof(sourceLayout) != sizes.Sizeof(targetLayout) || sizes.Alignof(sourceLayout) != sizes.Alignof(targetLayout) {
 		return fmt.Errorf("BASHPP-EUNSAFE-LAYOUT: %s and %s do not have the same size and alignment", bashPPTypeText(source), bashPPTypeText(target))
 	}
 	return nil

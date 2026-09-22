@@ -3,6 +3,7 @@
 package interp_test
 
 import (
+	"runtime"
 	"strings"
 	"testing"
 
@@ -16,7 +17,13 @@ type Source struct { x, y, z int }
 type Blank struct { _, _, _ int }
 type Nested struct { _ struct { a, b, c int } }
 `
-	t.Run("layout identity lifetime and comparison", func(t *testing.T) {
+	if runtime.GOARCH != "amd64" {
+		_, stderr, err := runGoSource(t, "s243-unsafe-architecture", prefix+`func main() { _ = *(*Blank)(unsafe.Pointer(&Source{})) }`)
+		qt.Assert(t, qt.IsNotNil(err))
+		qt.Assert(t, qt.IsTrue(strings.Contains(stderr, "BASHPP-EUNSAFE-LAYOUT")), qt.Commentf("stderr: %s", stderr))
+		return
+	}
+	t.Run("blank field comparison", func(t *testing.T) {
 		src := prefix + `
 func blank(x, y, z int) Blank { return *(*Blank)(unsafe.Pointer(&Source{x, y, z})) }
 func nested(x, y, z int) any { return *(*Nested)(unsafe.Pointer(&Source{x, y, z})) }
@@ -31,12 +38,44 @@ func main() {
 		qt.Assert(t, qt.Equals(stderr, ""))
 	})
 
+	t.Run("identity escaped storage and typed nil", func(t *testing.T) {
+		src := prefix + `
+func escaped() *Blank { p := &Source{1, 2, 3}; return (*Blank)(unsafe.Pointer(p)) }
+func main() {
+ p := &Source{1, 2, 3}
+ a := (*Blank)(unsafe.Pointer(p))
+ b := (*Blank)(unsafe.Pointer(p))
+ if a != b { panic("same allocation lost identity") }
+ q := &Source{1, 2, 3}
+ if a == (*Blank)(unsafe.Pointer(q)) { panic("distinct allocations collapsed") }
+ retained := escaped()
+ if *retained != (Blank{}) { panic("escaped pointer lost storage") }
+ var nilSource *Source
+ nilBlank := (*Blank)(unsafe.Pointer(nilSource))
+ if nilBlank != nil { panic("typed nil became nonnil") }
+ var boxed any = nilBlank
+ if boxed == nil { panic("typed nil lost dynamic type") }
+}
+`
+		out, stderr, err := runGoSource(t, "s243-unsafe-identity", src)
+		qt.Assert(t, qt.IsNil(err), qt.Commentf("stderr: %s", stderr))
+		qt.Assert(t, qt.Equals(out, ""))
+		qt.Assert(t, qt.Equals(stderr, ""))
+	})
+
 	for _, tc := range []struct{ name, target, want string }{
+		{"receive through view", `func main() { p := &Source{1, 2, 3}; v := (*Blank)(unsafe.Pointer(p)); c := make(chan Blank, 1); c <- Blank{}; select { case *v = <-c: } }`, "BASHPP-EUNSAFE-WRITE"},
+		{"write through view", `func main() { p := &Source{1, 2, 3}; v := (*Blank)(unsafe.Pointer(p)); *v = Blank{} }`, "BASHPP-EUNSAFE-WRITE"},
 		{"observable target", `type Bad struct { x, _, _ int }; var _ = *(*Bad)(unsafe.Pointer(&Source{}))`, "BASHPP-EUNSAFE-VIEW"},
+		{"trailing zero field padding", `type Padded struct { x int; z struct{} }; type Small struct { _ int }; var _ = *(*Small)(unsafe.Pointer(&Padded{}))`, "BASHPP-EUNSAFE-LAYOUT"},
 		{"layout mismatch", `type Bad struct { _, _ int }; var _ = *(*Bad)(unsafe.Pointer(&Source{}))`, "BASHPP-EUNSAFE-LAYOUT"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, stderr, err := runGoSource(t, "s243-unsafe-negative", prefix+tc.target+"\nfunc main() {}\n")
+			src := prefix + tc.target + "\n"
+			if !strings.Contains(tc.target, "func main") {
+				src += "func main() {}\n"
+			}
+			_, stderr, err := runGoSource(t, "s243-unsafe-negative", src)
 			qt.Assert(t, qt.IsNotNil(err))
 			qt.Assert(t, qt.IsTrue(strings.Contains(stderr, tc.want)), qt.Commentf("stderr: %s", stderr))
 		})

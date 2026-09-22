@@ -45,6 +45,11 @@ func (r *Runner) bashPPSelectReceiveAssign(assign *syntax.BashPPAssign, received
 	if ptr == nil || ptr.target == nil {
 		return
 	}
+	if ptr.unsafeView != nil {
+		r.errf("BASHPP-EUNSAFE-WRITE: writes through reinterpreted blank views are unsupported\n")
+		r.exit.code = 2
+		return
+	}
 	candidate := bashPPCopyAssignmentCell(received)
 	target := &bashPPCell{declType: ptr.elem}
 	r.bashPPPrepareInterfaceAssignment(target, candidate)

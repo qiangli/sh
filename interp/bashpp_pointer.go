@@ -218,8 +218,9 @@ func (r *Runner) bashPPPointerExprValue(expr syntax.BashPPExpr) (ptr *bashPPPoin
 				return ptr, err
 			}
 			view := *ptr
-			view.unsafeSource = ptr.elem
-			view.unsafeView = nil
+			if view.unsafeSource == nil {
+				view.unsafeSource = ptr.elem
+			}
 			return &view, nil
 		}
 		return nil, fmt.Errorf("BASHPP-EPOINTER-TARGET: expression is not a pointer")
@@ -891,6 +892,11 @@ func (r *Runner) bashPPDerefAssign(target *syntax.BashPPDerefExpr, rhs syntax.Ba
 			r.errf("%v\n", err)
 			r.exit.code = 2
 		}
+		return
+	}
+	if ptr.unsafeView != nil {
+		r.errf("BASHPP-EUNSAFE-WRITE: writes through reinterpreted blank views are unsupported\n")
+		r.exit.code = 2
 		return
 	}
 	value, meta, err := r.bashPPEvalTypedValue(rhs, ptr.elem)
