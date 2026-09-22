@@ -1440,8 +1440,12 @@ type BashPPChanType struct {
 	Chan      Pos
 	Arrow     Pos
 	Direction string
-	Element   BashPPTypeExpr
-	Elem      *Lit
+	// LocalDomain is set by Go-source package planning when every channel
+	// type connected to this one by a select is interpreter-owned and none
+	// crosses a native package boundary.
+	LocalDomain bool
+	Element     BashPPTypeExpr
+	Elem        *Lit
 }
 
 func (t *BashPPChanType) Pos() Pos {

@@ -63,7 +63,8 @@ type converter struct {
 	statementLabel  string
 	// gotoTargets holds the labels a goto names, built on first use by
 	// gotoTarget; nil until then.
-	gotoTargets map[types.Object]bool
+	gotoTargets       map[types.Object]bool
+	localChannelTypes map[string]bool
 }
 
 type converterBranchScope struct {
@@ -504,7 +505,7 @@ func (c *converter) typ(e ast.Expr) s.BashPPTypeExpr {
 		if x.Dir == ast.RECV {
 			dir = "recv"
 		}
-		return &s.BashPPChanType{Chan: c.pos(x.Begin), Arrow: c.pos(x.Arrow), Direction: dir, Element: c.typ(x.Value), Elem: c.lit(x.Value.Pos(), c.text(x.Value))}
+		return &s.BashPPChanType{Chan: c.pos(x.Begin), Arrow: c.pos(x.Arrow), Direction: dir, LocalDomain: c.localChannelType(c.info.TypeOf(x)), Element: c.typ(x.Value), Elem: c.lit(x.Value.Pos(), c.text(x.Value))}
 	case *ast.FuncType:
 		return &s.BashPPFuncType{Func: c.pos(x.Func), Lparen: c.pos(x.Params.Opening), Rparen: c.pos(x.Params.Closing), Params: c.fields(x.Params, false), Results: c.fields(x.Results, false)}
 	case *ast.InterfaceType:

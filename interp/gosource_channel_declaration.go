@@ -51,6 +51,12 @@ func (r *Runner) goSourceChannelDeclaration(d *syntax.BashPPDecl) bool {
 		return false
 	}
 	cell := goSourceNativeValueCell(bashPPBridgeValue{Kind: "nil", Type: r.bashPPBridgeTypeIdentity(d.DeclTypeExpr)})
+	if typ, ok := r.bashPPUnderlyingType(d.DeclTypeExpr).(*syntax.BashPPChanType); ok && typ.LocalDomain {
+		// A nil channel has no allocation to place, but its select arm must
+		// still belong to the package-planned domain of the channels it can
+		// arbitrate beside.
+		cell = &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String}}
+	}
 	cell.declType = d.DeclTypeExpr
 	if d.InitExpr != nil && !goSourceNilLiteral(d.InitExpr) {
 		value, err := r.goSourceValueCell(d.InitExpr)
