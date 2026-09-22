@@ -42,7 +42,7 @@ func TestS243NativeIndexedPointerBoundsAndAliasControls(t *testing.T) {
 	out, stderr, err := runGoSource(t, "s243-native-indexed-pointer-bounds", `package main
 import("syscall";"unsafe")
 func main(){s,err:=syscall.Mmap(-1,0,1,syscall.PROT_READ,syscall.MAP_ANON|syscall.MAP_PRIVATE);if err!=nil{panic(err)};_ = unsafe.Slice(&s[1],1)}`)
-	if err == nil || !strings.Contains(err.Error(), "index out of range") {
+	if err == nil || !strings.Contains(stderr, "index out of range") {
 		t.Fatalf("native indexed pointer bounds: err=%v stdout=%q stderr=%q", err, out, stderr)
 	}
 	_, stderr, err = runGoSource(t, "s243-native-indexed-pointer-local-alias", `package main
