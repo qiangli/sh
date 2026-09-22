@@ -63,7 +63,11 @@ func (m *mapImporter) variantImport(path string, pkg *types.Package, srcDir stri
 	if v, ok := m.variants[path]; ok && v != nil {
 		return v, nil
 	}
-	if !m.reachesMapped(pkg, map[*types.Package]bool{}) {
+	reaches, err := m.reachesMapped(pkg, srcDir, map[*types.Package]bool{})
+	if err != nil {
+		return nil, err
+	}
+	if !reaches {
 		return pkg, nil
 	}
 	lister, ok := m.fallback.(SourcePackageLister)
@@ -113,20 +117,31 @@ func (m *mapImporter) variantImport(path string, pkg *types.Package, srcDir stri
 
 // reachesMapped reports whether pkg or any package it imports, transitively,
 // is in the explicit map.
-func (m *mapImporter) reachesMapped(pkg *types.Package, seen map[*types.Package]bool) bool {
+func (m *mapImporter) reachesMapped(pkg *types.Package, srcDir string, seen map[*types.Package]bool) (bool, error) {
 	if pkg == nil || seen[pkg] {
-		return false
+		return false, nil
 	}
 	seen[pkg] = true
+	// Indexed export data can contain incomplete transitive package objects.
+	// Their empty Imports list is not evidence that they cannot reach a mapped
+	// package. Complete them through the SAME importer before inspecting their
+	// dependency graph; keep package identity owned by that importer.
+	if !pkg.Complete() {
+		complete, err := m.fallbackImport(pkg.Path(), srcDir, 0)
+		if err != nil {
+			return false, err
+		}
+		pkg = complete
+	}
 	for _, imp := range pkg.Imports() {
 		if _, ok := m.packages[imp.Path()]; ok {
-			return true
+			return true, nil
 		}
-		if m.reachesMapped(imp, seen) {
-			return true
+		if reaches, err := m.reachesMapped(imp, srcDir, seen); err != nil || reaches {
+			return reaches, err
 		}
 	}
-	return false
+	return false, nil
 }
 
 var _ = token.NoPos
