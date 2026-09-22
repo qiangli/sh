@@ -77,6 +77,14 @@ type Config struct {
 	// implementation so readable and searchable directories stay distinct.
 	IsSearchable func(string) bool
 
+	// Lstat reports a path's file info without following a final symlink.
+	// The path is in the shell's own spelling, exactly as [ReadDir2]
+	// receives it. `**` uses it to leave a symlinked directory as a leaf.
+	// If nil, [os.Lstat] is used, which on Windows cannot make sense of
+	// the shell's POSIX spelling (/c/x, /tmp/x) and so never recognised
+	// the symlink at all.
+	Lstat func(string) (fs.FileInfo, error)
+
 	// GlobStar corresponds to the shell option which allows globbing with "**".
 	GlobStar bool
 
@@ -5743,6 +5751,33 @@ func globPathAbs(p string) bool {
 	return strings.HasPrefix(p, "/") || filepath.IsAbs(p)
 }
 
+// globIsSymlink reports whether a path the `**` walk reached is a symlink,
+// which bash includes in the match set but never descends into. The path is
+// in the shell's spelling, so the lookup goes through [Config.Lstat] when
+// the caller supplied one: a plain [os.Lstat] of /c/Users/x or /tmp/x on
+// Windows fails outright, and the failure read as "not a symlink", so
+// globstar3.sub's `ln -s a c` was walked and `echo **` printed c/aa and
+// c/ab after c.
+//
+// On Windows a directory symlink can also be a junction, which Go reports
+// as an irregular file rather than a symlink (go1.23); a reparse point is
+// a leaf to the walk either way.
+func (cfg *Config) globIsSymlink(path string) bool {
+	lstat := cfg.Lstat
+	if lstat == nil {
+		lstat = os.Lstat
+	}
+	info, err := lstat(path)
+	if err != nil {
+		return false
+	}
+	mode := info.Mode()
+	if mode&fs.ModeSymlink != 0 {
+		return true
+	}
+	return runtime.GOOS == "windows" && mode&fs.ModeIrregular != 0
+}
+
 // globPathJoin joins a glob path element onto base unless it is absolute.
 // The result is the directory the walk reads next, in the shell's spelling:
 // base is $PWD, which on Windows keeps the POSIX form a script typed
@@ -5937,8 +5972,7 @@ func (cfg *Config) glob(base, pat string) ([]string, error) {
 				// Bash: `**` does not follow symlinks during recursion
 				// (to avoid cycles and unbounded expansion). Include the
 				// symlink entry itself but do not descend into it.
-				dirPath := globPathJoin(base, dir)
-				if info, err := os.Lstat(dirPath); err == nil && info.Mode()&os.ModeSymlink != 0 {
+				if cfg.globIsSymlink(globPathJoin(base, dir)) {
 					continue
 				}
 
@@ -5967,8 +6001,7 @@ func (cfg *Config) glob(base, pat string) ([]string, error) {
 				if needsDescent {
 					filtered := matches[:0]
 					for _, m := range matches {
-						mPath := globPathJoin(base, m)
-						if info, err := os.Lstat(mPath); err == nil && info.Mode()&os.ModeSymlink != 0 {
+						if cfg.globIsSymlink(globPathJoin(base, m)) {
 							continue
 						}
 						filtered = append(filtered, m)
