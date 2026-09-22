@@ -74,6 +74,11 @@ func TestStory687RecordedModeDeniesOpen(t *testing.T) {
 // instances are busy". No pipe is created here on purpose: the lookup must
 // answer without the filesystem, so it answers without a server too.
 func TestStory687ProcSubstPipeLookupDoesNotConnect(t *testing.T) {
+	// No pipe is created, only registered: the lookup must answer from the
+	// name alone. An unregistered name is a pipe the shell has released,
+	// and checkStat reports it gone rather than reaching for it.
+	procSubstPipeRegister(fifoNamePrefix + "deadbeef")
+	defer procSubstPipeRelease(fifoNamePrefix + "deadbeef")
 	for _, path := range []string{
 		windowsProcSubstShellDir + fifoNamePrefix + "deadbeef",
 		windowsProcSubstNativeDir + fifoNamePrefix + "deadbeef",

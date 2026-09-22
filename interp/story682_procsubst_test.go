@@ -79,14 +79,18 @@ func TestStory682ProcSubstPipePathRecognised(t *testing.T) {
 			t.Errorf("isProcSubstPipePathMode(%q, windows=%v) = %v, want %v", c.path, c.windows, got, c.want)
 		}
 	}
+	// The synthetic stat only answers for a pipe the shell is serving; see
+	// TestProcSubstPipeStatFollowsTheLiveName.
+	procSubstPipeRegister("sh-np-4a37")
+	defer procSubstPipeRelease("sh-np-4a37")
 	info, ok := procSubstPipeStatMode(`//./pipe/sh-np-4a37`, true)
-	if !ok {
+	if !ok || info == nil {
 		t.Fatal("no synthetic stat for the shell spelling")
 	}
 	if info.Mode()&fs.ModeNamedPipe == 0 || info.Mode()&0o600 != 0o600 || info.IsDir() || info.Name() != "sh-np-4a37" {
 		t.Errorf("synthetic stat = %v %q", info.Mode(), info.Name())
 	}
-	if info, ok := procSubstPipeStatMode(`\\.\pipe\sh-np-4a37`, true); !ok || info.Name() != "sh-np-4a37" {
+	if info, ok := procSubstPipeStatMode(`\\.\pipe\sh-np-4a37`, true); !ok || info == nil || info.Name() != "sh-np-4a37" {
 		t.Errorf("native spelling stat = %v, %v", info, ok)
 	}
 	if _, ok := procSubstPipeStatMode(`//./pipe/sh-np-4a37`, false); ok {
