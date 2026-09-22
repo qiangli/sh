@@ -225,18 +225,19 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 	if err != nil {
 		return err
 	}
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listener, bridgeNetwork, cleanupControl, err := bashPPNativeControlListener()
 	if err != nil {
 		return err
 	}
 	defer listener.Close()
+	defer cleanupControl()
 	secret := make([]byte, 24)
 	if _, err = rand.Read(secret); err != nil {
 		return err
 	}
 	auth := hex.EncodeToString(secret)
 	s.id = auth[:16]
-	source = strings.Replace(source, "//CONNECTION", "const bridgeAddress = "+strconv.Quote(listener.Addr().String())+"\nconst bridgeAuth = "+strconv.Quote(auth), 1)
+	source = strings.Replace(source, "//CONNECTION", "const bridgeNetwork = "+strconv.Quote(bridgeNetwork)+"\nconst bridgeAddress = "+strconv.Quote(listener.Addr().String())+"\nconst bridgeAuth = "+strconv.Quote(auth), 1)
 	scratchEnv := req.RuntimeEnv
 	if scratchEnv == nil {
 		scratchEnv = req.Env

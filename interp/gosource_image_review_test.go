@@ -52,6 +52,26 @@ func main(){defer func(){fmt.Println(recover())}();out:=bytes.NewBufferString(""
 		t.Run(name, func(t *testing.T) { callbackTourThreeModes(t, source) })
 	}
 }
+
+// A callback is not itself a result boundary. Imported composites used as
+// locals must be fully materialized so their methods and fields keep native Go
+// behavior before a separate value is returned to the dependency.
+func TestGoSourceImageCallbackLocalCompositeBehaviorThreeModes(t *testing.T) {
+	source := `package main
+import("fmt";"bytes";"image";"image/color";"image/png")
+type Picture struct{}
+` + imageReviewMethods + `
+func(m *Picture)At(x,y int)color.Color{
+	r:=image.Rect(1,2,4,6)
+	if r.Dx()!=3{panic("local method")}
+	r.Max.X=9
+	if r.Dx()!=8||r.Max.X!=9{panic("local field")}
+	return color.RGBA{uint8(r.Dx()),uint8(r.Max.X),17,255}
+}
+func main(){out:=bytes.NewBufferString("");err:=png.Encode(out,&Picture{});fmt.Println(out.Len()>0,err)}`
+	callbackTourThreeModes(t, source)
+}
+
 func TestGoSourceImageCallbackCancelReset(t *testing.T) {
 	dir := callbackTourModule(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
