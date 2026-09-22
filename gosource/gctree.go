@@ -28,6 +28,14 @@ import (
 //     receiver list like a parameter list, where a final ...T is legal, so
 //     the Ellipsis reaches go/types, which reports the parser's diagnostic
 //     again as an invalid syntax tree.
+//   - a type parameter list in which no parameter has a constraint
+//     ("missing type constraint") declares each name with a Bad constraint
+//     (parser.go paramList: a lone name is the parameter's name and its
+//     type is a BadExpr at the same position). go/parser keeps each lone
+//     name as an unnamed field's constraint type, on which go/types
+//     declares nothing and reports the name undefined. Once one parameter
+//     has a constraint both parsers name the rest and give them a Bad
+//     type, and both checkers ignore the Bad type without a message.
 //
 // Both policies check the mirrored tree: gc's stderr because types2 checks
 // gc's tree, the checker-test policy because its runners' own parsers make
@@ -45,6 +53,7 @@ func mirrorGCTree(fset *token.FileSet, file *ast.File, gc *gcsyntax.File) {
 	type lineCol struct{ line, col uint }
 	bad := map[lineCol]bool{}
 	funcs := map[lineCol]*gcsyntax.FuncDecl{}
+	badTParams := map[lineCol]bool{}
 	// After a syntax error gc's tree may hold a typed nil where the parser
 	// gave up (an import declaration without a path); the walker visits it.
 	gcsyntax.Inspect(gc, func(n gcsyntax.Node) bool {
@@ -61,6 +70,11 @@ func mirrorGCTree(fset *token.FileSet, file *ast.File, gc *gcsyntax.File) {
 				return false
 			}
 			funcs[lineCol{n.Pos().Line(), n.Pos().Col()}] = n
+			for _, f := range n.TParamList {
+				if _, isBad := f.Type.(*gcsyntax.BadExpr); isBad {
+					badTParams[lineCol{f.Pos().Line(), f.Pos().Col()}] = true
+				}
+			}
 		}
 		return true
 	})
@@ -75,7 +89,19 @@ func mirrorGCTree(fset *token.FileSet, file *ast.File, gc *gcsyntax.File) {
 
 	for _, decl := range file.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
-		if !ok || fn.Recv == nil {
+		if !ok {
+			continue
+		}
+		if fn.Type.TypeParams != nil && len(badTParams) > 0 {
+			for _, field := range fn.Type.TypeParams.List {
+				name, ok := field.Type.(*ast.Ident)
+				if len(field.Names) == 0 && ok && badTParams[at(name.Pos())] {
+					field.Names = []*ast.Ident{name}
+					field.Type = &ast.BadExpr{From: name.Pos(), To: name.End()}
+				}
+			}
+		}
+		if fn.Recv == nil {
 			continue
 		}
 		// gc positions the declaration at the token after "func": the

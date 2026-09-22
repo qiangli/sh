@@ -3,6 +3,7 @@ package gosource
 import (
 	"go/ast"
 	"go/parser"
+	"go/scanner"
 	"go/token"
 	"reflect"
 	"strings"
@@ -56,23 +57,81 @@ func gcSourceImage(src []byte) (image []byte, dropped []int) {
 	return image, dropped
 }
 
+// gcScannerImage returns image with every character that go/scanner
+// rejects as an ILLEGAL token rewritten into what gc's scanner makes of
+// it, and whether there was one (the result is image itself when there is
+// none). gc's scanner (scanner.go next,
+// atIdentChar) has no illegal token: a character below utf8.RuneSelf that
+// starts no token is reported ("invalid character U+0024 '$'") and
+// skipped, so it separates the tokens around it like a space; every other
+// character is an identifier character — at a token's start it begins an
+// identifier, after one it continues it — reported ("invalid character
+// U+2639 '☹' in identifier") and kept in the identifier's text. go/scanner
+// returns the character as an ILLEGAL token instead, after which go/parser
+// recovers by dropping the declaration or statement around it and go/types
+// reports on what was lost ("undefined: x" for `var ☹x int`, where types2
+// declares ☹x). The rewrite is a space for the former and a letter of the
+// same encoded width for the latter, so go/scanner tokenises the image as
+// gc's scanner tokenises the source, with the same token boundaries and
+// byte offsets; parseGoFile then restores each token's original text, so
+// the identifier's name is ☹x for go/types as it is for types2, which
+// neither checker looks up when it is not a valid name (typexpr.go ident,
+// call.go selector: isValidName). Characters inside a literal or a comment
+// are never rejected by either scanner and are left alone.
+func gcScannerImage(image []byte) (out []byte, rewritten bool) {
+	scratch := token.NewFileSet()
+	file := scratch.AddFile("", -1, len(image))
+	var s scanner.Scanner
+	s.Init(file, image, nil, 0)
+	out = image
+	for {
+		pos, tok, lit := s.Scan()
+		if tok == token.EOF {
+			break
+		}
+		if tok != token.ILLEGAL || lit == "" {
+			continue
+		}
+		offset := file.Offset(pos)
+		r, w := utf8.DecodeRune(image[offset:])
+		if string(r) != lit {
+			continue
+		}
+		if !rewritten {
+			out, rewritten = append([]byte(nil), image...), true
+		}
+		switch {
+		case r < utf8.RuneSelf:
+			out[offset] = ' '
+		default:
+			// A letter of each encoded width: U+00E9, U+4E16, U+1D400.
+			letter := [...]rune{2: 'é', 3: '世', 4: '𝐀'}[w]
+			utf8.EncodeRune(out[offset:offset+w], letter)
+		}
+	}
+	return out, rewritten
+}
+
 // parseGoFile is parser.ParseFile on the bytes gc's scanner sees, with the
-// tree positioned in the original file. When gcSourceImage drops nothing it
-// is parser.ParseFile itself. Otherwise the image is parsed in a scratch
-// file set, the original registered in fset with its own line table and
-// the same line directives, and every position in the tree mapped from the
-// image back to the original byte, so go/types checks the tree types2
-// checks and reports at the columns gc reports. Token boundaries are the
-// image's; a token's text is gc's segment of the original — the raw bytes
-// from its first to its last character, dropped bytes included (scanner.go
-// ident, stdString: s.segment()) — so an identifier or literal written
-// across a dropped byte keeps that byte in its name or value, as it does
-// for types2. The syntax verdict has already rejected such a source (each
-// dropped byte is one of gc's rows), so the tree is checked, never
-// converted or run.
+// tree positioned in the original file. When gcSourceImage drops nothing
+// and gcScannerImage rewrites nothing it is parser.ParseFile itself.
+// Otherwise the image is parsed in a scratch file set, the original
+// registered in fset with its own line table and the same line directives,
+// and every position in the tree mapped from the image back to the
+// original byte, so go/types checks the tree types2 checks and reports at
+// the columns gc reports. Token boundaries are the image's; a token's text
+// is gc's segment of the original — the raw bytes from its first to its
+// last character, dropped and rewritten bytes included (scanner.go ident,
+// stdString: s.segment()) — so an identifier or literal written across a
+// dropped byte keeps that byte in its name or value, and an identifier
+// written with an invalid character keeps the character in its name, as
+// they do for types2. The syntax verdict has already rejected such a
+// source (each dropped byte and each invalid character is one of gc's
+// rows), so the tree is checked, never converted or run.
 func parseGoFile(fset *token.FileSet, name string, src []byte, mode parser.Mode) (*ast.File, error) {
 	image, dropped := gcSourceImage(src)
-	if len(dropped) == 0 {
+	image, rewritten := gcScannerImage(image)
+	if len(dropped) == 0 && !rewritten {
 		return parser.ParseFile(fset, name, src, mode)
 	}
 	scratch := token.NewFileSet()

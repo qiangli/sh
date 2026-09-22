@@ -157,6 +157,19 @@ func checksAfterSyntaxVerdict(verdict ErrorList) bool {
 // printed (the position base and line are compared, so //line directives
 // are honored).
 //
+// A short variable declaration in a for statement's post clause is the one
+// diagnostic gc's parser reports under both policies (parser.go header:
+// "syntax error: cannot declare in post statement of for loop", at the
+// ":=") that go/types reports again: types2 relies on the parser (stmt.go
+// ForStmt: "The parser already reported an error") and only marks the
+// left-hand side used, go/types has no such parser and reports
+// InvalidPostDecl itself (stmt.go ForStmt) before marking the left-hand
+// side used. That row is recognised structurally: it is the soft
+// diagnostic anchored at the post statement itself, and the checker's
+// other diagnostics at that position — the assignment's own, from the
+// same left-hand side both checkers evaluate ("non-name a.b on left side
+// of :=", "undefined: a") — are not soft.
+//
 // go/types reports the continuation lines of a message ("\tother declaration
 // of x") as separate errors that follow their primary; they stay with it:
 // dropped with it, and never compared or sorted on their own.
@@ -164,6 +177,7 @@ type checkerDiagnostics struct {
 	list        ErrorList
 	dropped     int
 	anchors     map[token.Pos]bool
+	postDecls   map[token.Pos]bool
 	gcStderr    bool
 	fset        *token.FileSet
 	files       []*ast.File
@@ -175,20 +189,27 @@ type checkerDiagnostics struct {
 }
 
 func newCheckerDiagnostics(fset *token.FileSet, files []*ast.File, info *types.Info, checker checkerOptions) *checkerDiagnostics {
-	d := &checkerDiagnostics{gcStderr: checker.gcStderr(), fset: fset, files: files, info: info, goVersion: checker.goVersion}
-	if checker.checkerBranchErrors {
-		return d
+	d := &checkerDiagnostics{gcStderr: checker.gcStderr(), fset: fset, files: files, info: info, goVersion: checker.goVersion, postDecls: map[token.Pos]bool{}}
+	if !checker.checkerBranchErrors {
+		d.anchors = map[token.Pos]bool{}
 	}
-	d.anchors = map[token.Pos]bool{}
 	for _, file := range files {
 		ast.Inspect(file, func(n ast.Node) bool {
 			switch n := n.(type) {
+			case *ast.ForStmt:
+				if post, ok := n.Post.(*ast.AssignStmt); ok && post.Tok == token.DEFINE {
+					d.postDecls[post.Pos()] = true
+				}
 			case *ast.LabeledStmt:
-				d.anchors[n.Label.Pos()] = true
-			case *ast.BranchStmt:
-				d.anchors[n.Pos()] = true
-				if n.Label != nil {
+				if d.anchors != nil {
 					d.anchors[n.Label.Pos()] = true
+				}
+			case *ast.BranchStmt:
+				if d.anchors != nil {
+					d.anchors[n.Pos()] = true
+					if n.Label != nil {
+						d.anchors[n.Label.Pos()] = true
+					}
 				}
 			}
 			return true
@@ -209,7 +230,7 @@ func (d *checkerDiagnostics) report(err error) {
 		return
 	}
 	d.lastDropped = false
-	if ok && d.anchors[e.Pos] {
+	if ok && (d.anchors[e.Pos] || e.Soft && d.postDecls[e.Pos]) {
 		d.dropped++
 		d.lastDropped = true
 		return
