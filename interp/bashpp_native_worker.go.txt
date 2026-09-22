@@ -14,6 +14,7 @@ import (
  "reflect"
  "strconv"
  "sync"
+	"sync/atomic"
  "time"
  bppTextTemplate "text/template"
  bppTemplateParse "text/template/parse"
@@ -88,6 +89,8 @@ func livePointers()([]uint64,[]reflect.Value){originalPointers.Lock();defer orig
 // pointer's declared type. A shape outside it is never written back silently.
 func writablePointee(kind string)bool{switch kind{case "string","bool","int","uint","float","complex","nil","handle","struct","slice","array","map":return true};return false}
 var handles = struct { sync.Mutex; next uint64; values map[uint64]reflect.Value; stop chan struct{} }{values: map[uint64]reflect.Value{},stop:make(chan struct{})}
+var reflectedMethodInvocation = struct{ sync.Mutex; origin atomic.Uint64 }{}
+func callbackReceiver(v reflect.Value)value{recv:=structural(v);if origin:=reflectedMethodInvocation.origin.Load();origin!=0{recv.Origin=origin};return recv}
 func typeID(t reflect.Type) string { if t.Name()!="" && t.PkgPath()!="" {return t.PkgPath()+"."+t.Name()}; return t.String() }
 // seenTypes registers every type this helper has handed the interpreter, by
 // the identity it was handed under. A value the interpreter sends back names
@@ -431,8 +434,10 @@ func dispatch(q request)(reply response){
   defer func(){for _,buffer:=range q.SliceBuffers {v:=args[buffer.Index];reply.SliceUpdates=append(reply.SliceUpdates,sliceBuffer{Index:buffer.Index,Length:v.Len(),Value:structural(v.Slice(0,v.Cap()))})};origins,ptrs:=livePointers();for i,origin:=range origins{elem:=structural(ptrs[i].Elem());if !writablePointee(elem.Kind){continue};snapshot:=pointerSnapshot(elem);originalPointers.Lock();changed:=snapshot!=originalPointers.sent[origin];if changed{originalPointers.sent[origin]=snapshot};originalPointers.Unlock();if !changed{continue};reply.PtrUpdates=append(reply.PtrUpdates,value{Kind:"pointer",Type:ptrs[i].Type().String(),Origin:origin,Session:bridgeAuth[:16],Elements:[]value{elem}})}}()
  if handled,err:=sourceLog(q,args);handled{reply.Error=err;return}
  var returned []reflect.Value
+	if q.Receiver!=nil&&q.Receiver.Origin!=0&&fn.Kind()==reflect.Func {reflectedMethodInvocation.Lock();reflectedMethodInvocation.origin.Store(q.Receiver.Origin);defer func(){reflectedMethodInvocation.origin.Store(0);reflectedMethodInvocation.Unlock()}()}
  if q.Spread {if !signature.IsVariadic()||len(args)!=n{reply.Error="invalid spread call";return};returned=fn.CallSlice(args)}else{returned=fn.Call(args)}
- for _,v:=range returned{reply.Values=append(reply.Values,encode(v))};return
+	origin:=uint64(0);if q.Receiver!=nil{origin=q.Receiver.Origin}else if len(q.Args)==1&&len(returned)>0&&returned[0].Type()==reflect.TypeFor[reflect.Value](){origin=q.Args[0].Origin}
+	for _,v:=range returned{encoded:=encode(v);if encoded.Kind=="handle"&&origin!=0{encoded.Origin=origin};reply.Values=append(reply.Values,encoded)};return
 }
 func main(){
  conn,err:=net.Dial("tcp",bridgeAddress);if err!=nil{panic(err)};defer conn.Close()

@@ -101,10 +101,62 @@ func (r *Runner) bashPPBridgeCall(ctx context.Context, call *syntax.BashPPCall) 
 	if err != nil {
 		return nil, err
 	}
+	r.bashPPReflectValueReceiver(req, call, &q)
 	if !r.goSourceNativeSleepBoundary(ctx, req, q) {
 		return nil, errBashPPScalarInterrupted
 	}
 	return r.bashPPNativeRequest(ctx, req, q)
+}
+
+// bashPPReflectValueReceiver gives the reviewed reflect.ValueOf(local) path an
+// authenticated route back to the addressable interpreter cell. The worker
+// carries this origin through Method/MethodByName and Interface, so a later
+// invocation can run the original body while that request remains parked.
+func (r *Runner) bashPPReflectValueReceiver(req bashPPEvalRequest, call *syntax.BashPPCall, q *bashPPBridgeRequest) {
+	if q == nil || q.Receiver != nil || len(q.Args) != 1 || len(call.ArgExprs) != 1 {
+		return
+	}
+	alias, name, ok := strings.Cut(q.Selector, ".")
+	if !ok || req.Imports[alias] != "reflect" || name != "ValueOf" || q.Args[0].Origin != 0 {
+		return
+	}
+	var addressable func(syntax.BashPPExpr) *bashPPCell
+	addressable = func(expr syntax.BashPPExpr) *bashPPCell {
+		switch x := expr.(type) {
+		case *syntax.BashPPParenExpr:
+			return addressable(x.X)
+		case *syntax.BashPPIdent:
+			if r.bashPPScope == nil {
+				return nil
+			}
+			cell := r.bashPPScope.lookup(x.Name.Value)
+			if cell != nil && cell.interfaceValue != nil && !cell.interfaceValue.nilIface {
+				return cell.interfaceValue.cell
+			}
+			return cell
+		}
+		return nil
+	}
+	cell := addressable(call.ArgExprs[0])
+	if cell == nil {
+		return
+	}
+	elem := cell.declType
+	typeName := cell.typeName
+	if typeName == "" {
+		typeName = bashPPTypeText(elem)
+	}
+	typeName = strings.TrimPrefix(strings.TrimPrefix(typeName, "*"), "main.")
+	if elem == nil && typeName != "" {
+		elem = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: typeName}}
+	}
+	for _, local := range req.LocalTypes {
+		if (local.Name == typeName || local.WireType == typeName) && len(local.Methods) > 0 {
+			origin := bashPPTransportOrigin(req.Bridge, &bashPPPointer{target: cell, elem: elem})
+			q.Args[0].Origin, q.Args[0].Session = origin, req.Bridge.id
+			return
+		}
+	}
 }
 func (r *Runner) bashPPPrepareNativeCall(ctx context.Context, call *syntax.BashPPCall) (bashPPBridgeRequest, error) {
 	if !r.bashPPBridgeHandles(call) {

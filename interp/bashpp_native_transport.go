@@ -134,6 +134,9 @@ func validateLocalTransport(req bashPPEvalRequest, q bashPPBridgeRequest) error 
 	if synchronousReaderCallback(req, q) || synchronousImageCallback(req, q) || !functionCallbacks && (synchronousUnwrapCallback(req, q) || synchronousErrorsAsType(req, q)) {
 		return nil
 	}
+	if reflectedMethodValueOf(req, q) {
+		return nil
+	}
 	if functionCallbacks && !synchronousFunctionCallback(req, q) && !retainedFunctionCallback(req, q) {
 		return fmt.Errorf("gosource: asynchronous or retained original function callbacks are unsupported for %s", q.Selector)
 	}
@@ -157,6 +160,17 @@ func validateLocalTransport(req bashPPEvalRequest, q bashPPBridgeRequest) error 
 		}
 	}
 	return fmt.Errorf("gosource: dependency mutation of interpreter-owned references is unsupported for %s", q.Selector)
+}
+
+// reflectedMethodValueOf is the narrow creation edge for synchronous reflected
+// method values. Its origin is minted only from an addressable local cell;
+// arbitrary reflect calls and dependency retainers do not satisfy it.
+func reflectedMethodValueOf(req bashPPEvalRequest, q bashPPBridgeRequest) bool {
+	if q.Op != "call" || q.Receiver != nil || len(q.Args) != 1 || q.Args[0].Origin == 0 || q.Args[0].Session == "" {
+		return false
+	}
+	alias, name, ok := strings.Cut(q.Selector, ".")
+	return ok && req.Imports[alias] == "reflect" && name == "ValueOf" && requestHasCallbacks(req, q)
 }
 
 // bashPPReflectTypeOnly rewrites original function arguments of reflect.TypeOf

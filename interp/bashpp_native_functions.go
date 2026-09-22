@@ -200,6 +200,9 @@ func (r *Runner) bashPPNativeFunctionCallback(ctx context.Context, id uint64, ar
 func synchronousFunctionCallback(req bashPPEvalRequest, q bashPPBridgeRequest) bool {
 	path := ""
 	if q.Receiver != nil && q.Receiver.Kind == "handle" {
+		if q.Selector == "" && q.Receiver.Function && q.Receiver.Origin != 0 && q.Receiver.Callbacks {
+			return true
+		}
 		// A bare call of a native function handle whose signature names a
 		// program type is a func/method value the interpreter itself produced:
 		// reflect over a local type M yields `Method(0).Func` of type
