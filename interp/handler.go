@@ -976,8 +976,17 @@ func winHasExt(file string) bool {
 // extension at all (how a POSIX tool or script is spelled), or a file whose
 // first bytes say it is a program or a script. exec3.sub writes `echo bar`
 // into x.sh with a plain redirect and wants `exec ./x.sh` refused, the way
-// a 0644 file is refused on Unix.
+// a 0644 file is refused on Unix — and a redirect records no mode, so the
+// name rule still decides that one.
 func windowsExecutableFile(target string, exts []string) bool {
+	// A mode somebody recorded is the answer, whatever the name says: the
+	// corpus ships .sub scripts 755 and runs them directly, and `chmod +x`
+	// on any name must mean what it says (winmode).
+	if info, err := os.Stat(target); err == nil {
+		if applied := winmode.Apply(target, info); winmode.Recorded(applied) {
+			return applied.Mode().Perm()&0o111 != 0
+		}
+	}
 	if !winHasExt(target) {
 		return true
 	}
