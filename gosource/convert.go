@@ -750,28 +750,7 @@ func (c *converter) valueDecl(g *ast.GenDecl, v *ast.ValueSpec, n *ast.Ident, in
 		}
 		if obj, ok := c.info.Defs[n].(*types.Const); ok {
 			value := obj.Val().ExactString()
-			kind := "INT"
-			switch obj.Val().Kind() {
-			case constant.String:
-				kind = "STRING"
-			case constant.Bool:
-				out.InitExpr = &s.BashPPIdent{Name: c.lit(n.Pos(), value)}
-			case constant.Float:
-				kind = "FLOAT"
-				// ExactString may spell an integral float as an integer. Keep
-				// floating syntax without any machine-float conversion.
-				if !strings.Contains(value, "/") {
-					value += ".0"
-				}
-				if parts := strings.Split(value, "/"); len(parts) == 2 {
-					out.InitExpr = &s.BashPPBinaryExpr{X: &s.BashPPBasicLit{Kind: "FLOAT", Value: c.lit(n.Pos(), parts[0]+".0")}, Op: c.lit(n.Pos(), "/"), Y: &s.BashPPBasicLit{Kind: "FLOAT", Value: c.lit(n.Pos(), parts[1]+".0")}}
-				}
-			case constant.Complex:
-				out.InitExpr = c.complexConstantExpr(n.Pos(), obj.Val())
-			}
-			if out.InitExpr == nil {
-				out.InitExpr = &s.BashPPBasicLit{Kind: kind, Value: c.lit(n.Pos(), value)}
-			}
+			out.InitExpr = c.constantValueExpr(n.Pos(), obj.Val())
 			// Init is the WRITTEN carrier: compiled Go re-emits the source
 			// expression and lets gc evaluate it, so the folded value must
 			// never replace it — ExactString spells a rational (`1/3 +
@@ -828,22 +807,44 @@ func (c *converter) constGroup(g *ast.GenDecl) *s.BashPPConstGroup {
 					continue
 				}
 				spec.Init = []*s.Word{c.word(v.Values[i])}
-				// The interpreter evaluates a const initializer with its
-				// exact scalar evaluator, which folds literals and same-kind
-				// arithmetic but not every constant call (complex, huge
-				// literals). So the raw source form is kept only when folding
-				// would erase a use of an imported package (unsafe.Sizeof and
-				// friends) — the one case where the generated Go must keep
-				// the expression to keep the import.
-				saved := c.rawConstantExpr
-				c.rawConstantExpr = c.usesImportedPackage(v.Values[i])
-				spec.InitExpr = c.expr(v.Values[i])
-				c.rawConstantExpr = saved
+			}
+			// go/types has already evaluated every valid constant in package
+			// dependency order. Carry that exact value into the interpreter so
+			// forward references, repeated iota expressions, and huge rationals
+			// do not depend on source-order runtime cells. Init above remains the
+			// written expression for compiled output and import accounting.
+			if obj, ok := c.info.Defs[name].(*types.Const); ok {
+				if len(v.Values) == len(v.Names) && i < len(v.Values) &&
+					c.constAsWritten(v, i) && !c.constHasForwardReference(v.Values[i], name.Pos()) {
+					spec.InitExpr = c.expr(v.Values[i])
+				} else {
+					spec.InitExpr = c.constantValueExpr(name.Pos(), obj.Val())
+				}
 			}
 			out.Specs = append(out.Specs, spec)
 		}
 	}
 	return out
+}
+
+// constHasForwardReference reports a dependency whose declaration follows the
+// current ConstSpec. Such dependencies are valid Go, but cannot be recovered
+// from source-ordered interpreter cells; go/types' checked value must carry
+// them instead.
+func (c *converter) constHasForwardReference(e ast.Expr, declaration token.Pos) bool {
+	found := false
+	ast.Inspect(e, func(n ast.Node) bool {
+		id, ok := n.(*ast.Ident)
+		if !ok {
+			return !found
+		}
+		obj, ok := c.info.Uses[id].(*types.Const)
+		if ok && obj.Pos().IsValid() && obj.Pos() > declaration {
+			found = true
+		}
+		return !found
+	})
+	return found
 }
 
 // usesImportedPackage reports whether e selects through an imported package

@@ -62,6 +62,38 @@ func two() any { type T[_ any] int; return T[int](0) }
 
 func main() { fmt.Println(one() == two(), one() == one()) }
 `,
+		"grouped_iota_exact_forward_constants": `package main
+
+import "fmt"
+
+const (
+	h0, h1 = 1.0/(iota+1), 1.0/(iota+2)
+	h2, h3
+)
+const (
+	p0 = h0*f2 + h1*(-2*f2)
+	p1 = h2*f2 + h3*(-2*f2)
+)
+const f2 = f1 * 2
+const f1 = 1
+
+func main() { fmt.Println(p0, p1, p0 == 0, p1 == 0) }
+`,
+		"negative_folded_typed_constants": `package main
+
+import "fmt"
+
+const (
+	negativeFloat float64 = -2
+	negativeFraction = -2.0 / 3.0
+	negativeInt = -1 << 100
+)
+
+func main() {
+	fmt.Println(negativeFloat, negativeFraction*3 == -2)
+	fmt.Println(negativeInt+(1<<100) == 0)
+}
+`,
 	}
 	for name, source := range cases {
 		t.Run(name, func(t *testing.T) { typedSendThreeModes(t, source) })
