@@ -127,6 +127,16 @@ func (r *Runner) bashPPGoSendPayload(channel *bashPPChannel, send *syntax.BashPP
 	if r.bashPPPanicking() || r.exit.exiting || r.exit.fatalExit {
 		return nil, false
 	}
+	// A send is an assignment to the channel element type. Preserve that
+	// context for untyped nil before the receive transports its result cell.
+	// In particular len(<-chan *[N]T) needs *[N]T even when the value is nil.
+	if channel.element != nil && goSourceNilLiteral(send.ValueExpr) {
+		cell, err = r.goSourceExpectedCell(cell, channel.element)
+		if err != nil {
+			r.bashPPGoSendError(send.ValueExpr, err)
+			return nil, false
+		}
+	}
 	if channel.element != nil {
 		base, _ := r.bashPPChanElemBase(channel.elem)
 		if bashPPScalarType(base) || base == "complex64" || base == "complex128" {
