@@ -23,6 +23,12 @@ type goSourceRangeYield struct {
 	stopped   bool
 	returning bool
 	ret       bashPPReturnState
+	// deferBuf collects the defers executed directly inside the range body
+	// across every yield. They belong to the enclosing function, not to the
+	// yield callback or the iterator frame, so they are held here — off the live
+	// stack the iterator would truncate — and spliced onto the enclosing frame
+	// once the iterator returns; see [Runner.goSourceRangeFunction].
+	deferBuf []bashPPDeferred
 }
 
 func (r *Runner) goSourceIteratorYield(fn *bashPPFunc) (*syntax.BashPPFuncType, error) {
@@ -122,6 +128,19 @@ func (r *Runner) goSourceRangeFunction(ctx context.Context, rng *syntax.BashPPRa
 	vr := r.bashPPStoreFunc(yield)
 	r.bashPPCallCells = []*bashPPCell{{vr: vr, declType: yieldType}}
 	r.bashPPInvoke(ctx, fn, []string{vr.Str})
+	// The body's defers were collected off the live stack so the iterator's
+	// return could not run or discard them. They belong to the enclosing
+	// function, so splice them onto its region now, in registration order: onto
+	// the parent range's buffer if this range is itself nested in a body,
+	// otherwise onto the live stack the enclosing frame will unwind. This runs
+	// whether the iterator finished normally, stopped early, or panicked.
+	if len(state.deferBuf) > 0 {
+		if r.bashPPRangeDefer != nil {
+			*r.bashPPRangeDefer = append(*r.bashPPRangeDefer, state.deferBuf...)
+		} else {
+			r.bashPPDeferStack = append(r.bashPPDeferStack, state.deferBuf...)
+		}
+	}
 	if state.returning {
 		r.bashPPReturn = state.ret
 		r.exit.returning = true
@@ -159,7 +178,14 @@ func (r *Runner) goSourceInvokeRangeYield(ctx context.Context, fn *bashPPFunc, a
 		if len(values) > 1 {
 			value, valueType = values[1], params[1].typ
 		}
+		// A defer executed directly in the body binds to the enclosing function,
+		// so divert it to the state's buffer for the length of the body. A frame
+		// entered for an ordinary call the body makes clears the sink itself, so
+		// only the body's own defers are captured here.
+		savedSink := r.bashPPRangeDefer
+		r.bashPPRangeDefer = &state.deferBuf
 		more = r.bashPPRangeIteration(ctx, state.rng, key, keyType, value, nil, valueType)
+		r.bashPPRangeDefer = savedSink
 		r.bashPPScope = savedScope
 		if r.exit.returning {
 			state.returning, state.ret = true, r.bashPPReturn

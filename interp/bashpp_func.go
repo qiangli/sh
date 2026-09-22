@@ -2412,6 +2412,7 @@ type bashPPFrame struct {
 	scope      *bashPPScope
 	callDepth  int
 	deferMark  int
+	rangeDefer *[]bashPPDeferred
 	ret        bashPPReturnState
 	deferDepth int
 	// typeArgs is the caller's type parameter bindings, restored on leave so
@@ -2434,10 +2435,15 @@ func (r *Runner) bashPPEnterFrame(fn *bashPPFunc, args []string) *bashPPFrame {
 		scope:      r.bashPPScope,
 		callDepth:  len(r.callStack),
 		deferMark:  len(r.bashPPDeferStack),
+		rangeDefer: r.bashPPRangeDefer,
 		ret:        r.bashPPReturn,
 		deferDepth: r.bashPPDeferDepth,
 		typeArgs:   r.bashPPTypeParamArgs,
 	}
+	// A call made from a range-over-function body starts a frame of its own, so
+	// its defers belong to it and not to the range's enclosing function. Clear
+	// the sink for the callee; leave restores it for the body that resumes.
+	r.bashPPRangeDefer = nil
 	// The callee's own type arguments REPLACE the caller's rather than
 	// extending them. An ordinary function called from inside a generic body
 	// has none, and must not inherit a `T` it never declared.
@@ -2525,6 +2531,7 @@ func (f *bashPPFrame) leave() {
 	r.inFunc = f.inFunc
 	r.bashPPReturn = f.ret
 	r.bashPPDeferDepth = f.deferDepth
+	r.bashPPRangeDefer = f.rangeDefer
 	r.bashPPTypeParamArgs = f.typeArgs
 	r.bashPPFuncActive--
 }
@@ -2937,6 +2944,20 @@ func (r *Runner) bashPPReturnScalarExpr(expr syntax.BashPPExpr) {
 	r.exit.returning = true
 }
 
+// bashPPPushDeferred records one prepared deferred call on the frame it belongs
+// to. Ordinarily that is the live stack for the running invocation, but a defer
+// executed directly inside a range-over-function body belongs to the ENCLOSING
+// function, so it is diverted to the range sink and spliced onto the enclosing
+// frame's region once the iterator has finished; see [Runner.bashPPRangeDefer]
+// and [Runner.goSourceRangeFunction].
+func (r *Runner) bashPPPushDeferred(entry bashPPDeferred) {
+	if r.bashPPRangeDefer != nil {
+		*r.bashPPRangeDefer = append(*r.bashPPRangeDefer, entry)
+		return
+	}
+	r.bashPPDeferStack = append(r.bashPPDeferStack, entry)
+}
+
 // bashPPDeferStmt records a deferred call, evaluating its arguments now.
 func (r *Runner) bashPPDeferStmt(ctx context.Context, d *syntax.BashPPDefer) {
 	if d.Call == nil {
@@ -2957,14 +2978,14 @@ func (r *Runner) bashPPDeferStmt(ctx context.Context, d *syntax.BashPPDefer) {
 	if invoke, handled := r.goSourceCaptureDeferredClose(d.Call); handled {
 		if invoke != nil {
 			entry.builtin = invoke
-			r.bashPPDeferStack = append(r.bashPPDeferStack, entry)
+			r.bashPPPushDeferred(entry)
 		}
 		return
 	}
 	if invoke, handled := r.bashPPTestingCapture(d.Call); handled {
 		if invoke != nil {
 			entry.testing = invoke
-			r.bashPPDeferStack = append(r.bashPPDeferStack, entry)
+			r.bashPPPushDeferred(entry)
 		}
 		return
 	}
@@ -2976,7 +2997,7 @@ func (r *Runner) bashPPDeferStmt(ctx context.Context, d *syntax.BashPPDefer) {
 			return
 		}
 		entry.native = invoke
-		r.bashPPDeferStack = append(r.bashPPDeferStack, entry)
+		r.bashPPPushDeferred(entry)
 		return
 	}
 	if captured, cells, handled := r.goSourceCaptureDeferredValueBuiltin(d.Call); handled {
@@ -2984,7 +3005,7 @@ func (r *Runner) bashPPDeferStmt(ctx context.Context, d *syntax.BashPPDefer) {
 			entry.call = captured
 			entry.captured = cells
 			entry.predeclared = bashPPPredeclaredCall(d.Call)
-			r.bashPPDeferStack = append(r.bashPPDeferStack, entry)
+			r.bashPPPushDeferred(entry)
 		}
 		return
 	}
@@ -3009,7 +3030,7 @@ func (r *Runner) bashPPDeferStmt(ctx context.Context, d *syntax.BashPPDefer) {
 		entry.predeclared = bashPPPredeclaredCall(d.Call)
 		entry.args = r.bashPPCallArgValues(d.Call)
 	}
-	r.bashPPDeferStack = append(r.bashPPDeferStack, entry)
+	r.bashPPPushDeferred(entry)
 }
 
 // bashPPRunDefers runs the deferred calls pushed above mark, most recent first,
