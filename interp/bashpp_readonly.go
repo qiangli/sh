@@ -201,7 +201,15 @@ func (r *Runner) bashPPTupleAssignCall(ctx context.Context, assign *syntax.BashP
 			return
 		}
 	}
-	if r.bashPPGoSource && (assign.Call.CalleeExpr != nil || len(assign.Call.Fun) >= 2) {
+	// A local method selector is already a declared callable. Resolve it below
+	// before asking the computed-callable path, whose native probe evaluates a
+	// receiver expression. In particular, recover().(runtime.Error).Error()
+	// must not evaluate recover once to inspect the callee and again to call it.
+	localMethod := false
+	if selector, ok := assign.Call.CalleeExpr.(*syntax.BashPPSelectorExpr); ok {
+		localMethod = selector.MethodValue && !r.bashPPNativeExpr(selector.X)
+	}
+	if r.bashPPGoSource && !localMethod && (assign.Call.CalleeExpr != nil || len(assign.Call.Fun) >= 2) {
 		if cells, handled := r.goSourceResultFuncValueCallCells(ctx, assign.Call); handled {
 			if len(assign.Names) != len(cells) {
 				r.errf("%sBASHPP-EASSIGN-ARITY: %d variable(s) but %d value(s)\n",

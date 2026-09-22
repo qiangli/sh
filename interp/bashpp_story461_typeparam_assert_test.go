@@ -28,6 +28,9 @@ package interp_test
 //     value, so asserting it fails with EASSERT-OPERAND.
 
 import (
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -35,6 +38,16 @@ import (
 
 	"mvdan.cc/sh/v3/gosource"
 )
+
+func TestStory461Mdempsky16(t *testing.T) {
+	path := filepath.Join(runtime.GOROOT(), "test", "typeparam", "mdempsky", "16.go")
+	src, err := os.ReadFile(path)
+	qt.Assert(t, qt.IsNil(err))
+	out, stderr, err := runGoSource(t, "typeparam/mdempsky/16.go", string(src))
+	qt.Assert(t, qt.IsNil(err), qt.Commentf("stderr: %s", stderr))
+	qt.Assert(t, qt.Equals(stderr, ""))
+	qt.Assert(t, qt.Equals(out, ""))
+}
 
 func TestStory461TypeParamAssertions(t *testing.T) {
 	src := `package main

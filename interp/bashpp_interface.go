@@ -1148,6 +1148,7 @@ func (r *Runner) bashPPTypeAssertCell(assert *syntax.BashPPTypeAssertExpr, comma
 			if err != nil {
 				return nil, nil, err
 			}
+			message = r.goSourceInterfaceAssertionMessage(cell.declType, message)
 			return nil, nil, r.bashPPRaiseRuntimeError(bashPPRuntimeTypeAssert, message)
 		}
 		return nil, nil, fmt.Errorf("BASHPP-EASSERT-FAIL: interface value has dynamic type %s, not %s", bashPPTypeText(iv.dynamic), bashPPTypeText(assert.Assert))
@@ -1161,6 +1162,49 @@ func (r *Runner) bashPPTypeAssertCell(assert *syntax.BashPPTypeAssertExpr, comma
 		return []string{source.vr.Str, "true"}, source, nil
 	}
 	return []string{iv.cell.vr.Str, "true"}, iv.cell, nil
+}
+
+// goSourceInterfaceAssertionMessage replaces the shape-only spelling the
+// runtime-error builder uses for an anonymous interface with the complete
+// method set Go reports. This is presentation only: matching has already used
+// the interface's actual method set above.
+func (r *Runner) goSourceInterfaceAssertionMessage(static syntax.BashPPTypeExpr, message string) string {
+	iface, ok := static.(*syntax.BashPPInterfaceType)
+	if !ok || len(bashPPInterfaceElems(iface)) == 0 {
+		return message
+	}
+	var methods []string
+	for _, elem := range bashPPInterfaceElems(iface) {
+		if elem.Method == nil || elem.Method.Name == nil {
+			return message
+		}
+		fieldTypes := func(fields []*syntax.BashPPField) []string {
+			var out []string
+			for _, field := range fields {
+				count := max(len(field.Names), 1)
+				for range count {
+					out = append(out, r.goSourceRuntimeTypeText(field.FieldTypeExpr))
+				}
+			}
+			return out
+		}
+		text := elem.Method.Name.Value + "(" + strings.Join(fieldTypes(elem.Method.Params), ", ") + ")"
+		results := fieldTypes(elem.Method.Results)
+		switch len(results) {
+		case 1:
+			text += " " + results[0]
+		default:
+			if len(results) > 1 {
+				text += " (" + strings.Join(results, ", ") + ")"
+			}
+		}
+		methods = append(methods, text)
+	}
+	if len(methods) == 0 {
+		return message
+	}
+	needle := "interface conversion: interface "
+	return strings.Replace(message, needle, "interface conversion: interface { "+strings.Join(methods, "; ")+" } ", 1)
 }
 
 func bashPPInterfaceAssertTypeText(typ syntax.BashPPTypeExpr) string {
