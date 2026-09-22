@@ -153,6 +153,12 @@ func (r *Runner) bashPPSliceToArrayPointer(conv *syntax.BashPPConvertExpr, targe
 		return nil, false, nil
 	}
 	value, meta, _, err := ptr.read()
+	if _, sliced := operand.(*syntax.BashPPSliceExpr); sliced {
+		// bashPPAddress records the storage at the start of a zero-origin
+		// slice view. Validate the conversion against the view's length and
+		// shape, not the (possibly longer) slice stored in its parent cell.
+		value, meta, err = r.bashPPReadExpr(operand)
+	}
 	if err != nil || meta == nil || meta.kind != "slice" {
 		return nil, false, nil
 	}
@@ -372,6 +378,19 @@ func (r *Runner) bashPPAddress(expr syntax.BashPPExpr) (result *bashPPPointer, e
 			if err := descend(x.X); err != nil {
 				return err
 			}
+			// Go permits indexing a pointer to an array as shorthand for
+			// indexing the array itself: p[i] is (*p)[i]. Keep that implicit
+			// indirection in the stored address path, just as selectors above
+			// do for pointer bases. This is ordinary typed pointer semantics;
+			// it deliberately does not reinterpret unsafe.Pointer storage.
+			if pointer, isPointer := r.bashPPUnderlyingType(typ).(*syntax.BashPPPointerType); isPointer {
+				array, isArray := r.bashPPUnderlyingType(pointer.Element).(*syntax.BashPPCollectionType)
+				if isArray && array.Kind == "array" {
+					ptr.path = append(ptr.path, bashPPPointerStep{deref: true})
+					meta = nil
+					typ = pointer.Element
+				}
+			}
 			// A defined type such as `type bag []int` indexes exactly as its
 			// underlying collection does, so the shape has to be read through
 			// the definition rather than off the declared name.
@@ -411,6 +430,21 @@ func (r *Runner) bashPPAddress(expr syntax.BashPPExpr) (result *bashPPPointer, e
 				meta = meta.sequence[i]
 			}
 			return nil
+		case *syntax.BashPPSliceExpr:
+			// A zero-origin slice view shares the address of its first element
+			// with the operand. That is sufficient for Go's conversion from
+			// s[:n] to *[N]T. An offset view needs an address-path offset of its
+			// own and stays explicitly unsupported here.
+			if x.Low != nil {
+				low, err := r.bashPPCollectionIndex(x.Low)
+				if err != nil {
+					return err
+				}
+				if low.value != 0 {
+					return fmt.Errorf("BASHPP-ENONADDRESSABLE: offset slice address is not supported")
+				}
+			}
+			return descend(x.X)
 		default:
 			return fmt.Errorf("BASHPP-ENONADDRESSABLE: operand is not addressable")
 		}
