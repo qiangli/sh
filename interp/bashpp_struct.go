@@ -617,7 +617,7 @@ func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (value any, meta *bashPP
 			return r.bashPPReadCellValue(cell)
 		}
 	}
-	if value, meta, handled, err := r.goSourceCollectionCallValue(expr); handled {
+	if value, meta, handled, err := r.goSourceCollectionCallValue(expr, nil); handled {
 		return value, meta, err
 	}
 	// An index or slice rooted in a dependency-owned value is read through its

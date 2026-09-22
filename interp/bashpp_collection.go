@@ -690,6 +690,12 @@ func (r *Runner) bashPPEvalConstIntExpr(expr goast.Expr) (value constant.Value, 
 }
 
 func (r *Runner) bashPPEvalElement(expr syntax.BashPPExpr, expected syntax.BashPPTypeExpr) (any, *bashPPCollectionMeta, error) {
+	// Collection destinations written in a generic body are parsed before the
+	// function's type arguments are known. Resolve that contextual type at the
+	// value boundary, while the active frame still owns the bindings. This is
+	// deliberately destination-only: the source cell and its metadata remain
+	// intact for structured keys, arrays, pointers, and interface values.
+	expected = r.bashPPBindTypeExpr(expected)
 	// Imported concrete values can implement an imported interface element.
 	// Keep their native handle and let the existing typed assignment check
 	// validate the actual type, instead of attempting scalar evaluation.
@@ -717,7 +723,7 @@ func (r *Runner) bashPPEvalElement(expr syntax.BashPPExpr, expected syntax.BashP
 		}
 	}
 
-	if value, meta, handled, err := r.goSourceCollectionCallValue(expr); handled {
+	if value, meta, handled, err := r.goSourceCollectionCallValue(expr, expected); handled {
 		if err != nil {
 			return nil, nil, err
 		}

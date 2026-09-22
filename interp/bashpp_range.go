@@ -424,7 +424,7 @@ func (r *Runner) bashPPRangeCollectionValue(ctx context.Context, rng *syntax.Bas
 				if !exists {
 					continue
 				}
-				if !r.bashPPRangeIteration(ctx, rng, entry.key, collection.Key, item, child, collection.Element) {
+				if !r.bashPPRangeIterationKeyMeta(ctx, rng, entry.key, entry.keyMeta, collection.Key, item, child, collection.Element) {
 					return true
 				}
 			}
@@ -470,9 +470,18 @@ func (r *Runner) bashPPRangeIndexed(ctx context.Context, rng *syntax.BashPPRange
 }
 
 func (r *Runner) bashPPRangeIteration(ctx context.Context, rng *syntax.BashPPRange, key any, keyType syntax.BashPPTypeExpr, value any, valueMeta *bashPPCollectionMeta, valueType syntax.BashPPTypeExpr) bool {
+	return r.bashPPRangeIterationKeyMeta(ctx, rng, key, nil, keyType, value, valueMeta, valueType)
+}
+
+// bashPPRangeIterationKeyMeta keeps the actual typed map-key cell when a map
+// uses the comparable-key store. In particular, a struct key ranged from a
+// generic map must not be flattened to its printable storage spelling before
+// append or assignment consumes it.
+func (r *Runner) bashPPRangeIterationKeyMeta(ctx context.Context, rng *syntax.BashPPRange, key any, keyMeta *bashPPCollectionMeta, keyType syntax.BashPPTypeExpr, value any, valueMeta *bashPPCollectionMeta, valueType syntax.BashPPTypeExpr) bool {
 	leave := r.bashPPPushScope()
 	if len(rng.Names) >= 1 && rng.Names[0].Value != "_" {
-		r.bashPPDeclareRangeValue(rng.Names[0].Value, key, keyType, nil)
+		key, keyMeta = bashPPCopyArrayValue(key, keyMeta)
+		r.bashPPDeclareRangeValue(rng.Names[0].Value, key, keyType, keyMeta)
 	}
 	if len(rng.Names) == 2 && rng.Names[1].Value != "_" {
 		value, valueMeta = bashPPCopyArrayValue(value, valueMeta)

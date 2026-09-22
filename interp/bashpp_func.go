@@ -2324,12 +2324,25 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 	r.bashPPResultCells = make([]*bashPPCell, len(results))
 	for i := range results {
 		var source *bashPPCell
-		if i < len(resultNames) && resultNames[i] != "" {
+		blankResult := i < len(resultNames) && resultNames[i] == "_"
+		if i < len(resultNames) && resultNames[i] != "" && !blankResult {
 			source = r.bashPPScope.lookup(resultNames[i])
 		} else if decorated && i < len(decoratorCells) {
 			source = decoratorCells[i]
 		} else if i < len(r.bashPPReturn.cells) {
 			source = r.bashPPReturn.cells[i]
+		}
+		// A blank result parameter has a result slot but no lexical binding.
+		// On a naked return, instantiate that slot directly from its declared
+		// type; looking up "_" can only find unrelated shell state, while
+		// rebuilding the slot from results[i] loses non-string zero values.
+		// An explicit return reaches the branch above and keeps its value cell.
+		if source == nil && blankResult && i < len(resultTypes) {
+			resultType := r.bashPPBindTypeExpr(resultTypes[i])
+			zero, meta := r.bashPPZeroValue(resultType)
+			source = &bashPPCell{declType: resultType, typeName: bashPPNamedTypeBase(resultType)}
+			bashPPStoreCellValue(source, zero, meta)
+			results[i] = source.vr.String()
 		}
 		if i < len(resultTypes) && !r.bashPPCheckChannelResult(fn, resultTypes[i], source) {
 			r.bashPPResultCells = nil
@@ -2636,7 +2649,7 @@ func (r *Runner) bashPPSettleResults(fn *bashPPFunc, resultNames []string) []str
 			}
 		}
 		for i, name := range resultNames {
-			if name != "" && i < len(ret.values) {
+			if name != "" && name != "_" && i < len(ret.values) {
 				target := r.bashPPScope.lookup(name)
 				if target != nil && i < len(ret.cells) && ret.cells[i] != nil {
 					constantBinding := target.constant
@@ -2663,7 +2676,7 @@ func (r *Runner) bashPPSettleResults(fn *bashPPFunc, resultNames []string) []str
 	// with no explicit return yields its zero value, an empty string.
 	out := make([]string, 0, count)
 	for _, name := range resultNames {
-		if name == "" {
+		if name == "" || name == "_" {
 			out = append(out, "")
 			continue
 		}
@@ -2687,7 +2700,7 @@ func (r *Runner) bashPPSettleResults(fn *bashPPFunc, resultNames []string) []str
 func (r *Runner) bashPPFinalResults(settled []string, resultNames []string) []string {
 	out := settled
 	for i, name := range resultNames {
-		if name == "" || i >= len(out) {
+		if name == "" || name == "_" || i >= len(out) {
 			continue
 		}
 		out[i] = r.envGet(name)
