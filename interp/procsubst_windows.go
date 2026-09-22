@@ -20,10 +20,23 @@ import (
 // path with a plain CreateFile, which os.OpenFile already performs. This is
 // the smallest seam that makes `<(cmd)` and `>(cmd)` work without fd
 // inheritance or /dev/fd emulation.
+//
+// The pipe is a single instance (FILE_FLAG_FIRST_PIPE_INSTANCE, max 1), and
+// unlike a FIFO every CreateFile on its name is a connection, so the path
+// can be opened exactly once, by the consumer the substitution was written
+// for (cat, diff <(a) <(b), `done < <(cmd)`, exec N< <(cmd)). A second
+// opener gets ERROR_PIPE_BUSY ("All pipe instances are busy") while the
+// first client is connected, and ERROR_FILE_NOT_FOUND once the server end
+// has closed and the name is gone. A stat by a separate process (`ls -l`
+// on the path) is such a second opener; the shell's own stat/test of the
+// path is answered synthetically instead (see procSubstPipeStat).
 type procSubstNamedPipe struct {
-	pipePath string
-	handle   windows.Handle
-	opened   bool
+	// shellPath is the //./pipe/ spelling substituted into the command
+	// line; the handle was created from the native \\.\pipe\ spelling of
+	// the same name (windowsProcSubstPipeNames).
+	shellPath string
+	handle    windows.Handle
+	opened    bool
 }
 
 func (r *Runner) newProcSubstPipe(substWrites bool) (procSubstPipe, error) {
@@ -34,8 +47,8 @@ func (r *Runner) newProcSubstPipe(substWrites bool) (procSubstPipe, error) {
 		openMode = windows.PIPE_ACCESS_OUTBOUND
 	}
 	for try := 0; ; try++ {
-		name := `\\.\pipe\` + fifoNamePrefix + strconv.FormatUint(mathrand.Uint64(), 16)
-		name16, err := windows.UTF16PtrFromString(name)
+		native, shell := windowsProcSubstPipeNames(strconv.FormatUint(mathrand.Uint64(), 16))
+		name16, err := windows.UTF16PtrFromString(native)
 		if err != nil {
 			return nil, fmt.Errorf("cannot create named pipe: %v", err)
 		}
@@ -44,7 +57,7 @@ func (r *Runner) newProcSubstPipe(substWrites bool) (procSubstPipe, error) {
 			windows.PIPE_TYPE_BYTE|windows.PIPE_WAIT,
 			1, 4096, 4096, 0, nil)
 		if err == nil {
-			return &procSubstNamedPipe{pipePath: name, handle: h}, nil
+			return &procSubstNamedPipe{shellPath: shell, handle: h}, nil
 		}
 		// FILE_FLAG_FIRST_PIPE_INSTANCE reports a name collision as
 		// ERROR_ACCESS_DENIED; pick another random name.
@@ -57,7 +70,7 @@ func (r *Runner) newProcSubstPipe(substWrites bool) (procSubstPipe, error) {
 	}
 }
 
-func (p *procSubstNamedPipe) path() string { return p.pipePath }
+func (p *procSubstNamedPipe) path() string { return p.shellPath }
 
 // connect blocks until the consumer opens the substituted path, like the
 // blocking FIFO open on Unix, then hands the server end over as an *os.File
@@ -68,7 +81,7 @@ func (p *procSubstNamedPipe) connect() (*os.File, error) {
 		return nil, err
 	}
 	p.opened = true
-	return os.NewFile(uintptr(p.handle), p.pipePath), nil
+	return os.NewFile(uintptr(p.handle), p.shellPath), nil
 }
 
 func (p *procSubstNamedPipe) openWriter() (*os.File, error) { return p.connect() }

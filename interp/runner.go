@@ -11423,6 +11423,12 @@ func (r *Runner) open(ctx context.Context, path string, flags int, mode os.FileM
 	if dir == r.tempDir && strings.HasPrefix(name, fifoNamePrefix) {
 		return os.OpenFile(path, flags, mode)
 	}
+	// The Windows counterpart is a //./pipe/ named pipe (procsubst_windows.go);
+	// os.OpenFile hands that local-device path to CreateFile as is, and this
+	// open — the consumer's one connection — must not be diverted either.
+	if isProcSubstPipePath(path) {
+		return os.OpenFile(path, flags, mode)
+	}
 
 	handler := r.openHandler
 	if r.dryRun && r.dryRunOpenHandler != nil {
@@ -11519,6 +11525,11 @@ func (r *Runner) stat(ctx context.Context, name string) (fs.FileInfo, error) {
 	if info, ok, err := r.statVirtualFd(name); ok {
 		return info, err
 	}
+	// A Windows process-substitution pipe is stat'ed without opening it:
+	// a CreateFile on the name would take the consumer's one connection.
+	if info, ok := procSubstPipeStat(name); ok {
+		return info, nil
+	}
 	path := absPath(r.Dir, name)
 	return r.statHandler(ctx, path, true)
 }
@@ -11526,6 +11537,9 @@ func (r *Runner) stat(ctx context.Context, name string) (fs.FileInfo, error) {
 func (r *Runner) lstat(ctx context.Context, name string) (fs.FileInfo, error) {
 	if info, ok, err := r.statVirtualFd(name); ok {
 		return info, err
+	}
+	if info, ok := procSubstPipeStat(name); ok {
+		return info, nil
 	}
 	path := absPath(r.Dir, name)
 	return r.statHandler(ctx, path, false)
