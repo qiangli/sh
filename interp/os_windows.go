@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"strconv"
@@ -147,6 +148,9 @@ func userGroups() []string {
 // mirrors syscall.Open's (see windowsOpenSpecFor); devices, \\.\ and \\?\
 // paths, long paths and exotic flags fall back to os.OpenFile.
 func openPath(ctx context.Context, path string, flag int, perm os.FileMode) (io.ReadWriteCloser, error) {
+	if err := recordedModeDenies(path, flag); err != nil {
+		return nil, err
+	}
 	if f, handled, err := openShareDelete(path, flag, perm); handled {
 		if err != nil {
 			return nil, err
@@ -199,6 +203,48 @@ func openShareDelete(path string, flag int, perm os.FileMode) (f *os.File, handl
 		}
 	}
 	return os.NewFile(uintptr(h), path), true, nil
+}
+
+// recordedModeDenies reports the EACCES a chmod'ed mode calls for when the
+// access this open asks of path is one that mode took away.
+//
+// Windows enforces only half of a recorded mode (see [winmode]) by itself.
+// Clearing w also clears the read-only attribute every CreateFile checks,
+// so `chmod a-w f; > f` fails without anyone's help — which is why the
+// write half of redir12.sub passed while the read half did not. Clearing r
+// leaves nothing for the platform to refuse on: the DACL is consulted only
+// when the file has one this shell wrote, and even then a process holding
+// SeBackupPrivilege reads straight through it. The shell therefore asks
+// the same question its own `test -r` asks (see [Runner.access]) and gives
+// the redirection the same answer, so the two predicates cannot disagree
+// about what chmod recorded.
+//
+// Only a mode somebody recorded counts. A file nobody has chmod'ed has no
+// POSIX opinion to honour, and the attribute-derived mode io/fs reports
+// for it would refuse reads on every file of a read-only volume.
+func recordedModeDenies(path string, flag int) error {
+	mode, ok := winmode.Get(path)
+	if !ok {
+		return nil
+	}
+	// The owner class is the one asked about, as in [Runner.access]: the
+	// shell is nearly always the owner of a file it has just chmod'ed, and
+	// resolving the real class would cost a token lookup per redirection.
+	var want fs.FileMode
+	switch flag & (os.O_RDONLY | os.O_WRONLY | os.O_RDWR) {
+	case os.O_WRONLY:
+		want = 0o200
+	case os.O_RDWR:
+		want = 0o600
+	default:
+		want = 0o400
+	}
+	if mode.Perm()&want == want {
+		return nil
+	}
+	// The same errno a denying ACL would have produced, so the diagnostic
+	// and the exit status are indistinguishable from the enforced case.
+	return &os.PathError{Op: "open", Path: path, Err: syscall.ERROR_ACCESS_DENIED}
 }
 
 func openPathAt(ctx context.Context, dir, path string, flag int, perm os.FileMode) (io.ReadWriteCloser, error) {
