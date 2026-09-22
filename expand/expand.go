@@ -6245,7 +6245,14 @@ func (cfg *Config) filterGlobIgnore(matches []string) []string {
 		if globIgnorePathnameBlocked(pat) {
 			continue
 		}
-		matcher, err := internal.ExtendedPatternMatcher(filepath.FromSlash(pat), mode)
+		// GLOBIGNORE entries are shell patterns whose separators are
+		// always "/", regardless of host OS. Feeding them through
+		// filepath.FromSlash corrupts the pattern on Windows, where "\"
+		// is the pattern escape character: "ab/cd/efg" would become
+		// "ab\cd\efg" and compile to the literal "abcdefg". Keep the
+		// pattern verbatim and match it against the slash-normalized
+		// path forms below.
+		matcher, err := internal.ExtendedPatternMatcher(pat, mode)
 		if err != nil {
 			continue
 		}
@@ -6257,10 +6264,13 @@ func (cfg *Config) filterGlobIgnore(matches []string) []string {
 	filtered := matches[:0]
 	for _, match := range matches {
 		slashMatch := filepath.ToSlash(match)
-		baseMatch := filepath.Base(match)
+		baseMatch := path.Base(slashMatch)
 		ignored := false
 		for _, matcher := range matchers {
-			if matcher(match) || matcher(slashMatch) || matcher(baseMatch) {
+			// Match against slash-normalized forms only; the raw OS
+			// path (match) may carry "\" separators that a "/"-based
+			// pattern can never line up with.
+			if matcher(slashMatch) || matcher(baseMatch) {
 				ignored = true
 				break
 			}

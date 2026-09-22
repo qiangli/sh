@@ -1484,6 +1484,31 @@ func TestFieldsFailGlob(t *testing.T) {
 	}
 }
 
+func TestFieldsGlobIgnoreWindowsSlash(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("GLOBIGNORE uses slash-separated patterns on Windows")
+	}
+	temp := t.TempDir()
+	path := filepath.Join(temp, "ab", "cd", "efg")
+	if err := os.MkdirAll(filepath.Dir(path), 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, nil, 0o666); err != nil {
+		t.Fatal(err)
+	}
+	cfg := &Config{
+		Env:      ListEnviron("PWD="+temp, "GLOBIGNORE=ab/cd/efg"),
+		ReadDir2: os.ReadDir,
+	}
+	got, err := Fields(cfg, parseWord(t, `*/*/efg*`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{`*/*/efg*`}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("GLOBIGNORE pathname filter: got %q, want %q", got, want)
+	}
+}
+
 func TestFieldsNullGlobInvalidBracketWithSlash(t *testing.T) {
 	cfg := &Config{
 		NullGlob: true,
