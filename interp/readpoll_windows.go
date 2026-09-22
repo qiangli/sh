@@ -310,14 +310,17 @@ func cancellableReader(ctx context.Context, f *os.File) io.Reader {
 	if f == nil || ctx == nil || ctx.Done() == nil {
 		return nil
 	}
-	// The kind is the whole test: Windows hands the runtime poller neither a
-	// console handle nor an os.Pipe end, so SetReadDeadline is already known
-	// to have failed for these two — and known to have been unavailable to
-	// any caller upstream, which is why none of them can have armed a
-	// deadline we would be dropping here. Everything else keeps the direct
-	// read: a regular file does not wait on a peer.
-	switch windowsHandleKindOf(f) {
-	case winHandlePipe, winHandleConsole:
+	// The kind is the whole test: Windows never hands an os.Pipe end to the
+	// runtime poller, so SetReadDeadline is already known to have failed for
+	// it — and to have been unavailable to any caller upstream, which is why
+	// none of them can have armed a deadline we would be dropping here.
+	//
+	// Only pipes. A regular file does not wait on a peer, and a console read
+	// is left alone deliberately: its line editing is the console host's, and
+	// a `read` with no timeout waiting for the user to press enter is what
+	// bash does too. A console read that must give up on time goes through
+	// timeoutFileReader with a deadline instead.
+	if windowsHandleKindOf(f) == winHandlePipe {
 		return &timeoutFileReader{ctx: ctx, file: f}
 	}
 	return nil

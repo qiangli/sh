@@ -140,7 +140,8 @@ func TestWindowsCancellableReaderCoversPipes(t *testing.T) {
 }
 
 // A regular file's read completes without waiting for a peer; polling it
-// would only add syscalls.
+// would only add syscalls. Nor is a console read taken over: the wait for a
+// user to press enter is not a hang.
 func TestWindowsCancellableReaderSkipsRegularFiles(t *testing.T) {
 	t.Parallel()
 	f, err := os.CreateTemp(t.TempDir(), "readpoll")
