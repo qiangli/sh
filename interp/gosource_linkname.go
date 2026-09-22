@@ -40,6 +40,15 @@ func (r *Runner) goSourceLinknameDeclaration(d *syntax.BashPPDecl) (error, bool)
 	}
 	cell := root.linknames[target]
 	if cell == nil {
+		cell = r.goSourceGeneratedInitTaskCell(d, target)
+		if cell != nil {
+			if root.linknames == nil {
+				root.linknames = make(map[string]*bashPPCell)
+			}
+			root.linknames[target] = cell
+		}
+	}
+	if cell == nil {
 		return fmt.Errorf("go:linkname target %q is not a linked package variable", target), true
 	}
 	expected := d.DeclTypeExpr
@@ -58,6 +67,41 @@ func (r *Runner) goSourceLinknameDeclaration(d *syntax.BashPPDecl) (error, bool)
 	}
 	r.bashPPScope.entries[d.Name.Value] = cell
 	return nil, true
+}
+
+// goSourceGeneratedInitTaskCell models the one package-local storage symbol
+// synthesized by gc for package initialization. It is not a source variable,
+// so it cannot have been published by goSourceRegisterLinknameTarget. Its
+// linker spelling is deliberately exact: all ordinary missing targets retain
+// the refusal above.
+func (r *Runner) goSourceGeneratedInitTaskCell(d *syntax.BashPPDecl, target string) *bashPPCell {
+	source, ok := r.bashPPGoSourceFile.SourceAt(d.Pos())
+	if !ok {
+		return nil
+	}
+	packagePath := source.PackagePath
+	if packagePath == "" && source.Package == "main" {
+		// The program package is deliberately stored without an import path;
+		// gc nevertheless gives its generated symbols the main linker prefix.
+		packagePath = "main"
+	}
+	if packagePath == "" || target != packagePath+"..inittask" {
+		return nil
+	}
+	typ := d.DeclTypeExpr
+	if typ == nil && d.DeclType != nil {
+		typ = &syntax.BashPPNamedType{Name: d.DeclType}
+	}
+	if typ == nil {
+		return nil
+	}
+	value, meta := r.bashPPZeroValue(typ)
+	vr, meta := bashPPCollectionVariable(value), meta
+	cell := &bashPPCell{vr: vr, declType: typ, valueMeta: meta}
+	if meta != nil {
+		cell.object = &bashPPObjectIdentity{owner: target, collection: meta}
+	}
+	return cell
 }
 
 // goSourceRegisterLinknameTarget publishes a successfully evaluated mapped

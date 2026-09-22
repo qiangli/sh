@@ -36,6 +36,46 @@ func TestS243LinknameStorageOriginal(t *testing.T) {
 	}
 }
 
+// This is the unchanged upstream testdir:noinit.go fixture. gc creates
+// main..inittask itself, so the interpreted runtime must provide its zero
+// storage without treating arbitrary absent linkname targets as variables.
+func TestS243LinknameGeneratedInitTaskNoInitOriginal(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(runtime.GOROOT(), "test", "noinit.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, stderr := runGoSourcePackageSet(t, "noinit", string(data), nil)
+	if out != "" || stderr != "" {
+		t.Fatalf("noinit stdout=%q stderr=%q", out, stderr)
+	}
+}
+
+func TestS243LinknameGeneratedInitTaskRefusesNearMisses(t *testing.T) {
+	for _, target := range []string{"main..notinittask", "other..inittask"} {
+		t.Run(target, func(t *testing.T) {
+			program, err := gosource.Load([]gosource.Source{{Name: "main.go", Data: []byte(`package main
+import _ "unsafe"
+//go:linkname linked ` + target + `
+var linked int
+func main() { _ = linked }
+`)}}, gosource.Options{RunMain: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var output bytes.Buffer
+			runner, err := interp.New(interp.Lang(syntax.LangBashPP), interp.StdIO(nil, &output, &output))
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := runner.Run(ctx, program.File); err == nil || !strings.Contains(output.String(), "is not a linked package variable") {
+				t.Fatalf("target %q err=%v output=%q", target, err, output.String())
+			}
+		})
+	}
+}
+
 func TestS243LinknameStorageControls(t *testing.T) {
 	src := func(name, text string) gosource.Source { return gosource.Source{Name: name, Data: []byte(text)} }
 	dep := src("a.go", `package a
