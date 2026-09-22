@@ -372,14 +372,14 @@ func Load(sources []Source, options Options) (*Program, error) {
 					obj = lc.info.Implicits[spec]
 				}
 				if obj != nil && obj.Name() == "." {
-					// Flattening erases the file block that gives a dot-imported
-					// name its package identity. Always give a live dot import an
-					// explicit alias and rewrite its members through that alias;
-					// this also lets checked, synthesized type expressions retain
-					// the same identity as source type expressions.
+					// Native units retain file-scoped dot imports. Flattened
+					// execution needs an explicit alias when linking erases a
+					// package boundary, when file imports collide, or when a
+					// checked type must retain its native package identity.
 					if pkgname, ok := obj.(*types.PkgName); ok {
 						path := pkgname.Imported().Path()
-						if liveImportPaths[path] {
+						if liveImportPaths[path] && !options.PreserveNativeInit &&
+							(lc != c || dotImportCollides(lc, f, spec, pkgname, liveImportPaths, mapped) || dotImportNeedsQualifiedTypes(lc, path)) {
 							alias := fmt.Sprintf("%simport_%d_%d", c.prefix, fi, ii)
 							if lc != c {
 								alias = fmt.Sprintf("%simport_%d_%d_%d", c.prefix, pi, fi, ii)
@@ -391,7 +391,7 @@ func Load(sources []Source, options Options) (*Program, error) {
 									lc.renames[member] = alias + "." + name
 								}
 							}
-						} else if !liveImportPaths[path] {
+						} else {
 							if lc.dotImports[f] == nil {
 								lc.dotImports[f] = map[string]bool{}
 							}
@@ -580,6 +580,26 @@ func liveImports(linked []*converter, mapped map[string]int) map[string]bool {
 		}
 	}
 	return paths
+}
+
+// A bare imported named type loses its origin in the interpreter's flat type
+// namespace. Keep an explicit package binding whenever a checked expression's
+// type mentions this package, including inferred results and named constants.
+// Imports used only for predeclared-typed functions need no such rewrite.
+func dotImportNeedsQualifiedTypes(c *converter, path string) bool {
+	for _, tv := range c.info.Types {
+		found := false
+		types.TypeString(tv.Type, func(pkg *types.Package) string {
+			if pkg.Path() == path {
+				found = true
+			}
+			return pkg.Name()
+		})
+		if found {
+			return true
+		}
+	}
+	return false
 }
 
 func dotImportCollides(lc *converter, file *ast.File, spec *ast.ImportSpec, pkgname *types.PkgName, live map[string]bool, mapped map[string]int) bool {
