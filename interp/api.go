@@ -36,6 +36,18 @@ import (
 
 const BashyInheritedFdsEnv = "BASHY_INHERITED_FDS"
 
+// BashyInheritedHandlesEnv is the Windows counterpart of
+// [BashyInheritedFdsEnv]. Windows cannot pass numbered descriptors through
+// exec.Cmd.ExtraFiles, so when a bashy runs this same binary it duplicates
+// every open fd >= 3 as an inheritable handle and announces the mapping as
+// <fd>:<r|w|rw>:0x<handle>, comma-separated (e.g. "3:r:0x1a4,10:w:0x1b8").
+// A Runner adopts the entries from its environment at startup, so a CLI
+// needs no extra wiring: `read -u 3`, `cat <&3` and `echo >&10` then reach
+// the parent's files. Like [BashyHardIgnoreEnv] it is an internal channel:
+// filtered from the environment of every child and unset from the shell's
+// own scope. It is ignored off Windows.
+const BashyInheritedHandlesEnv = "BASHY_INHERITED_HANDLES"
+
 // BashyHardIgnoreEnv carries, across an exec of our own shell binary, the set
 // of signals (comma-separated bash names) that the parent shell had set to
 // SIG_IGN via `trap ” SIG`. The child treats them as ignored-on-entry, i.e.
@@ -951,6 +963,11 @@ type Runner struct {
 	redirMoveCloseFds map[int]bool
 
 	inheritedFds map[int]bool
+
+	// inheritedHandles maps an inherited fd to the Windows handle a parent
+	// bashy handed us via [BashyInheritedHandlesEnv]; nil elsewhere. Read
+	// only after startup, so clones share it.
+	inheritedHandles map[int]inheritedHandle
 
 	// ulimitOverride records pseudo-set values from `ulimit -X N`
 	// so the next `ulimit -X` read returns them. We don't actually
@@ -3037,6 +3054,9 @@ func (r *Runner) Reset() {
 		// covers a real parent that exec'd us with SIG_IGN inherited.
 		r.startupIgnored = startupIgnoredSignals(r.Env.Get(BashyHardIgnoreEnv).String())
 		r.parentPID = r.startupParentPID()
+		// Windows: descriptors a parent bashy handed over as inheritable
+		// handles. A no-op on other platforms.
+		r.adoptInheritedHandles(r.Env.Get(BashyInheritedHandlesEnv).String())
 		// A standalone host re-applies the bridged dispositions here. The Go
 		// runtime may have replaced inherited SIG_IGN before main; the explicit
 		// sideband is the supported provenance across that boundary.
@@ -3165,6 +3185,7 @@ func (r *Runner) Reset() {
 		standardInput:          r.standardInput,
 		mirrorUmask:            r.mirrorUmask,
 		inheritedFds:           maps.Clone(r.inheritedFds),
+		inheritedHandles:       r.inheritedHandles,
 		// fdTable is intentionally not preserved across Reset; a reset
 		// runner starts with no inherited non-stdio fds.
 	}
@@ -3231,6 +3252,10 @@ func (r *Runner) Reset() {
 	// snapshotted into startupIgnored) and hide it from the script's scope.
 	if r.writeEnv.Get(BashyHardIgnoreEnv).IsSet() {
 		r.delVar(BashyHardIgnoreEnv)
+	}
+	// Likewise the Windows handle handoff, already adopted at first Reset.
+	if r.writeEnv.Get(BashyInheritedHandlesEnv).IsSet() {
+		r.delVar(BashyInheritedHandlesEnv)
 	}
 	if r.writeEnv.Get(bashyParentPIDEnv).IsSet() {
 		r.delVar(bashyParentPIDEnv)
@@ -3824,11 +3849,12 @@ func (r *Runner) subshell(background bool) *Runner {
 		// Subshells inherit open fds the way bash does. Clone the map so
 		// child mutations (close, dup) don't leak back to the parent;
 		// the underlying *os.File handles are shared (single OS fd).
-		fdTable:       maps.Clone(r.fdTable),
-		fdReadTable:   maps.Clone(r.fdReadTable),
-		fdWriteTable:  maps.Clone(r.fdWriteTable),
-		fdClosedTable: maps.Clone(r.fdClosedTable),
-		inheritedFds:  maps.Clone(r.inheritedFds),
+		fdTable:          maps.Clone(r.fdTable),
+		fdReadTable:      maps.Clone(r.fdReadTable),
+		fdWriteTable:     maps.Clone(r.fdWriteTable),
+		fdClosedTable:    maps.Clone(r.fdClosedTable),
+		inheritedFds:     maps.Clone(r.inheritedFds),
+		inheritedHandles: r.inheritedHandles,
 
 		// Shared by pointer (not cloned): a background subshell must be
 		// able to resolve `$COPROC_PID` to the parent's coprocess so that

@@ -81,21 +81,6 @@ const (
 	handlerKindReadDir             // [ReadDirHandlerFunc2]
 )
 
-// closedExecFile returns an *os.File whose descriptor has already been
-// closed. os/exec treats its invalid descriptor as a request to leave the
-// corresponding child fd closed, rather than synthesizing /dev/null or a
-// live copy pipe for a nil or generic Reader/Writer.
-func closedExecFile() (*os.File, error) {
-	f, err := os.Open(os.DevNull)
-	if err != nil {
-		return nil, err
-	}
-	if err := f.Close(); err != nil {
-		return nil, err
-	}
-	return f, nil
-}
-
 // HandlerContext is the data passed to all the handler functions via [context.WithValue].
 // It contains some of the current state of the [Runner].
 type HandlerContext struct {
@@ -354,12 +339,18 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 				hc.runner.filename, args[0], missingInterp)
 			return ExitStatus(126)
 		}
-		extraFiles, inheritedFds, closeExtraFiles, err := hc.runner.execExtraFiles()
+		// What the child sees beyond stdio is platform-shaped: ExtraFiles
+		// plus BASHY_INHERITED_FDS on Unix; on Windows no ExtraFiles at
+		// all, and inheritable handles only for a child that is this
+		// same binary (exec_fds_*.go). execPath is final here: a shebang
+		// may have redirected it to the interpreter (or to this binary).
+		fds, err := prepareChildFds(hc.runner, execPath)
 		if err != nil {
 			fmt.Fprintln(hc.Stderr, err)
 			return ExitStatus(1)
 		}
-		defer closeExtraFiles()
+		defer func() { fds.finish() }()
+		extraFiles := fds.extraFiles
 		// A retained Linux cwd is addressed through /proc/self/fd/N. A shebang
 		// interpreter reopens that pathname after execve, when the runner's
 		// close-on-exec cwd descriptor would normally be gone. Export a private
@@ -403,9 +394,7 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 		if parent := hc.runner.childParentPIDBridge(ctx, diagnosticScriptPath); parent != "" {
 			env = setExecEnvValue(env, bashyParentPIDEnv, parent)
 		}
-		if inheritedFds != "" {
-			env = append(env, BashyInheritedFdsEnv+"="+inheritedFds)
-		}
+		env = append(env, fds.env...)
 		hc.runner.closeClosedInheritedFdsOnExec()
 		// If stdin is the in-memory script-source reader, back it with a
 		// seekable temp file: os/exec eagerly drains a non-File stdin, which
@@ -489,6 +478,9 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			Stderr:     execStderr,
 			ExtraFiles: extraFiles,
 		}
+		if fds.sysAttr != nil {
+			fds.sysAttr(&cmd)
+		}
 		prepareBackgroundJobCmd(ctx, &cmd)
 		foregroundTTY := prepareForegroundJobCmd(ctx, hc.runner, &cmd)
 		defer func() {
@@ -505,6 +497,9 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			} else {
 				startErr = cmd.Start()
 			}
+			// The child (if any) holds its own copies now; release what
+			// only the Start needed.
+			fds.started()
 			if startErr != nil && foregroundTTY != nil {
 				// Foreground may transfer the terminal before exec fails.
 				// Restore it before preparing an ENOEXEC fallback, which must
@@ -545,6 +540,21 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 						reExecEnv = append(append([]string(nil), env...), BashyHardIgnoreEnv+"="+ign)
 					}
 				}
+				// The target is now our own binary: on Windows that is
+				// where the descriptor handoff applies even if the first
+				// attempt aimed elsewhere. Unix keeps the prepared set.
+				reExecFds, fdErr := prepareSelfReexecFds(hc.runner, fds)
+				if fdErr != nil {
+					fmt.Fprintln(hc.Stderr, fdErr)
+					return ExitStatus(1)
+				}
+				if reExecFds != fds {
+					// Drop the first attempt's fd announcement, if any,
+					// in favour of the re-exec's.
+					reExecEnv = replaceExecEnvEntries(reExecEnv, fds.env, reExecFds.env)
+					fds = reExecFds
+					extraFiles = fds.extraFiles
+				}
 				cmd = exec.Cmd{
 					Path:       selfBin,
 					Args:       newArgs,
@@ -554,6 +564,9 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 					Stdout:     execStdout,
 					Stderr:     execStderr,
 					ExtraFiles: extraFiles,
+				}
+				if fds.sysAttr != nil {
+					fds.sysAttr(&cmd)
 				}
 				prepareBackgroundJobCmd(ctx, &cmd)
 				foregroundTTY = prepareForegroundJobCmd(ctx, hc.runner, &cmd)
@@ -776,6 +789,24 @@ func setExecEnvValue(env []string, name, value string) []string {
 		out = append(out, prefix+value)
 	}
 	return out
+}
+
+// replaceExecEnvEntries returns a copy of env without the variables named
+// by the old NAME=VALUE entries and with the new ones appended.
+func replaceExecEnvEntries(env, old, new []string) []string {
+	drop := make(map[string]bool, len(old))
+	for _, kv := range old {
+		name, _, _ := strings.Cut(kv, "=")
+		drop[name] = true
+	}
+	out := make([]string, 0, len(env)+len(new))
+	for _, kv := range env {
+		name, _, _ := strings.Cut(kv, "=")
+		if !drop[name] {
+			out = append(out, kv)
+		}
+	}
+	return append(out, new...)
 }
 
 func missingShebangInterpreter(path string) (string, bool) {

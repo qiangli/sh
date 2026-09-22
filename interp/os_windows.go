@@ -12,8 +12,10 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"syscall"
 	"time"
 
+	"golang.org/x/sys/windows"
 	"mvdan.cc/sh/v3/syntax"
 )
 
@@ -97,8 +99,65 @@ func userGroups() []string {
 	return []string{strconv.Itoa(os.Getgid())}
 }
 
+// openPath opens regular files through CreateFile with FILE_SHARE_DELETE
+// added to Go's READ|WRITE share mode, so a script can `rm -f f` while the
+// shell still holds `exec 9<> f`, as it can on Unix; os.OpenFile alone
+// makes that fail with "resource busy" (read2.sub). The flag/perm mapping
+// mirrors syscall.Open's (see windowsOpenSpecFor); devices, \\.\ and \\?\
+// paths, long paths and exotic flags fall back to os.OpenFile.
 func openPath(ctx context.Context, path string, flag int, perm os.FileMode) (io.ReadWriteCloser, error) {
+	if f, handled, err := openShareDelete(path, flag, perm); handled {
+		if err != nil {
+			return nil, err
+		}
+		return f, nil
+	}
 	return os.OpenFile(path, flag, perm)
+}
+
+// openShareDelete performs the share-delete open when path and flag are
+// within its remit; handled is false when the caller should use
+// os.OpenFile instead. Errors are *os.PathError like os.OpenFile's.
+func openShareDelete(path string, flag int, perm os.FileMode) (f *os.File, handled bool, err error) {
+	if !windowsShareDeleteEligible(path) {
+		return nil, false, nil
+	}
+	spec, ok := windowsOpenSpecFor(flag, perm)
+	if !ok {
+		return nil, false, nil
+	}
+	pathErr := func(err error) (*os.File, bool, error) {
+		return nil, true, &os.PathError{Op: "open", Path: path, Err: err}
+	}
+	name, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return pathErr(err)
+	}
+	// A nil SecurityAttributes leaves the handle non-inheritable, the
+	// O_CLOEXEC os.OpenFile always adds; the handoff to a child bashy
+	// duplicates explicitly (exec_fds_windows.go).
+	h, err := windows.CreateFile(name, spec.access, spec.share, nil, spec.createmode, spec.attrs, 0)
+	if err != nil {
+		if err == windows.ERROR_ACCESS_DENIED && spec.attrs&win32FileFlagBackupSemantics == 0 {
+			// Opening a directory for writing: report EISDIR as Go does.
+			if fa, e1 := windows.GetFileAttributes(name); e1 == nil && fa&windows.FILE_ATTRIBUTE_DIRECTORY != 0 {
+				err = syscall.EISDIR
+			}
+		}
+		return pathErr(err)
+	}
+	// Truncate after opening rather than via CREATE_ALWAYS, which would
+	// replace a read-only file with a fresh one (go.dev/issue/38225).
+	// windows.CreateFile drops the ERROR_ALREADY_EXISTS hint Go uses to
+	// skip this for a file OPEN_ALWAYS just created; truncating an empty
+	// file is a no-op, and the shell only pairs O_TRUNC with write access.
+	if spec.truncate {
+		if terr := windows.Ftruncate(h, 0); terr != nil {
+			_ = windows.CloseHandle(h)
+			return pathErr(terr)
+		}
+	}
+	return os.NewFile(uintptr(h), path), true, nil
 }
 
 func openPathAt(ctx context.Context, dir, path string, flag int, perm os.FileMode) (io.ReadWriteCloser, error) {
@@ -155,8 +214,25 @@ func relayExecReplacementSignal(sig int) error { return ExitStatus(128 + sig) }
 // program's outcome stays the ordinary 128+sig exit status.
 func relayForwardedProgramDeath(num int) error { return relayExecReplacementSignal(num) }
 
+// inheritedFd materialises a descriptor a parent bashy handed us through
+// BASHY_INHERITED_HANDLES (see adoptInheritedHandles): the registered
+// handle becomes an *os.File bound into the fd tables with the access the
+// parent recorded, so `read -u 3`, `cat <&3` and `echo >&10` work in the
+// child as they do on Unix after WithInheritedFds.
 func (r *Runner) inheritedFd(fd int) (*os.File, bool) {
-	return nil, false
+	if fd < 3 || !r.inheritedFds[fd] {
+		return nil, false
+	}
+	h, ok := r.inheritedHandles[fd]
+	if !ok {
+		return nil, false
+	}
+	f := os.NewFile(h.handle, "/dev/fd/"+strconv.Itoa(fd))
+	if f == nil {
+		return nil, false
+	}
+	r.bindInheritedFile(fd, f, h.mode)
+	return f, true
 }
 
 // closeOnExecFd is a no-op off unix: Windows/plan9 don't expose the int-fd
