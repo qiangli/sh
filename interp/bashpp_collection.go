@@ -542,8 +542,23 @@ func (r *Runner) bashPPEvalCollection(lit *syntax.BashPPCompositeLit, expected s
 	}
 	out := make([]any, length)
 	meta.sequence = make([]*bashPPCollectionMeta, length)
-	for i := range out {
-		out[i], meta.sequence[i] = r.bashPPZeroValue(collection.Element)
+	// Scalar zero values are immutable. Resolve one once and reuse it across
+	// the backing array; resolving a named element type for every implicit
+	// element makes sparse large literals proportional to their length in type
+	// resolution as well as storage. Structured values still need independent
+	// payload and metadata per element to preserve Go's value semantics.
+	if len(out) > 0 {
+		zero, zeroMeta := r.bashPPZeroValue(collection.Element)
+		if zeroMeta == nil {
+			for i := range out {
+				out[i] = zero
+			}
+		} else {
+			out[0], meta.sequence[0] = zero, zeroMeta
+			for i := 1; i < len(out); i++ {
+				out[i], meta.sequence[i] = r.bashPPZeroValue(collection.Element)
+			}
+		}
 	}
 	for i, value := range values {
 		out[i], meta.sequence[i] = value, children[i]
