@@ -5494,7 +5494,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 	case *syntax.BashPPSelect:
 		r.bashPPSelect(ctx, cm)
 	case *syntax.BashPPRange:
-		r.bashPPRange(ctx, cm)
+		r.bashPPRange(ctx, r.bashPPBindRange(cm))
 	case *syntax.BashPPAssign:
 		r.bashPPAssign(ctx, r.bashPPBindAssign(cm))
 	case *syntax.BashPPCall:

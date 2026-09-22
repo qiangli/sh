@@ -228,6 +228,24 @@ func (r *Runner) bashPPBindSwitch(s *syntax.BashPPSwitch) *syntax.BashPPSwitch {
 	return &cp
 }
 
+// bashPPBindRange substitutes the operand of a range written in a generic
+// body. The parser cannot mark body-local uses such as []V or map[K]V with the
+// enclosing function's parameters, so leaving the operand shared would make
+// iteration cells retain the abstract V/K identities after instantiation.
+func (r *Runner) bashPPBindRange(s *syntax.BashPPRange) *syntax.BashPPRange {
+	if s == nil || len(r.bashPPTypeParamArgs) == 0 {
+		return s
+	}
+	expr := r.bashPPBindExprs(s.Expr)
+	call := r.bashPPBindCallNode(s.Call)
+	if expr == s.Expr && call == s.Call {
+		return s
+	}
+	cp := *s
+	cp.Expr, cp.Call = expr, call
+	return &cp
+}
+
 func (r *Runner) bashPPBindExprList(exprs []syntax.BashPPExpr) ([]syntax.BashPPExpr, bool) {
 	if len(exprs) == 0 {
 		return exprs, false
