@@ -221,3 +221,71 @@ func (b *aclBuilder) acl() (*windows.ACL, error) {
 	copy(raw[header:], b.aces)
 	return (*windows.ACL)(unsafe.Pointer(&words[0])), nil
 }
+
+// ownerGroup reads path's owner and primary group SIDs. The second result
+// is false when the security descriptor cannot be read at all — a
+// filesystem without ACLs, or a path that has gone away.
+func ownerGroup(path string) (owner, group *windows.SID, ok bool) {
+	sd, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT,
+		windows.OWNER_SECURITY_INFORMATION|windows.GROUP_SECURITY_INFORMATION)
+	if err != nil {
+		return nil, nil, false
+	}
+	owner, _, _ = sd.Owner()
+	group, _, _ = sd.Group()
+	return owner, group, true
+}
+
+// IsOwner reports whether path is owned by the identity this process runs
+// under — the question `test -O` asks, answered from the owner SID rather
+// than from a uid Windows does not have. The second result is false when
+// there is no owner to compare against, and the caller should treat the
+// test as false rather than as refused.
+//
+// Two identities count as "us". The token's user SID is the ordinary one.
+// A group the token is a member of counts too, because a process running
+// elevated creates files owned by its token's default owner — usually
+// BUILTIN\Administrators — rather than by the user account, and a file
+// this shell just wrote is its own however Windows chose to spell that.
+func IsOwner(path string) (bool, bool) {
+	owner, _, ok := ownerGroup(path)
+	if !ok || owner == nil {
+		return false, false
+	}
+	token, err := windows.OpenCurrentProcessToken()
+	if err != nil {
+		return false, false
+	}
+	defer token.Close()
+	if user, err := token.GetTokenUser(); err == nil && user.User.Sid.Equals(owner) {
+		return true, true
+	}
+	member, err := token.IsMember(owner)
+	if err != nil {
+		return false, false
+	}
+	return member, true
+}
+
+// InGroup reports whether this process belongs to path's primary group —
+// the question `test -G` asks. The group class of a recorded mode is a
+// real SID with real members (see the package doc), so membership is a
+// question Windows can answer even though "what is this file's gid" is
+// not. The second result is false when there is no group to compare
+// against.
+func InGroup(path string) (bool, bool) {
+	_, group, ok := ownerGroup(path)
+	if !ok || group == nil {
+		return false, false
+	}
+	token, err := windows.OpenCurrentProcessToken()
+	if err != nil {
+		return false, false
+	}
+	defer token.Close()
+	member, err := token.IsMember(group)
+	if err != nil {
+		return false, false
+	}
+	return member, true
+}

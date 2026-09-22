@@ -107,13 +107,26 @@ func (r *Runner) access(ctx context.Context, path string, mode uint32) error {
 	return nil
 }
 
-// unTestOwnOrGrp panics. Under Unix, it implements the -O and -G unary tests,
-// but under Windows, it's unclear how to implement those tests, since Windows
-// doesn't have the concept of a file owner, just ACLs, and it's unclear how
-// to map the one to the other.
+// unTestOwnOrGrp implements the -O and -G unary tests. Windows has no uid
+// or gid to compare, but it does have an owner SID and a primary group SID
+// on every file, and a process token that says which of them are this
+// shell's — which is the whole of what the two tests ask. [winmode] reads
+// them, as it reads the ACL the recorded mode lives in.
+//
+// A file that does not exist, or one on a filesystem with no security
+// descriptor to read, is false rather than an error: the same answer the
+// Unix implementation gives when the stat fails.
 func (r *Runner) unTestOwnOrGrp(ctx context.Context, op syntax.UnTestOperator, x string) bool {
-	r.errf("unsupported unary test op: %v\n", op)
-	return false
+	if _, err := r.stat(ctx, x); err != nil {
+		return false
+	}
+	path := r.absPath(x)
+	if op == syntax.TsUsrOwn {
+		owned, _ := winmode.IsOwner(path)
+		return owned
+	}
+	member, _ := winmode.InGroup(path)
+	return member
 }
 
 // userGroups is bash's $GROUPS. Windows has no numeric gid (os.Getgid is

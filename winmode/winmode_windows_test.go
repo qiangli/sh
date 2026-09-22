@@ -141,3 +141,34 @@ func TestApplyStat(t *testing.T) {
 		t.Errorf("Overlay is %v, want %v", got, fs.FileMode(0o751|fs.ModeSetgid))
 	}
 }
+
+// TestIsOwnerAndInGroup pins the two questions `test -O` and `test -G` ask.
+// A file this process just created is its own and carries its own primary
+// group; a path that does not exist answers neither.
+func TestIsOwnerAndInGroup(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "f")
+	if err := os.WriteFile(path, []byte("x"), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	owned, ok := IsOwner(path)
+	if !ok {
+		t.Fatal("a file this process created has no owner to compare")
+	}
+	if !owned {
+		t.Error("a file this process created is not owned by it")
+	}
+	member, ok := InGroup(path)
+	if !ok {
+		t.Fatal("a file this process created has no group to compare")
+	}
+	if !member {
+		t.Error("a file this process created is not in any of its groups")
+	}
+	missing := filepath.Join(t.TempDir(), "gone")
+	if _, ok := IsOwner(missing); ok {
+		t.Error("IsOwner claims to know the owner of a missing file")
+	}
+	if _, ok := InGroup(missing); ok {
+		t.Error("InGroup claims to know the group of a missing file")
+	}
+}
