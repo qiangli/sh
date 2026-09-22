@@ -738,6 +738,16 @@ func (r *Runner) bashPPCellForInterfaceExpr(expr syntax.BashPPExpr) (*bashPPCell
 	if id, ok := expr.(*syntax.BashPPIdent); ok && !(bashPPBoolIdent(id.Name.Value) && r.bashPPScope.lookup(id.Name.Value) == nil) {
 		cell := r.bashPPScope.lookup(id.Name.Value)
 		if cell == nil {
+			// A declared function named as a value — `var i any = f` —
+			// is its handle, exactly as `g := f` binds it; its dynamic
+			// type is the declared signature. A generic function has no
+			// value until instantiated.
+			if fn := r.bashPPFuncs[id.Name.Value]; fn != nil && r.bashPPGoSource && len(fn.typeParams()) == 0 {
+				cell = &bashPPCell{vr: r.bashPPStoreFunc(fn)}
+				if typ := r.bashPPFuncValueType(cell); typ != nil {
+					return cell, typ, nil
+				}
+			}
 			return nil, nil, fmt.Errorf("BASHPP-EINTERFACE-VALUE: undefined value %s", id.Name.Value)
 		}
 		// An untyped constant's name stores what its literal would: the
@@ -878,6 +888,19 @@ func (r *Runner) bashPPInterfaceSourceCell(cell *bashPPCell, what string) (*bash
 	if actual == nil && cell.vr.Kind == expand.String {
 		if fn, ok := r.bashPPClosure(cell.vr.Str); ok && fn.lit != nil {
 			actual = bashPPClosureType(fn)
+		}
+	}
+	// A declared function bound by `:=` (`g := f`) is a handle too; its
+	// dynamic type is the declared signature.
+	if actual == nil {
+		actual = r.bashPPFuncValueType(cell)
+	}
+	// A scalar bound by `:=` from an untyped constant (`x := 0`) carries
+	// only the kind of that constant; its dynamic type is the constant's
+	// default type, exactly as the interface assignment path reads it.
+	if actual == nil && cell.vr.Kind == expand.String {
+		if name := bashPPDefaultScalarTypeName(cell.scalarKind); name != "" {
+			actual = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: name}}
 		}
 	}
 	if actual == nil {

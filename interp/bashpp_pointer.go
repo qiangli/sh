@@ -86,7 +86,11 @@ func (r *Runner) bashPPValidatePointerType(typ syntax.BashPPTypeExpr) error {
 // a pointer type — to the same pointer retyped: it names the storage p
 // names, and dereferences and method selection read it as a T. It reports
 // whether the expression was such a conversion; a nil operand stays nil.
-func (r *Runner) bashPPPointerConversion(expr syntax.BashPPExpr) (*bashPPPointer, *syntax.BashPPPointerType, bool, error) {
+// The type reported is the target as spelled: a conversion to a defined
+// pointer type (`Token(s)` for `type Token *[16]byte`) or to a type
+// parameter bound to one is a value of that type, not of its underlying
+// pointer shape, so it assigns to a variable declared with the same name.
+func (r *Runner) bashPPPointerConversion(expr syntax.BashPPExpr) (*bashPPPointer, syntax.BashPPTypeExpr, bool, error) {
 	for {
 		paren, ok := expr.(*syntax.BashPPParenExpr)
 		if !ok {
@@ -98,23 +102,24 @@ func (r *Runner) bashPPPointerConversion(expr syntax.BashPPExpr) (*bashPPPointer
 	if !ok {
 		return nil, nil, false, nil
 	}
-	target, ok := r.bashPPPointerType(r.bashPPConvertTarget(conv))
+	spelled := r.bashPPConvertTarget(conv)
+	target, ok := r.bashPPPointerType(spelled)
 	if !ok || target.Element == nil {
 		return nil, nil, false, nil
 	}
 	if goSourceNilLiteral(conv.X) {
-		return nil, target, true, nil
+		return nil, spelled, true, nil
 	}
 	if ptr, converted, err := r.bashPPSliceToArrayPointer(conv, target); converted {
-		return ptr, target, true, err
+		return ptr, spelled, true, err
 	}
 	ptr, err := r.bashPPPointerExprValue(conv.X)
 	if err != nil || ptr == nil {
-		return nil, target, true, err
+		return nil, spelled, true, err
 	}
 	retyped := *ptr
 	retyped.elem = target.Element
-	return &retyped, target, true, nil
+	return &retyped, spelled, true, nil
 }
 
 // bashPPSliceToArrayPointer applies Go's `(*[N]T)(s)` conversion of a slice

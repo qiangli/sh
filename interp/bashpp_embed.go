@@ -127,11 +127,13 @@ func bashPPNamedOwner(typ syntax.BashPPTypeExpr) (string, syntax.BashPPTypeExpr,
 }
 
 func (r *Runner) bashPPMethodOwner(typ syntax.BashPPTypeExpr) (string, syntax.BashPPTypeExpr, bool) {
-	if pointer, ok := typ.(*syntax.BashPPPointerType); ok {
-		typ = pointer.Element
-	}
 	seen := make(map[string]bool)
 	for {
+		// An alias may name a pointer type (`type P = *T`), in which case
+		// the method owner is the pointer's element, as it is for `*T`.
+		if pointer, ok := typ.(*syntax.BashPPPointerType); ok {
+			typ = pointer.Element
+		}
 		named, ok := typ.(*syntax.BashPPNamedType)
 		if !ok || named.Name == nil {
 			return "", nil, false
@@ -145,6 +147,27 @@ func (r *Runner) bashPPMethodOwner(typ syntax.BashPPTypeExpr) (string, syntax.Ba
 			return named.Name.Value, typ, true
 		}
 		typ = r.bashPPInstantiateNamedType(named)
+	}
+}
+
+// bashPPAliasPointerElement reports the element type when a named type is
+// an alias — possibly through further aliases — for a pointer type.
+func (r *Runner) bashPPAliasPointerElement(typ syntax.BashPPTypeExpr) (syntax.BashPPTypeExpr, bool) {
+	seen := make(map[string]bool)
+	for {
+		named, ok := typ.(*syntax.BashPPNamedType)
+		if !ok || named.Name == nil || seen[named.Name.Value] {
+			return nil, false
+		}
+		seen[named.Name.Value] = true
+		decl, found := r.bashPPTypes[named.Name.Value]
+		if !found || !decl.alias {
+			return nil, false
+		}
+		typ = r.bashPPInstantiateNamedType(named)
+		if pointer, ok := typ.(*syntax.BashPPPointerType); ok {
+			return pointer.Element, true
+		}
 	}
 }
 
@@ -171,6 +194,11 @@ func (r *Runner) bashPPResolveSelectionIn(root syntax.BashPPTypeExpr, name strin
 	rootPointer := false
 	if pointer, ok := root.(*syntax.BashPPPointerType); ok {
 		rootPointer, root = true, pointer.Element
+	} else if element, ok := r.bashPPAliasPointerElement(root); ok {
+		// `type P = *T` is the very type *T: a P root selects through
+		// the same implicit indirection, so a pointer-receiver method is
+		// in its method set whether or not the P is addressable.
+		rootPointer, root = true, element
 	}
 	key := bashPPTypeText(root)
 	level := []bashPPSelectionNode{{typ: root, indirect: rootPointer, ancestors: map[string]bool{key: true}}}
