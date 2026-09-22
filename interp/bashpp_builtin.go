@@ -181,6 +181,28 @@ func (r *Runner) bashPPBuiltinPointerArrayLen(arg bashPPBuiltinArg) (int, bool) 
 	return n, err == nil
 }
 
+func (r *Runner) goSourceStaticArrayLength(name string, call *syntax.BashPPCall) (*bashPPCell, bool) {
+	if !r.bashPPGoSource || (name != "len" && name != "cap") || call.GoRuntime || len(call.ArgExprs) != 1 || call.Ellipsis.IsValid() {
+		return nil, false
+	}
+	typ, ok := r.goSourceStaticExprType(call.ArgExprs[0])
+	if !ok {
+		return nil, false
+	}
+	if ptr, pointer := r.bashPPPointerType(typ); pointer {
+		typ = ptr.Element
+	}
+	array, ok := r.bashPPUnderlyingType(typ).(*syntax.BashPPCollectionType)
+	if !ok || array.Kind != "array" || array.Length == nil {
+		return nil, false
+	}
+	size, err := r.bashPPArrayLength(array.Length.Value)
+	if err != nil {
+		return nil, false
+	}
+	return bashPPBuiltinScalarCell(strconv.Itoa(size)), true
+}
+
 func (r *Runner) bashPPBuiltinByteSlice(shape *syntax.BashPPCollectionType) bool {
 	typ := r.bashPPCanonicalAssignableType(shape.Element)
 	named, ok := typ.(*syntax.BashPPNamedType)
@@ -308,6 +330,14 @@ func (r *Runner) bashPPRunValueBuiltin(name string, c *syntax.BashPPCall) (*bash
 				return cell, true
 			}
 		}
+	}
+	// A checked constant len/cap of an array-shaped expression reads only the
+	// operand's static type. In particular, len(*p) must not dereference a nil
+	// *[N]T. Calls and receives make the builtin non-constant; the Go front end
+	// records that distinction in GoRuntime, so those operands continue through
+	// the ordinary argument path below and are evaluated exactly once.
+	if cell, ok := r.goSourceStaticArrayLength(name, c); ok {
+		return cell, true
 	}
 
 	args, expanded, err := r.goSourceBuiltinTupleArgs(c)
