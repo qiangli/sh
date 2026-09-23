@@ -94,20 +94,36 @@ func TestStrictPosixInteractivePrefixAssignErrorContinues(t *testing.T) {
 	}
 }
 
-func TestNonStrictPosixReadonlyPrefixAssignErrorExits(t *testing.T) {
+func TestNonStrictPosixReadonlyPrefixAssignErrorContinuesNextLine(t *testing.T) {
 	stdout, stderr, err, exited := runStrictPosixAssignError(t, "echo command-ran", false, false)
-	if stdout != "" {
-		t.Fatalf("stdout = %q, want failed command and following command skipped", stdout)
+	if strings.Contains(stdout, "command-ran") || !strings.Contains(stdout, "not reached status=1") {
+		t.Fatalf("stdout = %q, want failed command discarded and following line run", stdout)
 	}
 	if !strings.Contains(stderr, "readonly variable") {
 		t.Fatalf("stderr = %q, want readonly diagnostic", stderr)
 	}
-	var status ExitStatus
-	if !errors.As(err, &status) || status != 1 {
-		t.Fatalf("Run error = %v, want exit status 1", err)
+	if err != nil || exited {
+		t.Fatalf("Run error = %v, exited = %v; want following line to succeed", err, exited)
 	}
-	if !exited {
-		t.Fatal("non-strict POSIX runner did not exit")
+}
+
+func TestNonStrictPosixReadonlyPrefixAssignErrorDiscardsSameLine(t *testing.T) {
+	file, err := syntax.NewParser().Parse(strings.NewReader(
+		"readonly a=a; a=b printf command-ran; printf after\n"), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	r, err := New(WithPosixMode(true), StdIO(nil, &stdout, &stderr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = r.Run(context.Background(), file)
+	var status ExitStatus
+	if stdout.Len() != 0 || !strings.Contains(stderr.String(), "readonly variable") ||
+		!errors.As(err, &status) || status != 1 {
+		t.Fatalf("stdout = %q, stderr = %q, err = %v; want same-line tail skipped with status 1",
+			stdout.String(), stderr.String(), err)
 	}
 }
 

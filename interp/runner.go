@@ -6212,7 +6212,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			restores = append(restores, restoreVar{name: as.name, vr: prev, wasTemp: wasTemp})
 		}
 		if assignFailed {
-			if !r.interactiveShell && (r.strictPosix || (r.opts[optPosix] && readonlyAssignFailed)) {
+			if r.strictPosix && !r.interactiveShell {
 				r.exit.exiting = true
 				break
 			}
@@ -6225,10 +6225,18 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					r.exit.exiting = true
 					break
 				}
+				if readonlyAssignFailed && !r.interactiveShell {
+					// Bash discards the rest of this physical line after a
+					// readonly prefix assignment, but resumes on the next
+					// line for a non-special command.
+					r.exit.exiting = true
+					r.exit.discarding = true
+					r.discardRestOfLine = r.curStmtPos.Line()
+					break
+				}
 				// Bash 5.3's default build is not STRICT_POSIX: other temporary
 				// assignment errors before a non-special command discard the
-				// command and continue with status 1. Readonly assignments
-				// above still exit a noninteractive POSIX shell.
+				// command and continue with status 1.
 				for _, restore := range restores {
 					r.restoreInlineVar(restore.name, restore.vr)
 				}
