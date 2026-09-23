@@ -18,6 +18,7 @@ import (
 
 	"golang.org/x/sys/unix"
 	"golang.org/x/term"
+	"mvdan.cc/sh/v3/interp/ownedexec"
 	"mvdan.cc/sh/v3/syntax"
 )
 
@@ -582,7 +583,7 @@ func waitExecCmd(ctx context.Context, cmd *exec.Cmd) (err error, user, sys time.
 	}
 }
 
-func execReplace(ctx context.Context, path string, args, env []string, stdin any, stdout any, stderr any) (bool, error) {
+func execReplace(ctx context.Context, path string, args, env []string, stdin any, stdout any, stderr any, owned *ownedExecHandoff) (bool, error) {
 	hc := HandlerCtx(ctx)
 	// syscall.Exec has no directory argument. The Runner keeps its working
 	// directory in-process, so after a shell `cd` it can differ from the Go
@@ -602,10 +603,31 @@ func execReplace(ctx context.Context, path string, args, env []string, stdin any
 		{2, stderr},
 	}
 	for _, entry := range files {
-		f, ok := entry.v.(*os.File)
-		if !ok {
+		if _, ok := entry.v.(*os.File); !ok {
 			return false, nil
 		}
+	}
+	// Reserve the frame descriptor before any stdio placement: the temporary
+	// file could itself have been allocated fd 0-2 after a closed redirect.
+	ownedFD := -1
+	if owned != nil {
+		base := 3
+		if hc.runner != nil {
+			for fd := range hc.runner.fdTable {
+				if fd >= base {
+					base = fd + 1
+				}
+			}
+		}
+		fd, err := unix.FcntlInt(owned.file.Fd(), unix.F_DUPFD_CLOEXEC, base)
+		if err != nil {
+			return true, err
+		}
+		ownedFD = fd
+		defer unix.Close(fd)
+	}
+	for _, entry := range files {
+		f := entry.v.(*os.File)
 		if f.Fd() == ^uintptr(0) {
 			// A closed standard descriptor is represented by an invalid
 			// *os.File. Preserve that state across a true exec replacement.
@@ -658,6 +680,12 @@ func execReplace(ctx context.Context, path string, args, env []string, stdin any
 			}
 			_ = unix.Close(p.tmp)
 		}
+	}
+	if ownedFD >= 0 {
+		if _, err := unix.FcntlInt(uintptr(ownedFD), unix.F_SETFD, 0); err != nil {
+			return true, err
+		}
+		env = setExecEnvValue(env, ownedexec.Marker, strconv.Itoa(ownedFD))
 	}
 	if len(args) == 0 {
 		return true, fmt.Errorf("exec: empty argument list")

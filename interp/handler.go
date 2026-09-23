@@ -428,12 +428,20 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 				env = setExecEnvValue(env, BashyHardIgnoreEnv, ign)
 			}
 		}
-		// A true Unix exec replacement bypasses exec.Cmd.Start. Check the
-		// complete environment before either launch path can mutate the
-		// shell's descriptors or replace its process image.
+		// Check the original exported payload before the owned-child frame
+		// shortens native argv/env. True Unix exec replacement bypasses Start.
 		if err := execBudgetRefusal(execPath, cmdArgs, env); err != nil {
 			fmt.Fprintln(hc.Stderr, err)
 			return ExitStatus(126)
+		}
+		owned, handoffArgs, handoffEnv, handoffFiles, err := prepareOwnedExec(hc.runner, execPath, cmdArgs, env, extraFiles)
+		if err != nil {
+			fmt.Fprintln(hc.Stderr, err)
+			return ExitStatus(126)
+		}
+		if owned != nil {
+			defer owned.close()
+			cmdArgs, env, extraFiles = handoffArgs, handoffEnv, handoffFiles
 		}
 		hc.runner.closeClosedInheritedFdsOnExec()
 		// If stdin is the in-memory script-source reader, back it with a
@@ -504,7 +512,7 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			}
 		}
 		if hc.ExecReplace && !proxyReplace {
-			if replaced, err := execReplace(ctx, execPath, cmdArgs, env, execStdin, execStdout, execStderr); replaced {
+			if replaced, err := execReplace(ctx, execPath, cmdArgs, env, execStdin, execStdout, execStderr, owned); replaced {
 				return err
 			}
 		}
@@ -521,6 +529,9 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 		if fds.sysAttr != nil {
 			fds.sysAttr(&cmd)
 		}
+		if owned != nil && owned.apply != nil {
+			owned.apply(&cmd)
+		}
 		prepareBackgroundJobCmd(ctx, &cmd)
 		foregroundTTY := prepareForegroundJobCmd(ctx, hc.runner, &cmd)
 		defer func() {
@@ -528,9 +539,10 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 				_ = foregroundTTY.restore()
 			}
 		}()
+		startingFallback := false
 		startCmd := func() error {
 			var startErr error
-			if refusal := execBudgetRefusalCmd(&cmd); refusal != nil {
+			if refusal := execBudgetRefusalCmd(&cmd); refusal != nil && (owned == nil || startingFallback) {
 				startErr = refusal
 			} else if start, ok := ctx.Value(execStartOverrideCtxKey{}).(func(*exec.Cmd) error); ok {
 				startErr = start(&cmd)
@@ -542,6 +554,9 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			// The child (if any) holds its own copies now; release what
 			// only the Start needed.
 			fds.started()
+			if owned != nil && owned.started != nil {
+				owned.started()
+			}
 			if startErr != nil && foregroundTTY != nil {
 				// Foreground may transfer the terminal before exec fails.
 				// Restore it before preparing an ENOEXEC fallback, which must
@@ -612,6 +627,7 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 				}
 				prepareBackgroundJobCmd(ctx, &cmd)
 				foregroundTTY = prepareForegroundJobCmd(ctx, hc.runner, &cmd)
+				startingFallback = true
 				err = startCmd()
 			}
 		}

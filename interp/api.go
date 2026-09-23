@@ -71,6 +71,9 @@ const BashyHardIgnoreEnv = "BASHY_HARD_IGNORE"
 // Runner's exported fields are meant to be configured via [RunnerOption];
 // once a Runner has been created, the fields should be treated as read-only.
 type Runner struct {
+	// ownedExecPaths are verified identities of Bashy-owned child binaries.
+	// Only these may consume the private argv handoff protocol.
+	ownedExecPaths []string
 	// Env specifies the initial environment for the interpreter, which must
 	// not be nil. It can only be set via [Env].
 	//
@@ -1772,6 +1775,16 @@ func (r *Runner) importExportedFuncs() {
 // Note that options cannot be applied once Run or Reset have been called.
 type RunnerOption func(*Runner) error
 
+// OwnedExecutablePaths enables the large-argument handoff only for the given
+// installed Bashy executables. The launch path is compared by file identity,
+// so an unrelated executable with the same basename is never opted in.
+func OwnedExecutablePaths(paths ...string) RunnerOption {
+	return func(r *Runner) error {
+		r.ownedExecPaths = append([]string(nil), paths...)
+		return nil
+	}
+}
+
 // TODO: enforce the rule above via didReset.
 
 // ForeignImports binds direct Python imports the embedder already owns, by
@@ -3100,6 +3113,7 @@ func (r *Runner) Reset() {
 		standaloneDefaults: standaloneDefaults,
 
 		goSourceEnvironment: r.goSourceEnvironment,
+		ownedExecPaths:      r.ownedExecPaths,
 		// Seeded imports are construction-time configuration ([ForeignImports])
 		// owned by the embedder, not per-Run state.
 		bashPPSeededImports: r.bashPPSeededImports,

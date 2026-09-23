@@ -143,7 +143,7 @@ func waitExecCmd(ctx context.Context, cmd *exec.Cmd) (err error, user, sys time.
 	return err, user, sys
 }
 
-func execReplace(ctx context.Context, path string, args, env []string, stdin any, stdout any, stderr any) (bool, error) {
+func execReplace(ctx context.Context, path string, args, env []string, stdin any, stdout any, stderr any, owned *ownedExecHandoff) (bool, error) {
 	return false, nil
 }
 
