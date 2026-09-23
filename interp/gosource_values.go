@@ -12,6 +12,9 @@ import (
 )
 
 func goSourceNativeValueCell(value bashPPBridgeValue) *bashPPCell {
+	if value.localCell != nil {
+		return goSourceLocalReflectCell(value.localCell)
+	}
 	if scalar, err := value.scalar(); err == nil {
 		cell := &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarStorageString(scalar)}, scalarKind: scalar.kind(), negativeZero: scalar.negativeZero, nonFinite: scalar.nonFinite, hasNonFinite: scalar.hasNonFinite, nonFiniteComplex: scalar.nonFiniteComplex, hasNonFiniteComplex: scalar.hasNonFiniteComplex, typeName: scalar.typ, declType: &syntax.BashPPNamedType{Name: &syntax.Lit{Value: scalar.typ}}}
 		if value.Interface != "" {
@@ -403,6 +406,9 @@ func (r *Runner) goSourceComputedNativeFunc(c *syntax.BashPPCall) (*bashPPFunc, 
 	}
 	if value.Kind != "handle" || !(value.Function || strings.HasPrefix(value.Type, "func(")) {
 		return nil, false
+	}
+	if fn, ok := r.goSourceLocalReflectFunc(&value); ok {
+		return fn, true
 	}
 	fn := &bashPPFunc{native: &value}
 	if sig := bashPPComputedCalleeSignature(c.CalleeExpr, cell); sig != nil {

@@ -44,6 +44,10 @@ type bashPPBridgeValue struct {
 	ReaderLength            int                 `json:"reader_length,omitempty"`
 	CallArgs                []bashPPBridgeValue `json:"call_args,omitempty"`
 	sliceView               *bashPPNativeSlice  // host-only original backing view
+	// localReflect and localCell are host-only interpreter-owned reflected
+	// values (bashpp_s248_reflected_method.go); neither ever crosses.
+	localReflect *goSourceLocalReflect
+	localCell    *bashPPCell
 
 	// reflectCopy marks a handle derived from an admitted reflect.ValueOf
 	// copy (reflectedValueCopy). Host-only: it is set on replies by the
@@ -590,6 +594,9 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 	}
 	var check func(bashPPBridgeValue) error
 	check = func(v bashPPBridgeValue) error {
+		if v.localReflect != nil || v.localCell != nil {
+			return errors.New("gosource: interpreter-owned reflected value reached the dependency unmaterialized")
+		}
 		if (v.Kind == "handle" || v.Kind == "callback" || v.Origin != 0) && v.Session != s.id {
 			return errors.New("gosource: native handle belongs to another dependency session")
 		}
