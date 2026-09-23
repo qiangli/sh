@@ -9201,8 +9201,16 @@ func (r *Runner) localeDecimalPoint() string {
 }
 
 func (r *Runner) stmts(ctx context.Context, stmts []*syntax.Stmt) {
+	var live *goSourceLivenessPlan
+	scope, frame := r.bashPPScope, r.bashPPGoSource && r.bashPPFuncActive > 0
+	if frame {
+		live = goSourceLivenessFor(stmts)
+	}
 	for i := 0; i < len(stmts); i++ {
 		r.stmt(ctx, stmts[i])
+		if frame {
+			r.goSourceReleaseDead(live, scope, i)
+		}
 		// Go source form has no "the last command failed" status to carry, so a
 		// statement that reports failure aborts the program. A status a call
 		// uses to REPORT a result is exempt, exactly as it is exempt from

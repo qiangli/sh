@@ -70,6 +70,9 @@ func (r *Runner) bashPPNativeExitStatus(err error) bool {
 // bashPPNativeRequest issues one bridge request and converts a self-terminated
 // dependency process into the program's exit status.
 func (r *Runner) bashPPNativeRequest(ctx context.Context, req bashPPEvalRequest, q bashPPBridgeRequest) ([]bashPPBridgeValue, error) {
+	if values, handled, err := r.goSourceLocalReflectRequest(ctx, req, &q); handled {
+		return values, err
+	}
 	values, err := req.Bridge.request(ctx, req, q)
 	if r.bashPPGoSource && r.bashPPGoTask && ctx.Err() != nil && errors.Is(err, ctx.Err()) {
 		// EOF cancels the task lifetime. Native expression callers need the

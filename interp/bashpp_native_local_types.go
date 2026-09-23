@@ -35,6 +35,11 @@ type bashPPLocalMethod struct {
 	ReaderLocalBuffer bool
 	Params            []string
 	Results           []string
+	// Receiver is the generic receiver spelling of a stub emitted on a real
+	// generic helper declaration — `X[T]` — with the method's own receiver
+	// type-parameter names, which its Params and Results mention. Empty for
+	// a stub on a concrete type.
+	Receiver string
 	// General marks a method mirrored by the generalised stub regardless of
 	// arity, so a zero-parameter zero-result method is not mistaken for the
 	// fixed one-string protocol stubs.
@@ -53,8 +58,11 @@ type bashPPLocalType struct {
 	Name     string
 	// PublicType is the real helper type expression for a package-level
 	// generic instantiation. Name remains its private registry key.
-	PublicType     string
-	GenericDecl    string
+	PublicType  string
+	GenericDecl string
+	// GenericMethods are the mirrored method stubs emitted beside GenericDecl
+	// on the real generic declaration; each carries its generic Receiver.
+	GenericMethods []bashPPLocalMethod
 	Alias          bool
 	WireType       string
 	Decl           string
@@ -83,6 +91,7 @@ var bashPPHelperReserved = map[string]bool{
 	"dispatch": true, "main": true, "callback": true, "callbackFailed": true,
 	"takeFailure": true, "bridgeAddress": true, "bridgeAuth": true,
 	"originalTypeIdentity": true, "originalTypeIdentities": true, "originalTypeString": true, "hasOriginalTypeIdentity": true,
+	"mirroredMethodSet": true, "mirroredMethodTypes": true, "mirroredMethodExpression": true,
 }
 
 // bashPPLocalScalarTypes are the predeclared names the helper's base type
@@ -131,6 +140,23 @@ func (r *Runner) bashPPLocalTypeDescriptors() []bashPPLocalType {
 }
 
 func (r *Runner) bashPPBuildLocalTypeDescriptors() ([]bashPPLocalType, map[string]string) {
+	// A public generic whose materialisation does not survive closure — its
+	// constraint or a stub signature names a type the helper cannot declare —
+	// is withdrawn and the namespace rebuilt with its instantiations
+	// materialised concretely instead, exactly as before it was public.
+	withdrawn := map[string]bool{}
+	for {
+		types, scoped, dropped := r.bashPPBuildLocalTypeDescriptorsWithout(withdrawn)
+		if len(dropped) == 0 {
+			return types, scoped
+		}
+		for name := range dropped {
+			withdrawn[name] = true
+		}
+	}
+}
+
+func (r *Runner) bashPPBuildLocalTypeDescriptorsWithout(withdrawn map[string]bool) ([]bashPPLocalType, map[string]string, map[string]bool) {
 	declared := map[string]syntax.BashPPTypeExpr{}
 	identities := map[string]*syntax.BashPPTypeIdentity{}
 	methods := map[string][]*syntax.BashPPFuncDecl{}
@@ -256,17 +282,65 @@ func (r *Runner) bashPPBuildLocalTypeDescriptors() ([]bashPPLocalType, map[strin
 		// here would be faithful; materialise nothing rather than a namespace
 		// that silently means something else.
 		if bashPPLocalScalarTypes[name] {
-			return nil, nil
+			return nil, nil, nil
 		}
 		names = append(names, name)
 	}
 	for key := range scopedDecls {
 		if bashPPLocalScalarTypes[scopedDecls[key].decl.Name.Value] {
-			return nil, nil
+			return nil, nil, nil
 		}
 	}
 	sort.Strings(names)
 	local := &bashPPLocalTypeSet{declared: declared, imports: r.bashPPImports, generics: generics, resolve: resolveScoped}
+	// A package-level defined generic whose declaration, constraints and
+	// mirrored method stubs are all expressible is materialised as itself:
+	// its instantiations are aliases of the real generic instance, so fmt
+	// and reflect see X[Arg], an embedding keeps the field name X and the
+	// promoted method set is the helper's own Go semantics. Every public
+	// generic is settled before any declaration renders, so an embedded
+	// instantiation in another declaration can rely on it.
+	local.public = map[string]bool{}
+	genericNames := make([]string, 0, len(packageGenerics))
+	for name := range packageGenerics {
+		genericNames = append(genericNames, name)
+	}
+	sort.Strings(genericNames)
+	genericDecls := map[string]string{}
+	genericMethods := map[string][]bashPPLocalMethod{}
+	genericRefs := map[string]map[string]bool{}
+	for _, name := range genericNames {
+		base := packageGenerics[name]
+		if base.Alias || generics[name] != base || bashPPHelperReserved[name] || withdrawn[name] {
+			continue
+		}
+		local.public[name] = true
+	}
+	for settled := false; !settled; {
+		settled = true
+		for _, name := range genericNames {
+			if !local.public[name] {
+				continue
+			}
+			base := packageGenerics[name]
+			refs := map[string]bool{}
+			local.refs = refs
+			decl, ok := local.genericHeader(base)
+			var stubs []bashPPLocalMethod
+			if ok {
+				stubs, ok = local.genericStubs(base, methods[name], refs)
+			}
+			local.refs = nil
+			if !ok {
+				// Withdrawing one public generic changes how the others
+				// spell it, so the set is recomputed until it is stable.
+				delete(local.public, name)
+				settled = false
+				continue
+			}
+			genericDecls[name], genericMethods[name], genericRefs[name] = decl, stubs, refs
+		}
+	}
 	var out []bashPPLocalType
 	// Each function-local declaration of a reused name is its own helper
 	// type. Such a declaration cannot carry methods (Go declares methods
@@ -355,7 +429,6 @@ func (r *Runner) bashPPBuildLocalTypeDescriptors() ([]bashPPLocalType, map[strin
 		wires = append(wires, wire)
 	}
 	sort.Strings(wires)
-	emittedGenerics := map[string]bool{}
 	for _, wire := range wires {
 		named := instantiations[wire]
 		base := generics[named.Name.Value]
@@ -428,12 +501,24 @@ func (r *Runner) bashPPBuildLocalTypeDescriptors() ([]bashPPLocalType, map[strin
 		// alias and registry key, so fmt and reflect see F[Arg], never the key.
 		// Generic aliases deliberately retain the structural path repaired by
 		// 15455fc6; local generics retain their lexical-identity materialisation.
-		if !base.Alias && packageGenerics[named.Name.Value] == base && len(methods[named.Name.Value]) == 0 && !bashPPHelperReserved[named.Name.Value] {
-			if genericDecl, publicType, ok := local.genericDeclaration(base, named); ok {
+		if local.public[named.Name.Value] && packageGenerics[named.Name.Value] == base {
+			if _, publicType, ok := local.genericDeclaration(base, named); ok {
 				materialised.PublicType = publicType
-				if !emittedGenerics[named.Name.Value] {
-					materialised.GenericDecl = genericDecl
-					emittedGenerics[named.Name.Value] = true
+				// The instance mirrors exactly the stubs the generic
+				// declaration carries; anything else is omitted below.
+				stubbed := map[string]bool{}
+				for _, m := range genericMethods[named.Name.Value] {
+					stubbed[m.Name] = true
+				}
+				kept := materialised.Methods[:0:0]
+				for _, m := range materialised.Methods {
+					if stubbed[m.Name] {
+						kept = append(kept, m)
+					}
+				}
+				materialised.Methods = kept
+				for ref := range genericRefs[named.Name.Value] {
+					materialised.refs[ref] = true
 				}
 			}
 		}
@@ -458,6 +543,7 @@ func (r *Runner) bashPPBuildLocalTypeDescriptors() ([]bashPPLocalType, map[strin
 	for _, materialised := range out {
 		emitted[materialised.Name] = true
 	}
+	droppedPublic := map[string]bool{}
 	for changed := true; changed; {
 		changed = false
 		kept := out[:0]
@@ -472,11 +558,28 @@ func (r *Runner) bashPPBuildLocalTypeDescriptors() ([]bashPPLocalType, map[strin
 			if !closed {
 				delete(emitted, materialised.Name)
 				changed = true
+				if materialised.PublicType != "" && local.public[materialised.Callback] {
+					droppedPublic[materialised.Callback] = true
+				}
 				continue
 			}
 			kept = append(kept, materialised)
 		}
 		out = kept
+	}
+	if len(droppedPublic) > 0 {
+		return nil, nil, droppedPublic
+	}
+	// Each public generic is declared once, beside the first of its
+	// instantiations that survived closure; the others are aliases of it.
+	declaredGeneric := map[string]bool{}
+	for i := range out {
+		name := out[i].Callback
+		if out[i].PublicType == "" || declaredGeneric[name] || genericDecls[name] == "" {
+			continue
+		}
+		out[i].GenericDecl, out[i].GenericMethods = genericDecls[name], genericMethods[name]
+		declaredGeneric[name] = true
 	}
 	// A scoped identity whose declaration was dropped must not be spelled
 	// either: the reference falls back to the plain name and is refused.
@@ -516,7 +619,23 @@ func (r *Runner) bashPPBuildLocalTypeDescriptors() ([]bashPPLocalType, map[strin
 		}
 		out[i].Methods = methods
 	}
-	return out, scopedNames
+	return out, scopedNames, nil
+}
+
+// genericHeader renders a package-level generic declaration alone, without
+// an instantiation of it.
+func (l *bashPPLocalTypeSet) genericHeader(base *syntax.BashPPDecl) (string, bool) {
+	var args []*syntax.BashPPTypeArg
+	for _, group := range base.TypeParams {
+		if group == nil {
+			return "", false
+		}
+		for range group.Names {
+			args = append(args, &syntax.BashPPTypeArg{ArgType: &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "int"}}})
+		}
+	}
+	decl, _, ok := l.genericDeclaration(base, &syntax.BashPPNamedType{Name: base.Name, TypeArgs: args})
+	return decl, ok
 }
 
 // genericDeclaration renders a package-level generic declaration and one
@@ -536,9 +655,9 @@ func (l *bashPPLocalTypeSet) genericDeclaration(base *syntax.BashPPDecl, instanc
 			bindings[name.Value] = name.Value
 		}
 	}
-	oldSubst := l.subst
-	l.subst = bindings
-	defer func() { l.subst = oldSubst }()
+	oldSubst, oldMode := l.subst, l.genericMode
+	l.subst, l.genericMode = bindings, true
+	defer func() { l.subst, l.genericMode = oldSubst, oldMode }()
 	for _, group := range base.TypeParams {
 		constraint, ok := l.source(group.Constraint, 0)
 		if !ok {
@@ -554,7 +673,7 @@ func (l *bashPPLocalTypeSet) genericDeclaration(base *syntax.BashPPDecl, instanc
 	if !ok {
 		return "", "", false
 	}
-	l.subst = oldSubst
+	l.subst, l.genericMode = oldSubst, oldMode
 	args := make([]string, len(instance.TypeArgs))
 	for i, arg := range instance.TypeArgs {
 		rendered, ok := l.source(arg.ArgType, 0)
@@ -588,6 +707,14 @@ type bashPPLocalTypeSet struct {
 	// parameters: every parameter is bound by the instantiation, and only the
 	// fixed-signature String/Error/Read stubs are mirrored for them.
 	instantiated bool
+	// public names the package-level generic declarations the helper
+	// materialises as real generic declarations, so an embedded
+	// instantiation keeps its promoted field name and an instantiation
+	// spelled inside a generic rendering keeps the public spelling.
+	public map[string]bool
+	// genericMode marks a rendering of a public generic declaration or its
+	// method stubs, where type-parameter spellings stay symbolic.
+	genericMode bool
 	// resolve spells a reference to a function-local declaration of a
 	// reused name by its own helper identity; nil or false keeps the plain
 	// name (bashpp_s243_scoped_local_types.go).
@@ -602,6 +729,85 @@ func (l *bashPPLocalTypeSet) embeddedInstantiation(typ syntax.BashPPTypeExpr) bo
 	}
 	named, ok := typ.(*syntax.BashPPNamedType)
 	return ok && named.Name != nil && len(named.TypeArgs) > 0 && l.generics[named.Name.Value] != nil
+}
+
+// embeddedPublic reports an embedded instantiation of a generic the helper
+// declares as itself: instanceRef spells it `X[args]`, so the helper's
+// embedded field is named X exactly as the interpreter's promoted field is.
+func (l *bashPPLocalTypeSet) embeddedPublic(typ syntax.BashPPTypeExpr) bool {
+	if ptr, ok := typ.(*syntax.BashPPPointerType); ok {
+		typ = ptr.Element
+	}
+	named, ok := typ.(*syntax.BashPPNamedType)
+	return ok && named.Name != nil && l.public[named.Name.Value]
+}
+
+// genericStubs renders the mirrored method stubs of a public generic
+// declaration once, over symbolic receiver type parameters. Each receiver
+// type parameter is renamed positionally to a generated identifier, so a
+// program parameter named like a helper identifier (value, reflect) cannot
+// shadow the stub's own protocol code. Methods are grouped by their receiver
+// spelling, since each group binds its own names. It reports false when a
+// receiver cannot be spelled, and records every local name the stubs mention
+// in refs.
+func (l *bashPPLocalTypeSet) genericStubs(base *syntax.BashPPDecl, decls []*syntax.BashPPFuncDecl, refs map[string]bool) ([]bashPPLocalMethod, bool) {
+	arity := 0
+	for _, group := range base.TypeParams {
+		arity += len(group.Names)
+	}
+	fresh := make([]string, arity)
+	for i := range fresh {
+		fresh[i] = fmt.Sprintf("bppTypeParam%d", i)
+		for l.declared[fresh[i]] != nil || l.generics[fresh[i]] != nil {
+			fresh[i] += "_"
+		}
+	}
+	groups := map[string][]*syntax.BashPPFuncDecl{}
+	var keys []string
+	for _, decl := range decls {
+		if decl.Receiver == nil || len(decl.Receiver.TypeParams) != arity {
+			return nil, false
+		}
+		names := make([]string, arity)
+		for i, param := range decl.Receiver.TypeParams {
+			if param == nil {
+				return nil, false
+			}
+			names[i] = param.Value
+		}
+		key := strings.Join(names, ",")
+		if _, seen := groups[key]; !seen {
+			keys = append(keys, key)
+		}
+		groups[key] = append(groups[key], decl)
+	}
+	sort.Strings(keys)
+	receiver := base.Name.Value + "[" + strings.Join(fresh, ", ") + "]"
+	var methods []bashPPLocalMethod
+	seen := map[string]bool{}
+	oldSubst, oldInstantiated, oldMode, oldRefs := l.subst, l.instantiated, l.genericMode, l.refs
+	defer func() { l.subst, l.instantiated, l.genericMode, l.refs = oldSubst, oldInstantiated, oldMode, oldRefs }()
+	for _, key := range keys {
+		bindings := map[string]string{}
+		for i, name := range strings.Split(key, ",") {
+			if name != "_" {
+				bindings[name] = fresh[i]
+			}
+		}
+		l.subst, l.instantiated, l.genericMode, l.refs = bindings, true, true, refs
+		for _, method := range l.mirrored(groups[key]) {
+			if seen[method.Name] {
+				continue
+			}
+			seen[method.Name] = true
+			method.Receiver = receiver
+			for ref := range method.refs {
+				refs[ref] = true
+			}
+			methods = append(methods, method)
+		}
+	}
+	return methods, true
 }
 
 // instanceName is the generated helper name of one instantiation spelling.
@@ -632,6 +838,16 @@ func (l *bashPPLocalTypeSet) instanceRef(t *syntax.BashPPNamedType, depth int) (
 		args[i] = rendered
 	}
 	name := l.instanceName(t.Name.Value + "[" + strings.Join(args, ", ") + "]")
+	if l.public[t.Name.Value] {
+		// A real generic declaration is spelled as itself. Inside a
+		// generic rendering the arguments may be type parameters, which
+		// name no materialised instance; a concrete spelling still keeps
+		// the instance it denotes in the dependency-closed set.
+		if !l.genericMode && l.refs != nil {
+			l.refs[name] = true
+		}
+		return t.Name.Value + "[" + strings.Join(args, ", ") + "]", true
+	}
 	if l.refs != nil {
 		l.refs[name] = true
 	}
@@ -847,6 +1063,11 @@ func (l *bashPPLocalTypeSet) source(typ syntax.BashPPTypeExpr, depth int) (strin
 		if name == "interface{}" {
 			return "any", true
 		}
+		// comparable is predeclared but only meaningful as a constraint,
+		// which only a generic rendering spells.
+		if name == "comparable" && l.genericMode && l.declared[name] == nil {
+			return name, true
+		}
 		if _, local := l.declared[name]; local && !bashPPHelperReserved[name] {
 			if l.refs != nil {
 				l.refs[name] = true
@@ -920,7 +1141,7 @@ func (l *bashPPLocalTypeSet) source(typ syntax.BashPPTypeExpr, depth int) (strin
 				// original name, and the two would not address the same
 				// field. (Sprint 153's recorded refusal; the instantiation
 				// itself is materialised, see instanceRef.)
-				if l.embeddedInstantiation(field.FieldTypeExpr) {
+				if l.embeddedInstantiation(field.FieldTypeExpr) && !l.embeddedPublic(field.FieldTypeExpr) {
 					return "", false
 				}
 				element, ok := l.source(field.FieldTypeExpr, depth+1)
@@ -1023,7 +1244,29 @@ func (l *bashPPLocalTypeSet) signature(spec *syntax.BashPPMethodSpec, depth int)
 // callback.
 func bashPPLocalTypeGo(local bashPPLocalType) string {
 	if local.PublicType != "" {
-		return local.GenericDecl + "type " + local.Name + " = " + local.PublicType + "\n"
+		var b strings.Builder
+		b.WriteString(local.GenericDecl)
+		// A generic stub's receiver reflects as the public instance X[Arg];
+		// the interpreter resolves a callback receiver by the registry name
+		// of its materialised instance, which each instance registers here.
+		names, receiver := "bppInstanceNames_"+local.Callback, "bppGenericReceiver_"+local.Callback
+		if len(local.GenericMethods) > 0 {
+			fmt.Fprintf(&b, "var %s = map[reflect.Type]string{}\n", names)
+			fmt.Fprintf(&b, "func %s(v reflect.Value) value { recv:=callbackReceiver(v); if name,ok:=%s[v.Type()];ok{recv.Type=name}; return recv }\n", receiver, names)
+		}
+		for _, method := range local.GenericMethods {
+			recv := method.Receiver
+			if method.Pointer {
+				recv = "*" + recv
+			}
+			stub := bashPPLocalMethodStubGo(local.Callback, recv, method)
+			b.WriteString(strings.ReplaceAll(stub, "callbackReceiver(reflect.ValueOf(bpprecv))", receiver+"(reflect.ValueOf(bpprecv))"))
+		}
+		b.WriteString("type " + local.Name + " = " + local.PublicType + "\n")
+		if len(local.Methods) > 0 {
+			fmt.Fprintf(&b, "func init(){%s[reflect.TypeFor[%s]()] = %q}\n", names, local.Name, "main."+local.Name)
+		}
+		return b.String()
 	}
 	var b strings.Builder
 	alias := ""
@@ -1040,12 +1283,28 @@ func bashPPLocalTypeGo(local bashPPLocalType) string {
 		if method.Pointer {
 			receiver = "*" + local.Name
 		}
-		if method.General || len(method.Params) > 0 || len(method.Results) > 0 {
-			b.WriteString(bashPPLocalMethodGo(selectorBase, receiver, method))
-			continue
+		b.WriteString(bashPPLocalMethodStubGo(selectorBase, receiver, method))
+	}
+	// Register the mirrored method set for mirroredMethodExpression. An alias
+	// declares no methods of its own; its target registers them.
+	if len(local.Methods) > 0 && !local.Alias {
+		names := make([]string, len(local.Methods))
+		for i, method := range local.Methods {
+			names[i] = fmt.Sprintf("%q:true", method.Name)
 		}
-		if method.Name == "Read" {
-			fmt.Fprintf(&b, `func (bpprecv %s) Read(p []byte)(int,error) {
+		fmt.Fprintf(&b, "func init(){mirroredMethodTypes=append(mirroredMethodTypes,mirroredMethodSet{types:[]reflect.Type{reflect.TypeFor[%s](),reflect.TypeFor[*%s]()},names:map[string]bool{%s}})}\n", local.Name, local.Name, strings.Join(names, ","))
+	}
+	return b.String()
+}
+
+// bashPPLocalMethodStubGo emits the stub of one mirrored method on receiver.
+func bashPPLocalMethodStubGo(selectorBase, receiver string, method bashPPLocalMethod) string {
+	var b strings.Builder
+	switch {
+	case method.General || len(method.Params) > 0 || len(method.Results) > 0:
+		b.WriteString(bashPPLocalMethodGo(selectorBase, receiver, method))
+	case method.Name == "Read":
+		fmt.Fprintf(&b, `func (bpprecv %s) Read(p []byte)(int,error) {
  recv:=callbackReceiver(reflect.ValueOf(bpprecv));recv.CallArgs=[]value{encode(reflect.ValueOf(p))}
  if %t { recv.CallArgs=append(recv.CallArgs,value{Kind:"reader-buffer",ReaderBuffer:append([]byte(nil),p[:cap(p)]...),ReaderLength:len(p)}) }
  out,err:=callback(%q,recv);if err!=nil{panic(err)}
@@ -1057,8 +1316,7 @@ func bashPPLocalTypeGo(local bashPPLocalType) string {
  return int(count.Int()),readErr
 }
 `, receiver, method.ReaderLocalBuffer, selectorBase+".Read")
-			continue
-		}
+	default:
 		fmt.Fprintf(&b, `func (bpprecv %s) %s() string {
  out, err := callback(%q, callbackReceiver(reflect.ValueOf(bpprecv)))
  if err != nil { return callbackFailed(err) }
@@ -1142,6 +1400,9 @@ func bashPPLocalTypeIdentity(locals []bashPPLocalType) string {
 	var b strings.Builder
 	for _, local := range locals {
 		fmt.Fprintf(&b, "%s|%s|%s|%s|%t|%s|%s|", local.Name, local.PublicType, local.GenericDecl, local.Decl, local.Alias, local.WireType, local.Callback)
+		for _, method := range local.GenericMethods {
+			fmt.Fprintf(&b, "%s:%s:%t:%t:%t:%v:%v,", method.Receiver, method.Name, method.Pointer, method.ReaderLocalBuffer, method.General, method.Params, method.Results)
+		}
 		fmt.Fprintf(&b, "%v|", local.Identity)
 		for _, method := range local.Methods {
 			fmt.Fprintf(&b, "%s:%t:%t:%t:%v:%v,", method.Name, method.Pointer, method.ReaderLocalBuffer, method.General, method.Params, method.Results)

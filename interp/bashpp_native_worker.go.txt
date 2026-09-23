@@ -52,16 +52,17 @@ type value struct {
  Text string `json:"text,omitempty"`
  Bytes []byte `json:"bytes,omitempty"`
  Handle uint64 `json:"handle,omitempty"`
+ NilChannel bool `json:"nil_channel,omitempty"`
  Elements []value `json:"elements,omitempty"`
  Fields map[string]value `json:"fields,omitempty"`
  Entries []bppProtocolEntry `json:"entries,omitempty"`
 }
 type bppProtocolEntry struct {Key value `json:"key"`; Value value `json:"value"`}
 type sliceBuffer struct {Index int `json:"index"`;Length int `json:"length"`;Value value `json:"value"`}
-type request struct { SliceBuffers []sliceBuffer `json:"slice_buffers,omitempty"`; Transfers []int `json:"transfers,omitempty"`; ID uint64 `json:"id"`; Op string `json:"op"`; Selector string `json:"selector"`; Instance string `json:"instance,omitempty"`; Receiver *value `json:"receiver,omitempty"`; Args []value `json:"args,omitempty"`; Spread bool `json:"spread,omitempty"`; SourceFile string `json:"source_file,omitempty"`; SourceLine int `json:"source_line,omitempty"`; LogPrint string `json:"log_print,omitempty"`; Values []value `json:"values,omitempty"`; Error string `json:"error,omitempty"` }
+type request struct { SliceBuffers []sliceBuffer `json:"slice_buffers,omitempty"`; Transfers []int `json:"transfers,omitempty"`; ID uint64 `json:"id"`; Op string `json:"op"`; PanicOnFault bool `json:"panic_on_fault,omitempty"`; Selector string `json:"selector"`; Instance string `json:"instance,omitempty"`; Receiver *value `json:"receiver,omitempty"`; Args []value `json:"args,omitempty"`; Spread bool `json:"spread,omitempty"`; SourceFile string `json:"source_file,omitempty"`; SourceLine int `json:"source_line,omitempty"`; LogPrint string `json:"log_print,omitempty"`; Values []value `json:"values,omitempty"`; Error string `json:"error,omitempty"` }
 // Op, Selector and Receiver are set only on a callback: the reverse direction
 // in which this helper asks the interpreter to run an original method body.
-type response struct { SliceUpdates []sliceBuffer `json:"slice_updates,omitempty"`; Transferred []sliceBuffer `json:"transferred,omitempty"`; PtrUpdates []value `json:"ptr_updates,omitempty"`; Panic *value `json:"panic,omitempty"`; ID uint64 `json:"id"`; Op string `json:"op,omitempty"`; Selector string `json:"selector,omitempty"`; Receiver *value `json:"receiver,omitempty"`; Values []value `json:"values,omitempty"`; Error string `json:"error,omitempty"` }
+type response struct { SliceUpdates []sliceBuffer `json:"slice_updates,omitempty"`; Transferred []sliceBuffer `json:"transferred,omitempty"`; PtrUpdates []value `json:"ptr_updates,omitempty"`; Panic *value `json:"panic,omitempty"`; PanicAddr *uint64 `json:"panic_addr,omitempty"`; ID uint64 `json:"id"`; Op string `json:"op,omitempty"`; Selector string `json:"selector,omitempty"`; Receiver *value `json:"receiver,omitempty"`; Values []value `json:"values,omitempty"`; Error string `json:"error,omitempty"` }
 var symbols = map[string]reflect.Value{
 //SYMBOLS
 }
@@ -180,6 +181,19 @@ var types = map[string]reflect.Type{
 type localStructCodec struct { decode func(*decodeState,value)(reflect.Value,error); structural func(reflect.Value,map[uintptr]bool)value }
 var localStructCodecs = map[reflect.Type]localStructCodec{}
 func localTypeKey(name string) string { expr,err:=parser.ParseExpr(name);if err!=nil{return name};var b bytes.Buffer;if format.Node(&b,token.NewFileSet(),expr)!=nil{return name};return b.String() }
+// mirroredMethodSet names the methods a local type mirrors: each one is a
+// generated trampoline that only carries its call back to the original body.
+// mirroredMethodExpression proves a func value IS one of them (Type.Method(i)
+// .Func of that type, by code identity and signature), so calling it can never
+// run dependency code that retains or writes through its arguments.
+type mirroredMethodSet struct { types []reflect.Type; names map[string]bool }
+var mirroredMethodTypes []mirroredMethodSet
+func mirroredMethodExpression(fn reflect.Value) bool {
+ if !fn.IsValid()||fn.Kind()!=reflect.Func||fn.IsNil(){return false}
+ code:=fn.Pointer()
+ for _,set:=range mirroredMethodTypes{for _,typ:=range set.types{for i:=0;i<typ.NumMethod();i++{m:=typ.Method(i);if set.names[m.Name]&&m.Func.Type()==fn.Type()&&m.Func.Pointer()==code{return true}}}}
+ return false
+}
 //LOCALTYPES
 
 var originalPointers = struct {sync.Mutex; values map[uint64]reflect.Value; ids map[uintptr]uint64; sent map[uint64]string}{values:map[uint64]reflect.Value{},ids:map[uintptr]uint64{},sent:map[uint64]string{}}
@@ -222,7 +236,7 @@ func nativeTypeID(t reflect.Type) string {if t.Kind()==reflect.Pointer{return "*
 // Tokens are keyed by reflect.Type itself, never its potentially ambiguous String.
 var nativeTypeTokens=struct{sync.Mutex;next uint64;ids map[reflect.Type]uint64}{ids:map[reflect.Type]uint64{}}
 func nativeTypeToken(t reflect.Type)uint64{if t.Kind()==reflect.Interface{return 0};nativeTypeTokens.Lock();defer nativeTypeTokens.Unlock();if id:=nativeTypeTokens.ids[t];id!=0{return id};nativeTypeTokens.next++;nativeTypeTokens.ids[t]=nativeTypeTokens.next;return nativeTypeTokens.next}
-func encodeHandle(v reflect.Value,result value)value {result.NativeTypeID=nativeTypeToken(v.Type());handles.Lock();handles.next++;id:=handles.next;copy:=reflect.New(v.Type()).Elem();copy.Set(v);handles.values[id]=copy;handles.Unlock();result.Kind="handle";result.Handle=id;return result}
+func encodeHandle(v reflect.Value,result value)value {result.NativeTypeID=nativeTypeToken(v.Type());if v.Kind()==reflect.Chan&&v.IsNil(){result.NilChannel=true};handles.Lock();handles.next++;id:=handles.next;copy:=reflect.New(v.Type()).Elem();copy.Set(v);handles.values[id]=copy;handles.Unlock();result.Kind="handle";result.Handle=id;return result}
 func reflectedContext(id uint64)(reflectedMethodContext,bool){handles.Lock();defer handles.Unlock();ctx,ok:=handles.reflected[id];return ctx,ok}
 func setReflectedContext(id uint64,ctx reflectedMethodContext){handles.Lock();handles.reflected[id]=ctx;handles.Unlock()}
 func encode(v reflect.Value) value {
@@ -591,6 +605,7 @@ func dispatch(q request)(reply response){
  // value -- a struct such as go/types.Error as much as a typed nil pointer --
  // is never equal to nil. Only an unmarked nilable value asks its own IsNil.
  if !left.IsValid()||!right.IsValid(){other,marked:=left,q.Args[0].Interface!="";if !other.IsValid(){other,marked=right,q.Args[1].Interface!=""};if !other.IsValid(){equal=true}else if marked&&other.Kind()!=reflect.Interface{equal=false}else{switch other.Kind(){case reflect.Chan,reflect.Func,reflect.Interface,reflect.Map,reflect.Pointer,reflect.Slice,reflect.UnsafePointer:equal=other.IsNil();default:reply.Error="value cannot be compared with nil";return}}}else{equal=left.Equal(right);if !equal&&left.Kind()==reflect.Chan&&right.Kind()==reflect.Chan&&left.Type().Elem()==right.Type().Elem(){equal=left.Pointer()==right.Pointer()}};reply.Values=[]value{encode(reflect.ValueOf(equal))};return}
+ if q.Op=="mirrored-method-expression" {if q.Receiver==nil{reply.Error="method expression inspection requires native receiver";return};v,err:=decode(*q.Receiver,nil);if err!=nil{reply.Error=err.Error();return};reply.Values=[]value{encode(reflect.ValueOf(mirroredMethodExpression(v)))};return}
  if q.Op=="template-readonly" {if q.Receiver==nil{reply.Error="template inspection requires native receiver";return};v,err:=decode(*q.Receiver,nil);if err!=nil{reply.Error=err.Error();return};template,ok:=v.Interface().(*bppTextTemplate.Template);safe:=ok&&template!=nil&&template.Tree!=nil&&primitiveTemplateTree(template.Tree.Root);reply.Values=[]value{encode(reflect.ValueOf(safe))};return}
  if q.Op=="assignable" {if len(q.Args)!=1{reply.Error="assignability requires one value";return};typ:=resolveType(q.Selector);if typ==nil{reply.Error="unregistered bridge type "+strconv.Quote(q.Selector);return};v,err:=decode(q.Args[0],nil);if err!=nil{reply.Error=err.Error();return};result:=encode(reflect.ValueOf(v.IsValid()&&v.Type().AssignableTo(typ)));if typ.Kind()==reflect.Interface{result.Interface=q.Selector};reply.Values=[]value{result};return}
  if q.Op=="type" {typ:=resolveType(q.Selector);if typ==nil{reply.Error="unregistered bridge type "+strconv.Quote(q.Selector);return};reply.Values=[]value{encode(reflect.ValueOf(typeID(typ)))};return}
@@ -635,6 +650,7 @@ func dispatch(q request)(reply response){
    if valid{if q.Receiver!=nil{encoded.Origin=q.Receiver.Origin}else{encoded.Origin=q.Args[0].Origin};setReflectedContext(encoded.Handle,ctx)}
   };reply.Values=append(reply.Values,encoded)};return
 }
+func nativeFaultAddr(q request)(uint64,bool){if q.Receiver==nil||len(q.Args)<1{return 0,false};switch q.Op{case "index","byte-set":default:return 0,false};n,err:=strconv.Atoi(q.Args[0].Text);if err!=nil||n<0{return 0,false};rv,err:=decode(*q.Receiver,nil);if err!=nil{return 0,false};for rv.Kind()==reflect.Interface&&!rv.IsNil(){rv=rv.Elem()};switch rv.Kind(){case reflect.Slice:if rv.Type().Elem().Kind()!=reflect.Uint8||n>=rv.Len(){return 0,false};return uint64(rv.Pointer()+uintptr(n)),true;case reflect.Array:if rv.Type().Elem().Kind()!=reflect.Uint8||n>=rv.Len()||!rv.CanAddr(){return 0,false};return uint64(rv.UnsafeAddr()+uintptr(n)),true};return 0,false}
 func main(){
  conn,err:=net.Dial(bridgeNetwork,bridgeAddress);if err!=nil{panic(err)};defer conn.Close()
  encoder:=json.NewEncoder(conn);if err=encoder.Encode(bridgeAuth);err!=nil{return};decoder:=json.NewDecoder(conn)
@@ -643,5 +659,5 @@ func main(){
  // Waiting for those calls would orphan listeners after host termination.
  for {var q request;if err:=decoder.Decode(&q);err!=nil{close(handles.stop);return};if q.Op=="close"{close(handles.stop);return}
   if q.Op=="callback-reply" {callbacks.Lock();wait:=callbacks.waiting[q.ID];callbacks.Unlock();if wait!=nil{wait<-q};continue}
-  go func(){answer:=dispatch(q);outbound.Lock();defer outbound.Unlock();_ = outbound.encoder.Encode(answer)}()}
+  go func(){if q.PanicOnFault {old:=bppDebug.SetPanicOnFault(true);defer bppDebug.SetPanicOnFault(old)};answer:=response{ID:q.ID};if q.PanicOnFault {defer func(){if r:=recover();r!=nil{answer=response{ID:q.ID,Error:fmt.Sprintf("native dependency panic: %v",r)};if a,ok:=r.(interface{Addr()uintptr});ok{addr:=uint64(a.Addr());answer.PanicAddr=&addr}else if addr,ok:=nativeFaultAddr(q);ok{answer.PanicAddr=&addr};outbound.Lock();defer outbound.Unlock();_ = outbound.encoder.Encode(answer)}}()};answer=dispatch(q);outbound.Lock();defer outbound.Unlock();_ = outbound.encoder.Encode(answer)}()}
 }

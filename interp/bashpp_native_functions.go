@@ -15,7 +15,12 @@ func (r *Runner) bashPPBridgeFunction(fn *bashPPFunc) (bashPPBridgeValue, error)
 		return *fn.native, nil
 	}
 	iteratorYield, _ := r.goSourceIteratorYield(fn)
+	makeFunc := r.bashPPReflectMakeFuncShape(fn)
+	copiedResults := false
 	for group, fields := range [][]*syntax.BashPPField{fn.params(), fn.results()} {
+		if makeFunc {
+			break
+		}
 		for _, field := range fields {
 			if field.Variadic() {
 				return bashPPBridgeValue{}, fmt.Errorf("gosource: variadic original callbacks are unsupported")
@@ -43,6 +48,15 @@ func (r *Runner) bashPPBridgeFunction(fn *bashPPFunc) (bashPPBridgeValue, error)
 			if group == 0 && r.bashPPNativeType(field.FieldTypeExpr) {
 				continue
 			}
+			// A slice of dependency values: as a parameter it arrives as the
+			// dependency's own slice behind one handle, so element writes stay
+			// shared; as a result it is rebuilt from its element handles, which
+			// only a consumer that copies results out and never retains the
+			// slice may observe (checked at the request, where it is known).
+			if r.bashPPNativeHandleSlice(field.FieldTypeExpr) {
+				copiedResults = copiedResults || group == 1
+				continue
+			}
 			// Interface parameters and results can carry nil, native handles, or
 			// interpreter-owned dynamic values through the existing interface
 			// side channel without flattening them to strings.
@@ -64,13 +78,13 @@ func (r *Runner) bashPPBridgeFunction(fn *bashPPFunc) (bashPPBridgeValue, error)
 	}
 	for id, existing := range s.functions {
 		if existing == fn {
-			return bashPPBridgeValue{Kind: "callback", Handle: id, Session: s.id, Callbacks: true}, nil
+			return bashPPBridgeValue{Kind: "callback", Handle: id, Session: s.id, Callbacks: true, copiedResults: copiedResults}, nil
 		}
 	}
 	s.functionNext++
 	id := s.functionNext
 	s.functions[id] = fn
-	return bashPPBridgeValue{Kind: "callback", Handle: id, Session: s.id, Callbacks: true}, nil
+	return bashPPBridgeValue{Kind: "callback", Handle: id, Session: s.id, Callbacks: true, copiedResults: copiedResults}, nil
 }
 
 // bashPPFunctionTypeText renders an original function's type in the original
@@ -176,8 +190,9 @@ func (r *Runner) bashPPRunCallbackFunc(ctx context.Context, fn *bashPPFunc, args
 		cells[i], texts[i] = cell, text
 	}
 	r.bashPPCallCells = cells
+	entry := len(r.callStack)
 	results := r.bashPPInvoke(ctx, fn, texts)
-	if r.bashPPPanicking() && !r.exit.exiting {
+	if r.bashPPCallbackRaised(entry) && !r.exit.exiting {
 		payload := r.bashPPPanic.value()
 		r.bashPPPanic, r.exit = savedPanic, savedExit
 		return []bashPPBridgeValue{{Kind: "panic", Text: payload, Type: "string"}}, nil
@@ -309,6 +324,11 @@ func retainedFunctionCallback(req bashPPEvalRequest, q bashPPBridgeRequest) bool
 	case "net/http.HandleFunc", "net/http.Handle",
 		"net/http.ServeMux.HandleFunc", "net/http.ServeMux.Handle":
 		return true
+	case "reflect.MakeFunc":
+		// The made function retains its implementation and raises it on
+		// every call of the result — a bare handle call that parks here.
+		// Only the session's own runner serves it; see bashPPMadeFuncOwner.
+		return bashPPMadeFuncOwner(req)
 	}
 	return false
 }
@@ -333,4 +353,51 @@ func (r *Runner) bashPPTourCallbackResult(typ syntax.BashPPTypeExpr) bool {
 	}
 	element := bashPPTypeText(r.bashPPUnderlyingType(inner.Element))
 	return element == "uint8" || element == "byte"
+}
+
+// bashPPNativeHandleSlice reports a slice whose elements name an imported
+// dependency type ([]reflect.Value): every element is a session handle, so
+// the slice carries no interpreter-owned storage of its own.
+func (r *Runner) bashPPNativeHandleSlice(typ syntax.BashPPTypeExpr) bool {
+	shape, ok := r.bashPPUnderlyingType(typ).(*syntax.BashPPCollectionType)
+	if !ok || shape.Kind != "slice" {
+		return false
+	}
+	return r.bashPPCallbackNativeType(shape.Element)
+}
+
+// resultOwnedFunctionCallback reports a dependency constructor that keeps an
+// original function only inside the value it returns and never invokes it
+// itself. reflect.MakeFunc wraps fn in the returned reflect.Value; that result
+// (and every value derived from it) is marked callback-bearing, so the only
+// way to reach fn again is a later request carrying the handle, which parks
+// and serves the callback on the Runner that makes it. The session is not
+// switched to retained dispatch, and reflect copies fn's results out of the
+// returned slice without retaining it.
+func resultOwnedFunctionCallback(req bashPPEvalRequest, q bashPPBridgeRequest) bool {
+	if q.Receiver != nil {
+		return false
+	}
+	alias, name, ok := strings.Cut(q.Selector, ".")
+	return ok && req.Imports[alias] == "reflect" && name == "MakeFunc"
+}
+
+// callbackInertRequest reports a request that carries callback-bearing
+// values but cannot invoke any of them while it is in flight: the
+// reflect.MakeFunc registration itself, and reflect.Value.Interface on a
+// value it made. Such a request needs no callback service, so it does not
+// take the session's callback gate — a made function's callback that blocks
+// (on a full channel, say) until this goroutine proceeds must not wait for it.
+func callbackInertRequest(req bashPPEvalRequest, q bashPPBridgeRequest) bool {
+	if resultOwnedFunctionCallback(req, q) {
+		return true
+	}
+	return q.Op == "call" && q.Receiver != nil && q.Receiver.Kind == "handle" && q.Receiver.NativeType == "reflect.Value" &&
+		q.Selector == "Interface" && len(q.Args) == 0
+}
+
+// copiedResultsConsumer reports a request whose callbacks' copied aggregate
+// results are consumed without retention (see resultOwnedFunctionCallback).
+func copiedResultsConsumer(req bashPPEvalRequest, q bashPPBridgeRequest) bool {
+	return resultOwnedFunctionCallback(req, q)
 }

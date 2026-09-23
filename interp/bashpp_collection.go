@@ -10,6 +10,7 @@ import (
 	goparser "go/parser"
 	gotoken "go/token"
 	"maps"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -254,23 +255,45 @@ func bashPPTypeText(typ syntax.BashPPTypeExpr) string {
 }
 
 func (r *Runner) bashPPUnderlyingType(typ syntax.BashPPTypeExpr) syntax.BashPPTypeExpr {
-	seen := make(map[string]bool)
+	// The cycle guard compares "name@scope" keys of the declarations already
+	// expanded on this walk. A key is only needed once a second declaration
+	// is reached, so the common one-step resolution (an alias or defined
+	// type straight to its literal, or a predeclared type) spells no key
+	// and allocates nothing. Keys are pure functions of the reference and
+	// the unchanged registry, so computing them late compares the same.
+	var chainStore [4]*syntax.BashPPNamedType
+	chain := chainStore[:0]
+	var keys []string
 	for {
 		name, ok := typ.(*syntax.BashPPNamedType)
 		if !ok {
 			return typ
 		}
-		key := bashPPTypeText(name)
-		if scope, known := r.goSourceLocalTypeScope(name); known {
-			key += "@" + scope
-		}
 		decl, found := r.bashPPTypeDeclarationForReference(name)
-		if !found || decl.typeExpr == nil || seen[key] {
+		if !found || decl.typeExpr == nil {
 			return typ
 		}
-		seen[key] = true
+		if len(chain) > 0 {
+			for len(keys) < len(chain) {
+				keys = append(keys, r.bashPPUnderlyingTypeKey(chain[len(keys)]))
+			}
+			if slices.Contains(keys, r.bashPPUnderlyingTypeKey(name)) {
+				return typ
+			}
+		}
+		chain = append(chain, name)
 		typ = bashPPInstantiateTypeDeclaration(name, decl)
 	}
+}
+
+// bashPPUnderlyingTypeKey is the cycle-guard identity of a named reference:
+// its spelling plus the lexical scope of the local declaration it names.
+func (r *Runner) bashPPUnderlyingTypeKey(name *syntax.BashPPNamedType) string {
+	key := bashPPTypeText(name)
+	if scope, known := r.goSourceLocalTypeScope(name); known {
+		key += "@" + scope
+	}
+	return key
 }
 
 func (r *Runner) bashPPTypeAssignable(actual, expected syntax.BashPPTypeExpr) bool {

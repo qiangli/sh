@@ -238,11 +238,16 @@ func TestGoSourceS243GeneratedTestMainTransferNegatives(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) { refusedGoSourceTestMain(t, rewrite(s243GeneratedDriver), copied) })
 	}
+	// The consumer RETAINS the slice (reflect.ValueOf keeps it inside the
+	// Value it returns). A read-only fmt walk is no longer the probe here: it
+	// is admitted under the Sprint 248 copy-coherence check, which fact or no
+	// fact never transfers anything.
 	t.Run("interpreter-owned elements stay refused", func(t *testing.T) {
 		refusedGoSourceTestMain(t, `package main
 
 import (
 	"fmt"
+	"reflect"
 	"testing/internal/testdeps"
 )
 
@@ -254,7 +259,7 @@ var items = []item{{1}, {2}}
 
 func main() {
 	_ = testdeps.TestDeps{}
-	fmt.Println(items)
+	_ = reflect.ValueOf(items)
 	fmt.Println("ran")
 }
 `, copied)

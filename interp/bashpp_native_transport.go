@@ -30,6 +30,9 @@ func validateLocalTransport(req bashPPEvalRequest, q bashPPBridgeRequest) error 
 	var inspect func(bashPPBridgeValue, bool) (bool, bool, error)
 	inspect = func(v bashPPBridgeValue, identity bool) (bool, bool, error) {
 		if v.Kind == "callback" {
+			if v.copiedResults && !copiedResultsConsumer(req, q) {
+				return false, false, fmt.Errorf("gosource: original callback signature requires value-semantics parameters and supported results")
+			}
 			functionCallbacks = true
 			return false, false, nil
 		}
@@ -143,7 +146,7 @@ func validateLocalTransport(req bashPPEvalRequest, q bashPPBridgeRequest) error 
 	if synchronousReaderCallback(req, q) || synchronousImageCallback(req, q) || !functionCallbacks && (synchronousUnwrapCallback(req, q) || synchronousErrorsAsType(req, q)) {
 		return nil
 	}
-	if reflectedMethodValueOf(req, q) {
+	if reflectedMethodValueOf(req, q) || reflectedValueCopy(req, q) || reflectedCopyDerivedCall(q) {
 		return nil
 	}
 	// A reviewed synchronous methods-driven consumer over origin-bearing
@@ -156,14 +159,29 @@ func validateLocalTransport(req bashPPEvalRequest, q bashPPBridgeRequest) error 
 	if nativeSharedReferenceConsumer(req, q) && q.Receiver != nil && nativeTemplateExecuteProven(req, q) {
 		return nil
 	}
-	if functionCallbacks && !synchronousFunctionCallback(req, q) && !retainedFunctionCallback(req, q) {
+	if functionCallbacks && !synchronousFunctionCallback(req, q) && !retainedFunctionCallback(req, q) && !resultOwnedFunctionCallback(req, q) {
 		return fmt.Errorf("gosource: asynchronous or retained original function callbacks are unsupported for %s", q.Selector)
 	}
-	if !unsafe && (synchronousFunctionCallback(req, q) || retainedFunctionCallback(req, q)) {
+	if !unsafe && (synchronousFunctionCallback(req, q) || retainedFunctionCallback(req, q) || resultOwnedFunctionCallback(req, q)) {
 		return nil
 	}
 	if !unsafe && !requestHasCallbacks(req, q) {
 		return nil
+	}
+	// A made function is served by the retained-callback protocol, which has
+	// no route back to a concurrent task (bashPPMadeFuncOwner): only its
+	// session's own runner may call it or view it through Interface.
+	madeByOtherRunner := q.Receiver != nil && req.Bridge.madeFunc(*q.Receiver) && !bashPPMadeFuncOwner(req)
+	if !unsafe && !functionCallbacks && !madeByOtherRunner && q.Receiver != nil && q.Receiver.Kind == "handle" && q.Receiver.Callbacks {
+		// The dependency already owns the retained function; calling it (or
+		// converting its reflect.Value back with Interface) hands over no
+		// interpreter storage and registers no new callback.
+		if q.Selector == "" && q.Receiver.Function {
+			return nil
+		}
+		if q.Receiver.NativeType == "reflect.Value" && q.Selector == "Interface" && len(q.Args) == 0 {
+			return nil
+		}
 	}
 	if q.Receiver != nil && q.Receiver.Callbacks && (q.Selector == "Error" || q.Selector == "String") && len(q.Args) == 0 {
 		return nil
@@ -178,6 +196,12 @@ func validateLocalTransport(req bashPPEvalRequest, q bashPPBridgeRequest) error 
 			return nil
 		}
 	}
+	if bashPPMadeFuncUse(req, q) {
+		return nil
+	}
+	if mirroredMethodExpressionCall(req, q) {
+		return nil
+	}
 	return fmt.Errorf("gosource: dependency mutation of interpreter-owned references is unsupported for %s", q.Selector)
 }
 
@@ -190,6 +214,106 @@ func reflectedMethodValueOf(req bashPPEvalRequest, q bashPPBridgeRequest) bool {
 	}
 	alias, name, ok := strings.Cut(q.Selector, ".")
 	return ok && req.Imports[alias] == "reflect" && name == "ValueOf" && requestHasCallbacks(req, q)
+}
+
+// reflectedValueCopy admits reflect.ValueOf over an interpreter value whose
+// every write the dependency could perform is either impossible or
+// reconciled. reflect.ValueOf copies its operand, exactly as Go does: the
+// copy is unaddressable, so no Set* reaches a direct field, and a mirrored
+// value-receiver method invoked through the resulting Value runs on a copy
+// in Go as well. What such a copy can still reach is referenced storage: a
+// pointer is admitted only with an authenticated origin, whose pointee the
+// native pointer writeback reconciles on every reply, while a copied slice,
+// map or channel, or an original function value, stays refused because a
+// native write or retained call through it would not reach the original.
+func reflectedValueCopy(req bashPPEvalRequest, q bashPPBridgeRequest) bool {
+	if q.Op != "call" || q.Receiver != nil || len(q.Args) != 1 {
+		return false
+	}
+	alias, name, ok := strings.Cut(q.Selector, ".")
+	if !ok || req.Imports[alias] != "reflect" || name != "ValueOf" {
+		return false
+	}
+	return reflectCopyReconciled(q.Args[0])
+}
+
+// reflectedCopyDerivedCall admits a call on a handle the host derived from an
+// admitted reflect copy — Elem, Field, Interface, a mirrored method of the
+// value Interface returned — whose arguments satisfy the same rule. Every
+// value such a call can reach is still the copy or origin-reconciled storage,
+// so it neither mutates nor retains interpreter storage the host cannot see.
+// The mark is host-only (reflectCopy is never decoded from the wire), and the
+// result stays callback-tainted, so a retaining dependency still refuses it.
+func reflectedCopyDerivedCall(q bashPPBridgeRequest) bool {
+	if q.Op != "call" || q.Receiver == nil || q.Receiver.Kind != "handle" || !q.Receiver.reflectCopy {
+		return false
+	}
+	for _, arg := range q.Args {
+		if !reflectCopyReconciled(arg) {
+			return false
+		}
+	}
+	return true
+}
+
+// reflectedCopyDerived reports a request whose handle results are still the
+// admitted reflect copy: the ValueOf itself, an admitted call on a derived
+// handle, or a read of one — a member (method value), field or element.
+func reflectedCopyDerived(req bashPPEvalRequest, q bashPPBridgeRequest) bool {
+	switch q.Op {
+	case "member", "field", "index":
+		return q.Receiver != nil && q.Receiver.Kind == "handle" && q.Receiver.reflectCopy
+	}
+	return reflectedValueCopy(req, q) || reflectedCopyDerivedCall(q)
+}
+
+// bashPPMarkReflectCopy sets the host-only reflect-copy mark on every handle
+// a reply carries — a result slice of reflect.Values (Call) nests them — and
+// clears it everywhere else, so the mark never survives from the wire.
+func bashPPMarkReflectCopy(v *bashPPBridgeValue, derived bool) {
+	v.reflectCopy = derived && v.Kind == "handle"
+	for i := range v.Elements {
+		bashPPMarkReflectCopy(&v.Elements[i], derived)
+	}
+	for name, field := range v.Fields {
+		bashPPMarkReflectCopy(&field, derived)
+		v.Fields[name] = field
+	}
+	for i := range v.Entries {
+		bashPPMarkReflectCopy(&v.Entries[i].Key, derived)
+		bashPPMarkReflectCopy(&v.Entries[i].Value, derived)
+	}
+}
+
+// reflectCopyReconciled reports a transported value none of whose storage a
+// native write could change unseen: scalars, value aggregates, origin-bearing
+// pointers (reconciled by the pointer writeback) and native handles that do
+// not carry an original callback from anywhere but an admitted reflect copy.
+func reflectCopyReconciled(v bashPPBridgeValue) bool {
+	switch v.Kind {
+	case "struct", "array", "bool", "int", "uint", "float", "complex", "string", "nil":
+	case "handle":
+		if v.Callbacks && !v.reflectCopy {
+			return false
+		}
+	case "pointer":
+		if v.Origin == 0 {
+			return false
+		}
+	default:
+		return false
+	}
+	for _, child := range v.Elements {
+		if !reflectCopyReconciled(child) {
+			return false
+		}
+	}
+	for _, child := range v.Fields {
+		if !reflectCopyReconciled(child) {
+			return false
+		}
+	}
+	return len(v.Entries) == 0
 }
 
 // bashPPReflectTypeOnly rewrites original function arguments of reflect.TypeOf
@@ -327,13 +451,16 @@ func synchronousErrorsAsType(req bashPPEvalRequest, q bashPPBridgeRequest) bool 
 // callback: the dependency may raise that one at any later moment, and the
 // request parked at that moment is the only frame able to run it.
 func requestCallbackCapable(req bashPPEvalRequest, q bashPPBridgeRequest) bool {
-	if requestHasCallbacks(req, q) {
+	if requestHasCallbacks(req, q) && !callbackInertRequest(req, q) {
 		return true
 	}
 	if reflectValueCall(q) && localMethodsMirrored(req) {
 		return true
 	}
 	if companionTrampolineCall(req, q) {
+		return true
+	}
+	if reflectedHandleOperand(q) {
 		return true
 	}
 	return req.Bridge != nil && req.Bridge.retainedCallbacks()

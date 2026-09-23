@@ -28,14 +28,9 @@ func (r *Runner) bashPPNativeTypeRequest(op string, typ syntax.BashPPTypeExpr, a
 	if err != nil {
 		return bashPPBridgeValue{}, err
 	}
-	values, err := r.bashPPNativeRequest(r.ectx, req, bashPPBridgeRequest{Op: op, Selector: r.bashPPBridgeTypeIdentity(typ), Args: args})
-	if err != nil {
-		return bashPPBridgeValue{}, err
-	}
-	if len(values) != 1 {
-		return bashPPBridgeValue{}, fmt.Errorf("gosource: native type operation returned %d values", len(values))
-	}
-	return values[0], nil
+	// Session-fixed answers ("type", handle "assignable") are remembered per
+	// session; see bashpp_s248_native_type_facts.go.
+	return r.bashPPNativeTypeFactRequest(req, op, typ, args)
 }
 func (r *Runner) bashPPNativeComposite(lit *syntax.BashPPCompositeLit, address bool) (bashPPBridgeValue, error) {
 	return r.bashPPNativeCompositeAtBoundary(lit, address, false)
@@ -138,6 +133,12 @@ func (r *Runner) bashPPNativeCompareValues(lv bashPPBridgeValue, op token.Token,
 		return false, err
 	}
 	lv, rv = bashPPBridgeCompareOperands(lv, rv)
+	if equal, handled := bashPPNativeScalarEqual(lv, rv); handled {
+		if op == token.NEQ {
+			equal = !equal
+		}
+		return equal, nil
+	}
 	values, err := r.bashPPNativeRequest(r.ectx, req, bashPPBridgeRequest{Op: "equal", Args: []bashPPBridgeValue{lv, rv}})
 	if err != nil {
 		return false, err

@@ -29,6 +29,11 @@ func bashPPCodecFieldNames(field *ast.Field) []string {
 				return name(e.X)
 			case *ast.SelectorExpr:
 				return e.Sel.Name, true
+			case *ast.IndexExpr:
+				// An embedded generic instantiation X[A] is promoted as X.
+				return name(e.X)
+			case *ast.IndexListExpr:
+				return name(e.X)
 			}
 			return "", false
 		}

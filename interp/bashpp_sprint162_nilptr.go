@@ -105,11 +105,19 @@ func (r *Runner) goSourceRuntimeFault(err error) error {
 // is executing, retaining the interpreted frames as an explicit panic call
 // would, so an unrecovered fault reports the same Go-shaped traceback.
 func (r *Runner) goSourceRuntimePanic(text string) {
+	r.goSourceRuntimePanicValue(text, nil)
+}
+
+func (r *Runner) goSourceRuntimePanicValue(text string, value any) {
 	r.bashPPPanic.traceSource = r.filename
 	r.bashPPPanic.traceLine = r.curStmtPos.Line()
 	r.bashPPPanic.traceFrames = r.bashPPPanic.traceFrames[:0]
 	for _, frame := range r.callStack {
 		r.bashPPPanic.traceFrames = append(r.bashPPPanic.traceFrames, frame.funcName)
+	}
+	if value != nil {
+		r.bashPPRaiseValue(text, value)
+		return
 	}
 	r.bashPPRaise(text)
 }

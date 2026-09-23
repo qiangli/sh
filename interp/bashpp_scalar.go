@@ -1154,6 +1154,38 @@ func bashPPIntegerWidth(typ string) (bits int, signed bool) {
 
 func bashPPWrapInteger(typ string, value constant.Value) constant.Value {
 	bits, signed := bashPPIntegerWidth(typ)
+	if wrapped, ok := bashPPWrapInt64(bits, signed, value); ok {
+		return wrapped
+	}
+	return bashPPWrapIntegerExact(bits, signed, value)
+}
+
+// bashPPWrapInt64 is bashPPWrapInteger for an integer constant that fits an
+// int64 — every ordinary loop counter and element value — in machine
+// arithmetic instead of a decimal round trip through math/big. The result is
+// the same two's-complement residue; anything else takes the exact path.
+func bashPPWrapInt64(bits int, signed bool, value constant.Value) (constant.Value, bool) {
+	if value.Kind() != constant.Int || bits < 1 || bits > 64 {
+		return nil, false
+	}
+	v, exact := constant.Int64Val(value)
+	if !exact {
+		return nil, false
+	}
+	u := uint64(v)
+	if bits < 64 {
+		u &= 1<<uint(bits) - 1
+	}
+	if !signed {
+		return constant.MakeUint64(u), true
+	}
+	if bits < 64 && u&(1<<uint(bits-1)) != 0 {
+		return constant.MakeInt64(int64(u) - 1<<uint(bits)), true
+	}
+	return constant.MakeInt64(int64(u)), true
+}
+
+func bashPPWrapIntegerExact(bits int, signed bool, value constant.Value) constant.Value {
 	n, ok := new(big.Int).SetString(value.ExactString(), 10)
 	if !ok {
 		return value

@@ -263,45 +263,48 @@ func (r *Runner) goSourceGenericCallbackHelper(ctx context.Context, req bashPPEv
 	return nil, false, nil
 }
 
-// goSourceSlicesSortFunc reorders the visible elements with the original
-// comparison callback and rides the existing mutation writeback, so every
-// aliasing header observes the reordering as native Go's in-place sort does.
-// Elements the callback reports equal keep their input order. slices.SortFunc
-// leaves that order unspecified, so retaining it is one of the orders Go
-// permits, and it is the one slices.SortStableFunc requires.
+// goSourceSlicesSortFunc reorders the original backing array in place with
+// the original comparison callback (bashpp_native_shared_order.go): each
+// comparison reads its two elements from live storage, and each swap moves
+// the elements and their metadata, so every aliasing header — and the
+// callback itself, should it index the slice — observes the order native Go's
+// pdqsortCmpFunc/stableCmpFunc produce, one step at a time.
 func (r *Runner) goSourceSlicesSortFunc(ctx context.Context, req bashPPEvalRequest, q *bashPPBridgeRequest) error {
-	if len(q.SliceBuffers) != 1 {
-		return fmt.Errorf("gosource: %s requires a direct original slice", nativeSliceCallable(req, *q))
+	name := nativeSliceCallable(req, *q)
+	if len(q.SliceBuffers) != 1 || len(q.sliceTargets) != 1 {
+		return fmt.Errorf("gosource: %s requires a direct original slice", name)
 	}
 	if len(q.Args) != 2 {
-		return fmt.Errorf("gosource: %s requires a slice and a comparison function", nativeSliceCallable(req, *q))
+		return fmt.Errorf("gosource: %s requires a slice and a comparison function", name)
 	}
 	fn, err := goSourceCallbackFunc(req, q.Args[1])
 	if err != nil {
 		return err
 	}
-	sorted := append([]bashPPBridgeValue(nil), q.SliceBuffers[0].Value.Elements...)
-	var callbackErr error
-	sort.SliceStable(sorted, func(i, j int) bool {
-		if callbackErr != nil {
-			return false
-		}
-		n, err := r.goSourceCallbackInt(ctx, fn, []bashPPBridgeValue{sorted[i], sorted[j]})
-		if err != nil {
-			callbackErr = err
-			return false
-		}
-		return n < 0
-	})
-	if callbackErr != nil {
-		return callbackErr
+	shared, ok := r.goSourceSharedSliceOf(bashPPBridgeValue{Kind: "slice", sliceView: q.sliceTargets[0]})
+	if !ok {
+		return fmt.Errorf("gosource: %s cannot share the original slice storage", name)
 	}
-	reply := bashPPBridgeResponse{SliceUpdates: []bashPPNativeSliceBuffer{{
-		Index:  q.SliceBuffers[0].Index,
-		Length: q.SliceBuffers[0].Length,
-		Value:  bashPPBridgeValue{Kind: "slice", Elements: sorted},
-	}}}
-	return applyNativeSliceBuffers(r, *q, reply)
+	order := &goSourceSharedOrder{
+		n: len(shared.view),
+		less: func(i, j int) (bool, error) {
+			a, err := r.goSourceSharedElement(shared, i)
+			if err != nil {
+				return false, err
+			}
+			b, err := r.goSourceSharedElement(shared, j)
+			if err != nil {
+				return false, err
+			}
+			n, err := r.goSourceCallbackInt(ctx, fn, []bashPPBridgeValue{a, b})
+			return n < 0, err
+		},
+		swap: shared.swap,
+	}
+	if name == "slices.SortStableFunc" {
+		return order.run(sort.Stable)
+	}
+	return order.run(sort.Sort)
 }
 
 // goSourceSlicesSearchFunc answers slices.IndexFunc/ContainsFunc. Both only

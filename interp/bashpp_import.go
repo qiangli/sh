@@ -64,6 +64,11 @@ type bashPPEvalRequest struct {
 	// CgoPackages are the cgo pseudo-package bindings the interpreted
 	// program's packages reference; each is built natively with cgo.
 	CgoPackages []syntax.CgoPackage
+	// PanicOnFault is the interpreted goroutine's runtime/debug
+	// SetPanicOnFault state. The native worker handles each request on its own
+	// goroutine, so the state must be replayed around memory accesses it
+	// performs on behalf of this interpreted goroutine.
+	PanicOnFault bool
 	// CompanionUnmappedFrames are the companion symbols whose assembly frame
 	// carries no locals pointer map. While one of those is live the helper may
 	// neither move nor scan the goroutine's stack; see companionOffFrame and
@@ -106,6 +111,7 @@ type bashPPToolchain struct {
 	eval          bashPPEvaluator
 	bridge        *bashPPNativeSession
 	callbackDepth int
+	panicOnFault  bool
 
 	moduleDir  string
 	importPath string
@@ -549,7 +555,7 @@ func (r *Runner) bashPPEvalRequest() (bashPPEvalRequest, error) {
 	if err != nil {
 		return bashPPEvalRequest{}, err
 	}
-	return bashPPEvalRequest{CallbackOwner: r, CallbackDepth: r.bashPPTools.callbackDepth, LocalTypes: r.bashPPLocalTypeDescriptors(), Instances: r.bashPPImportedInstances(), RuntimeEnv: runtimeEnv, ModuleDir: moduleDir, ImportPath: importPath, TestMain: testMain, Argv: append([]string{r.filename}, r.Params...), Bridge: r.bashPPTools.bridge, Go: r.bashPPTools.goBinary, Dir: r.Dir, Env: env, Stdin: r.stdin,
+	return bashPPEvalRequest{CallbackOwner: r, CallbackDepth: r.bashPPTools.callbackDepth, PanicOnFault: r.bashPPTools.panicOnFault, LocalTypes: r.bashPPLocalTypeDescriptors(), Instances: r.bashPPImportedInstances(), RuntimeEnv: runtimeEnv, ModuleDir: moduleDir, ImportPath: importPath, TestMain: testMain, Argv: append([]string{r.filename}, r.Params...), Bridge: r.bashPPTools.bridge, Go: r.bashPPTools.goBinary, Dir: r.Dir, Env: env, Stdin: r.stdin,
 		Stdout: r.bashPPWriter(r.stdout), Stderr: r.bashPPWriter(r.stderr), Imports: r.bashPPImports, SourceDir: sourceDir, SourceFile: sourceFile, EmbedDecls: embedDecls, CompanionFiles: companionFiles, NativeFuncs: nativeFuncs, CompanionTrampolines: trampolines, CompanionUnmappedFrames: unmappedFrames, RootFiles: r.bashPPGoSourceRootFiles(), CgoPackages: r.bashPPGoSourceCgoPackages()}, nil
 }
 

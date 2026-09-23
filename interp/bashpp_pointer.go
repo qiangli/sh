@@ -248,25 +248,29 @@ func (r *Runner) bashPPPointerExprValue(expr syntax.BashPPExpr) (ptr *bashPPPoin
 	case *syntax.BashPPAddressExpr:
 		return r.bashPPAddress(x.X)
 	case *syntax.BashPPNewExpr:
-		if err := r.bashPPValidateValueType(x.AllocType, make(map[string]bool)); err != nil {
+		// Inside a generic body `new(T)` allocates the frame's type
+		// argument: the pointer's dynamic type is *E, never the parameter
+		// spelling *T, which has no method set outside this frame.
+		alloc := r.bashPPBindTypeExpr(x.AllocType)
+		if err := r.bashPPValidateValueType(alloc, make(map[string]bool)); err != nil {
 			return nil, fmt.Errorf("BASHPP-EPOINTER-TYPE: %v", err)
 		}
-		value, meta := r.bashPPZeroValue(x.AllocType)
+		value, meta := r.bashPPZeroValue(alloc)
 		if x.Init != nil {
-			initialized, initializedMeta, err := r.bashPPEvalTypedValue(x.Init, x.AllocType)
+			initialized, initializedMeta, err := r.bashPPEvalTypedValue(x.Init, alloc)
 			if err != nil {
 				return nil, err
 			}
 			value, meta = initialized, initializedMeta
 		}
-		cell := &bashPPCell{declType: x.AllocType}
+		cell := &bashPPCell{declType: alloc}
 		if vr, ok := r.bashPPGoSourceCollectionCarrier(value, meta); ok {
 			cell.vr, cell.valueMeta = vr, meta
 			cell.object = &bashPPObjectIdentity{collection: meta}
 		} else {
 			bashPPStoreCellValue(cell, value, meta)
 		}
-		return r.bashPPPointerForStorage(cell, x.AllocType, true), nil
+		return r.bashPPPointerForStorage(cell, alloc, true), nil
 	case *syntax.BashPPIdent:
 		cell := r.bashPPScope.lookup(x.Name.Value)
 		if cell == nil || !cell.pointer {

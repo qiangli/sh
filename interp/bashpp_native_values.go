@@ -93,6 +93,11 @@ func (r *Runner) bashPPGoSourceNativeFunc(name string) bool {
 	return false
 }
 func (r *Runner) bashPPBridgeCall(ctx context.Context, call *syntax.BashPPCall) ([]bashPPBridgeValue, error) {
+	// A reflected method value of an original receiver runs here; see
+	// bashpp_s248_reflected_method.go.
+	if values, claimed, err := r.goSourceLocalReflectCall(call); claimed {
+		return values, err
+	}
 	// The integer sync/atomic functions address interpreter storage, so they
 	// are answered here rather than prepared as a dependency request; see
 	// gosource_atomic.md.
@@ -112,6 +117,11 @@ func (r *Runner) bashPPBridgeCall(ctx context.Context, call *syntax.BashPPCall) 
 	// Stack introspection reads the interpreter's own frames; see
 	// bashpp_sprint162_nilptr2_stack.go.
 	if values, claimed, err := r.goSourceRuntimeStackCall(call); claimed {
+		return values, err
+	}
+	// Finalizers are kept on the interpreter's own allocations; see
+	// gosource_finalizer.go.
+	if values, claimed, err := r.goSourceFinalizerCall(ctx, call); claimed {
 		return values, err
 	}
 	q, err := r.bashPPPrepareNativeCall(ctx, call)
@@ -187,6 +197,9 @@ func (r *Runner) bashPPReflectValueReceiver(req bashPPEvalRequest, call *syntax.
 		return nil
 	}
 	cell := addressable(call.ArgExprs[0])
+	if cell == nil {
+		cell = r.bashPPReflectValueSnapshot(req, q.Args[0])
+	}
 	if cell == nil {
 		return
 	}
@@ -1124,6 +1137,10 @@ func (r *Runner) bashPPBridgeShortDecl(ctx context.Context, d *syntax.BashPPShor
 // an ordinary typed interpreter variable; anything else stays a session handle
 // so the dependency keeps ownership, identity and mutation of the value.
 func (r *Runner) bashPPBindNativeValue(name string, value bashPPBridgeValue) {
+	if value.localCell != nil {
+		r.goSourceBindLocalReflectCell(name, value.localCell)
+		return
+	}
 	scalar, err := value.scalar()
 	if err == nil {
 		r.bashPPDeclareName(name, expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarStorageString(scalar)})

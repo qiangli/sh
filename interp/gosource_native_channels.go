@@ -198,3 +198,12 @@ func (r *Runner) goSourceNativeChannelFits(cell *bashPPCell, target *syntax.Bash
 	values, err := r.bashPPNativeRequest(r.bashPPTaskContext(r.ectx), req, bashPPBridgeRequest{Op: "channel-type", Selector: goSourceNativeChannelTypeText(target), Receiver: value})
 	return err == nil && len(values) == 1 && values[0].Kind == "bool" && values[0].Text == "true"
 }
+
+// goSourceNativeNilChannel reports a dependency channel operand whose value is
+// nil: a descriptor with no handle and no session authority, or a handle the
+// dependency itself marked as holding a nil channel. Communication on
+// a nil channel never proceeds, so a select arm on it is disabled exactly as
+// the language disables it, and it needs no dependency arbitration.
+func goSourceNativeNilChannel(value *bashPPBridgeValue) bool {
+	return value != nil && (value.Kind == "nil" && value.Handle == 0 || value.Kind == "handle" && value.NilChannel)
+}

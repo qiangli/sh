@@ -10,7 +10,8 @@ import (
 
 // A refusal recorded inside a callee is the program's outcome wherever the
 // callee was called from. (The refusing operation is a retained finalizer
-// callback — the one bridge refusal S153.2 kept by design; reflect.TypeOf
+// on an interior pointer, which the interpreter-owned finalizers of Sprint 248
+// still refuse — the one bridge refusal S153.2 kept by design; reflect.TypeOf
 // of a closure, the original pin, is admitted since S153.2 C1a.) A dependency operation the bridge refuses has no
 // native counterpart, so this is pinned by the diagnostic itself rather than
 // by a native oracle: the same refusal must surface whether the refusing
@@ -22,8 +23,8 @@ func TestSprint153FatalDiagnosticSurvivesReturnCall(t *testing.T) {
 type Stream struct{}
 
 func Pipe(s Stream) Stream {
-	x := new(int)
-	runtime.SetFinalizer(x, func(p *int) {})
+	x := new([2]int)
+	runtime.SetFinalizer(&x[1], func(p *int) {})
 	fmt.Println("unreached")
 	return Stream{}
 }
@@ -63,8 +64,8 @@ import (
 func main() {
 	done := make(chan bool)
 	go func() {
-		x := new(int)
-		runtime.SetFinalizer(x, func(p *int) {})
+		x := new([2]int)
+		runtime.SetFinalizer(&x[1], func(p *int) {})
 		fmt.Println("unreached")
 		done <- true
 	}()

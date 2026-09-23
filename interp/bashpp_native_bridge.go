@@ -44,6 +44,15 @@ type bashPPBridgeValue struct {
 	ReaderLength            int                 `json:"reader_length,omitempty"`
 	CallArgs                []bashPPBridgeValue `json:"call_args,omitempty"`
 	sliceView               *bashPPNativeSlice  // host-only original backing view
+	// localReflect and localCell are host-only interpreter-owned reflected
+	// values (bashpp_s248_reflected_method.go); neither ever crosses.
+	localReflect *goSourceLocalReflect
+	localCell    *bashPPCell
+
+	// reflectCopy marks a handle derived from an admitted reflect.ValueOf
+	// copy (reflectedValueCopy). Host-only: it is set on replies by the
+	// session itself and never trusted from the wire.
+	reflectCopy bool
 
 	// Callable is derived by the interpreter from authenticated native type or
 	// import metadata; the dependency worker cannot set callback policy itself.
@@ -63,6 +72,14 @@ type bashPPBridgeValue struct {
 	Elements     []bashPPBridgeValue          `json:"elements,omitempty"`
 	Fields       map[string]bashPPBridgeValue `json:"fields,omitempty"`
 	Entries      []bashPPBridgeEntry          `json:"entries,omitempty"`
+
+	// NilChannel marks a dependency channel handle whose value is nil. A nil
+	// channel never communicates, so a select arm on it needs no arbitration.
+	NilChannel bool `json:"nil_channel,omitempty"`
+	// copiedResults marks an original callback whose declared results include
+	// a slice of dependency handles, rebuilt on the dependency side on return.
+	// Host-only; only a non-retaining result consumer may carry it.
+	copiedResults bool
 }
 type bashPPBridgeEntry struct {
 	Key   bashPPBridgeValue `json:"key"`
@@ -91,9 +108,13 @@ type bashPPBridgeRequest struct {
 	Transfers     []int `json:"transfers,omitempty"`
 	argCells      []*bashPPCell
 	transferProof []bool
+	// coherence, when set, re-reads the storage a read-only request copied
+	// after every callback it serves. See bashpp_native_coherence.go.
+	coherence     *goSourceCopyCoherence
 	sourceProgram bool   // the call site is in the program package itself
 	ID            uint64 `json:"id"`
 	Op            string `json:"op"`
+	PanicOnFault  bool   `json:"panic_on_fault,omitempty"`
 	Selector      string `json:"selector"`
 	// Instance is the type-argument suffix of an instantiated imported
 	// generic function; the helper resolves Selector+Instance.
@@ -117,7 +138,11 @@ type bashPPBridgeResponse struct {
 	PtrUpdates  []bashPPBridgeValue       `json:"ptr_updates,omitempty"`
 
 	Panic *bashPPBridgeValue `json:"panic,omitempty"`
-	ID    uint64             `json:"id"`
+	// PanicAddr carries runtime.Error values produced by SetPanicOnFault. It
+	// is meaningful only when Error is a worker-recovered native dependency
+	// panic.
+	PanicAddr *uint64 `json:"panic_addr,omitempty"`
+	ID        uint64  `json:"id"`
 	// Op, Selector and Receiver are set only when the dependency is asking the
 	// interpreter to run an original method body it must not compile itself.
 	Op       string              `json:"op,omitempty"`
@@ -129,6 +154,7 @@ type bashPPBridgeResponse struct {
 type bashPPNativeSession struct {
 	// Type facts are authenticated on this connection; no native values are cached.
 	handleTypes         map[uint64]uint64
+	typeFacts           map[bashPPNativeTypeFactKey]bashPPBridgeValue // protected by mu
 	interfaceAdmissions map[goSourceNativeAdmissionKey]bool
 	functions           map[uint64]*bashPPFunc
 	functionNext        uint64
@@ -138,8 +164,14 @@ type bashPPNativeSession struct {
 	// retained records that this session was handed an original callback it
 	// keeps past the handing-over call. Every later request then parks as a
 	// callback server; see requestCallbackCapable.
-	retained            bool
+	retained bool
+	// madeFuncs are the handles of functions reflect.MakeFunc built over an
+	// original implementation, and of their Interface() views; see
+	// bashPPMadeFuncUse.
+	madeFuncs           map[uint64]bool
 	origins             map[uint64]*bashPPPointer
+	originIndex         map[bashPPOriginKey]uint64 // protected by mu; see bashPPTransportOrigin
+	originIndexed       int                        // len(origins) the index covers
 	originNext          uint64
 	start               sync.Mutex
 	write               sync.Mutex
@@ -512,7 +544,7 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 						return
 					}
 				} else {
-					s.serveCallback(ctx, nil, reply)
+					s.serveCallback(ctx, nil, reply, nil)
 				}
 				continue
 			}
@@ -530,6 +562,14 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	// The package sort ordering entry points run over the interpreter's own
+	// storage when they carry original callbacks, so the callbacks and the
+	// algorithm share one backing array (bashpp_native_shared_order.go).
+	if req.CallbackOwner != nil {
+		if values, handled, err := req.CallbackOwner.goSourceSharedOrdering(ctx, req, &q); handled || err != nil {
+			return values, err
+		}
+	}
 	if err := prepareNativeSliceBuffers(req, &q); err != nil {
 		return nil, err
 	}
@@ -545,6 +585,7 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 	if err := validateLocalTransport(req, q); err != nil {
 		return nil, err
 	}
+	q.PanicOnFault = req.PanicOnFault
 	// A transfer hands the dependency slices whose elements carry original
 	// callbacks; the callee may keep them past this call exactly as a
 	// registration API does, so the session serves callbacks from now on.
@@ -561,6 +602,9 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 	}
 	var check func(bashPPBridgeValue) error
 	check = func(v bashPPBridgeValue) error {
+		if v.localReflect != nil || v.localCell != nil {
+			return errors.New("gosource: interpreter-owned reflected value reached the dependency unmaterialized")
+		}
 		if (v.Kind == "handle" || v.Kind == "callback" || v.Origin != 0) && v.Session != s.id {
 			return errors.New("gosource: native handle belongs to another dependency session")
 		}
@@ -612,7 +656,7 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 			// The callback body may write to the caller's streams directly;
 			// child output raised before the callback must land first.
 			s.drainOutputs()
-			s.serveCallback(ctx, req.CallbackOwner, callback)
+			s.serveCallback(ctx, req.CallbackOwner, callback, q.coherence)
 			if owner := req.CallbackOwner; owner != nil {
 				if owner.exit.err != nil {
 					return nil, owner.exit.err
@@ -656,6 +700,9 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 				if forwarded && strings.HasSuffix(reply.Error, errBashPPScalarInterrupted.Error()) {
 					return nil, errBashPPScalarInterrupted
 				}
+				if message, ok := goSourceNativeRuntimePanic(errors.New(reply.Error)); ok && reply.PanicAddr != nil {
+					return nil, &bashPPNativeFaultPanic{text: message, addr: *reply.PanicAddr}
+				}
 				return nil, errors.New(reply.Error)
 			}
 			// The dependency now holds each transferred slice; rebind the
@@ -663,13 +710,16 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 			if err := s.applyNativeSliceTransfers(q, reply); err != nil {
 				return nil, err
 			}
+			derivedCopy := reflectedCopyDerived(req, q)
 			for i := range reply.Values {
+				bashPPMarkReflectCopy(&reply.Values[i], derivedCopy)
 				if reply.Values[i].Kind == "handle" {
 					reply.Values[i].Session = s.id
 					s.rememberNativeHandleType(reply.Values[i])
 					if reply.Values[i].Origin != 0 && reply.Values[i].Function {
 						reply.Values[i].Callbacks = true
 					}
+					s.rememberMadeFunc(req, q, reply.Values[i])
 					// Only a result of a request that actually CARRIED an
 					// original callback may retain one. A request merely
 					// parked as a callback server for the session — every
@@ -679,6 +729,9 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 						reply.Values[i].Callbacks = true
 					}
 				}
+			}
+			if owner := req.CallbackOwner; owner != nil && bashPPSetPanicOnFaultRequest(req, q) {
+				owner.bashPPTools.panicOnFault = q.Args[0].Text == "true"
 			}
 			return reply.Values, nil
 		case <-ctx.Done():
@@ -954,6 +1007,16 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 			}
 		}
 		localTypes[i].Methods = methods
+		generic := append([]bashPPLocalMethod(nil), localTypes[i].GenericMethods...)
+		for j := range generic {
+			if generic[j].Params, err = rewrite(generic[j].Params); err != nil {
+				return "", err
+			}
+			if generic[j].Results, err = rewrite(generic[j].Results); err != nil {
+				return "", err
+			}
+		}
+		localTypes[i].GenericMethods = generic
 	}
 	for _, local := range localTypes {
 		locals.WriteString(bashPPLocalTypeGo(local))
@@ -1227,10 +1290,15 @@ func (r *Runner) bashPPBridgeRegisterScalarTypes(ctx context.Context, req bashPP
 
 // A sibling may have passed its initial context check before EOF cancellation
 // closed the shared connection. Only that causally identified local close is
-// cancellation; ordinary network failures and live-context requests stay errors.
+// cancellation; ordinary network failures and live-context requests stay errors,
+// except a live request that lost the connection to a forwarded program signal
+// (bashpp_s248_forwarded_close.go).
 func (s *bashPPNativeSession) closedWriteError(ctx context.Context, err error) error {
-	if ctx.Err() == nil || !errors.Is(err, net.ErrClosed) {
+	if !errors.Is(err, net.ErrClosed) {
 		return err
+	}
+	if ctx.Err() == nil {
+		return s.forwardedDeathWriteError(err)
 	}
 	s.mu.Lock()
 	canceled := s.closeCancellation != nil || s.processCanceledLocked(s.waitErr)
@@ -1281,6 +1349,21 @@ func (s *bashPPNativeSession) retainedCallbacks() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.retained
+}
+
+type bashPPNativeFaultPanic struct {
+	text string
+	addr uint64
+}
+
+func (p *bashPPNativeFaultPanic) Error() string { return p.text }
+
+func bashPPSetPanicOnFaultRequest(req bashPPEvalRequest, q bashPPBridgeRequest) bool {
+	if q.Op != "call" || len(q.Args) != 1 || q.Args[0].Kind != "bool" {
+		return false
+	}
+	pkg, name, ok := strings.Cut(q.Selector, ".")
+	return ok && name == "SetPanicOnFault" && req.Imports[pkg] == "runtime/debug"
 }
 
 // bashPPForcesCollection reports an imported function that starts a collection
