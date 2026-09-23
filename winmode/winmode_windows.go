@@ -267,12 +267,40 @@ func IsOwner(path string) (bool, bool) {
 	return member, true
 }
 
+// tokenHasGroup reports whether sid is one of the groups carried by token.
+// Token.IsMember is deliberately not used here: CheckTokenMembership requires
+// an impersonation token, while OpenCurrentProcessToken gives us a primary
+// token. It also answers an access-check question and ignores groups marked
+// SE_GROUP_USE_FOR_DENY_ONLY. Such a SID may still be the primary group
+// recorded on a file.
+func tokenHasGroup(token windows.Token, sid *windows.SID) (bool, error) {
+	primary, err := token.GetTokenPrimaryGroup()
+	if err != nil {
+		return false, err
+	}
+	if primary.PrimaryGroup != nil && primary.PrimaryGroup.Equals(sid) {
+		return true, nil
+	}
+	groups, err := token.GetTokenGroups()
+	if err != nil {
+		return false, err
+	}
+	for _, group := range groups.AllGroups() {
+		if group.Sid != nil && group.Sid.Equals(sid) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // InGroup reports whether this process belongs to path's primary group —
 // the question `test -G` asks. The group class of a recorded mode is a
 // real SID with real members (see the package doc), so membership is a
 // question Windows can answer even though "what is this file's gid" is
-// not. The second result is false when there is no group to compare
-// against.
+// not. Membership here means identity membership, including a token group
+// disabled for access checks; it does not mean that an ACL would grant the
+// token access through that group. The second result is false when there is
+// no group to compare against.
 func InGroup(path string) (bool, bool) {
 	_, group, ok := ownerGroup(path)
 	if !ok || group == nil {
@@ -283,7 +311,7 @@ func InGroup(path string) (bool, bool) {
 		return false, false
 	}
 	defer token.Close()
-	member, err := token.IsMember(group)
+	member, err := tokenHasGroup(token, group)
 	if err != nil {
 		return false, false
 	}

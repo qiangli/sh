@@ -6,10 +6,14 @@
 package winmode
 
 import (
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"golang.org/x/sys/windows"
 )
 
 // TestSetGetFile pins the round trip through a real DACL: what Set writes
@@ -171,4 +175,80 @@ func TestIsOwnerAndInGroup(t *testing.T) {
 	if _, ok := InGroup(missing); ok {
 		t.Error("InGroup claims to know the group of a missing file")
 	}
+}
+
+// TestBash53FixtureInGroupProbe reproduces the layout and operation behind
+// test.tests' `touch /tmp/test.group; chgrp ${GROUPS[0]}` on Windows. The
+// Windows chgrp applet succeeds without changing the native primary group, so
+// a new file has the same group state as the fixture. Keep the complete SID
+// evidence in verbose test output: the
+// distinction between token identity and access-enabled membership is exactly
+// what this regression needs to expose on a hosted Windows runner.
+func TestBash53FixtureInGroupProbe(t *testing.T) {
+	tree, err := os.MkdirTemp("", "bash53-group-probe-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tree)
+	tmp := filepath.Join(tree, "tmp")
+	if err := os.MkdirAll(tmp, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(tmp, "test.group")
+	if err := os.WriteFile(path, nil, 0o666); err != nil {
+		t.Fatal(err)
+	}
+
+	owner, group, ok := ownerGroup(path)
+	if !ok || owner == nil || group == nil {
+		t.Fatalf("fixture file security descriptor: owner=%s group=%s ok=%t", sidText(owner), sidText(group), ok)
+	}
+	token, err := windows.OpenCurrentProcessToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer token.Close()
+	user, err := token.GetTokenUser()
+	if err != nil {
+		t.Fatal(err)
+	}
+	primary, err := token.GetTokenPrimaryGroup()
+	if err != nil {
+		t.Fatal(err)
+	}
+	groups, err := token.GetTokenGroups()
+	if err != nil {
+		t.Fatal(err)
+	}
+	accessMember, accessErr := token.IsMember(group)
+	identityMember, identityErr := tokenHasGroup(token, group)
+	inGroup, known := InGroup(path)
+
+	var tokenGroups []string
+	for _, entry := range groups.AllGroups() {
+		tokenGroups = append(tokenGroups, fmt.Sprintf("%s attributes=%#x", sidText(entry.Sid), entry.Attributes))
+	}
+	t.Logf("fixture path=%s", path)
+	t.Logf("file owner=%s group=%s", sidText(owner), sidText(group))
+	t.Logf("token user=%s primary-group=%s", sidText(user.User.Sid), sidText(primary.PrimaryGroup))
+	t.Logf("token groups:\n  %s", strings.Join(tokenGroups, "\n  "))
+	t.Logf("group access-member=%t err=%v identity-member=%t err=%v test-G=%t known=%t",
+		accessMember, accessErr, identityMember, identityErr, inGroup, known)
+
+	if identityErr != nil {
+		t.Fatalf("read token group identity: %v", identityErr)
+	}
+	if !identityMember {
+		t.Fatalf("file group %s is absent from both the token primary group and token groups", group)
+	}
+	if !known || !inGroup {
+		t.Fatalf("test -G result = %t, %t; want true for token group %s", inGroup, known, group)
+	}
+}
+
+func sidText(sid *windows.SID) string {
+	if sid == nil {
+		return "<nil>"
+	}
+	return sid.String()
 }
