@@ -21,7 +21,8 @@ func TestDetachedExecHonorsBashyArgMax(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	status := runDetachedExec(context.Background(), r, "setsid", []string{"/bin/true"}, true)
+	r.Reset()
+	status := runDetachedExec(context.Background(), r, "setsid", []string{"true"}, true)
 	if status.code != 126 || !strings.Contains(stderr.String(), "argument list too long") {
 		t.Fatalf("detached over-budget launch = status %d, stderr %q", status.code, stderr.String())
 	}
