@@ -82,8 +82,10 @@ func main() {
 			if err == nil {
 				t.Fatalf("forged address accepted; stderr=%q", stderr)
 			}
-			if got := err.Error() + stderr; !strings.Contains(got, "BASHPP-EUNSAFE-ADDRESS") {
-				t.Fatalf("refusal=%q; want BASHPP-EUNSAFE-ADDRESS", got)
+			// A constant address may exist as an opaque forged value
+			// (unsafebuiltins compares them) but never dereferences.
+			if got := err.Error() + stderr; !strings.Contains(got, "BASHPP-EUNSAFE-ADDRESS") && !strings.Contains(got, "BASHPP-EUNSAFE-FORGED") {
+				t.Fatalf("refusal=%q; want BASHPP-EUNSAFE-ADDRESS or BASHPP-EUNSAFE-FORGED", got)
 			}
 		})
 	}

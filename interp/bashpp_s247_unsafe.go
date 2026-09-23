@@ -96,6 +96,11 @@ func (r *Runner) goSourceUnsafePointerExpr(expr syntax.BashPPExpr) (*bashPPPoint
 		return &bashPPPointer{forged: true, unsafeAddress: uint64(address)}, target, true, nil
 	}
 	ptr, err := r.bashPPPointerExprValue(conv.X)
+	if err != nil && strings.HasPrefix(err.Error(), "BASHPP-EPOINTER-TARGET:") {
+		// An operand that is neither a recognised integer spelling nor
+		// interpreter storage is never trusted as an address.
+		return nil, target, true, fmt.Errorf("BASHPP-EUNSAFE-ADDRESS: unsafe.Pointer operand is not an interpreter-owned live pointer (%v)", err)
+	}
 	if err != nil || ptr == nil {
 		return nil, target, true, err
 	}
