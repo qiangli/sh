@@ -937,17 +937,25 @@ func (r *Runner) bashPPScalarInterfaceCell(expr syntax.BashPPExpr) (*bashPPCell,
 	}
 	name := value.typ
 	if name == "" {
-		name = bashPPDefaultScalarTypeName(value.value.Kind())
+		name = bashPPDefaultScalarTypeName(value.kind())
 	}
 	if name == "" {
 		return nil, nil, fmt.Errorf("BASHPP-EINTERFACE-VALUE: interface assignment requires a named value")
 	}
 	actual, name := bashPPScalarNamedType(name)
+	// A runtime float or complex result keeps its IEEE carrier in the boxed
+	// cell: a non-finite value has no exact constant to spell, and a complex
+	// signed zero survives only in the carrier.
 	cell := &bashPPCell{
-		vr:         expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarString(value.value)},
-		scalarKind: value.value.Kind(),
-		typeName:   name,
-		declType:   actual,
+		vr:                  expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarStorageString(value)},
+		scalarKind:          value.kind(),
+		negativeZero:        value.negativeZero,
+		nonFinite:           value.nonFinite,
+		hasNonFinite:        value.hasNonFinite,
+		nonFiniteComplex:    value.nonFiniteComplex,
+		hasNonFiniteComplex: value.hasNonFiniteComplex,
+		typeName:            name,
+		declType:            actual,
 	}
 	return cell, actual, nil
 }

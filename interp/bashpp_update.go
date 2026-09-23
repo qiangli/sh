@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"go/constant"
 	"go/token"
+	"strconv"
 	"strings"
 
 	"mvdan.cc/sh/v3/expand"
@@ -317,6 +318,20 @@ func (r *Runner) bashPPUpdateResult(op string, left, right bashPPScalar) (any, c
 	if err != nil {
 		return nil, constant.Unknown, err
 	}
+	// A runtime complex result, and a float result that overflowed to an
+	// infinity or NaN, is authoritative in its IEEE carrier: the exact
+	// constant is absent (non-finite) or cannot hold a signed zero component.
+	// A complex commits its Go spelling, the form collection storage and
+	// cells already use for it; a non-finite float commits its float64.
+	if result.hasNonFiniteComplex {
+		return bashPPScalarStorageString(result), constant.Complex, nil
+	}
+	if result.hasNonFinite {
+		return result.nonFinite, constant.Float, nil
+	}
+	if result.value == nil {
+		return nil, constant.Unknown, fmt.Errorf("BASHPP-EEXPR-OPERAND: operation %s produced no value", op)
+	}
 	return bashPPUpdateGoValue(result.value), result.value.Kind(), nil
 }
 
@@ -339,9 +354,30 @@ func (r *Runner) bashPPUpdateScalar(value any, typ syntax.BashPPTypeExpr) (bashP
 				return out, nil
 			}
 		case named.Name.Value == "float32" || named.Name.Value == "float64":
+			if special, ok := bashPPNonFiniteText(text); ok && r.bashPPGoSource {
+				return bashPPNonFiniteScalar(special, out.typ), nil
+			}
 			out.value = constant.MakeFromLiteral(text, token.FLOAT, 0)
 			if out.value.Kind() == constant.Float {
 				return out, nil
+			}
+		case (named.Name.Value == "complex64" || named.Name.Value == "complex128") && r.bashPPGoSource:
+			// A complex target's storage holds either a Go complex value or
+			// its Go spelling; both rebuild the IEEE carrier the runtime
+			// complex operators consume (signed zeros and infinities intact).
+			bits := 128
+			if named.Name.Value == "complex64" {
+				bits = 64
+			}
+			switch z := value.(type) {
+			case complex64:
+				return bashPPNonFiniteComplexScalar(complex128(z), out.typ), nil
+			case complex128:
+				return bashPPNonFiniteComplexScalar(z, out.typ), nil
+			case string:
+				if parsed, err := strconv.ParseComplex(z, bits); err == nil {
+					return bashPPNonFiniteComplexScalar(parsed, out.typ), nil
+				}
 			}
 		}
 	}
@@ -393,6 +429,12 @@ func (r *Runner) bashPPWriteUpdatePointer(ptr *bashPPPointer, value any, kind co
 		ptr.target.vr.List, ptr.target.vr.Map = nil, nil
 		ptr.target.vr.ListMap, ptr.target.vr.ListSet = nil, nil
 		ptr.target.scalarKind = kind
+		// The stored spelling is now the value. Drop any IEEE carrier left
+		// by the previous value so it cannot shadow the new spelling; the
+		// cell reader rebuilds the carrier from the spelling and the
+		// declared type (complex width, float infinities and NaN).
+		ptr.target.hasNonFinite, ptr.target.nonFinite = false, 0
+		ptr.target.hasNonFiniteComplex, ptr.target.nonFiniteComplex = false, 0
 		return nil
 	}
 	parent, parentMeta, _, err := ptr.readParent()
