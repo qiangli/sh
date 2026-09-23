@@ -199,8 +199,11 @@ func (r *Runner) bashPPResolveSelectionIn(root syntax.BashPPTypeExpr, name strin
 		// in its method set whether or not the P is addressable.
 		rootPointer, root = true, element
 	}
-	key := bashPPTypeText(root)
-	level := []bashPPSelectionNode{{typ: root, indirect: rootPointer, ancestors: map[string]bool{key: true}}}
+	// The root's ancestor set ({root}) is only consulted when lookup descends
+	// into an embedded field, so it is materialized there rather than on
+	// every selector evaluation: a nil ancestors map stands for {root}.
+	rootKey, rootKeyed := "", false
+	level := []bashPPSelectionNode{{typ: root, indirect: rootPointer}}
 	for len(level) > 0 {
 		var matches []bashPPSelection
 		var next []bashPPSelectionNode
@@ -256,10 +259,16 @@ func (r *Runner) bashPPResolveSelectionIn(root syntax.BashPPTypeExpr, name strin
 					continue
 				}
 				childKey := bashPPTypeText(child)
-				if node.ancestors[childKey] {
+				if node.ancestors == nil && !rootKeyed {
+					rootKey, rootKeyed = bashPPTypeText(root), true
+				}
+				if node.ancestors[childKey] || (node.ancestors == nil && childKey == rootKey) {
 					continue
 				}
-				ancestors := make(map[string]bool, len(node.ancestors)+1)
+				ancestors := make(map[string]bool, len(node.ancestors)+2)
+				if node.ancestors == nil {
+					ancestors[rootKey] = true
+				}
 				for ancestor := range node.ancestors {
 					ancestors[ancestor] = true
 				}

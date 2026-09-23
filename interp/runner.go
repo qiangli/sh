@@ -5496,8 +5496,9 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		// `{ ...; }` is a Go block in the bash++ dialect: a `var` declared
 		// inside it is gone at the closing brace. Shell assignments in the
 		// same braces keep bash's lifetime, which is why only the typed
-		// scope is pushed here.
-		if r.bashPPScope != nil {
+		// scope is pushed here. An empty block declares nothing, so it needs
+		// no scope of its own.
+		if r.bashPPScope != nil && len(cm.Stmts) > 0 {
 			defer r.bashPPPushScope()()
 		}
 		r.stmts(ctx, cm.Stmts)

@@ -27,6 +27,9 @@ type bashPPMapEntry struct {
 	storage string
 	key     any
 	keyMeta *bashPPCollectionMeta
+	// dead is set when the entry is deleted from its map, so a cached
+	// iteration order can skip and compact it.
+	dead bool
 }
 
 func (r *Runner) bashPPSprint165StoredBridgeScalar(expr syntax.BashPPExpr, expected syntax.BashPPTypeExpr) (any, *bashPPCollectionMeta, bool, error) {
@@ -281,6 +284,10 @@ func (r *Runner) bashPPSprint165MapDelete(mapping map[string]any, meta *bashPPCo
 	delete(mapping, entry.storage)
 	delete(meta.mapping, entry.storage)
 	delete(meta.mapKeys, key)
+	entry.dead = true
+	if meta.mapOrderValid {
+		meta.mapOrderDead++
+	}
 	return nil
 }
 
@@ -323,6 +330,7 @@ func (r *Runner) bashPPSprint165MapStore(mapping map[string]any, meta *bashPPCol
 	}
 	entry := &bashPPMapEntry{storage: storage, key: value, keyMeta: valueMeta}
 	meta.mapKeys[key] = entry
+	meta.mapOrder, meta.mapOrderDead, meta.mapOrderValid = nil, 0, false
 	mapping[storage], meta.mapping[storage] = element, child
 	return storage, nil
 }
@@ -331,14 +339,37 @@ func bashPPSprint165MapEntries(meta *bashPPCollectionMeta) []*bashPPMapEntry {
 	if meta == nil {
 		return nil
 	}
-	bashPPStorageMu.RLock()
-	entries := make([]*bashPPMapEntry, 0, len(meta.mapKeys))
-	for _, entry := range meta.mapKeys {
-		entries = append(entries, entry)
+	bashPPStorageMu.Lock()
+	defer bashPPStorageMu.Unlock()
+	if !meta.mapOrderValid {
+		entries := make([]*bashPPMapEntry, 0, len(meta.mapKeys))
+		for _, entry := range meta.mapKeys {
+			entries = append(entries, entry)
+		}
+		sort.Slice(entries, func(i, j int) bool { return entries[i].storage < entries[j].storage })
+		meta.mapOrder, meta.mapOrderDead, meta.mapOrderValid = entries, 0, true
+		return entries
 	}
-	bashPPStorageMu.RUnlock()
-	sort.Slice(entries, func(i, j int) bool { return entries[i].storage < entries[j].storage })
-	return entries
+	// Deleted entries only leave the cached order lazily: drop a dead prefix
+	// (the drain-by-range idiom) and compact once they are the majority. A
+	// dead entry still returned is skipped by callers, which re-check each
+	// entry's storage before use exactly as for a snapshot.
+	order := meta.mapOrder
+	for len(order) > 0 && order[0].dead {
+		order = order[1:]
+		meta.mapOrderDead--
+	}
+	if meta.mapOrderDead > 0 && meta.mapOrderDead*2 > len(order) {
+		live := make([]*bashPPMapEntry, 0, len(order)-meta.mapOrderDead)
+		for _, entry := range order {
+			if !entry.dead {
+				live = append(live, entry)
+			}
+		}
+		order, meta.mapOrderDead = live, 0
+	}
+	meta.mapOrder = order
+	return order
 }
 
 func bashPPSprint165MapHasTypedKeys(meta *bashPPCollectionMeta) bool {
@@ -392,7 +423,11 @@ func bashPPSprint165MapClear(mapping map[string]any, meta *bashPPCollectionMeta)
 	clear(mapping)
 	if meta != nil {
 		clear(meta.mapping)
+		for _, entry := range meta.mapKeys {
+			entry.dead = true
+		}
 		clear(meta.mapKeys)
+		meta.mapOrder, meta.mapOrderDead, meta.mapOrderValid = nil, 0, false
 	}
 	bashPPStorageMu.Unlock()
 }

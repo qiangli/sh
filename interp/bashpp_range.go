@@ -528,7 +528,13 @@ func (r *Runner) bashPPRangeIteration(ctx context.Context, rng *syntax.BashPPRan
 // generic map must not be flattened to its printable storage spelling before
 // append or assignment consumes it.
 func (r *Runner) bashPPRangeIterationKeyMeta(ctx context.Context, rng *syntax.BashPPRange, key any, keyMeta *bashPPCollectionMeta, keyType syntax.BashPPTypeExpr, value any, valueMeta *bashPPCollectionMeta, valueType syntax.BashPPTypeExpr) bool {
-	leave := r.bashPPPushScope()
+	// The iteration scope holds only the iteration variables; the body is a
+	// block that pushes its own scope. A range binding no names (for range n,
+	// or only blanks) therefore needs no per-iteration scope of its own.
+	leave := bashPPNoScopeLeave
+	if bashPPRangeBindsNames(rng) {
+		leave = r.bashPPPushScope()
+	}
 	if len(rng.Names) >= 1 && rng.Names[0].Value != "_" {
 		key, keyMeta = bashPPCopyArrayValue(key, keyMeta)
 		r.bashPPDeclareRangeValue(rng.Names[0].Value, key, keyType, keyMeta)
@@ -540,6 +546,19 @@ func (r *Runner) bashPPRangeIterationKeyMeta(ctx context.Context, rng *syntax.Ba
 	r.cmd(r.bashPPTaskContext(ctx), rng.Body)
 	leave()
 	return r.bashPPRangeControl()
+}
+
+func bashPPNoScopeLeave() {}
+
+// bashPPRangeBindsNames reports whether a range declares any non-blank
+// iteration variable.
+func bashPPRangeBindsNames(rng *syntax.BashPPRange) bool {
+	for i, name := range rng.Names {
+		if i < 2 && name.Value != "_" {
+			return true
+		}
+	}
+	return false
 }
 
 // bashPPRangeControl reduces the runner state one executed loop body leaves to

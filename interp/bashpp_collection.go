@@ -31,6 +31,15 @@ type bashPPCollectionMeta struct {
 	mapping     map[string]*bashPPCollectionMeta
 	mapKeys     map[bashPPMapKey]*bashPPMapEntry
 	mapNonce    uint64
+	// mapOrder caches the sorted iteration order of mapKeys so that starting
+	// a range does not re-sort the whole map (range-then-break over a map
+	// being drained would otherwise be quadratic). It is rebuilt after any
+	// insertion of a new key; deletions only mark entries dead, counted in
+	// mapOrderDead, and the cache is compacted once dead entries dominate.
+	// Slices handed out are never mutated in place.
+	mapOrder      []*bashPPMapEntry
+	mapOrderDead  int
+	mapOrderValid bool
 	// interfaceValue preserves the dynamic type and value of an interface
 	// stored inside a collection or struct. The JSON-shaped payload alone can
 	// only retain its printable shell value.
@@ -151,6 +160,7 @@ func bashPPCloneCollectionMeta(meta *bashPPCollectionMeta, seen map[*bashPPColle
 	bashPPStorageMu.RLock()
 	out := *meta
 	bashPPStorageMu.RUnlock()
+	out.mapOrder, out.mapOrderDead, out.mapOrderValid = nil, 0, false
 	seen[meta] = &out
 	if meta.interfaceValue != nil {
 		iface := *meta.interfaceValue
@@ -672,7 +682,20 @@ func (r *Runner) bashPPCollectionZero(typ syntax.BashPPTypeExpr) (any, *bashPPCo
 		}
 		values := make([]any, length)
 		meta.sequence = make([]*bashPPCollectionMeta, length)
-		for i := range values {
+		if length == 0 {
+			return values, meta
+		}
+		// Resolve the element type once. An immutable scalar zero with no
+		// metadata (string, bool, int, float64) is shared by every element;
+		// anything carrying metadata or mutable storage is built per element.
+		values[0], meta.sequence[0] = r.bashPPZeroValue(x.Element)
+		if meta.sequence[0] == nil && bashPPImmutableScalarZero(values[0]) {
+			for i := 1; i < length; i++ {
+				values[i] = values[0]
+			}
+			return values, meta
+		}
+		for i := 1; i < length; i++ {
 			values[i], meta.sequence[i] = r.bashPPZeroValue(x.Element)
 		}
 		return values, meta
@@ -680,6 +703,16 @@ func (r *Runner) bashPPCollectionZero(typ syntax.BashPPTypeExpr) (any, *bashPPCo
 		return nil, bashPPPointerMeta(x)
 	}
 	return nil, nil
+}
+
+// bashPPImmutableScalarZero reports whether a zero value is a plain immutable
+// Go scalar that array elements may share instead of re-deriving per element.
+func bashPPImmutableScalarZero(value any) bool {
+	switch value.(type) {
+	case string, bool, int, float64:
+		return true
+	}
+	return false
 }
 
 func (r *Runner) bashPPArrayLength(text string) (int, error) {
