@@ -530,6 +530,14 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	// The package sort ordering entry points run over the interpreter's own
+	// storage when they carry original callbacks, so the callbacks and the
+	// algorithm share one backing array (bashpp_native_shared_order.go).
+	if req.CallbackOwner != nil {
+		if values, handled, err := req.CallbackOwner.goSourceSharedOrdering(ctx, req, &q); handled || err != nil {
+			return values, err
+		}
+	}
 	if err := prepareNativeSliceBuffers(req, &q); err != nil {
 		return nil, err
 	}
