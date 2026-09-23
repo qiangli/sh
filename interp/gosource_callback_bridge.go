@@ -453,9 +453,41 @@ func (r *Runner) goSourceCopiedReceiverDigest(cell *bashPPCell) string {
 	if cell == nil {
 		return ""
 	}
+	// Only slices and maps have shared mutable storage in a copied value
+	// receiver. Most high-frequency callbacks (for example image.Image.At)
+	// carry scalar structs; avoid rebuilding and walking their entire bridge
+	// representation merely to discover that their reference digest is empty.
+	if !bashPPCopiedReceiverHasReferences(bashPPCellMeta(cell), make(map[*bashPPCollectionMeta]bool)) {
+		return ""
+	}
 	value, err := r.bashPPBridgeCell(cell)
 	if err != nil {
 		return ""
 	}
 	return goSourceReferenceDigest(value)
+}
+
+func bashPPCopiedReceiverHasReferences(meta *bashPPCollectionMeta, seen map[*bashPPCollectionMeta]bool) bool {
+	if meta == nil || seen[meta] {
+		return false
+	}
+	seen[meta] = true
+	if meta.kind == "slice" || meta.kind == "map" {
+		return true
+	}
+	if iface := meta.interfaceValue; iface != nil && iface.cell != nil &&
+		bashPPCopiedReceiverHasReferences(bashPPCellMeta(iface.cell), seen) {
+		return true
+	}
+	for _, child := range meta.sequence {
+		if bashPPCopiedReceiverHasReferences(child, seen) {
+			return true
+		}
+	}
+	for _, child := range meta.mapping {
+		if bashPPCopiedReceiverHasReferences(child, seen) {
+			return true
+		}
+	}
+	return false
 }

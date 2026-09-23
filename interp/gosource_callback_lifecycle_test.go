@@ -68,6 +68,22 @@ func main() {
 	differGoSource(t, source, nil, "")
 }
 
+// TestGoSourceCallbackValueReceiverMutation pins the copy boundary used by the
+// callback fast path: changing a scalar field of a value receiver is visible
+// inside that invocation but never changes the caller's value or a later call.
+func TestGoSourceCallbackValueReceiverMutation(t *testing.T) {
+	const source = `package main
+import "fmt"
+type Counter struct{ n int }
+func (c Counter) String() string { c.n++; return fmt.Sprintf("c%d", c.n) }
+func main() {
+	c := Counter{n: 4}
+	fmt.Println(c, c, c.n)
+}
+`
+	differGoSource(t, source, nil, "")
+}
+
 // TestGoSourceCallbackAsyncRetainedRefused pins the retained-callback policy at
 // a second, unrelated door: time.AfterFunc keeps an original function and calls
 // it later from a timer goroutine. That asynchronous retention is not one of the

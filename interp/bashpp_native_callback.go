@@ -224,7 +224,7 @@ func (r *Runner) bashPPNativeCallback(ctx context.Context, selector string, recv
 	r.bashPPCallChannels, r.bashPPCallInterfaces, r.bashPPCallCells = nil, nil, nil
 
 	// A pointer receiver binds to the original interpreter storage.
-	bound, ok := r.bashPPBindMethod(cell, method, true)
+	bound, ok := r.bashPPBindMethodReceiver(cell, method, true, copied != nil)
 	if !ok {
 		return nil, fmt.Errorf("gosource: cannot bind original method %s", selector)
 	}

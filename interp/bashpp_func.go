@@ -1637,6 +1637,15 @@ func (r *Runner) bashPPBindInterfaceMethod(iv *bashPPInterfaceValue, method stri
 }
 
 func (r *Runner) bashPPBindMethod(cell *bashPPCell, method string, addressable bool) (*bashPPFunc, bool) {
+	return r.bashPPBindMethodReceiver(cell, method, addressable, false)
+}
+
+// bashPPBindMethodReceiver binds a method to cell. A transported native
+// callback receiver is already the value copy on which Go invoked the
+// generated mirror method, so copiedReceiver avoids copying that private value
+// a second time. Reference fields remain shared exactly as they are in a Go
+// value-receiver copy; ordinary call sites keep the usual copy below.
+func (r *Runner) bashPPBindMethodReceiver(cell *bashPPCell, method string, addressable, copiedReceiver bool) (*bashPPFunc, bool) {
 	fn := r.bashPPMethods[cell.typeName][method]
 	if fn == nil {
 		r.errf("type %s has no method %s\n", cell.typeName, method)
@@ -1662,6 +1671,10 @@ func (r *Runner) bashPPBindMethod(cell *bashPPCell, method string, addressable b
 	if ptrRecv {
 		bound.receiver = cell
 	} else {
+		if copiedReceiver && !cell.pointer {
+			bound.receiver = cell
+			return &bound, true
+		}
 		copyCell := *cell
 		if cell.pointer && cell.pointerValue != nil {
 			value, meta, typ, err := cell.pointerValue.read()
