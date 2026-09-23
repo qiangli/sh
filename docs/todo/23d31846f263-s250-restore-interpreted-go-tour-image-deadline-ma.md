@@ -59,3 +59,16 @@ JSON socket trial had no local timing benefit and was discarded. Keep the
 original fixture, 60s limit, effect ordering, cancellation and fallback
 policy. Coordinate one focused DO run under the leaf lock; the manager owns
 the full 291 acceptance gate.
+
+An unchanged public-head candidate was independently replayed on the other
+authorized DigitalOcean test droplet (`vsc-s129-shell-20260908`,
+`138.68.155.86`, two vCPUs) under its `/srv/sprint219/leaf.lock`. Candidate
+manifest SHA-256 `e34f92359318640e55df4d81b1f08d3abe2d799fb0cb49e65dd3dccc5bdab2cb`,
+Bashy binary SHA-256 `f7d5c4054e7e18a46924af2f1cc012ac2d6b3ab0615598ef1f5bccc8a3673ad6`,
+Bashy `8a68fab1`, sh `4888f8d7`, and harness `c308f5c` matched the first
+droplet. The original executor's one-row diagnostic authenticated the
+candidate; baseline and compiled image passed, but interpreted image again
+timed out at the unchanged 60s limit (60.012s). The partial ledger SHA-256 is
+`09716ba3f3ed4a1c196ba34a50f556dfda671fcb1465cec35ea2329670dbe52f`
+at `/srv/sprint250/story141-do2-head-8a68fab-image-r2/`. Neither existing
+two-vCPU test droplet provides a safe margin for the current public head.
