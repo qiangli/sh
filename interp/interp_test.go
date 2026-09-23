@@ -5158,7 +5158,7 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	},
 	{
 		"set -o posix; VAR=4; readonly VAR; VAR=7 echo ok; echo after",
-		"VAR: readonly variable\nafter\n",
+		"VAR: readonly variable\nexit status 1 #JUSTERR",
 	},
 	{
 		"set -k; export HOME=/foo/bar; c=7; HOME=/a/b/c echo $HOME c=9; echo $c",

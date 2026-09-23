@@ -94,18 +94,29 @@ func TestStrictPosixInteractivePrefixAssignErrorContinues(t *testing.T) {
 	}
 }
 
-func TestNonStrictPosixPrefixAssignErrorContinues(t *testing.T) {
+func TestNonStrictPosixReadonlyPrefixAssignErrorExits(t *testing.T) {
 	stdout, stderr, err, exited := runStrictPosixAssignError(t, "echo command-ran", false, false)
-	if strings.Contains(stdout, "command-ran") || !strings.Contains(stdout, "not reached status=1") {
-		t.Fatalf("stdout = %q, want failed command discarded with status 1 and following command run", stdout)
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want failed command and following command skipped", stdout)
 	}
 	if !strings.Contains(stderr, "readonly variable") {
 		t.Fatalf("stderr = %q, want readonly diagnostic", stderr)
 	}
-	if err != nil {
-		t.Fatalf("Run error = %v, want success from following command", err)
+	var status ExitStatus
+	if !errors.As(err, &status) || status != 1 {
+		t.Fatalf("Run error = %v, want exit status 1", err)
 	}
-	if exited {
-		t.Fatal("non-strict runner unexpectedly exited")
+	if !exited {
+		t.Fatal("non-strict POSIX runner did not exit")
+	}
+}
+
+func TestNonStrictPosixInteractiveReadonlyPrefixAssignErrorContinues(t *testing.T) {
+	stdout, stderr, err, exited := runStrictPosixAssignError(t, "echo command-ran", false, true)
+	if strings.Contains(stdout, "command-ran") || !strings.Contains(stdout, "not reached status=1") {
+		t.Fatalf("stdout = %q, want failed command discarded and following command run", stdout)
+	}
+	if !strings.Contains(stderr, "readonly variable") || err != nil || exited {
+		t.Fatalf("stderr = %q, err = %v, exited = %v; want interactive continuation", stderr, err, exited)
 	}
 }

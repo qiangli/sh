@@ -6100,6 +6100,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		}
 
 		assignFailed := false
+		readonlyAssignFailed := false
 		for _, as := range cm.Assigns {
 			as = r.bashPPRewriteAssign(as)
 			if as.Index != nil {
@@ -6160,6 +6161,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			}
 			if !r.exit.ok() {
 				assignFailed = true
+				readonlyAssignFailed = prev.ReadOnly && !readonlyTemp
 				break
 			}
 			alreadyRestoring := false
@@ -6201,6 +6203,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			r.setVar(as.name, as.vr)
 			if !r.exit.ok() {
 				assignFailed = true
+				readonlyAssignFailed = prev.ReadOnly
 				break
 			}
 			if o, ok := r.writeEnv.(*overlayEnviron); ok {
@@ -6209,7 +6212,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			restores = append(restores, restoreVar{name: as.name, vr: prev, wasTemp: wasTemp})
 		}
 		if assignFailed {
-			if r.strictPosix && !r.interactiveShell {
+			if !r.interactiveShell && (r.strictPosix || (r.opts[optPosix] && readonlyAssignFailed)) {
 				r.exit.exiting = true
 				break
 			}
@@ -6222,9 +6225,10 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 					r.exit.exiting = true
 					break
 				}
-				// Bash 5.3's default build is not STRICT_POSIX: a temporary
-				// assignment error before a non-special command discards the
-				// command and continues with status 1.
+				// Bash 5.3's default build is not STRICT_POSIX: other temporary
+				// assignment errors before a non-special command discard the
+				// command and continue with status 1. Readonly assignments
+				// above still exit a noninteractive POSIX shell.
 				for _, restore := range restores {
 					r.restoreInlineVar(restore.name, restore.vr)
 				}
