@@ -76,6 +76,10 @@ type bashPPBridgeValue struct {
 	// NilChannel marks a dependency channel handle whose value is nil. A nil
 	// channel never communicates, so a select arm on it needs no arbitration.
 	NilChannel bool `json:"nil_channel,omitempty"`
+	// copiedResults marks an original callback whose declared results include
+	// a slice of dependency handles, rebuilt on the dependency side on return.
+	// Host-only; only a non-retaining result consumer may carry it.
+	copiedResults bool
 }
 type bashPPBridgeEntry struct {
 	Key   bashPPBridgeValue `json:"key"`

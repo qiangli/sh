@@ -30,6 +30,9 @@ func validateLocalTransport(req bashPPEvalRequest, q bashPPBridgeRequest) error 
 	var inspect func(bashPPBridgeValue, bool) (bool, bool, error)
 	inspect = func(v bashPPBridgeValue, identity bool) (bool, bool, error) {
 		if v.Kind == "callback" {
+			if v.copiedResults && !copiedResultsConsumer(req, q) {
+				return false, false, fmt.Errorf("gosource: original callback signature requires value-semantics parameters and supported results")
+			}
 			functionCallbacks = true
 			return false, false, nil
 		}
@@ -156,14 +159,25 @@ func validateLocalTransport(req bashPPEvalRequest, q bashPPBridgeRequest) error 
 	if nativeSharedReferenceConsumer(req, q) && q.Receiver != nil && nativeTemplateExecuteProven(req, q) {
 		return nil
 	}
-	if functionCallbacks && !synchronousFunctionCallback(req, q) && !retainedFunctionCallback(req, q) {
+	if functionCallbacks && !synchronousFunctionCallback(req, q) && !retainedFunctionCallback(req, q) && !resultOwnedFunctionCallback(req, q) {
 		return fmt.Errorf("gosource: asynchronous or retained original function callbacks are unsupported for %s", q.Selector)
 	}
-	if !unsafe && (synchronousFunctionCallback(req, q) || retainedFunctionCallback(req, q)) {
+	if !unsafe && (synchronousFunctionCallback(req, q) || retainedFunctionCallback(req, q) || resultOwnedFunctionCallback(req, q)) {
 		return nil
 	}
 	if !unsafe && !requestHasCallbacks(req, q) {
 		return nil
+	}
+	if !unsafe && !functionCallbacks && q.Receiver != nil && q.Receiver.Kind == "handle" && q.Receiver.Callbacks {
+		// The dependency already owns the retained function; calling it (or
+		// converting its reflect.Value back with Interface) hands over no
+		// interpreter storage and registers no new callback.
+		if q.Selector == "" && q.Receiver.Function {
+			return nil
+		}
+		if q.Receiver.NativeType == "reflect.Value" && q.Selector == "Interface" && len(q.Args) == 0 {
+			return nil
+		}
 	}
 	if q.Receiver != nil && q.Receiver.Callbacks && (q.Selector == "Error" || q.Selector == "String") && len(q.Args) == 0 {
 		return nil
@@ -433,7 +447,7 @@ func synchronousErrorsAsType(req bashPPEvalRequest, q bashPPBridgeRequest) bool 
 // callback: the dependency may raise that one at any later moment, and the
 // request parked at that moment is the only frame able to run it.
 func requestCallbackCapable(req bashPPEvalRequest, q bashPPBridgeRequest) bool {
-	if requestHasCallbacks(req, q) {
+	if requestHasCallbacks(req, q) && !callbackInertRequest(req, q) {
 		return true
 	}
 	if reflectValueCall(q) && localMethodsMirrored(req) {

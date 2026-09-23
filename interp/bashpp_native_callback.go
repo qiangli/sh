@@ -40,8 +40,19 @@ func (s *bashPPNativeSession) enterCallbacks(ctx context.Context, req bashPPEval
 	if !nested {
 		select {
 		case <-gate:
-		case <-ctx.Done():
-			return nil, nil, ctx.Err()
+		default:
+			// Waiting for another task's callback frame is a blocking
+			// operation: announce it, so the goroutine that launched this
+			// task — possibly the one that will unblock that frame — is not
+			// held at the launch handshake meanwhile.
+			if owner := req.CallbackOwner; owner != nil && !owner.bashPPArmBeforeBlock(ctx) {
+				return nil, nil, errBashPPScalarInterrupted
+			}
+			select {
+			case <-gate:
+			case <-ctx.Done():
+				return nil, nil, ctx.Err()
+			}
 		}
 	}
 	s.mu.Lock()
