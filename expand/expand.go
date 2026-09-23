@@ -1128,21 +1128,7 @@ func printfTimeLocation(cfg *Config) *time.Location {
 		return time.Local
 	}
 	name := tz.String()
-	if name == "" {
-		return time.UTC
-	}
-	if loc, err := time.LoadLocation(name); err == nil {
-		return loc
-	}
-	// Bash's tests use this POSIX TZ rule. Go's time package does not
-	// load POSIX rule strings directly, so map the common eastern-US
-	// rule to the equivalent IANA zone.
-	if strings.HasPrefix(name, "EST5EDT") {
-		if loc, err := time.LoadLocation("America/New_York"); err == nil {
-			return loc
-		}
-	}
-	return time.Local
+	return printfLocationFromTZ(name)
 }
 
 func printfDecimalComma(cfg *Config) bool {
