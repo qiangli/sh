@@ -984,6 +984,16 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 			}
 		}
 		localTypes[i].Methods = methods
+		generic := append([]bashPPLocalMethod(nil), localTypes[i].GenericMethods...)
+		for j := range generic {
+			if generic[j].Params, err = rewrite(generic[j].Params); err != nil {
+				return "", err
+			}
+			if generic[j].Results, err = rewrite(generic[j].Results); err != nil {
+				return "", err
+			}
+		}
+		localTypes[i].GenericMethods = generic
 	}
 	for _, local := range localTypes {
 		locals.WriteString(bashPPLocalTypeGo(local))
