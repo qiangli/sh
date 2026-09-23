@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -913,7 +914,14 @@ func (s *bashPPNativeSession) programExitError(err error) error {
 	var exit *exec.ExitError
 	if errors.As(err, &exit) {
 		if exit.ExitCode() >= 0 {
-			return &bashPPNativeExit{status: exit.ExitCode(), err: err}
+			code := exit.ExitCode()
+			forwarded := false
+			if runtime.GOOS == "windows" && code == 0xC000013A {
+				s.mu.Lock()
+				forwarded = s.forwardedSignal > 0
+				s.mu.Unlock()
+			}
+			return &bashPPNativeExit{status: code, err: err, forwarded: forwarded}
 		}
 		s.mu.Lock()
 		forwardedSignal := s.forwardedSignal

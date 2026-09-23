@@ -338,9 +338,14 @@ func relayAsyncOwnerSignal(sig killSig) error { return relayExecReplacementSigna
 
 func relayExecReplacementSignal(sig int) error { return ExitStatus(128 + sig) }
 
-// relayForwardedProgramDeath has no signal death to reproduce off unix; the
-// program's outcome stays the ordinary 128+sig exit status.
-func relayForwardedProgramDeath(num int) error { return relayExecReplacementSignal(num) }
+// A Windows console break exits with a 32-bit NT status. After the bridge has
+// drained output and removed scratch, reproduce that exact process outcome.
+func relayForwardedProgramDeath(num int) error {
+	if num == 0xC000013A {
+		os.Exit(num)
+	}
+	return relayExecReplacementSignal(num)
+}
 
 // inheritedFd materialises a descriptor a parent bashy handed us through
 // BASHY_INHERITED_HANDLES (see adoptInheritedHandles): the registered

@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 )
 
 // bashPPNativeExit reports that the dependency process terminated on its own
@@ -39,12 +40,19 @@ func (r *Runner) bashPPNativeExitStatus(err error) bool {
 		return false
 	}
 	status := exit.status
-	if status < 0 || status > 255 {
+	windowsBreak := runtime.GOOS == "windows" && exit.forwarded && status == 0xC000013A
+	if status < 0 || status > 255 && !windowsBreak {
 		return false
 	}
 	r.closeGoSourceBridge()
-	r.exit = exitStatus{code: uint8(status), exiting: true}
-	if exit.forwarded && status > 128 {
+	code := uint8(status)
+	if windowsBreak {
+		code = 130 // shell status while unwinding; Run reproduces the full Windows exit.
+	}
+	r.exit = exitStatus{code: code, exiting: true}
+	if windowsBreak {
+		r.bashPPForwardedDeath = status
+	} else if exit.forwarded && status > 128 {
 		// The dependency process died by a signal an external sender addressed
 		// to this host's PID. The program never installed a handler for it, so
 		// Run must reproduce the same signal death on this process once the
@@ -62,7 +70,7 @@ func (r *Runner) bashPPNativeExitStatus(err error) bool {
 		// every later exit.fatal on this unwind a no-op, so the program's own
 		// status is not replaced by a bridge diagnostic.
 		r.exit.fatalExit = true
-		r.exit.err = ExitStatus(uint8(status))
+		r.exit.err = ExitStatus(code)
 	}
 	return true
 }

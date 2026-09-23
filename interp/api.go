@@ -3685,9 +3685,8 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 		// bridge session (child reaped, output drained, scratch removed,
 		// forwarder unsubscribed), so the host can now take the same signal
 		// under its default disposition and report WIFSIGNALED to its parent —
-		// exactly what a compiled build of the program would have shown. Off
-		// unix there is no signal death to reproduce and this returns the
-		// familiar 128+sig exit status instead.
+		// exactly what a compiled build of the program would have shown. On
+		// Windows, a forwarded console break reproduces the native 32-bit exit.
 		return relayForwardedProgramDeath(sig)
 	}
 	// Return the first of: a fatal error, a non-fatal handler error, or the exit code.
