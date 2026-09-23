@@ -25,6 +25,39 @@ import (
 	"mvdan.cc/sh/v3/interp"
 )
 
+func TestReadFromInheritedDescriptor(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "input")
+	if err := os.WriteFile(path, []byte("inherited input\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	fd := int(f.Fd())
+	for _, script := range []string{
+		fmt.Sprintf("read -u %d line; printf '%%s\\n' \"$line\"", fd),
+		fmt.Sprintf("mapfile -u %d lines; printf '%%s' \"${lines[0]}\"", fd),
+	} {
+		if _, err := f.Seek(0, io.SeekStart); err != nil {
+			t.Fatal(err)
+		}
+		file := parse(t, nil, script)
+		var out, stderr bytes.Buffer
+		r, err := interp.New(interp.StdIO(nil, &out, &stderr), interp.WithInheritedFds([]int{fd}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := r.Run(context.Background(), file); err != nil {
+			t.Fatalf("%q: %v; stderr=%q", script, err, stderr.String())
+		}
+		if got := out.String(); got != "inherited input\n" {
+			t.Fatalf("%q: got %q; stderr=%q", script, got, stderr.String())
+		}
+	}
+}
+
 func TestRunnerTerminalStdIO(t *testing.T) {
 	t.Parallel()
 

@@ -3777,6 +3777,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				// `-u 0` is just stdin — no swap needed.
 			default:
 				f, ok := r.fdTable[readFD]
+				if !ok && !r.fdClosedTable[readFD] {
+					f, ok = r.inheritedFd(readFD)
+				}
 				if !ok {
 					return failf(2, "read: %d: invalid file descriptor: Bad file descriptor\n", readFD)
 				}
@@ -5022,6 +5025,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			return failf(2, "%s: %d: invalid file descriptor: not open for reading\n", name, readFD)
 		default:
 			f, ok := r.fdTable[readFD]
+			if !ok && !r.fdClosedTable[readFD] {
+				f, ok = r.inheritedFd(readFD)
+			}
 			if !ok {
 				return failf(2, "%s: %d: invalid file descriptor: Bad file descriptor\n", name, readFD)
 			}
