@@ -3,7 +3,7 @@ id: 2b03805c1605
 kind: bug
 title: Fix printf POSIX timezone fixture on native Windows
 seq: 136
-status: assigned
+status: done
 priority: p1
 labels:
     - windows
@@ -12,6 +12,8 @@ assignee: codex-gpt-5.5
 sprint: 257
 sprint_id: 14e6cca7-6d3d-5712-b474-70aa075ad503
 sprint_title: Verify final Sprint 253 Bash 5.3 candidate on Windows
+closed: 2026-09-23T08:10:25.755425Z
+closed_by: codex-gpt-5.5
 ---
 
 Resolve explicit POSIX TZ in printf %(fmt)T on native Windows. The final Sprint 253 candidate maps the fixture rule to an IANA zone that is unavailable without embedded timezone data. Verify focused and full Bash 5.3 fixtures on both Windows builds; keep repository records generic.
