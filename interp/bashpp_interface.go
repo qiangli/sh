@@ -1065,6 +1065,21 @@ func (r *Runner) bashPPInterfaceOperand(x syntax.BashPPExpr, what string) (*bash
 		}
 		return cell, nil
 	}
+	// A dependency-owned field, element or pointee — ring.Ring's Value — is
+	// read by a native access that reports the dynamic value alone. go/types
+	// already proved the operand's static type an interface, so the read is
+	// that interface holding the reported dynamic value (a nil read is the
+	// nil interface).
+	if r.bashPPNativeReadExpr(x) {
+		value, err := r.bashPPBridgeExpr(x)
+		if err != nil {
+			return nil, err
+		}
+		if value.Interface == "" {
+			value.Interface = "any"
+		}
+		return r.goSourceNativeValueCell(value), nil
+	}
 	value, meta, err := r.bashPPReadExpr(x)
 	if err != nil {
 		return nil, err

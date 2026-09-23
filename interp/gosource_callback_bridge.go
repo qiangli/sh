@@ -154,6 +154,12 @@ func (r *Runner) goSourceCallInterpretedCallback(ctx context.Context, fn *bashPP
 		}
 		cells[i], texts[i] = cell, text
 	}
+	return r.goSourceInvokeCallbackCells(ctx, fn, cells, texts)
+}
+
+// goSourceInvokeCallbackCells runs an original callback over argument cells
+// already bound at the parameters' declared types.
+func (r *Runner) goSourceInvokeCallbackCells(ctx context.Context, fn *bashPPFunc, cells []*bashPPCell, texts []string) ([]*bashPPCell, error) {
 	savedResults, savedCalls := r.bashPPResultCells, r.bashPPCallCells
 	savedChannels, savedInterfaces := r.bashPPCallChannels, r.bashPPCallInterfaces
 	defer func() {

@@ -1013,7 +1013,7 @@ func (r *Runner) bashPPEvalElement(expr syntax.BashPPExpr, expected syntax.BashP
 	}
 	if cell, handled, err := r.goSourceCallableCell(expr); handled {
 		if err != nil {
-			return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-ELEMENT: %v", err)
+			return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-ELEMENT: %w", err)
 		}
 		if _, ok := r.bashPPUnderlyingType(expected).(*syntax.BashPPFuncType); !ok {
 			return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-ELEMENT: cannot use function as %s", bashPPTypeText(expected))
@@ -1026,7 +1026,7 @@ func (r *Runner) bashPPEvalElement(expr syntax.BashPPExpr, expected syntax.BashP
 	}
 	scalar, err := r.bashPPEvalScalarExpr(expr)
 	if err != nil {
-		return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-ELEMENT: %v", err)
+		return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-ELEMENT: %w", err)
 	}
 	// go/constant cannot represent NaN or infinity. They travel through scalar
 	// evaluation in the side carrier, so collection keys and elements must use
@@ -1346,7 +1346,7 @@ func (r *Runner) bashPPResolveCollectionIndex(v bashPPScalar, diagnostic string)
 func (r *Runner) bashPPCollectionIndex(expr syntax.BashPPExpr) (bashPPCollectionIndexValue, error) {
 	v, err := r.bashPPCollectionIndexScalar(expr)
 	if err != nil {
-		return bashPPCollectionIndexValue{}, fmt.Errorf("BASHPP-ECOLLECTION-INDEX: %v", err)
+		return bashPPCollectionIndexValue{}, fmt.Errorf("BASHPP-ECOLLECTION-INDEX: %w", err)
 	}
 	return r.bashPPResolveCollectionIndex(v, "BASHPP-ECOLLECTION-INDEX: index must be an integer")
 }
@@ -1392,7 +1392,7 @@ func (r *Runner) bashPPStringSliceBound(expr syntax.BashPPExpr, fallback int) (b
 	}
 	v, err := r.bashPPCollectionIndexScalar(expr)
 	if err != nil {
-		return bashPPCollectionIndexValue{}, false, fmt.Errorf("BASHPP-ECOLLECTION-INDEX: %v", err)
+		return bashPPCollectionIndexValue{}, false, fmt.Errorf("BASHPP-ECOLLECTION-INDEX: %w", err)
 	}
 	index, err := r.bashPPResolveCollectionIndex(v, "BASHPP-ECOLLECTION-INDEX: index must be an integer")
 	if err != nil {

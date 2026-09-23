@@ -944,7 +944,9 @@ func (r *Runner) bashPPStructuredAssign(target, rhs syntax.BashPPExpr) {
 				_, err = r.bashPPNativeAccess(r.ectx, "field-set", base, selector.Sel.Value, value)
 			}
 		}
-		if err != nil {
+		// An interrupted access (a goroutine unwound by program exit or a
+		// panic) already carries its outcome.
+		if err != nil && !errors.Is(err, errBashPPScalarInterrupted) {
 			r.errf("%v\n", err)
 			r.exit = exitStatus{code: 2}
 		}

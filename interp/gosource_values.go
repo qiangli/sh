@@ -18,8 +18,10 @@ func goSourceNativeValueCell(value bashPPBridgeValue) *bashPPCell {
 	if scalar, err := value.scalar(); err == nil {
 		cell := &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarStorageString(scalar)}, scalarKind: scalar.kind(), negativeZero: scalar.negativeZero, nonFinite: scalar.nonFinite, hasNonFinite: scalar.hasNonFinite, nonFiniteComplex: scalar.nonFiniteComplex, hasNonFiniteComplex: scalar.hasNonFiniteComplex, typeName: scalar.typ, declType: &syntax.BashPPNamedType{Name: &syntax.Lit{Value: scalar.typ}}}
 		if value.Interface != "" {
-			cell.declType = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.Interface}}
+			// The payload is the dynamic value at its own scalar type; only
+			// the interface cell carries the static interface type.
 			payload := bashPPCopyAssignmentCell(cell)
+			cell.declType = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.Interface}}
 			cell.interfaceValue = &bashPPInterfaceValue{
 				nilIface: value.Kind == "nil",
 				cell:     payload,

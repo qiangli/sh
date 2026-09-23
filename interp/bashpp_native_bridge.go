@@ -569,6 +569,11 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 		if values, handled, err := req.CallbackOwner.goSourceSharedOrdering(ctx, req, &q); handled || err != nil {
 			return values, err
 		}
+		// container/heap likewise runs over the original receiver
+		// (bashpp_native_shared_heap.go).
+		if values, handled, err := req.CallbackOwner.goSourceSharedHeap(ctx, req, &q); handled || err != nil {
+			return values, err
+		}
 	}
 	if err := prepareNativeSliceBuffers(req, &q); err != nil {
 		return nil, err

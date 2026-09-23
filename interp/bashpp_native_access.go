@@ -363,34 +363,7 @@ func (r *Runner) bashPPNativeIterationValue(element bashPPBridgeValue) (any, *ba
 // its handle so that the dependency retains ownership and identity. The
 // boolean reports whether this path applies at all.
 func (r *Runner) bashPPNativeRead(expr syntax.BashPPExpr) (any, *bashPPCollectionMeta, error, bool) {
-	if !r.bashPPGoSource {
-		return nil, nil, nil, false
-	}
-	switch x := expr.(type) {
-	case *syntax.BashPPIndexExpr:
-		if !r.bashPPNativeExpr(x.X) {
-			return nil, nil, nil, false
-		}
-	case *syntax.BashPPSliceExpr:
-		if !r.bashPPNativeExpr(x.X) {
-			return nil, nil, nil, false
-		}
-	case *syntax.BashPPSelectorExpr:
-		// A local aggregate can contain a dependency-shaped value (notably a
-		// nil func or channel). Its field still belongs to the aggregate's
-		// typed storage, so let the ordinary selector reader retain that
-		// metadata instead of projecting it as an untyped native read.
-		if r.bashPPNativeLocalField(x) != nil {
-			return nil, nil, nil, false
-		}
-		if !r.bashPPNativeExpr(x) {
-			return nil, nil, nil, false
-		}
-	case *syntax.BashPPDerefExpr:
-		if !r.bashPPNativeExpr(x.X) {
-			return nil, nil, nil, false
-		}
-	default:
+	if !r.bashPPNativeReadExpr(expr) {
 		return nil, nil, nil, false
 	}
 	value, err := r.bashPPBridgeExpr(expr)
@@ -585,4 +558,41 @@ func (r *Runner) bashPPNativeLocalBase(expr syntax.BashPPExpr) (any, *bashPPColl
 		}
 	}
 	return value, meta, true
+}
+
+// bashPPNativeReadExpr reports an index, slice, selector or dereference whose
+// operand is dependency-owned, which bashPPNativeRead answers by a native
+// access rather than through local storage.
+func (r *Runner) bashPPNativeReadExpr(expr syntax.BashPPExpr) bool {
+	if !r.bashPPGoSource {
+		return false
+	}
+	switch x := expr.(type) {
+	case *syntax.BashPPIndexExpr:
+		if !r.bashPPNativeExpr(x.X) {
+			return false
+		}
+	case *syntax.BashPPSliceExpr:
+		if !r.bashPPNativeExpr(x.X) {
+			return false
+		}
+	case *syntax.BashPPSelectorExpr:
+		// A local aggregate can contain a dependency-shaped value (notably a
+		// nil func or channel). Its field still belongs to the aggregate's
+		// typed storage, so let the ordinary selector reader retain that
+		// metadata instead of projecting it as an untyped native read.
+		if r.bashPPNativeLocalField(x) != nil {
+			return false
+		}
+		if !r.bashPPNativeExpr(x) {
+			return false
+		}
+	case *syntax.BashPPDerefExpr:
+		if !r.bashPPNativeExpr(x.X) {
+			return false
+		}
+	default:
+		return false
+	}
+	return true
 }

@@ -948,8 +948,12 @@ func (r *Runner) bashPPDerefAssign(target *syntax.BashPPDerefExpr, rhs syntax.Ba
 	}
 	value, meta, err := r.bashPPEvalTypedValue(rhs, ptr.elem)
 	if err != nil {
-		r.errf("BASHPP-EASSIGN-MISMATCH: %v\n", err)
-		r.exit.code = 2
+		// An interrupted right-hand side (a receive unwound by program
+		// exit or a panic) already carries its outcome.
+		if !errors.Is(err, errBashPPScalarInterrupted) {
+			r.errf("BASHPP-EASSIGN-MISMATCH: %v\n", err)
+			r.exit.code = 2
+		}
 		return
 	}
 	if ptr.target.object != nil && ptr.target.object.readonly {
