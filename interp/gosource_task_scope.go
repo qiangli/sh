@@ -46,7 +46,20 @@ type bashPPGoSourceScope struct {
 
 // bashPPGoSourceFreeNames reports the free variables of a launched body and
 // whether the analysis modelled every construct it encountered.
+//
+// The answer depends only on the immutable parsed body and the bound names,
+// so it is computed once per (body, bound) pair and shared: every launch of a
+// goroutine re-derives the capture set of every carried function, and without
+// the memo that re-walks the whole program's function bodies per go
+// statement. The returned map is shared and must not be modified.
 func bashPPGoSourceFreeNames(body *syntax.Block, bound map[string]bool) (map[string]bool, bool) {
+	if body == nil {
+		return bashPPGoSourceFreeNamesWalk(body, bound)
+	}
+	return bashPPGoSourceFreeNamesMemo(body, bound)
+}
+
+func bashPPGoSourceFreeNamesWalk(body *syntax.Block, bound map[string]bool) (map[string]bool, bool) {
 	s := &bashPPGoSourceScope{free: make(map[string]bool), exact: true}
 	frame := make(map[string]bool, len(bound))
 	for name := range bound {

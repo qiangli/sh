@@ -55,6 +55,13 @@ func (r *Runner) goSourceLocalTypes() *goSourceLocalTypeIndex {
 	if r.bashPPLocalTypes != nil && r.bashPPLocalTypes.file == file {
 		return r.bashPPLocalTypes
 	}
+	// The index depends only on the immutable parsed file, and every task
+	// snapshot starts with an empty per-runner slot, so the built index is
+	// shared across runners; see gosource_s247_free_names_memo.go.
+	if index := goSourceLocalTypeIndexShared(file); index != nil {
+		r.bashPPLocalTypes = index
+		return index
+	}
 	index := &goSourceLocalTypeIndex{file: file, decls: make(map[string][]goSourceLocalTypeDecl)}
 	for _, top := range file.Stmts {
 		// Every statement range below the top-level statement, so a
@@ -89,8 +96,8 @@ func (r *Runner) goSourceLocalTypes() *goSourceLocalTypeIndex {
 			})
 		}
 	}
-	r.bashPPLocalTypes = index
-	return index
+	r.bashPPLocalTypes = goSourceLocalTypeIndexPublish(file, index)
+	return r.bashPPLocalTypes
 }
 
 func goSourceRangeContains(s *syntax.Stmt, pos syntax.Pos) bool {

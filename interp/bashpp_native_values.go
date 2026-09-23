@@ -118,6 +118,11 @@ func (r *Runner) bashPPBridgeCall(ctx context.Context, call *syntax.BashPPCall) 
 	if values, claimed, err := r.goSourceUnsafeSliceCall(call); claimed {
 		return values, err
 	}
+	// runtime.Gosched yields the interpreter's own scheduler; see
+	// gosource_s247_gosched.go.
+	if values, claimed, err := r.goSourceGoschedCall(call); claimed {
+		return values, err
+	}
 	// Stack introspection reads the interpreter's own frames; see
 	// bashpp_sprint162_nilptr2_stack.go.
 	if values, claimed, err := r.goSourceRuntimeStackCall(call); claimed {
