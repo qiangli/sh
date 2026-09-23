@@ -83,7 +83,7 @@ func runDetachedExec(ctx context.Context, r *Runner, label string, args []string
 		return exit
 	}
 	cmd := detachedExecCmd(r, path, args)
-	if err := cmd.Start(); err != nil {
+	if err := startExecCmdWithinBudget(&cmd); err != nil {
 		r.errf("%s: %v\n", label, err)
 		exit.code = 126
 		return exit

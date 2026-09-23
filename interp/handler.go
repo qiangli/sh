@@ -530,7 +530,7 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 		}()
 		startCmd := func() error {
 			var startErr error
-			if refusal := execBudgetRefusal(cmd.Path, cmd.Args, cmd.Env); refusal != nil {
+			if refusal := execBudgetRefusalCmd(&cmd); refusal != nil {
 				startErr = refusal
 			} else if start, ok := ctx.Value(execStartOverrideCtxKey{}).(func(*exec.Cmd) error); ok {
 				startErr = start(&cmd)
@@ -768,6 +768,27 @@ func execBudgetRefusal(path string, args, env []string) error {
 		return nil
 	}
 	return &os.PathError{Op: "fork/exec", Path: path, Err: execBudgetErr()}
+}
+
+// execBudgetRefusalCmd handles os/exec's nil-Env inheritance and nil-Args
+// fallback for launch paths outside DefaultExecHandler.
+func execBudgetRefusalCmd(cmd *exec.Cmd) error {
+	args := cmd.Args
+	if len(args) == 0 {
+		args = []string{cmd.Path}
+	}
+	env := cmd.Env
+	if env == nil {
+		env = os.Environ()
+	}
+	return execBudgetRefusal(cmd.Path, args, env)
+}
+
+func startExecCmdWithinBudget(cmd *exec.Cmd) error {
+	if err := execBudgetRefusalCmd(cmd); err != nil {
+		return err
+	}
+	return cmd.Start()
 }
 
 // shellVisibleLookupError removes the retained Linux cwd descriptor from a

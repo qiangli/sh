@@ -75,7 +75,7 @@ func runDetachedExec(ctx context.Context, r *Runner, label string, args []string
 			Setsid: true,
 		},
 	}
-	if err := cmd.Start(); err != nil {
+	if err := startExecCmdWithinBudget(&cmd); err != nil {
 		r.errf("%s: %v\n", label, err)
 		// 126 = found but not executable, per POSIX
 		exit.code = 126

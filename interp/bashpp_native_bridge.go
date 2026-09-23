@@ -428,7 +428,7 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 		bashPPNativeKill(cmd)
 		return nil
 	}
-	if err = cmd.Start(); err != nil {
+	if err = startExecCmdWithinBudget(cmd); err != nil {
 		s.closeDrains()
 		cleanup()
 		return err

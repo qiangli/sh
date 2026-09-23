@@ -56,6 +56,9 @@ func (s *bashPPCmdSource) Kill() {
 // exec.Cmd.StdoutPipe, the pipes are drained to EOF by the substrate before it
 // reaps the process, so callers never close them.
 func bashPPStartCmd(ctx context.Context, cmd *exec.Cmd, buffer int) (*bashPPLineProcess, error) {
+	if err := execBudgetRefusalCmd(cmd); err != nil {
+		return nil, err
+	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, err
