@@ -142,6 +142,7 @@ type bashPPBridgeResponse struct {
 type bashPPNativeSession struct {
 	// Type facts are authenticated on this connection; no native values are cached.
 	handleTypes         map[uint64]uint64
+	typeFacts           map[bashPPNativeTypeFactKey]bashPPBridgeValue // protected by mu
 	interfaceAdmissions map[goSourceNativeAdmissionKey]bool
 	functions           map[uint64]*bashPPFunc
 	functionNext        uint64
