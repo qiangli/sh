@@ -128,6 +128,30 @@ func nativeExecEnvMode(env []string, windows bool) []string {
 	return nativeExecEnvMountsMode(pathconv.CurrentMounts(), env, windows)
 }
 
+// nativeExecEnvForChildMountsMode keeps the shell's PATH spelling when the
+// child is this Bashy executable. The child performs its own PATH lookup and
+// understands POSIX mount paths, while a native Windows program still needs
+// the converted semicolon-separated PATH. In particular, `command -p sh` is
+// allowed to use the standard utility search path without changing the PATH
+// exported to the child shell.
+func nativeExecEnvForChildMountsMode(m *pathconv.Mounts, env []string, windows, selfChild bool) []string {
+	native := nativeExecEnvMountsMode(m, env, windows)
+	if !windows || !selfChild {
+		return native
+	}
+	for i, kv := range env {
+		name, _, ok := strings.Cut(kv, "=")
+		if !ok || !strings.EqualFold(name, "PATH") || i >= len(native) || native[i] == kv {
+			continue
+		}
+		// nativeExecEnvMountsMode may have returned the input slice when no
+		// conversion was required; never change the runner's own environment.
+		native = append([]string(nil), native...)
+		native[i] = kv
+	}
+	return native
+}
+
 // nativeExecEnvMountsMode is [nativeExecEnvMode] with an explicit mount
 // table, so the virtual root (/bin, /tmp) can be exercised on any host.
 // windowsHostTempEnv reports the host's own temp-directory variables, the
