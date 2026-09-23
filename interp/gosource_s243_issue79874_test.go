@@ -45,10 +45,14 @@ func main(){s,err:=syscall.Mmap(-1,0,1,syscall.PROT_READ,syscall.MAP_ANON|syscal
 	if err == nil || !strings.Contains(stderr, "index out of range") {
 		t.Fatalf("native indexed pointer bounds: err=%v stdout=%q stderr=%q", err, out, stderr)
 	}
-	_, stderr, err = runGoSource(t, "s243-native-indexed-pointer-local-alias", `package main
+	// Sprint 247 gave local unsafe.Slice a storage-span model: the result
+	// aliases the interpreter's own backing, so it stays local and writes
+	// are visible both ways. A copy across the native boundary would print
+	// 2 and 9.
+	out, stderr, err = runGoSource(t, "s243-native-indexed-pointer-local-alias", `package main
 import("unsafe";"fmt")
-func main(){s:=[]byte{1,2};p:=&s[1];v:=unsafe.Slice(p,1);s[1]=9;fmt.Println(v[0])}`)
-	if err == nil || out != "" {
-		t.Fatalf("local slice alias control unexpectedly crossed native boundary: err=%v stdout=%q stderr=%q", err, out, stderr)
+func main(){s:=[]byte{1,2};p:=&s[1];v:=unsafe.Slice(p,1);s[1]=9;fmt.Println(v[0]);v[0]=7;fmt.Println(s[1])}`)
+	if err != nil || stderr != "" || out != "9\n7\n" {
+		t.Fatalf("local slice alias: err=%v stdout=%q stderr=%q", err, out, stderr)
 	}
 }
