@@ -61,3 +61,20 @@ Sprint 248 denominator.
 
 `TestS248RuntimeObservationReplacementConformance` compares unchanged Go,
 interpreted Bash# and the compiled Bash# artifact for these contracts.
+
+## Sprint 247: field-tracking experiment
+
+**Ratified by the operator, 2026-09-22 (Sprint 247 lane D, provisional: "for
+now").** Two value/provenance roots assert the gc field-tracking experiment
+rather than the language. Both pass natively and in compiled mode. They stay
+**FAIL by ID in interpreted mode**, with no synthetic PASS and no reduction of
+the 17-root Sprint 247 denominator. They are the same class as
+`fixedbugs/issue47928.go` and `typeparam/mdempsky/15.go` above.
+
+| Root | Reason | gc-owned observation absent from interpreted Bash# | Replacement observable contract |
+| --- | --- | --- | --- |
+| `fixedbugs/issue20014.go` | `gc-only-check` | `-goexperiment fieldtrack` with `-ldflags -k=main.fieldTrackInfo`: the linker writes the set of tracked fields it saw into a string variable | `go:"track"` is an ordinary struct tag; tracked fields read and write like any other. |
+| `fixedbugs/issue30862.go` | `gc-only-check` | `//go:nointerface` under `-goexperiment fieldtrack`, across an imported embedded struct | A pointer method promoted through an embedded struct satisfies interfaces through the pointer and the embedding pointer, not the embedding value. |
+
+`TestS247DecisionReplacementConformance` compares unchanged Go, interpreted
+Bash# and the compiled Bash# artifact for these contracts.
