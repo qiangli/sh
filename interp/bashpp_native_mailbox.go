@@ -146,7 +146,7 @@ var callbackMailbox []byte
 func callbackMailboxWord(slot,offset int)*uint32{return (*uint32)(unsafe.Pointer(&callbackMailbox[slot*callbackMailboxSlotSize+offset]))}
 func callbackMailboxRequestBytes(slot int)[]byte{start:=slot*callbackMailboxSlotSize+callbackMailboxHeader;return callbackMailbox[start:start+callbackMailboxHalf]}
 func callbackMailboxReplyBytes(slot int)[]byte{start:=slot*callbackMailboxSlotSize+callbackMailboxHeader+callbackMailboxHalf;return callbackMailbox[start:(slot+1)*callbackMailboxSlotSize]}
-func openCallbackMailbox(){if callbackMailboxPath==""{return};f,err:=os.OpenFile(callbackMailboxPath,os.O_RDWR,0);if err!=nil{return};defer f.Close();callbackMailbox,err=syscall.Mmap(int(f.Fd()),0,%d,syscall.PROT_READ|syscall.PROT_WRITE,syscall.MAP_SHARED);if err!=nil{callbackMailbox=nil}}
+%s
 func mailboxCallback(q response)(request,bool,error){
  if callbackMailbox==nil{return request{},false,nil}
  payload,err:=json.Marshal(q);if err!=nil||len(payload)>callbackMailboxHalf{return request{},false,err}
@@ -160,7 +160,7 @@ func mailboxCallback(q response)(request,bool,error){
  atomic.StoreUint32(callbackMailboxWord(slot,0),callbackMailboxFree)
  return reply,true,err
 }
-`, bashPPMailboxSlots, bashPPMailboxSlotSize, bashPPMailboxHeader, bashPPMailboxHalf, bashPPMailboxFree, bashPPMailboxWriting, bashPPMailboxRequest, bashPPMailboxReply, bashPPMailboxSize)
+`, bashPPMailboxSlots, bashPPMailboxSlotSize, bashPPMailboxHeader, bashPPMailboxHalf, bashPPMailboxFree, bashPPMailboxWriting, bashPPMailboxRequest, bashPPMailboxReply, bashPPMailboxOpenWorkerSource())
 	return imports, implementation
 }
 

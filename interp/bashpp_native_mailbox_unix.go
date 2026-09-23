@@ -3,6 +3,7 @@
 package interp
 
 import (
+	"fmt"
 	"os"
 	"syscall"
 )
@@ -40,4 +41,8 @@ func newBashPPCallbackMailbox() (*bashPPCallbackMailbox, error) {
 		}
 		return err
 	}}, nil
+}
+
+func bashPPMailboxOpenWorkerSource() string {
+	return fmt.Sprintf(`func openCallbackMailbox(){if callbackMailboxPath==""{return};f,err:=os.OpenFile(callbackMailboxPath,os.O_RDWR,0);if err!=nil{return};defer f.Close();callbackMailbox,err=syscall.Mmap(int(f.Fd()),0,%d,syscall.PROT_READ|syscall.PROT_WRITE,syscall.MAP_SHARED);if err!=nil{callbackMailbox=nil}}`, bashPPMailboxSize)
 }
