@@ -8,6 +8,7 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Keep original reference-bearing values in their interpreter-owned storage.
@@ -254,4 +255,42 @@ func (r *Runner) goSourceNativeSleepBoundary(ctx context.Context, req bashPPEval
 		return true
 	}
 	return r.bashPPArmBeforeBlock(ctx)
+}
+
+// goSourceLocalTimeSleep keeps a main-task time.Sleep in the interpreter.
+// The dependency process owns time.Timer channels, but sleeping this goroutine
+// advances the same monotonic clock without paying a request/reply round trip.
+// That distinction matters on Windows, where the bridge latency between a
+// select default arm and its 50 ms sleep can consume the next timer boundary.
+// Launched tasks retain the dependency path and its launch-handshake rules.
+func (r *Runner) goSourceLocalTimeSleep(ctx context.Context, req bashPPEvalRequest, q bashPPBridgeRequest) (bool, error) {
+	if !r.bashPPGoSource || r.bashPPGoTask || q.Op != "call" || len(q.Args) != 1 || q.Spread {
+		return false, nil
+	}
+	sleep := false
+	alias, name, ok := strings.Cut(q.Selector, ".")
+	if ok && req.Imports[alias] == "time" && name == "Sleep" {
+		sleep = true
+	}
+	if q.Receiver != nil && q.Receiver.Callable == "time.Sleep" {
+		sleep = true
+	}
+	if !sleep {
+		return false, nil
+	}
+	n, err := strconv.ParseInt(q.Args[0].Text, 10, 64)
+	if err != nil {
+		return false, nil
+	}
+	if n <= 0 {
+		return true, nil
+	}
+	timer := time.NewTimer(time.Duration(n))
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true, nil
+	case <-ctx.Done():
+		return true, ctx.Err()
+	}
 }

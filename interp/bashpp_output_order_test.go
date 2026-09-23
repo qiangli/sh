@@ -57,6 +57,24 @@ func TestGoSourcePanicHonorsGoTracebackNone(t *testing.T) {
 	}
 }
 
+func TestGoSourceSelectDefaultPreservesPriorNativeOutput(t *testing.T) {
+	got := runOrderedInterpreter(t, "select-default.go", `package main
+import "fmt"
+func main() {
+	fmt.Println("native-before-default")
+	select {
+	case <-make(chan int):
+		println("unreachable")
+	default:
+		println("local-after-default")
+	}
+}`)
+	want := orderedOutput{combined: "native-before-default\nlocal-after-default\n"}
+	if got != want {
+		t.Fatalf("select default output order: got %+v want %+v", got, want)
+	}
+}
+
 type orderedOutput struct {
 	combined string
 	status   int

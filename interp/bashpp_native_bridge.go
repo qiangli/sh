@@ -151,6 +151,30 @@ type bashPPBridgeResponse struct {
 	Values   []bashPPBridgeValue `json:"values,omitempty"`
 	Error    string              `json:"error,omitempty"`
 }
+
+func bashPPNativeSelectDefaultReply(q bashPPBridgeRequest, reply bashPPBridgeResponse) bool {
+	return q.Op == "channel-select" && q.Selector == "probe" && reply.Error == "" &&
+		reply.Panic == nil && len(reply.Values) == 3 && reply.Values[0].Kind == "int" &&
+		reply.Values[0].Text == "-1"
+}
+
+func bashPPNativeNoOutputReply(req bashPPEvalRequest, q bashPPBridgeRequest, reply bashPPBridgeResponse) bool {
+	if reply.Error != "" || reply.Panic != nil {
+		return false
+	}
+	if bashPPNativeSelectDefaultReply(q, reply) {
+		return true
+	}
+	if q.Op != "call" {
+		return false
+	}
+	if q.Receiver != nil {
+		return q.Receiver.Type == "time.Duration" && q.Selector == "Round"
+	}
+	alias, name, ok := strings.Cut(q.Selector, ".")
+	return ok && req.Imports[alias] == "time" && name == "Since"
+}
+
 type bashPPNativeSession struct {
 	// Type facts are authenticated on this connection; no native values are cached.
 	handleTypes         map[uint64]uint64
@@ -791,7 +815,14 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 		case 2:
 			// The reply crossed the control channel after the dependency's own
 			// writes; the barrier keeps the next interpreted statement behind them.
-			s.drainOutputs()
+			// A probed select that chose default did not communicate with a
+			// sender. Pure time.Since and time.Duration.Round calls cannot
+			// write output either. Earlier requests already drained their own
+			// output, so these replies need no pipe barrier. This matters in
+			// polling loops with short sleeps.
+			if !bashPPNativeNoOutputReply(req, q, reply) {
+				s.drainOutputs()
+			}
 			// A written-back element may nest native values this session
 			// still owns — a reflect.Type inside a reflect.StructField, a
 			// reflect.Value the worker re-minted a handle for. They arrived
