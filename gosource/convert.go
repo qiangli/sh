@@ -2079,7 +2079,10 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 // original targets, which is the order required by the Go specification.
 func (c *converter) selectComm(st ast.Stmt) (s.Command, []*s.Stmt) {
 	assign, ok := st.(*ast.AssignStmt)
-	if !ok || assign.Tok != token.ASSIGN || len(assign.Lhs) < 2 || tuplePlainTargets(assign.Lhs) {
+	if !ok || assign.Tok != token.ASSIGN || tuplePlainTargets(assign.Lhs) {
+		return c.one(st), nil
+	}
+	if len(assign.Lhs) < 2 && !c.mapElementTarget(assign.Lhs[0]) {
 		return c.one(st), nil
 	}
 	temps := make([]ast.Expr, len(assign.Lhs))
@@ -2089,6 +2092,23 @@ func (c *converter) selectComm(st ast.Stmt) (s.Command, []*s.Stmt) {
 	recv := &ast.AssignStmt{Lhs: temps, TokPos: assign.TokPos, Tok: token.DEFINE, Rhs: assign.Rhs}
 	commit := &ast.AssignStmt{Lhs: assign.Lhs, TokPos: assign.TokPos, Tok: token.ASSIGN, Rhs: temps}
 	return c.one(recv), c.statements(commit)
+}
+
+// mapElementTarget reports whether target is a map index expression. A map
+// element is not addressable, so a select receive into one commits through an
+// ordinary map assignment after the case is chosen, which is also when the
+// spec evaluates the receive's left-hand side.
+func (c *converter) mapElementTarget(target ast.Expr) bool {
+	index, ok := ast.Unparen(target).(*ast.IndexExpr)
+	if !ok {
+		return false
+	}
+	typ := c.info.TypeOf(index.X)
+	if typ == nil {
+		return false
+	}
+	_, isMap := typ.Underlying().(*types.Map)
+	return isMap
 }
 
 func (c *converter) one(st ast.Stmt) s.Command {
