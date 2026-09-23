@@ -161,6 +161,7 @@ type bashPPNativeSession struct {
 	callbackGate        chan struct{}
 	activeCallbacks     chan bashPPBridgeResponse
 	callbackOwner       *Runner
+	mailbox             *bashPPCallbackMailbox
 	// retained records that this session was handed an original callback it
 	// keeps past the handing-over call. Every later request then parks as a
 	// callback server; see requestCallbackCapable.
@@ -239,6 +240,11 @@ func (s *bashPPNativeSession) closeCanceled(cause error) {
 			s.stopSignals()
 		}
 		s.closeDrains()
+		s.mu.Lock()
+		mailbox := s.mailbox
+		s.mailbox = nil
+		s.mu.Unlock()
+		mailbox.close()
 		if s.cmd != nil && s.cmd.Process != nil {
 			// The child is gone by now, so the copiers can reach EOF; waiting
 			// here makes the program's final output visible before the session
@@ -294,7 +300,31 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 	}
 	auth := hex.EncodeToString(secret)
 	s.id = auth[:16]
-	source = strings.Replace(source, "//CONNECTION", "const bridgeNetwork = "+strconv.Quote(bridgeNetwork)+"\nconst bridgeAddress = "+strconv.Quote(listener.Addr().String())+"\nconst bridgeAuth = "+strconv.Quote(auth), 1)
+	mailbox, mailboxErr := newBashPPCallbackMailbox()
+	if mailboxErr == nil {
+		s.mu.Lock()
+		s.mailbox = mailbox
+		s.mu.Unlock()
+	}
+	mailboxStarted := false
+	defer func() {
+		if !mailboxStarted && mailbox != nil {
+			s.mu.Lock()
+			if s.mailbox == mailbox {
+				s.mailbox = nil
+			}
+			s.mu.Unlock()
+			mailbox.close()
+		}
+	}()
+	mailboxPath := ""
+	if mailbox != nil {
+		mailboxPath = mailbox.path
+	}
+	mailboxImports, mailboxSource := bashPPMailboxWorkerSource(mailbox != nil)
+	source = strings.Replace(source, "//CALLBACKMAILBOXIMPORTS", mailboxImports, 1)
+	source = strings.Replace(source, "//CALLBACKMAILBOX", mailboxSource, 1)
+	source = strings.Replace(source, "//CONNECTION", "const bridgeNetwork = "+strconv.Quote(bridgeNetwork)+"\nconst bridgeAddress = "+strconv.Quote(listener.Addr().String())+"\nconst bridgeAuth = "+strconv.Quote(auth)+"\nconst callbackMailboxPath = "+strconv.Quote(mailboxPath), 1)
 	scratchEnv := req.RuntimeEnv
 	if scratchEnv == nil {
 		scratchEnv = req.Env
@@ -556,6 +586,7 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 			}
 		}
 	}()
+	mailboxStarted = true
 	return nil
 }
 func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest, q bashPPBridgeRequest) ([]bashPPBridgeValue, error) {
@@ -604,6 +635,14 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 	defer release()
 	if err := s.begin(ctx, req); err != nil {
 		return nil, err
+	}
+	s.mu.Lock()
+	requestMailbox := s.mailbox
+	s.mu.Unlock()
+	if requestMailbox != nil && requestMailbox.retain() {
+		defer requestMailbox.release()
+	} else {
+		requestMailbox = nil
 	}
 	var check func(bashPPBridgeValue) error
 	check = func(v bashPPBridgeValue) error {
@@ -656,6 +695,35 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 		return nil, s.closedWriteError(ctx, err)
 	}
 	for {
+		s.mu.Lock()
+		mailboxActive := requestMailbox != nil && callbacks != nil && s.activeCallbacks == callbacks
+		s.mu.Unlock()
+		if mailboxActive {
+			if slot, callback, ok := requestMailbox.take(); ok {
+				answer := s.callbackAnswer(ctx, req.CallbackOwner, callback, q.coherence)
+				s.mu.Lock()
+				mailboxAlive, waitErr := s.mailbox == requestMailbox, s.waitErr
+				s.mu.Unlock()
+				if !mailboxAlive {
+					if canceled := s.canceledTermination(ctx, waitErr); canceled != nil {
+						return nil, canceled
+					}
+					return nil, s.programExitError(waitErr)
+				}
+				requestMailbox.answer(slot, answer)
+				if owner := req.CallbackOwner; owner != nil {
+					// A nested os.Exit has already made this the program's process
+					// outcome. Keep that identity through the enclosing request.
+					if owner.exit.exiting {
+						return nil, &bashPPNativeExit{status: int(owner.exit.code)}
+					}
+					if owner.exit.err != nil {
+						return nil, owner.exit.err
+					}
+				}
+				continue
+			}
+		}
 		select {
 		case callback := <-callbacks:
 			// The callback installs a write barrier on the interpreter's
@@ -751,6 +819,25 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 				return nil, canceled
 			}
 			return nil, s.programExitError(err)
+		default:
+			if mailboxActive {
+				bashPPMailboxYield()
+				continue
+			}
+			// Ordinary requests retain the blocking socket path. Put the event
+			// back into its one-place queue so the common handling above owns all
+			// ordering, cancellation and writeback semantics.
+			select {
+			case callback := <-callbacks:
+				callbacks <- callback
+			case reply := <-wait:
+				wait <- reply
+			case <-ctx.Done():
+				s.closeCanceled(ctx.Err())
+				return nil, s.canceledTermination(ctx, ctx.Err())
+			case <-s.done:
+				return nil, s.programExitError(nil)
+			}
 		}
 	}
 }

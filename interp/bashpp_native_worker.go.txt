@@ -30,6 +30,7 @@ import (
  "unsafe"
  bppTextTemplate "text/template"
  bppTemplateParse "text/template/parse"
+//CALLBACKMAILBOXIMPORTS
 //IMPORTS
 )
 
@@ -281,14 +282,16 @@ func structuralPath(v reflect.Value,path map[uintptr]bool) value {
 // is this protocol exchange.
 var callbacks = struct { sync.Mutex; next uint64; waiting map[uint64]chan request }{waiting: map[uint64]chan request{}}
 var outbound = struct { sync.Mutex; encoder *json.Encoder }{}
+//CALLBACKMAILBOX
 func callback(selector string, recv value) ([]value,error) {
  outbound.Lock();encoder:=outbound.encoder;outbound.Unlock()
  if encoder==nil {return nil,fmt.Errorf("no interpreter connection for %s",selector)}
  callbacks.Lock();callbacks.next++;id:=callbacks.next;wait:=make(chan request,1);callbacks.waiting[id]=wait;callbacks.Unlock()
  defer func(){callbacks.Lock();delete(callbacks.waiting,id);callbacks.Unlock()}()
- outbound.Lock();err:=encoder.Encode(response{ID:id,Op:"callback",Selector:selector,Receiver:&recv});outbound.Unlock()
+ message:=response{ID:id,Op:"callback",Selector:selector,Receiver:&recv}
+ reply,handled,err:=mailboxCallback(message)
  if err!=nil{return nil,err}
- reply:=<-wait
+ if !handled {outbound.Lock();err=encoder.Encode(message);outbound.Unlock();if err!=nil{return nil,err};reply=<-wait}
  if reply.Receiver!=nil && recv.Origin!=0 {if _,err:=decode(*reply.Receiver,nil);err!=nil{return nil,err}}
  if reply.Error!=""{return nil,fmt.Errorf("%s",reply.Error)}
  if len(reply.Values)==1 && reply.Values[0].Kind=="panic" {panic(originalCallbackPanic{reply.Values[0]})}
@@ -652,6 +655,7 @@ func dispatch(q request)(reply response){
 }
 func nativeFaultAddr(q request)(uint64,bool){if q.Receiver==nil||len(q.Args)<1{return 0,false};switch q.Op{case "index","byte-set":default:return 0,false};n,err:=strconv.Atoi(q.Args[0].Text);if err!=nil||n<0{return 0,false};rv,err:=decode(*q.Receiver,nil);if err!=nil{return 0,false};for rv.Kind()==reflect.Interface&&!rv.IsNil(){rv=rv.Elem()};switch rv.Kind(){case reflect.Slice:if rv.Type().Elem().Kind()!=reflect.Uint8||n>=rv.Len(){return 0,false};return uint64(rv.Pointer()+uintptr(n)),true;case reflect.Array:if rv.Type().Elem().Kind()!=reflect.Uint8||n>=rv.Len()||!rv.CanAddr(){return 0,false};return uint64(rv.UnsafeAddr()+uintptr(n)),true};return 0,false}
 func main(){
+ openCallbackMailbox()
  conn,err:=net.Dial(bridgeNetwork,bridgeAddress);if err!=nil{panic(err)};defer conn.Close()
  encoder:=json.NewEncoder(conn);if err=encoder.Encode(bridgeAuth);err!=nil{return};decoder:=json.NewDecoder(conn)
  outbound.Lock();outbound.encoder=encoder;outbound.Unlock()

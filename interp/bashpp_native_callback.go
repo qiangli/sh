@@ -77,7 +77,7 @@ func (s *bashPPNativeSession) enterCallbacks(ctx context.Context, req bashPPEval
 // emitter, is checked after the body and after the receiver reconciliation
 // is computed: a stale copy fails this callback before the dependency reads
 // any further.
-func (s *bashPPNativeSession) serveCallback(ctx context.Context, owner *Runner, q bashPPBridgeResponse, coherence *goSourceCopyCoherence) {
+func (s *bashPPNativeSession) callbackAnswer(ctx context.Context, owner *Runner, q bashPPBridgeResponse, coherence *goSourceCopyCoherence) bashPPBridgeRequest {
 	answer := bashPPBridgeRequest{ID: q.ID, Op: "callback-reply"}
 	if owner == nil || q.Receiver == nil {
 		answer.Error = "gosource: callback has no original owner or receiver"
@@ -134,6 +134,11 @@ func (s *bashPPNativeSession) serveCallback(ctx context.Context, owner *Runner, 
 			}
 		}
 	}
+	return answer
+}
+
+func (s *bashPPNativeSession) serveCallback(ctx context.Context, owner *Runner, q bashPPBridgeResponse, coherence *goSourceCopyCoherence) {
+	answer := s.callbackAnswer(ctx, owner, q, coherence)
 	s.mu.Lock()
 	conn := s.conn
 	s.mu.Unlock()
