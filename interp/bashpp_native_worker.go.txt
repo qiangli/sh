@@ -292,6 +292,7 @@ func callback(selector string, recv value) ([]value,error) {
  reply,handled,err:=mailboxCallback(message)
  if err!=nil{return nil,err}
  if !handled {outbound.Lock();err=encoder.Encode(message);outbound.Unlock();if err!=nil{return nil,err};reply=<-wait}
+ if handled && reply.Op=="callback-mailbox-overflow" && reply.Error=="" {select{case reply=<-wait:case <-handles.stop:return nil,fmt.Errorf("interpreter connection closed during callback")}}
  if reply.Receiver!=nil && recv.Origin!=0 {if _,err:=decode(*reply.Receiver,nil);err!=nil{return nil,err}}
  if reply.Error!=""{return nil,fmt.Errorf("%s",reply.Error)}
  if len(reply.Values)==1 && reply.Values[0].Kind=="panic" {panic(originalCallbackPanic{reply.Values[0]})}

@@ -20,6 +20,13 @@ import (
 
 func TestGoSourceCallbackEffects(t *testing.T) {
 	for name, source := range map[string]string{
+		"large_return_once": `package main
+import "fmt"
+import "strings"
+type Tag int
+var calls int
+func(t Tag)String()string{calls++;return strings.Repeat("x",40000)}
+func main(){s:=fmt.Sprint(Tag(1));fmt.Println(len(s),calls)}`,
 
 		"wrapped_callback": `package main
 import "fmt"

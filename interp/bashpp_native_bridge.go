@@ -710,7 +710,26 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 					}
 					return nil, s.programExitError(waitErr)
 				}
-				requestMailbox.answer(slot, answer)
+				if !requestMailbox.answer(slot, answer) {
+					// The original body has already run. Send its exact result once
+					// through the authenticated socket, then wake its mailbox waiter.
+					s.mu.Lock()
+					conn := s.conn
+					s.mu.Unlock()
+					var sendErr error
+					if conn == nil {
+						sendErr = errors.New("gosource: callback connection closed")
+					} else {
+						s.write.Lock()
+						sendErr = json.NewEncoder(conn).Encode(answer)
+						s.write.Unlock()
+					}
+					marker := bashPPBridgeRequest{ID: answer.ID, Op: "callback-mailbox-overflow"}
+					if sendErr != nil {
+						marker.Error = sendErr.Error()
+					}
+					requestMailbox.answer(slot, marker)
+				}
 				if owner := req.CallbackOwner; owner != nil {
 					// A nested os.Exit has already made this the program's process
 					// outcome. Keep that identity through the enclosing request.
@@ -724,8 +743,39 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 				continue
 			}
 		}
-		select {
-		case callback := <-callbacks:
+		// Poll only while this request owns an active mailbox. Ordinary
+		// requests block on their channels, and each event is consumed once.
+		var callback bashPPBridgeResponse
+		var reply bashPPBridgeResponse
+		var event uint8
+		if mailboxActive {
+			select {
+			case callback = <-callbacks:
+				event = 1
+			case reply = <-wait:
+				event = 2
+			case <-ctx.Done():
+				event = 3
+			case <-s.done:
+				event = 4
+			default:
+				bashPPMailboxYield()
+				continue
+			}
+		} else {
+			select {
+			case callback = <-callbacks:
+				event = 1
+			case reply = <-wait:
+				event = 2
+			case <-ctx.Done():
+				event = 3
+			case <-s.done:
+				event = 4
+			}
+		}
+		switch event {
+		case 1:
 			// The callback installs a write barrier on the interpreter's
 			// streams. If it writes directly, earlier child output lands first;
 			// a callback with no direct output needs no pipe round trip.
@@ -738,7 +788,7 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 					return nil, &bashPPNativeExit{status: int(owner.exit.code)}
 				}
 			}
-		case reply := <-wait:
+		case 2:
 			// The reply crossed the control channel after the dependency's own
 			// writes; the barrier keeps the next interpreted statement behind them.
 			s.drainOutputs()
@@ -807,10 +857,10 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 				owner.bashPPTools.panicOnFault = q.Args[0].Text == "true"
 			}
 			return reply.Values, nil
-		case <-ctx.Done():
+		case 3:
 			s.closeCanceled(ctx.Err())
 			return nil, ctx.Err()
-		case <-s.done:
+		case 4:
 			s.waitDrains()
 			s.mu.Lock()
 			err := s.waitErr
@@ -819,25 +869,6 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 				return nil, canceled
 			}
 			return nil, s.programExitError(err)
-		default:
-			if mailboxActive {
-				bashPPMailboxYield()
-				continue
-			}
-			// Ordinary requests retain the blocking socket path. Put the event
-			// back into its one-place queue so the common handling above owns all
-			// ordering, cancellation and writeback semantics.
-			select {
-			case callback := <-callbacks:
-				callbacks <- callback
-			case reply := <-wait:
-				wait <- reply
-			case <-ctx.Done():
-				s.closeCanceled(ctx.Err())
-				return nil, s.canceledTermination(ctx, ctx.Err())
-			case <-s.done:
-				return nil, s.programExitError(nil)
-			}
 		}
 	}
 }

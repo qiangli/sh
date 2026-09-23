@@ -74,21 +74,17 @@ func (m *bashPPCallbackMailbox) take() (int, bashPPBridgeResponse, bool) {
 	return 0, bashPPBridgeResponse{}, false
 }
 
-func (m *bashPPCallbackMailbox) answer(slot int, answer bashPPBridgeRequest) {
+// answer publishes a reply only when it fits. The caller sends larger replies
+// over the authenticated control connection, then publishes a small marker.
+func (m *bashPPCallbackMailbox) answer(slot int, answer bashPPBridgeRequest) bool {
 	payload, err := json.Marshal(answer)
 	if err != nil || len(payload) > len(m.replyBytes(slot)) {
-		answer.Values = nil
-		answer.Receiver = nil
-		if err != nil {
-			answer.Error = fmt.Sprintf("gosource: encode callback mailbox reply: %v", err)
-		} else {
-			answer.Error = "gosource: callback mailbox reply too large"
-		}
-		payload, _ = json.Marshal(answer)
+		return false
 	}
 	copy(m.replyBytes(slot), payload)
 	atomic.StoreUint32(m.word(slot, 8), uint32(len(payload)))
 	atomic.StoreUint32(m.word(slot, 0), bashPPMailboxReply)
+	return true
 }
 
 func (m *bashPPCallbackMailbox) close() {
