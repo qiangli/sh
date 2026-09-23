@@ -397,6 +397,14 @@ func (r *Runner) bashPPPanicValueText(value any, fallback string) string {
 	if bashPPRuntimeErrorType(iv.dynamic) {
 		return bashPPRuntimeErrorText(iv)
 	}
+	// A native error stored in an interface keeps its bridge handle in the
+	// concrete payload. Render its Error method at the panic boundary, just
+	// as Go does, while retaining the original handle for recover.
+	if r.bashPPGoSource && iv.cell.vr.Kind == expand.Object {
+		if native, ok := iv.cell.vr.Obj.(*bashPPBridgeValue); ok && native != nil {
+			return r.goSourcePanicNativeText(*native, fallback)
+		}
+	}
 	named, ok := iv.dynamic.(*syntax.BashPPNamedType)
 	if !ok || named.Name == nil || iv.cell.vr.Kind != expand.String {
 		return fallback
