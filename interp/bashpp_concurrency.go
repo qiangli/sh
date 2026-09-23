@@ -267,6 +267,9 @@ type bashPPConcurrent struct {
 	// fifoPending holds rendezvous openers that have announced themselves
 	// but not yet acquired a descriptor; see bashPPFIFOOpen.
 	fifoPending map[*bashPPFIFOEntry]struct{}
+	// finalizers holds the program's armed finalizers; see
+	// gosource_finalizer.go.
+	finalizers *goSourceFinalizers
 }
 
 // bashPPLockedWriter serializes one Write call at a time across every task in

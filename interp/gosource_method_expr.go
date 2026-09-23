@@ -82,6 +82,17 @@ func (r *Runner) goSourceMethodExprCallee(c *syntax.BashPPCall) (syntax.BashPPTy
 // the receiver type: its parameters are the receiver followed by M's own,
 // its results M's, and its body the one call `recv.M(args…)`.
 func (r *Runner) goSourceMethodExprClosure(recv syntax.BashPPTypeExpr, method *syntax.Lit) (*bashPPFunc, error) {
+	closure, err := r.goSourceMethodExprLit(recv, method)
+	if err != nil {
+		return nil, err
+	}
+	fn, _ := r.bashPPMakeClosure(closure)
+	return fn, nil
+}
+
+// goSourceMethodExprLit is the forwarding function literal of
+// goSourceMethodExprClosure, before it is bound to a scope.
+func (r *Runner) goSourceMethodExprLit(recv syntax.BashPPTypeExpr, method *syntax.Lit) (*syntax.BashPPFuncLit, error) {
 	sel := r.bashPPResolveSelection(recv, method.Value, true, false)
 	if sel.ambiguous {
 		return nil, fmt.Errorf("BASHPP-ESELECTOR-AMBIGUOUS: ambiguous selector %s.%s", bashPPTypeText(recv), method.Value)
@@ -136,8 +147,7 @@ func (r *Runner) goSourceMethodExprClosure(recv syntax.BashPPTypeExpr, method *s
 		body.Stmts = []*syntax.Stmt{{Cmd: ret, Position: at}}
 	}
 	closure.Body = body
-	fn, _ := r.bashPPMakeClosure(closure)
-	return fn, nil
+	return closure, nil
 }
 
 // goSourceMethodExprCell is the function value a method expression used as

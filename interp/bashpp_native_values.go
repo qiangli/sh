@@ -119,6 +119,11 @@ func (r *Runner) bashPPBridgeCall(ctx context.Context, call *syntax.BashPPCall) 
 	if values, claimed, err := r.goSourceRuntimeStackCall(call); claimed {
 		return values, err
 	}
+	// Finalizers are kept on the interpreter's own allocations; see
+	// gosource_finalizer.go.
+	if values, claimed, err := r.goSourceFinalizerCall(ctx, call); claimed {
+		return values, err
+	}
 	q, err := r.bashPPPrepareNativeCall(ctx, call)
 	if err != nil {
 		return nil, err
