@@ -3,10 +3,9 @@ id: 23d31846f263
 kind: bug
 title: S250 restore interpreted Go Tour image deadline margin
 seq: 141
-status: assigned
+status: todo
 priority: p0
 created: 2026-09-23T11:36:53.923078Z
-weave: 237
 assignee: qiangli
 sprint: 250
 sprint_id: c912e608-edfe-59b8-bd36-a98f6dad1634
@@ -72,3 +71,19 @@ timed out at the unchanged 60s limit (60.012s). The partial ledger SHA-256 is
 `09716ba3f3ed4a1c196ba34a50f556dfda671fcb1465cec35ea2329670dbe52f`
 at `/srv/sprint250/story141-do2-head-8a68fab-image-r2/`. Neither existing
 two-vCPU test droplet provides a safe margin for the current public head.
+
+A further exact one-row diagnostic on the first droplet kept the same product,
+source and 60s limit, adding only system-wide one-second `perf stat` sampling
+under the leaf lock. The interpreted image happened to pass at 57.623s, just
+2.377s below the limit. Its partial ledger SHA-256 is
+`5e88a6d612e459b5433a2516c350fa3ab972a1df52a3ba8d564b22f820cd20b6`
+at `/srv/sprint250/story141-linux-perf-head-8a68fab/`; the sampled counts are
+bound by `perf-1s.txt` SHA-256
+`cc568e7e9b476b02489145563f0043ea1862623009c9d9eb63fddc642dc3811a`.
+During seconds 3–60, the host made about 2.19 million context switches,
+546,000 read syscalls and 268,000 write syscalls, versus roughly 400 context
+switches per idle second. The repeated synchronous callback exchange dominates
+this fixture. A four-file second-connection prototype cut the local image case
+only about 8% and failed a race control for concurrent/reentrant callbacks;
+it was rejected without Linux promotion. No measured, small, sound patch yet
+gives the required comfortable margin, so keep this story open.
