@@ -20,6 +20,24 @@ also hit 60.01s (exit 124), stdout/stderr empty. Original source SHA-256
 `d78cda6272212f8a73bd991efa502753b4ff36edcd004b21539c2111b16b547f`
 matched the harness copy exactly. Artifacts:
 `/srv/sprint250/story89-linux-head-5353ba3/image-focused/`.
-The manager has reserved the DO leaf for c308 harness reruns; coordinate the
-leaf lock before further profiling and run only focused tests. Do not rerun a
-full Tour gate; the sprint manager owns that acceptance replay.
+Coordinate the DO leaf lock before further profiling and run only focused
+tests. The sprint manager owns full Tour acceptance replays.
+
+The first bounded callback optimization shipped as sh `4888f8d7` and Bashy
+pin `8a68fab1`: it skipped a redundant value-receiver copy and an empty
+reference digest. Focused original-source Linux replays passed at 55.21s and
+52.05s, with exact baseline stdout and the unchanged 60s deadline. The
+manager's clean public-head full Go Tour on harness `c308f5c` then executed
+291/291 observations and still hit the interpreted image deadline at 60.011s
+(source SHA-256 `d78cda6272212f8a73bd991efa502753b4ff36edcd004b21539c2111b16b547f`).
+All 97 baseline, all 97 compiled and the other 96 interpreted observations
+passed. Raw lineage and ledger:
+`/srv/sprint250/story89-linux-head-8a68fab/go-tour/`.
+
+Next bounded repair: profile the exact Tour executor image row with its fresh
+per-row HOME/TMPDIR/tool cache and original fixture, and remove another
+general interpreter cost. Target a comfortable margin below about 45s in the
+exact executor, preserving value-receiver aliasing, callback effects,
+stdout, native-fallback policy and 60s deadline. The manager owns the next
+full 291 gate and the DO leaf lock; the agent should run focused controls
+locally and ask for one coordinated Linux focused timing after a patch.
