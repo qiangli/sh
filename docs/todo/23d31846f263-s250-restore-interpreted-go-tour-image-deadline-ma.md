@@ -41,3 +41,21 @@ exact executor, preserving value-receiver aliasing, callback effects,
 stdout, native-fallback policy and 60s deadline. The manager owns the next
 full 291 gate and the DO leaf lock; the agent should run focused controls
 locally and ask for one coordinated Linux focused timing after a patch.
+
+The second bounded agent submitted local candidate `cf2b5320`: focused image
+allocations fell 18.2%, but the authenticated exact Linux executor row passed
+at 58.399s, leaving only 1.601s under the original deadline. Its earlier
+three-file subset timed out at 60.008s. The candidate remains unintegrated.
+A one-second process sample of the exact 60.006s timeout shows native helper
+compilation in the first ~2s; at elapsed 59s Bashy had used 48s CPU and the
+generated `bashpp-session` helper 18s CPU, both still in the callback phase.
+Evidence: `/srv/sprint250/story141-linux-opt236/go-tour-image-sampled/` and
+`/srv/sprint250/story141-linux-cf2/go-tour-image-exact/`.
+
+Next bounded agent: find one measured, general repeated callback cost on the
+exact executor path and make a minimal sound repair that gets image below
+about 45s. Do not repeat allocation tweaks without Linux timing. A buffered
+JSON socket trial had no local timing benefit and was discarded. Keep the
+original fixture, 60s limit, effect ordering, cancellation and fallback
+policy. Coordinate one focused DO run under the leaf lock; the manager owns
+the full 291 acceptance gate.
