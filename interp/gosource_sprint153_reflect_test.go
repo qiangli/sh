@@ -33,14 +33,16 @@ func TestGoSourceBridgeReflectTypeOnly(t *testing.T) {
 }
 
 // TestGoSourceBridgeReflectRefusals proves the classes that stay outside the
-// type-only transport are refused, not hung: reflect.ValueOf hands the
-// dependency a value whose mirrored callbacks it could retain, and
-// testing.AllocsPerRun would measure the callback trampoline's own child
-// allocations as the program's observable.
+// type-only transport are refused, not hung: reflect.ValueOf over a
+// method-bearing value whose copy shares a map with the caller, and
+// testing.AllocsPerRun, which would measure the callback trampoline's own
+// child allocations as the program's observable. (A plain-data value of a
+// method-bearing type is admitted since Sprints 219/248; see
+// TestS248ReflectValueOfTemporary.)
 func TestGoSourceBridgeReflectRefusals(t *testing.T) {
 	cases := map[string]string{
-		"valueof_refused.go.txt":      "dependency mutation of interpreter-owned references is unsupported",
-		"allocsperrun_refused.go.txt": "asynchronous or retained original function callbacks are unsupported",
+		"valueof_reference_refused.go.txt": "dependency mutation of interpreter-owned references is unsupported",
+		"allocsperrun_refused.go.txt":      "asynchronous or retained original function callbacks are unsupported",
 	}
 	for name, want := range cases {
 		t.Run(name, func(t *testing.T) {

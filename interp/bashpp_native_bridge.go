@@ -151,7 +151,11 @@ type bashPPNativeSession struct {
 	// retained records that this session was handed an original callback it
 	// keeps past the handing-over call. Every later request then parks as a
 	// callback server; see requestCallbackCapable.
-	retained            bool
+	retained bool
+	// madeFuncs are the handles of functions reflect.MakeFunc built over an
+	// original implementation, and of their Interface() views; see
+	// bashPPMadeFuncUse.
+	madeFuncs           map[uint64]bool
 	origins             map[uint64]*bashPPPointer
 	originNext          uint64
 	start               sync.Mutex
@@ -697,6 +701,7 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 					if reply.Values[i].Origin != 0 && reply.Values[i].Function {
 						reply.Values[i].Callbacks = true
 					}
+					s.rememberMadeFunc(req, q, reply.Values[i])
 					// Only a result of a request that actually CARRIED an
 					// original callback may retain one. A request merely
 					// parked as a callback server for the session — every

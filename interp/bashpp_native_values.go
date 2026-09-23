@@ -188,6 +188,9 @@ func (r *Runner) bashPPReflectValueReceiver(req bashPPEvalRequest, call *syntax.
 	}
 	cell := addressable(call.ArgExprs[0])
 	if cell == nil {
+		cell = r.bashPPReflectValueSnapshot(req, q.Args[0])
+	}
+	if cell == nil {
 		return
 	}
 	elem := cell.declType

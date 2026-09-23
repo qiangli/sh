@@ -258,8 +258,9 @@ func (r *Runner) bashPPNativeCallback(ctx context.Context, selector string, recv
 		}
 		r.bashPPCallCells = cells
 	}
+	entry := len(r.callStack)
 	results := r.bashPPInvoke(ctx, bound, arguments)
-	if r.bashPPPanicking() && !r.exit.exiting {
+	if r.bashPPCallbackRaised(entry) && !r.exit.exiting {
 		payload := r.bashPPPanic.value()
 		r.bashPPPanic, r.exit = savedPanic, savedExit
 		return []bashPPBridgeValue{{Kind: "panic", Type: "string", Text: payload}}, nil

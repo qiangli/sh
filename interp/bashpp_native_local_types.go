@@ -91,6 +91,7 @@ var bashPPHelperReserved = map[string]bool{
 	"dispatch": true, "main": true, "callback": true, "callbackFailed": true,
 	"takeFailure": true, "bridgeAddress": true, "bridgeAuth": true,
 	"originalTypeIdentity": true, "originalTypeIdentities": true, "originalTypeString": true, "hasOriginalTypeIdentity": true,
+	"mirroredMethodSet": true, "mirroredMethodTypes": true, "mirroredMethodExpression": true,
 }
 
 // bashPPLocalScalarTypes are the predeclared names the helper's base type
@@ -1283,6 +1284,15 @@ func bashPPLocalTypeGo(local bashPPLocalType) string {
 			receiver = "*" + local.Name
 		}
 		b.WriteString(bashPPLocalMethodStubGo(selectorBase, receiver, method))
+	}
+	// Register the mirrored method set for mirroredMethodExpression. An alias
+	// declares no methods of its own; its target registers them.
+	if len(local.Methods) > 0 && !local.Alias {
+		names := make([]string, len(local.Methods))
+		for i, method := range local.Methods {
+			names[i] = fmt.Sprintf("%q:true", method.Name)
+		}
+		fmt.Fprintf(&b, "func init(){mirroredMethodTypes=append(mirroredMethodTypes,mirroredMethodSet{types:[]reflect.Type{reflect.TypeFor[%s](),reflect.TypeFor[*%s]()},names:map[string]bool{%s}})}\n", local.Name, local.Name, strings.Join(names, ","))
 	}
 	return b.String()
 }

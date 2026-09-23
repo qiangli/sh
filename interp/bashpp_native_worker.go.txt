@@ -180,6 +180,19 @@ var types = map[string]reflect.Type{
 type localStructCodec struct { decode func(*decodeState,value)(reflect.Value,error); structural func(reflect.Value,map[uintptr]bool)value }
 var localStructCodecs = map[reflect.Type]localStructCodec{}
 func localTypeKey(name string) string { expr,err:=parser.ParseExpr(name);if err!=nil{return name};var b bytes.Buffer;if format.Node(&b,token.NewFileSet(),expr)!=nil{return name};return b.String() }
+// mirroredMethodSet names the methods a local type mirrors: each one is a
+// generated trampoline that only carries its call back to the original body.
+// mirroredMethodExpression proves a func value IS one of them (Type.Method(i)
+// .Func of that type, by code identity and signature), so calling it can never
+// run dependency code that retains or writes through its arguments.
+type mirroredMethodSet struct { types []reflect.Type; names map[string]bool }
+var mirroredMethodTypes []mirroredMethodSet
+func mirroredMethodExpression(fn reflect.Value) bool {
+ if !fn.IsValid()||fn.Kind()!=reflect.Func||fn.IsNil(){return false}
+ code:=fn.Pointer()
+ for _,set:=range mirroredMethodTypes{for _,typ:=range set.types{for i:=0;i<typ.NumMethod();i++{m:=typ.Method(i);if set.names[m.Name]&&m.Func.Type()==fn.Type()&&m.Func.Pointer()==code{return true}}}}
+ return false
+}
 //LOCALTYPES
 
 var originalPointers = struct {sync.Mutex; values map[uint64]reflect.Value; ids map[uintptr]uint64; sent map[uint64]string}{values:map[uint64]reflect.Value{},ids:map[uintptr]uint64{},sent:map[uint64]string{}}
@@ -591,6 +604,7 @@ func dispatch(q request)(reply response){
  // value -- a struct such as go/types.Error as much as a typed nil pointer --
  // is never equal to nil. Only an unmarked nilable value asks its own IsNil.
  if !left.IsValid()||!right.IsValid(){other,marked:=left,q.Args[0].Interface!="";if !other.IsValid(){other,marked=right,q.Args[1].Interface!=""};if !other.IsValid(){equal=true}else if marked&&other.Kind()!=reflect.Interface{equal=false}else{switch other.Kind(){case reflect.Chan,reflect.Func,reflect.Interface,reflect.Map,reflect.Pointer,reflect.Slice,reflect.UnsafePointer:equal=other.IsNil();default:reply.Error="value cannot be compared with nil";return}}}else{equal=left.Equal(right);if !equal&&left.Kind()==reflect.Chan&&right.Kind()==reflect.Chan&&left.Type().Elem()==right.Type().Elem(){equal=left.Pointer()==right.Pointer()}};reply.Values=[]value{encode(reflect.ValueOf(equal))};return}
+ if q.Op=="mirrored-method-expression" {if q.Receiver==nil{reply.Error="method expression inspection requires native receiver";return};v,err:=decode(*q.Receiver,nil);if err!=nil{reply.Error=err.Error();return};reply.Values=[]value{encode(reflect.ValueOf(mirroredMethodExpression(v)))};return}
  if q.Op=="template-readonly" {if q.Receiver==nil{reply.Error="template inspection requires native receiver";return};v,err:=decode(*q.Receiver,nil);if err!=nil{reply.Error=err.Error();return};template,ok:=v.Interface().(*bppTextTemplate.Template);safe:=ok&&template!=nil&&template.Tree!=nil&&primitiveTemplateTree(template.Tree.Root);reply.Values=[]value{encode(reflect.ValueOf(safe))};return}
  if q.Op=="assignable" {if len(q.Args)!=1{reply.Error="assignability requires one value";return};typ:=resolveType(q.Selector);if typ==nil{reply.Error="unregistered bridge type "+strconv.Quote(q.Selector);return};v,err:=decode(q.Args[0],nil);if err!=nil{reply.Error=err.Error();return};result:=encode(reflect.ValueOf(v.IsValid()&&v.Type().AssignableTo(typ)));if typ.Kind()==reflect.Interface{result.Interface=q.Selector};reply.Values=[]value{result};return}
  if q.Op=="type" {typ:=resolveType(q.Selector);if typ==nil{reply.Error="unregistered bridge type "+strconv.Quote(q.Selector);return};reply.Values=[]value{encode(reflect.ValueOf(typeID(typ)))};return}

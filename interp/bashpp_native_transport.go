@@ -178,6 +178,12 @@ func validateLocalTransport(req bashPPEvalRequest, q bashPPBridgeRequest) error 
 			return nil
 		}
 	}
+	if bashPPMadeFuncUse(req, q) {
+		return nil
+	}
+	if mirroredMethodExpressionCall(req, q) {
+		return nil
+	}
 	return fmt.Errorf("gosource: dependency mutation of interpreter-owned references is unsupported for %s", q.Selector)
 }
 
@@ -434,6 +440,9 @@ func requestCallbackCapable(req bashPPEvalRequest, q bashPPBridgeRequest) bool {
 		return true
 	}
 	if companionTrampolineCall(req, q) {
+		return true
+	}
+	if reflectedHandleOperand(q) {
 		return true
 	}
 	return req.Bridge != nil && req.Bridge.retainedCallbacks()

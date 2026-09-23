@@ -15,7 +15,11 @@ func (r *Runner) bashPPBridgeFunction(fn *bashPPFunc) (bashPPBridgeValue, error)
 		return *fn.native, nil
 	}
 	iteratorYield, _ := r.goSourceIteratorYield(fn)
+	makeFunc := r.bashPPReflectMakeFuncShape(fn)
 	for group, fields := range [][]*syntax.BashPPField{fn.params(), fn.results()} {
+		if makeFunc {
+			break
+		}
 		for _, field := range fields {
 			if field.Variadic() {
 				return bashPPBridgeValue{}, fmt.Errorf("gosource: variadic original callbacks are unsupported")
@@ -176,8 +180,9 @@ func (r *Runner) bashPPRunCallbackFunc(ctx context.Context, fn *bashPPFunc, args
 		cells[i], texts[i] = cell, text
 	}
 	r.bashPPCallCells = cells
+	entry := len(r.callStack)
 	results := r.bashPPInvoke(ctx, fn, texts)
-	if r.bashPPPanicking() && !r.exit.exiting {
+	if r.bashPPCallbackRaised(entry) && !r.exit.exiting {
 		payload := r.bashPPPanic.value()
 		r.bashPPPanic, r.exit = savedPanic, savedExit
 		return []bashPPBridgeValue{{Kind: "panic", Text: payload, Type: "string"}}, nil
@@ -309,6 +314,11 @@ func retainedFunctionCallback(req bashPPEvalRequest, q bashPPBridgeRequest) bool
 	case "net/http.HandleFunc", "net/http.Handle",
 		"net/http.ServeMux.HandleFunc", "net/http.ServeMux.Handle":
 		return true
+	case "reflect.MakeFunc":
+		// The made function retains its implementation and raises it on
+		// every call of the result — a bare handle call that parks here.
+		// Only the session's own runner serves it; see bashPPMadeFuncOwner.
+		return bashPPMadeFuncOwner(req)
 	}
 	return false
 }
