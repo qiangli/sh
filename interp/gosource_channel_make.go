@@ -294,3 +294,38 @@ func (r *Runner) goSourceLocalTimeSleep(ctx context.Context, req bashPPEvalReque
 		return true, ctx.Err()
 	}
 }
+
+// time.Millisecond is a fixed typed constant. Resolve this authenticated
+// import locally so a polling loop does not request it from the dependency
+// process on every evaluation of a duration expression.
+func (r *Runner) goSourceLocalTimeMillisecond(req bashPPEvalRequest, q bashPPBridgeRequest) (bashPPBridgeValue, bool) {
+	if !r.bashPPGoSource || q.Op != "get" || q.Receiver != nil || len(q.Args) != 0 {
+		return bashPPBridgeValue{}, false
+	}
+	alias, name, ok := strings.Cut(q.Selector, ".")
+	if !ok || req.Imports[alias] != "time" || name != "Millisecond" {
+		return bashPPBridgeValue{}, false
+	}
+	return bashPPBridgeValue{Kind: "int", Type: "time.Duration", Text: strconv.FormatInt(int64(time.Millisecond), 10)}, true
+}
+
+// Round on a scalar time.Duration is pure. Its receiver and argument are
+// already transported as signed nanoseconds, so use the standard library's
+// implementation without a dependency-process request on the main task.
+func (r *Runner) goSourceLocalDurationRound(q bashPPBridgeRequest) (bashPPBridgeValue, bool) {
+	if !r.bashPPGoSource || r.bashPPGoTask || q.Op != "call" || q.Selector != "Round" ||
+		q.Receiver == nil || q.Receiver.Kind != "int" || q.Receiver.Type != "time.Duration" ||
+		len(q.Args) != 1 || q.Args[0].Kind != "int" || q.Spread {
+		return bashPPBridgeValue{}, false
+	}
+	duration, err := strconv.ParseInt(q.Receiver.Text, 10, 64)
+	if err != nil {
+		return bashPPBridgeValue{}, false
+	}
+	unit, err := strconv.ParseInt(q.Args[0].Text, 10, 64)
+	if err != nil {
+		return bashPPBridgeValue{}, false
+	}
+	result := time.Duration(duration).Round(time.Duration(unit))
+	return bashPPBridgeValue{Kind: "int", Type: "time.Duration", Text: strconv.FormatInt(int64(result), 10)}, true
+}
