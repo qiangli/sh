@@ -6,7 +6,7 @@ import "testing"
 
 // Sprint: #248; Stories: #700, #701, #702
 //
-// Five upstream roots assert gc toolchain or runtime implementation
+// Six upstream roots assert gc toolchain or runtime implementation
 // observations that Bash#'s interpreted mode deliberately does not mimic
 // (bashsharp docs/bashpp-go-implementation-claim.md, "Language, not
 // implementation"; sh docs/bashpp-compiler-artifact-contracts.md, Sprint 248
@@ -46,6 +46,25 @@ func main() {
 	var v interface{} = T{}
 	_, okValue := v.(interface{ Bad() })
 	fmt.Println(ok, okValue)
+}
+`,
+		// typeparam/mdempsky/15.go: the same fieldtrack-only pragma, on
+		// methods promoted through embedded generic types.
+		"promoted-generic-method-sets": `package main
+import "fmt"
+type E struct{}
+func (E) EGood() {}
+type X[T any] struct{ E }
+func (X[T]) XGood() {}
+type W struct{ X[int] }
+func main() {
+	var e, x, w interface{} = E{}, X[int]{}, W{}
+	_, a := e.(interface{ EGood() })
+	_, b := x.(interface{ EGood() })
+	_, c := x.(interface{ XGood() })
+	_, d := w.(interface{ XGood() })
+	_, f := w.(interface{ Missing() })
+	fmt.Println(a, b, c, d, f)
 }
 `,
 		// issue15277.go: heap deltas are a GC observation; a KeepAlive'd
