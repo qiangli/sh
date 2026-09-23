@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -154,7 +155,8 @@ func TestGoSourceSignalProxyOriginalShape(t *testing.T) {
 	if got := fmt.Sprintf("%x", sha256.Sum256([]byte(goByExampleSignals))); got != "ae3085f94eda7c2199a167f73628efaf8e3e0b17904abace594103a29008a50b" {
 		t.Fatalf("original fixture bytes changed: %s", got)
 	}
-	if os.Getenv("SH_GOSOURCE_SIGNAL_HELPER") == "1" {
+	switch os.Getenv("SH_GOSOURCE_SIGNAL_HELPER") {
+	case "program":
 		program, err := gosource.Parse(strings.NewReader(goByExampleSignals), filepath.Join(t.TempDir(), "signals.go"), gosource.Options{RunMain: true})
 		if err != nil {
 			t.Fatal(err)
@@ -164,6 +166,31 @@ func TestGoSourceSignalProxyOriginalShape(t *testing.T) {
 			t.Fatal(err)
 		}
 		if err := runner.Run(context.Background(), program.File); err != nil {
+			t.Fatal(err)
+		}
+		os.Exit(0)
+	case "launcher":
+		// Match the macOS harness: the launcher ignores SIGINT before exec and
+		// the interpreted program remains in its process group. Its native Go
+		// helper moves to a separate group and therefore needs the proxy.
+		signal.Ignore(syscall.SIGINT)
+		executable, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command(executable, "-test.run=^TestGoSourceSignalProxyOriginalShape$")
+		for _, entry := range os.Environ() {
+			if !strings.HasPrefix(entry, "SH_GOSOURCE_SIGNAL_HELPER=") &&
+				!strings.HasPrefix(entry, "GOSH_PROG=") && !strings.HasPrefix(entry, "GOSH_CMD=") {
+				cmd.Env = append(cmd.Env, entry)
+			}
+		}
+		cmd.Env = append(cmd.Env, "SH_GOSOURCE_SIGNAL_HELPER=program")
+		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+		if err := cmd.Run(); err != nil {
+			if exitErr, ok := err.(*exec.ExitError); ok {
+				os.Exit(exitErr.ExitCode())
+			}
 			t.Fatal(err)
 		}
 		os.Exit(0)
@@ -180,7 +207,8 @@ func TestGoSourceSignalProxyOriginalShape(t *testing.T) {
 			cmd.Env = append(cmd.Env, entry)
 		}
 	}
-	cmd.Env = append(cmd.Env, "SH_GOSOURCE_SIGNAL_HELPER=1")
+	cmd.Env = append(cmd.Env, "SH_GOSOURCE_SIGNAL_HELPER=launcher")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -195,7 +223,7 @@ func TestGoSourceSignalProxyOriginalShape(t *testing.T) {
 	if err != nil || line != "awaiting signal\n" {
 		t.Fatalf("executable=%q readiness=%q err=%v stderr=%q", executable, line, err, stderr.String())
 	}
-	if err := cmd.Process.Signal(syscall.SIGINT); err != nil {
+	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGINT); err != nil {
 		t.Fatal(err)
 	}
 	var output strings.Builder // bashpp-racegate:safe-private the test goroutine is the sole writer.

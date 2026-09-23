@@ -24,9 +24,23 @@ func forwardExecReplacementSignals(pid int) func() {
 }
 
 func forwardExecReplacementSignalsWithReport(pid int, report func(int)) func() {
+	return forwardSignalsWithReport(pid, report, false)
+}
+
+// forwardBashPPNativeSignalsWithReport also subscribes to signals ignored by
+// the process which launched the interpreter. The native Go helper is placed
+// in its own process group for cleanup, so it would otherwise miss a signal
+// sent to the interpreted program's group. A Go program may still explicitly
+// subscribe to an inherited-ignored signal with os/signal.Notify.
+func forwardBashPPNativeSignalsWithReport(pid int, report func(int)) func() {
+	return forwardSignalsWithReport(pid, report, true)
+}
+
+func forwardSignalsWithReport(pid int, report func(int), includeIgnored bool) func() {
 	ch := make(chan os.Signal, 16)
 	var forwarded []os.Signal
 	var dispositions []signalDisposition
+	var ignored []bool
 	for _, name := range [...]string{
 		"HUP", "INT", "QUIT", "ABRT", "USR1", "USR2", "PIPE", "ALRM", "TERM",
 		"TSTP", "TTIN", "TTOU", "XCPU", "XFSZ",
@@ -36,7 +50,8 @@ func forwardExecReplacementSignalsWithReport(pid int, report func(int)) func() {
 			continue
 		}
 		osSig := signalForOS(sig)
-		if osSignalIgnored(osSig) {
+		wasIgnored := osSignalIgnored(osSig)
+		if wasIgnored && !includeIgnored {
 			continue
 		}
 		disposition, ok := saveSignalDisposition(osSig)
@@ -45,6 +60,7 @@ func forwardExecReplacementSignalsWithReport(pid int, report func(int)) func() {
 		}
 		forwarded = append(forwarded, osSig)
 		dispositions = append(dispositions, disposition)
+		ignored = append(ignored, wasIgnored)
 	}
 	if len(forwarded) == 0 {
 		return func() {}
@@ -52,8 +68,10 @@ func forwardExecReplacementSignalsWithReport(pid int, report func(int)) func() {
 	// OSSignalResetter may have installed SIG_DFL through raw sigaction after
 	// clearing Go's handling bit. Synchronize os/signal's bookkeeping before
 	// Notify so Linux reliably reinstalls the runtime trampoline.
-	for _, sig := range forwarded {
-		signal.Reset(sig)
+	for i, sig := range forwarded {
+		if !ignored[i] {
+			signal.Reset(sig)
+		}
 	}
 	signal.Notify(ch, forwarded...)
 	done := make(chan struct{})

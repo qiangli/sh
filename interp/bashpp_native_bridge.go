@@ -468,7 +468,7 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 	// The helper owns the native standard-library state of the interpreted Go
 	// program. Keep it in an isolated process group for cleanup, but proxy the
 	// program process's catchable signals as an exec replacement would.
-	s.stopSignals = forwardExecReplacementSignalsWithReport(cmd.Process.Pid, func(sig int) {
+	s.stopSignals = forwardBashPPNativeSignalsWithReport(cmd.Process.Pid, func(sig int) {
 		s.mu.Lock()
 		s.forwardedSignal = sig
 		s.mu.Unlock()
