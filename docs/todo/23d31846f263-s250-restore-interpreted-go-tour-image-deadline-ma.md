@@ -87,3 +87,27 @@ this fixture. A four-file second-connection prototype cut the local image case
 only about 8% and failed a race control for concurrent/reentrant callbacks;
 it was rejected without Linux promotion. No measured, small, sound patch yet
 gives the required comfortable margin, so keep this story open.
+
+Resumed bounded callback-transport diagnosis: the unchanged full-tag local
+image control on current `sh@3efbaccb` passed in 12.12–12.57s on macOS and
+counted 131,078 original method callbacks versus only seven outer bridge
+requests. CPU profiling placed 6.37s of 10.16s sampled time under callback
+reply socket writes; the repeated cross-process exchange is the dominant
+cost. On the second authorized Linux droplet, an authenticated one-row
+diagnostic of the earlier public `Bashy@8a68fab1`/`sh@4888f8d7` candidate
+with `GOMAXPROCS=1` still timed out under the unchanged 60s image bound
+(baseline and compiled passed); partial ledger SHA-256
+`d64a18e5de4533993cd76c2382cdacc09f75368d2b302da9a3f9f44b54b1208a`
+at `/srv/sprint250/story89-linux-head-8a68fab/go-tour-image-gmp1/`.
+Changing only the scheduler setting is insufficient and is not a product fix.
+
+An isolated second-socket prototype removed the worker's callback-reply
+channel handoff while preserving interpreter-side callback serialization,
+nested fallback, authentication, output order, cancellation, and panic
+controls. Focused controls passed, but the original image remained about
+12.6s locally, indistinguishable from current code; the prototype was
+reverted, not promoted to Linux or merged. The next repair needs a measured
+reduction in per-callback cross-process wakeups (for example a reviewed
+shared-memory notification protocol with reentrancy, process-death and
+cross-platform controls), followed by exact Linux/Windows image rows and
+the unchanged full Tour gates. No fixture, comparator, or deadline changed.
