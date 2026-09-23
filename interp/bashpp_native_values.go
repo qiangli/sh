@@ -19,6 +19,10 @@ func (r *Runner) bashPPBridgeHandles(call *syntax.BashPPCall) bool {
 	if !r.bashPPGoSource || call == nil {
 		return false
 	}
+	// unsafe builtins over interpreter storage; see bashpp_s247_unsafe.go.
+	if r.goSourceUnsafeLocalCall(call) {
+		return false
+	}
 	if call.CalleeExpr != nil {
 		selector, ok := call.CalleeExpr.(*syntax.BashPPSelectorExpr)
 		if !ok {
@@ -1389,23 +1393,36 @@ func (r *Runner) goSourceUnsafeStringCall(call *syntax.BashPPCall) (values []bas
 	if r.bashPPScope != nil && r.bashPPScope.lookup(call.Fun[0].Value) != nil {
 		return nil, false, nil
 	}
-	ptr, err := r.bashPPPointerExprValue(call.ArgExprs[0])
+	return r.goSourceUnsafeString(call, false)
+}
+
+// goSourceUnsafeString evaluates unsafe.String once. With discard set, a
+// forged pointer that passes Go's checks yields no value instead of a
+// refusal; see goSourceUnsafeDiscardAssign.
+func (r *Runner) goSourceUnsafeString(call *syntax.BashPPCall, discard bool) (values []bashPPBridgeValue, claimed bool, err error) {
+	defer func() { err = r.goSourceRuntimeFault(err) }()
+	var ptr *bashPPPointer
+	// An untyped nil operand is the nil *byte.
+	if !goSourceNilLiteral(call.ArgExprs[0]) {
+		ptr, err = r.bashPPPointerExprValue(call.ArgExprs[0])
+		if err != nil {
+			return nil, true, err
+		}
+	}
+	// The length, nil and address-space checks are unsafe.Slice's; see
+	// bashpp_s247_unsafe.go. A forged or out-of-span pointer then refuses.
+	n, err := r.goSourceUnsafeLength("String", ptr, call.ArgExprs[1], 1)
 	if err != nil {
 		return nil, true, err
-	}
-	length, err := r.bashPPEvalScalarExpr(call.ArgExprs[1])
-	if err != nil {
-		return nil, true, err
-	}
-	n, ok := constant.Int64Val(constant.ToInt(length.value))
-	if !ok || n < 0 {
-		return nil, true, &bashPPRuntimeError{refusal: "BASHPP-EUNSAFE-STRING: unsafe.String: len out of range", runtime: "unsafe.String: len out of range"}
 	}
 	if ptr == nil {
-		if n == 0 {
-			return []bashPPBridgeValue{{Kind: "string", Type: "string", NativeType: "string"}}, true, nil
-		}
-		return nil, true, &bashPPRuntimeError{refusal: "BASHPP-EUNSAFE-STRING: unsafe.String: ptr is nil and len is not zero", runtime: "unsafe.String: ptr is nil and len is not zero"}
+		return []bashPPBridgeValue{{Kind: "string", Type: "string", NativeType: "string"}}, true, nil
+	}
+	if discard && ptr.forged {
+		return nil, true, nil
+	}
+	if err := goSourceUnsafeDerefCheck(ptr); err != nil {
+		return nil, true, err
 	}
 	var bytes []any
 	if last := len(ptr.path) - 1; last >= 0 && ptr.path[last].field == "" && !ptr.path[last].deref {

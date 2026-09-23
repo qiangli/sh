@@ -1402,6 +1402,9 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 			}
 			return
 		}
+		if r.goSourceUnsafeShortDecl(d) {
+			return
+		}
 		// Native dependency handles resolve their own methods before local
 		// language method lookup attempts to inspect interpreter type metadata.
 		if r.bashPPBridgeShortDecl(ctx, d) {

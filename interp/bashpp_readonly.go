@@ -184,6 +184,9 @@ func (r *Runner) bashPPBuiltinAssign(assign *syntax.BashPPAssign) {
 }
 
 func (r *Runner) bashPPTupleAssignCall(ctx context.Context, assign *syntax.BashPPAssign) {
+	if r.goSourceUnsafeDiscardAssign(assign) {
+		return
+	}
 	if r.bashPPGoSource && r.bashPPBridgeHandles(assign.Call) {
 		r.goSourceNativeAssignCall(ctx, assign)
 		return

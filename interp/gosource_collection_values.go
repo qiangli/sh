@@ -125,6 +125,9 @@ func (r *Runner) goSourceCollectionCallValue(expr syntax.BashPPExpr, expected sy
 	if !ok {
 		return nil, nil, false, nil
 	}
+	if value, meta, claimed, err := r.goSourceUnsafeSliceValue(call); claimed {
+		return value, meta, true, err
+	}
 	if values, claimed, err := r.goSourceUnsafeSliceCall(call); claimed {
 		if err != nil {
 			return nil, nil, true, err

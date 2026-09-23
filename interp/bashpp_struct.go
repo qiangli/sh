@@ -622,6 +622,9 @@ func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (value any, meta *bashPP
 	// call into an untyped empty scalar before a dereference or selector could
 	// consume it.
 	if r.bashPPGoSource {
+		if value, meta, handled, err := r.goSourceUnsafeRead(expr); handled {
+			return value, meta, err
+		}
 		if _, call := expr.(*syntax.BashPPCall); call {
 			cell, err := r.goSourceValueCell(expr)
 			if err != nil {

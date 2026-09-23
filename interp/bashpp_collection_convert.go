@@ -327,9 +327,15 @@ func (r *Runner) bashPPConvertCollectionScalar(x *syntax.BashPPConvertExpr) (bas
 		}
 		return bashPPScalar{value: constant.MakeString(text), typ: typ, runtime: true}, true, nil
 	}
-	value, meta, ok := r.bashPPCollectionOperand(x.X)
-	if !ok {
-		return bashPPScalar{}, false, nil
+	value, meta, claimed, err := r.goSourceUnsafeSliceValue(x.X)
+	if err != nil {
+		return bashPPScalar{}, true, err
+	}
+	if !claimed {
+		value, meta, ok = r.bashPPCollectionOperand(x.X)
+		if !ok {
+			return bashPPScalar{}, false, nil
+		}
 	}
 	elemKind, ok := r.bashPPByteOrRuneSlice(meta.typ)
 	if !ok {

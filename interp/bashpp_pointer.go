@@ -35,6 +35,13 @@ type bashPPPointer struct {
 	// struct view presented by a following typed-pointer conversion.
 	unsafeSource syntax.BashPPTypeExpr
 	unsafeView   syntax.BashPPTypeExpr
+	// unsafeOffset is a residual byte offset left by unsafe.Add outside the
+	// element grid of the span; forged/unsafeAddress name an opaque address
+	// converted from an integer. Neither may be dereferenced; see
+	// bashpp_s247_unsafe.go.
+	unsafeOffset  int64
+	forged        bool
+	unsafeAddress uint64
 }
 
 // bashPPZeroSizeStorage is real process storage used as the canonical address
@@ -144,7 +151,7 @@ func (r *Runner) bashPPPointerConversion(expr syntax.BashPPExpr) (*bashPPPointer
 		return nil, spelled, true, err
 	}
 	retyped := *ptr
-	if ptr.unsafeSource != nil {
+	if ptr.unsafeSource != nil && bashPPTypeText(ptr.unsafeSource) != bashPPTypeText(target.Element) {
 		if err := r.goSourceUnsafeBlankView(ptr.unsafeSource, target.Element); err != nil {
 			return nil, target, true, err
 		}
@@ -225,6 +232,12 @@ func (r *Runner) bashPPPointerExprValue(expr syntax.BashPPExpr) (ptr *bashPPPoin
 	defer func() { err = r.goSourceRuntimeFaultAt(err, expr) }()
 	if _, nilConversion := r.bashPPNilPointerConversion(expr); nilConversion {
 		return nil, nil
+	}
+	if ptr, _, handled, err := r.goSourceUnsafePointerExpr(expr); handled {
+		return ptr, err
+	}
+	if ptr, handled, err := r.goSourceUnsafeDataPointer(expr); handled {
+		return ptr, err
 	}
 	if ptr, _, converted, err := r.bashPPPointerConversion(expr); converted {
 		return ptr, err
@@ -568,6 +581,9 @@ func bashPPInferredCellType(cell *bashPPCell) syntax.BashPPTypeExpr {
 }
 
 func (p *bashPPPointer) read() (any, *bashPPCollectionMeta, syntax.BashPPTypeExpr, error) {
+	if err := goSourceUnsafeDerefCheck(p); err != nil {
+		return nil, nil, nil, err
+	}
 	if p == nil || p.target == nil {
 		return nil, nil, nil, errBashPPNilDereference
 	}
@@ -630,7 +646,7 @@ func (p *bashPPPointer) read() (any, *bashPPCollectionMeta, syntax.BashPPTypeExp
 // step has an addressable slot; struct fields live in map storage, whose
 // entries have no address, so any other final step reports false.
 func (p *bashPPPointer) slot() ([]any, int, bool) {
-	if p == nil || p.target == nil || len(p.path) == 0 {
+	if p == nil || p.target == nil || len(p.path) == 0 || p.forged || p.unsafeOffset != 0 {
 		return nil, 0, false
 	}
 	last := p.path[len(p.path)-1]
@@ -849,6 +865,25 @@ func (r *Runner) bashPPBindPointerExpr(name string, expr syntax.BashPPExpr) bool
 	var value any
 	var meta *bashPPCollectionMeta
 	var typ syntax.BashPPTypeExpr
+	if ptr, target, handled, err := r.goSourceUnsafePointerExpr(expr); handled {
+		if err != nil {
+			r.errf("%v\n", err)
+			r.exit.code = 2
+			return true
+		}
+		expr, value, typ, meta = nil, ptr, target, bashPPPointerMeta(target)
+	} else if ptr, handled, err := r.goSourceUnsafeDataPointer(expr); handled {
+		if err != nil {
+			r.errf("%v\n", err)
+			r.exit.code = 2
+			return true
+		}
+		typ, _ = r.goSourceStaticExprType(expr)
+		if ptr != nil {
+			typ = &syntax.BashPPPointerType{Element: ptr.elem}
+		}
+		expr, value, meta = nil, ptr, bashPPPointerMeta(typ)
+	}
 	if ptr, target, converted, err := r.bashPPPointerConversion(expr); converted {
 		if err != nil {
 			r.errf("%v\n", err)
@@ -939,6 +974,11 @@ func (r *Runner) bashPPDerefAssign(target *syntax.BashPPDerefExpr, rhs syntax.Ba
 			r.errf("%v\n", err)
 			r.exit.code = 2
 		}
+		return
+	}
+	if err := goSourceUnsafeDerefCheck(ptr); err != nil {
+		r.errf("%v\n", err)
+		r.exit.code = 2
 		return
 	}
 	if ptr.unsafeView != nil {
