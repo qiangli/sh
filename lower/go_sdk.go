@@ -172,6 +172,9 @@ func goSDKCandidates() ([]goSDKCandidate, []string) {
 	// the exact binary to use, so it is tried before everything else.
 	if injected := strings.TrimSpace(os.Getenv("BASHPP_GO")); injected != "" {
 		add("BASHPP_GO", "", injected)
+		if len(candidates) != 0 {
+			return candidates, rejected
+		}
 	}
 
 	// The embedder's tool resolver is the island rule applied to the Go
