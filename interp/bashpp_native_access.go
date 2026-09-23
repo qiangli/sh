@@ -14,6 +14,7 @@ package interp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"go/constant"
 	"strings"
@@ -126,6 +127,11 @@ func (r *Runner) bashPPNativeAccess(ctx context.Context, op string, base bashPPB
 		// a worker-reported Go runtime panic here, at the access boundary, so
 		// recover sees the same value as it does for interpreter-owned slices.
 		// Bridge and arity errors remain ordinary errors.
+		var fault *bashPPNativeFaultPanic
+		if errors.As(err, &fault) {
+			r.goSourceRuntimePanicValue(fault.text, bashPPRuntimeErrorValueWithAddr(bashPPRuntimeErrorAddress, fault.text, fault.addr))
+			return bashPPBridgeValue{}, errBashPPScalarInterrupted
+		}
 		if message, ok := goSourceNativeRuntimePanic(err); ok {
 			r.goSourceRuntimePanic(message)
 			return bashPPBridgeValue{}, errBashPPScalarInterrupted

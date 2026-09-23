@@ -58,10 +58,10 @@ type value struct {
 }
 type bppProtocolEntry struct {Key value `json:"key"`; Value value `json:"value"`}
 type sliceBuffer struct {Index int `json:"index"`;Length int `json:"length"`;Value value `json:"value"`}
-type request struct { SliceBuffers []sliceBuffer `json:"slice_buffers,omitempty"`; Transfers []int `json:"transfers,omitempty"`; ID uint64 `json:"id"`; Op string `json:"op"`; Selector string `json:"selector"`; Instance string `json:"instance,omitempty"`; Receiver *value `json:"receiver,omitempty"`; Args []value `json:"args,omitempty"`; Spread bool `json:"spread,omitempty"`; SourceFile string `json:"source_file,omitempty"`; SourceLine int `json:"source_line,omitempty"`; LogPrint string `json:"log_print,omitempty"`; Values []value `json:"values,omitempty"`; Error string `json:"error,omitempty"` }
+type request struct { SliceBuffers []sliceBuffer `json:"slice_buffers,omitempty"`; Transfers []int `json:"transfers,omitempty"`; ID uint64 `json:"id"`; Op string `json:"op"`; PanicOnFault bool `json:"panic_on_fault,omitempty"`; Selector string `json:"selector"`; Instance string `json:"instance,omitempty"`; Receiver *value `json:"receiver,omitempty"`; Args []value `json:"args,omitempty"`; Spread bool `json:"spread,omitempty"`; SourceFile string `json:"source_file,omitempty"`; SourceLine int `json:"source_line,omitempty"`; LogPrint string `json:"log_print,omitempty"`; Values []value `json:"values,omitempty"`; Error string `json:"error,omitempty"` }
 // Op, Selector and Receiver are set only on a callback: the reverse direction
 // in which this helper asks the interpreter to run an original method body.
-type response struct { SliceUpdates []sliceBuffer `json:"slice_updates,omitempty"`; Transferred []sliceBuffer `json:"transferred,omitempty"`; PtrUpdates []value `json:"ptr_updates,omitempty"`; Panic *value `json:"panic,omitempty"`; ID uint64 `json:"id"`; Op string `json:"op,omitempty"`; Selector string `json:"selector,omitempty"`; Receiver *value `json:"receiver,omitempty"`; Values []value `json:"values,omitempty"`; Error string `json:"error,omitempty"` }
+type response struct { SliceUpdates []sliceBuffer `json:"slice_updates,omitempty"`; Transferred []sliceBuffer `json:"transferred,omitempty"`; PtrUpdates []value `json:"ptr_updates,omitempty"`; Panic *value `json:"panic,omitempty"`; PanicAddr *uint64 `json:"panic_addr,omitempty"`; ID uint64 `json:"id"`; Op string `json:"op,omitempty"`; Selector string `json:"selector,omitempty"`; Receiver *value `json:"receiver,omitempty"`; Values []value `json:"values,omitempty"`; Error string `json:"error,omitempty"` }
 var symbols = map[string]reflect.Value{
 //SYMBOLS
 }
@@ -635,6 +635,7 @@ func dispatch(q request)(reply response){
    if valid{if q.Receiver!=nil{encoded.Origin=q.Receiver.Origin}else{encoded.Origin=q.Args[0].Origin};setReflectedContext(encoded.Handle,ctx)}
   };reply.Values=append(reply.Values,encoded)};return
 }
+func nativeFaultAddr(q request)(uint64,bool){if q.Receiver==nil||len(q.Args)<1{return 0,false};switch q.Op{case "index","byte-set":default:return 0,false};n,err:=strconv.Atoi(q.Args[0].Text);if err!=nil||n<0{return 0,false};rv,err:=decode(*q.Receiver,nil);if err!=nil{return 0,false};for rv.Kind()==reflect.Interface&&!rv.IsNil(){rv=rv.Elem()};switch rv.Kind(){case reflect.Slice:if rv.Type().Elem().Kind()!=reflect.Uint8||n>=rv.Len(){return 0,false};return uint64(rv.Pointer()+uintptr(n)),true;case reflect.Array:if rv.Type().Elem().Kind()!=reflect.Uint8||n>=rv.Len()||!rv.CanAddr(){return 0,false};return uint64(rv.UnsafeAddr()+uintptr(n)),true};return 0,false}
 func main(){
  conn,err:=net.Dial(bridgeNetwork,bridgeAddress);if err!=nil{panic(err)};defer conn.Close()
  encoder:=json.NewEncoder(conn);if err=encoder.Encode(bridgeAuth);err!=nil{return};decoder:=json.NewDecoder(conn)
@@ -643,5 +644,5 @@ func main(){
  // Waiting for those calls would orphan listeners after host termination.
  for {var q request;if err:=decoder.Decode(&q);err!=nil{close(handles.stop);return};if q.Op=="close"{close(handles.stop);return}
   if q.Op=="callback-reply" {callbacks.Lock();wait:=callbacks.waiting[q.ID];callbacks.Unlock();if wait!=nil{wait<-q};continue}
-  go func(){answer:=dispatch(q);outbound.Lock();defer outbound.Unlock();_ = outbound.encoder.Encode(answer)}()}
+  go func(){if q.PanicOnFault {old:=bppDebug.SetPanicOnFault(true);defer bppDebug.SetPanicOnFault(old)};answer:=response{ID:q.ID};if q.PanicOnFault {defer func(){if r:=recover();r!=nil{answer=response{ID:q.ID,Error:fmt.Sprintf("native dependency panic: %v",r)};if a,ok:=r.(interface{Addr()uintptr});ok{addr:=uint64(a.Addr());answer.PanicAddr=&addr}else if addr,ok:=nativeFaultAddr(q);ok{answer.PanicAddr=&addr};outbound.Lock();defer outbound.Unlock();_ = outbound.encoder.Encode(answer)}}()};answer=dispatch(q);outbound.Lock();defer outbound.Unlock();_ = outbound.encoder.Encode(answer)}()}
 }

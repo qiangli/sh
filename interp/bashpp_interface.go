@@ -33,9 +33,10 @@ func bashPPStripLocalPackage(text string) string {
 }
 
 type bashPPInterfaceValue struct {
-	dynamic  syntax.BashPPTypeExpr
-	cell     *bashPPCell
-	nilIface bool
+	dynamic     syntax.BashPPTypeExpr
+	cell        *bashPPCell
+	nilIface    bool
+	runtimeAddr *uint64
 }
 
 type bashPPInterfaceMethod struct {

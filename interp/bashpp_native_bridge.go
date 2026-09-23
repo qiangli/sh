@@ -97,6 +97,7 @@ type bashPPBridgeRequest struct {
 	sourceProgram bool   // the call site is in the program package itself
 	ID            uint64 `json:"id"`
 	Op            string `json:"op"`
+	PanicOnFault  bool   `json:"panic_on_fault,omitempty"`
 	Selector      string `json:"selector"`
 	// Instance is the type-argument suffix of an instantiated imported
 	// generic function; the helper resolves Selector+Instance.
@@ -120,7 +121,11 @@ type bashPPBridgeResponse struct {
 	PtrUpdates  []bashPPBridgeValue       `json:"ptr_updates,omitempty"`
 
 	Panic *bashPPBridgeValue `json:"panic,omitempty"`
-	ID    uint64             `json:"id"`
+	// PanicAddr carries runtime.Error values produced by SetPanicOnFault. It
+	// is meaningful only when Error is a worker-recovered native dependency
+	// panic.
+	PanicAddr *uint64 `json:"panic_addr,omitempty"`
+	ID        uint64  `json:"id"`
 	// Op, Selector and Receiver are set only when the dependency is asking the
 	// interpreter to run an original method body it must not compile itself.
 	Op       string              `json:"op,omitempty"`
@@ -556,6 +561,7 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 	if err := validateLocalTransport(req, q); err != nil {
 		return nil, err
 	}
+	q.PanicOnFault = req.PanicOnFault
 	// A transfer hands the dependency slices whose elements carry original
 	// callbacks; the callee may keep them past this call exactly as a
 	// registration API does, so the session serves callbacks from now on.
@@ -667,6 +673,9 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 				if forwarded && strings.HasSuffix(reply.Error, errBashPPScalarInterrupted.Error()) {
 					return nil, errBashPPScalarInterrupted
 				}
+				if message, ok := goSourceNativeRuntimePanic(errors.New(reply.Error)); ok && reply.PanicAddr != nil {
+					return nil, &bashPPNativeFaultPanic{text: message, addr: *reply.PanicAddr}
+				}
 				return nil, errors.New(reply.Error)
 			}
 			// The dependency now holds each transferred slice; rebind the
@@ -690,6 +699,9 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 						reply.Values[i].Callbacks = true
 					}
 				}
+			}
+			if owner := req.CallbackOwner; owner != nil && bashPPSetPanicOnFaultRequest(req, q) {
+				owner.bashPPTools.panicOnFault = q.Args[0].Text == "true"
 			}
 			return reply.Values, nil
 		case <-ctx.Done():
@@ -1292,6 +1304,21 @@ func (s *bashPPNativeSession) retainedCallbacks() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.retained
+}
+
+type bashPPNativeFaultPanic struct {
+	text string
+	addr uint64
+}
+
+func (p *bashPPNativeFaultPanic) Error() string { return p.text }
+
+func bashPPSetPanicOnFaultRequest(req bashPPEvalRequest, q bashPPBridgeRequest) bool {
+	if q.Op != "call" || len(q.Args) != 1 || q.Args[0].Kind != "bool" {
+		return false
+	}
+	pkg, name, ok := strings.Cut(q.Selector, ".")
+	return ok && name == "SetPanicOnFault" && req.Imports[pkg] == "runtime/debug"
 }
 
 // bashPPForcesCollection reports an imported function that starts a collection

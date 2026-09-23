@@ -36,6 +36,7 @@ import (
 // Dynamic type names of the runtime's error values, spelled as %T prints them.
 const (
 	bashPPRuntimeErrorString  = "runtime.errorString"
+	bashPPRuntimeErrorAddress = "runtime.errorAddressString"
 	bashPPRuntimePlainError   = "runtime.plainError"
 	bashPPRuntimeBoundsError  = "runtime.boundsError"
 	bashPPRuntimeTypeAssert   = "*runtime.TypeAssertionError"
@@ -51,7 +52,7 @@ func bashPPRuntimeErrorType(typ syntax.BashPPTypeExpr) bool {
 		return false
 	}
 	switch named.Name.Value {
-	case bashPPRuntimeErrorString, bashPPRuntimePlainError, bashPPRuntimeBoundsError, bashPPRuntimeTypeAssert, bashPPRuntimePanicNil:
+	case bashPPRuntimeErrorString, bashPPRuntimeErrorAddress, bashPPRuntimePlainError, bashPPRuntimeBoundsError, bashPPRuntimeTypeAssert, bashPPRuntimePanicNil:
 		return true
 	}
 	return false
@@ -60,6 +61,10 @@ func bashPPRuntimeErrorType(typ syntax.BashPPTypeExpr) bool {
 // bashPPRuntimeErrorValue builds the interface value a runtime error panics
 // with: dynamic type typeName, payload text.
 func bashPPRuntimeErrorValue(typeName, text string) *bashPPInterfaceValue {
+	return bashPPRuntimeErrorValueWithAddr(typeName, text, 0)
+}
+
+func bashPPRuntimeErrorValueWithAddr(typeName, text string, addr uint64) *bashPPInterfaceValue {
 	dynamic := &syntax.BashPPNamedType{Name: &syntax.Lit{Value: typeName}}
 	// The payload is the message as a plain string cell: it crosses the
 	// dependency boundary as a Go string, which prints exactly as an error's
@@ -67,7 +72,11 @@ func bashPPRuntimeErrorValue(typeName, text string) *bashPPInterfaceValue {
 	// value inside the interpreter, where the two methods of runtime.Error
 	// are answered by bashPPRuntimeErrorMethod.
 	cell := &bashPPCell{declType: dynamic, vr: expand.Variable{Set: true, Kind: expand.String, Str: text}, scalarKind: constant.String}
-	return &bashPPInterfaceValue{dynamic: dynamic, cell: cell}
+	result := &bashPPInterfaceValue{dynamic: dynamic, cell: cell}
+	if addr != 0 {
+		result.runtimeAddr = &addr
+	}
+	return result
 }
 
 // bashPPRuntimeErrorText reads the message of a runtime error value.
@@ -125,8 +134,9 @@ func (r *Runner) bashPPPanicTrace(call *syntax.BashPPCall) {
 }
 
 // bashPPRuntimeErrorImplements answers bashPPImplements for a runtime error
-// value: its method set is exactly {Error, RuntimeError}, so it satisfies
-// `error`, `runtime.Error` and any interface asking for no other method.
+// value: its method set is {Error, RuntimeError}, plus Addr for fault panics,
+// so it satisfies `error`, `runtime.Error` and the runtime's fault-address
+// interface only when the worker supplied an actual fault address.
 func (r *Runner) bashPPRuntimeErrorImplements(actual syntax.BashPPTypeExpr, iface *syntax.BashPPInterfaceType) error {
 	methods, err := r.bashPPInterfaceMethodSet("interface", iface, make(map[string]bool))
 	if err != nil {
@@ -134,7 +144,7 @@ func (r *Runner) bashPPRuntimeErrorImplements(actual syntax.BashPPTypeExpr, ifac
 	}
 	for _, key := range methods.order {
 		name := methods.byName[key].name
-		if name != "Error" && name != "RuntimeError" {
+		if name != "Error" && name != "RuntimeError" && name != "Addr" {
 			return &bashPPRuntimeErrorMissingMethod{typ: bashPPTypeText(actual), method: name}
 		}
 	}
@@ -148,19 +158,30 @@ func (e *bashPPRuntimeErrorMissingMethod) Error() string {
 }
 
 // bashPPRuntimeErrorMethod binds a method of a runtime error value; Error
-// yields the message and RuntimeError yields nothing.
+// yields the message, RuntimeError yields nothing, and Addr yields the
+// SetPanicOnFault address when the runtime supplied one.
 func (r *Runner) bashPPRuntimeErrorMethod(iv *bashPPInterfaceValue, method string) (*bashPPFunc, bool) {
 	switch method {
-	case "Error", "RuntimeError":
+	case "Error", "RuntimeError", "Addr":
+		if method == "Addr" && iv.runtimeAddr == nil {
+			break
+		}
 		// The literal carries the method's signature — `func() string` for
 		// Error, `func()` for RuntimeError — so result binding sees the
 		// declared result list; the body is answered by
 		// bashPPInvokeRuntimeErrorMethod, never interpreted.
 		lit := &syntax.BashPPFuncLit{Kw: &syntax.Lit{Value: "func"}}
-		if method == "Error" {
+		switch method {
+		case "Error":
 			lit.Results = []*syntax.BashPPField{{FieldType: &syntax.Lit{Value: "string"}, FieldTypeExpr: &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "string"}}}}
+		case "Addr":
+			lit.Results = []*syntax.BashPPField{{FieldType: &syntax.Lit{Value: "uintptr"}, FieldTypeExpr: &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "uintptr"}}}}
 		}
-		return &bashPPFunc{lit: lit, runtimeError: &bashPPRuntimeErrorCall{text: bashPPRuntimeErrorText(iv), method: method}}, true
+		call := &bashPPRuntimeErrorCall{text: bashPPRuntimeErrorText(iv), method: method}
+		if iv.runtimeAddr != nil {
+			call.addr = *iv.runtimeAddr
+		}
+		return &bashPPFunc{lit: lit, runtimeError: call}, true
 	}
 	r.errf("type %s has no method %s\n", bashPPTypeText(iv.dynamic), method)
 	r.exit.code = 2
@@ -171,6 +192,7 @@ func (r *Runner) bashPPRuntimeErrorMethod(iv *bashPPInterfaceValue, method strin
 type bashPPRuntimeErrorCall struct {
 	text   string
 	method string
+	addr   uint64
 	// panicWrap is set on the itab wrapper of a value method reached through
 	// a nil pointer in an interface: invoking it raises the runtime's
 	// panicwrap fault instead of running a body. See
@@ -185,9 +207,19 @@ func (r *Runner) bashPPInvokeRuntimeErrorMethod(fn *bashPPFunc) []string {
 		r.bashPPRaiseValue(fn.runtimeError.text, fn.runtimeError.panicWrap)
 		return nil
 	}
-	if fn.runtimeError.method != "Error" {
+	if fn.runtimeError.method != "Error" && fn.runtimeError.method != "Addr" {
 		r.bashPPResultCells = nil
 		return nil
+	}
+	if fn.runtimeError.method == "Addr" {
+		text := strconv.FormatUint(fn.runtimeError.addr, 10)
+		cell := &bashPPCell{
+			vr:          expand.Variable{Set: true, Kind: expand.String, Str: text},
+			exactScalar: constant.MakeUint64(fn.runtimeError.addr), scalarKind: constant.Int, typeName: "uintptr",
+			declType: &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "uintptr"}},
+		}
+		r.bashPPResultCells = []*bashPPCell{cell}
+		return []string{text}
 	}
 	cell := &bashPPCell{
 		vr:         expand.Variable{Set: true, Kind: expand.String, Str: fn.runtimeError.text},
