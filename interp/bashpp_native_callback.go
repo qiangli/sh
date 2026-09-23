@@ -82,6 +82,13 @@ func (s *bashPPNativeSession) serveCallback(ctx context.Context, owner *Runner, 
 	if owner == nil || q.Receiver == nil {
 		answer.Error = "gosource: callback has no original owner or receiver"
 	} else {
+		// The dependency may have written to its pipes before asking for this
+		// callback. Wait for those bytes only if the interpreted body writes to
+		// a caller stream. The outer request still drains on its final reply.
+		// Wrapping the original streams too covers process substitutions, which
+		// inherit them instead of the current stdout/stderr pair.
+		restoreOutput := s.lazyCallbackOutputBarrier(owner)
+		defer restoreOutput()
 		s.bashPPAuthenticateCallbackValue(q.Receiver)
 		owner.bashPPTools.callbackDepth++
 		var values []bashPPBridgeValue

@@ -137,6 +137,48 @@ func (s *bashPPNativeSession) drainOutputs() {
 	}
 }
 
+// callbackOutputWriter orders the first direct interpreter write in a callback
+// after any output the dependency emitted before the callback. The dependency
+// and its callbacks otherwise run on separate output paths; when a callback
+// produces no direct output, its earlier per-callback pipe barriers were
+// unnecessary. A shared once orders stdout and stderr as one boundary.
+type callbackOutputWriter struct {
+	writer io.Writer
+	once   *sync.Once
+	bridge *bashPPNativeSession
+}
+
+func (w *callbackOutputWriter) Write(p []byte) (int, error) {
+	w.once.Do(w.bridge.drainOutputs)
+	return w.writer.Write(p)
+}
+
+func (s *bashPPNativeSession) lazyCallbackOutputBarrier(r *Runner) func() {
+	if len(s.drains) == 0 {
+		return func() {}
+	}
+	stdout, stderr := r.stdout, r.stderr
+	origStdout, origStderr := r.origStdout, r.origStderr
+	once := new(sync.Once)
+	wrap := func(w io.Writer) io.Writer {
+		if w == nil {
+			return nil
+		}
+		// A real descriptor already shares kernel ordering with the helper;
+		// retaining its concrete type also preserves exec/TTY/fd behavior.
+		if _, ok := w.(interface{ Fd() uintptr }); ok {
+			return w
+		}
+		return &callbackOutputWriter{writer: w, once: once, bridge: s}
+	}
+	r.stdout, r.stderr = wrap(stdout), wrap(stderr)
+	r.origStdout, r.origStderr = wrap(origStdout), wrap(origStderr)
+	return func() {
+		r.stdout, r.stderr = stdout, stderr
+		r.origStdout, r.origStderr = origStdout, origStderr
+	}
+}
+
 func (s *bashPPNativeSession) closeDrains() {
 	for _, drain := range s.drains {
 		drain.closeWrite()

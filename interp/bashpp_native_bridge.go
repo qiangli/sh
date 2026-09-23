@@ -658,9 +658,9 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 	for {
 		select {
 		case callback := <-callbacks:
-			// The callback body may write to the caller's streams directly;
-			// child output raised before the callback must land first.
-			s.drainOutputs()
+			// The callback installs a write barrier on the interpreter's
+			// streams. If it writes directly, earlier child output lands first;
+			// a callback with no direct output needs no pipe round trip.
 			s.serveCallback(ctx, req.CallbackOwner, callback, q.coherence)
 			if owner := req.CallbackOwner; owner != nil {
 				if owner.exit.err != nil {

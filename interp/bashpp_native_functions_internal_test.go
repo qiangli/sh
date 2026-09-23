@@ -82,3 +82,33 @@ func main(){strings.Map(func(r rune)rune{println("capture");return r},"a")}`
 		t.Fatalf("stale callback accepted: %v", probeErr)
 	}
 }
+
+func TestGoSourceLazyCallbackOutputBarrier(t *testing.T) {
+	var output bytes.Buffer
+	drain, err := newBashPPNativeOutputDrain(&output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer drain.closeWrite()
+
+	session := &bashPPNativeSession{drains: []*bashPPNativeOutputDrain{drain}}
+	runner := &Runner{stdout: &output, stderr: &output, origStdout: &output, origStderr: &output}
+	if _, err := drain.write.Write([]byte("native-before\n")); err != nil {
+		t.Fatal(err)
+	}
+
+	restore := session.lazyCallbackOutputBarrier(runner)
+	if _, err := runner.stdout.Write([]byte("callback\n")); err != nil {
+		t.Fatal(err)
+	}
+	restore()
+	drain.closeWrite()
+	<-drain.finished
+
+	if got := output.String(); got != "native-before\ncallback\n" {
+		t.Fatalf("callback output overtook native output: %q", got)
+	}
+	if _, wrapped := runner.stdout.(*callbackOutputWriter); wrapped {
+		t.Fatal("callback output wrapper was not restored")
+	}
+}
