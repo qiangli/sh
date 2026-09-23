@@ -72,6 +72,10 @@ type bashPPBridgeValue struct {
 	Elements     []bashPPBridgeValue          `json:"elements,omitempty"`
 	Fields       map[string]bashPPBridgeValue `json:"fields,omitempty"`
 	Entries      []bashPPBridgeEntry          `json:"entries,omitempty"`
+
+	// NilChannel marks a dependency channel handle whose value is nil. A nil
+	// channel never communicates, so a select arm on it needs no arbitration.
+	NilChannel bool `json:"nil_channel,omitempty"`
 }
 type bashPPBridgeEntry struct {
 	Key   bashPPBridgeValue `json:"key"`

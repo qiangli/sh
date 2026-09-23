@@ -1402,7 +1402,7 @@ func (r *Runner) bashPPVisitPersistentCells(fn func(*bashPPCell)) {
 func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
 	var nativeCases []bashPPBridgeValue
 	var nativeArms []*syntax.BashPPSelectCase
-	hasLocal := false
+	hasLocal, liveNative := false, false
 	var cases []reflect.SelectCase
 	var arms []*syntax.BashPPSelectCase
 	var caseElems []*bashPPChannel
@@ -1435,6 +1435,7 @@ func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
 			if c.native != nil {
 				nativeCases = append(nativeCases, bashPPBridgeValue{Kind: "recv", Elements: []bashPPBridgeValue{*c.native}})
 				nativeArms = append(nativeArms, arm)
+				liveNative = liveNative || !goSourceNativeNilChannel(c.native)
 			} else {
 				hasLocal = true
 			}
@@ -1458,6 +1459,7 @@ func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
 			if c.native != nil {
 				nativeCases = append(nativeCases, bashPPBridgeValue{Kind: "recv", Elements: []bashPPBridgeValue{*c.native}})
 				nativeArms = append(nativeArms, arm)
+				liveNative = liveNative || !goSourceNativeNilChannel(c.native)
 			} else {
 				hasLocal = true
 			}
@@ -1477,6 +1479,7 @@ func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
 			if c.native != nil {
 				nativeCases = append(nativeCases, bashPPBridgeValue{Kind: "recv", Elements: []bashPPBridgeValue{*c.native}})
 				nativeArms = append(nativeArms, arm)
+				liveNative = liveNative || !goSourceNativeNilChannel(c.native)
 			} else {
 				hasLocal = true
 			}
@@ -1495,6 +1498,12 @@ func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
 				}
 				nativeCases = append(nativeCases, bashPPBridgeValue{Kind: "send", Elements: []bashPPBridgeValue{*c.native, value}})
 				nativeArms = append(nativeArms, arm)
+				liveNative = liveNative || !goSourceNativeNilChannel(c.native)
+				// The interpreter-owned select below sees this arm disabled,
+				// which is what a send on a nil channel is.
+				cases = append(cases, reflect.SelectCase{Dir: reflect.SelectSend})
+				arms = append(arms, arm)
+				caseElems = append(caseElems, nil)
 				continue
 			}
 			hasLocal = true
@@ -1527,7 +1536,10 @@ func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
 		}
 		arms = append(arms, arm)
 	}
-	if len(nativeCases) > 0 {
+	// Communication on a nil channel never proceeds, so dependency arms whose
+	// channels are all nil need no arbitration against interpreter-owned arms:
+	// the interpreter's select runs with those arms disabled.
+	if len(nativeCases) > 0 && (!hasLocal || liveNative) {
 		if hasLocal {
 			r.errf("%sgosource: mixed native/interpreted channel select requires atomic arbitration\n", r.bashErrPrefix(s.Pos()))
 			r.exit.code = 2

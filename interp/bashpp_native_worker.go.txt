@@ -52,6 +52,7 @@ type value struct {
  Text string `json:"text,omitempty"`
  Bytes []byte `json:"bytes,omitempty"`
  Handle uint64 `json:"handle,omitempty"`
+ NilChannel bool `json:"nil_channel,omitempty"`
  Elements []value `json:"elements,omitempty"`
  Fields map[string]value `json:"fields,omitempty"`
  Entries []bppProtocolEntry `json:"entries,omitempty"`
@@ -235,7 +236,7 @@ func nativeTypeID(t reflect.Type) string {if t.Kind()==reflect.Pointer{return "*
 // Tokens are keyed by reflect.Type itself, never its potentially ambiguous String.
 var nativeTypeTokens=struct{sync.Mutex;next uint64;ids map[reflect.Type]uint64}{ids:map[reflect.Type]uint64{}}
 func nativeTypeToken(t reflect.Type)uint64{if t.Kind()==reflect.Interface{return 0};nativeTypeTokens.Lock();defer nativeTypeTokens.Unlock();if id:=nativeTypeTokens.ids[t];id!=0{return id};nativeTypeTokens.next++;nativeTypeTokens.ids[t]=nativeTypeTokens.next;return nativeTypeTokens.next}
-func encodeHandle(v reflect.Value,result value)value {result.NativeTypeID=nativeTypeToken(v.Type());handles.Lock();handles.next++;id:=handles.next;copy:=reflect.New(v.Type()).Elem();copy.Set(v);handles.values[id]=copy;handles.Unlock();result.Kind="handle";result.Handle=id;return result}
+func encodeHandle(v reflect.Value,result value)value {result.NativeTypeID=nativeTypeToken(v.Type());if v.Kind()==reflect.Chan&&v.IsNil(){result.NilChannel=true};handles.Lock();handles.next++;id:=handles.next;copy:=reflect.New(v.Type()).Elem();copy.Set(v);handles.values[id]=copy;handles.Unlock();result.Kind="handle";result.Handle=id;return result}
 func reflectedContext(id uint64)(reflectedMethodContext,bool){handles.Lock();defer handles.Unlock();ctx,ok:=handles.reflected[id];return ctx,ok}
 func setReflectedContext(id uint64,ctx reflectedMethodContext){handles.Lock();handles.reflected[id]=ctx;handles.Unlock()}
 func encode(v reflect.Value) value {
