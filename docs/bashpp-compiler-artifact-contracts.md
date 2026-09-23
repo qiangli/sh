@@ -54,6 +54,7 @@ Sprint 248 denominator.
 | `maymorestack.go` | `gc-only-check` | `-gcflags=-d=maymorestack` hook called before every stack-growth check | Deep recursion with large frames computes exactly. |
 | `fixedbugs/issue47928.go` | `gc-only-check` | `//go:nointerface` under `-goexperiment fieldtrack` | Promoted pointer methods satisfy interfaces without the experiment. |
 | `typeparam/mdempsky/15.go` | `gc-only-check` | `//go:nointerface` under `-goexperiment fieldtrack`, on generic promoted methods | Methods promoted through embedded generic types satisfy interfaces; absent methods do not. |
+| `fixedbugs/bug260.go` | `unsafe-reinterpretation` | array-element addresses compared through `%p` (memory layout) | Struct sizes, alignments and array sizes; distinct elements have distinct, stable addresses. |
 | `fixedbugs/issue15277.go` | `gc-observation` | `runtime.MemStats` heap deltas around `KeepAlive` | A kept-alive allocation keeps its contents; releasing it is well defined. |
 | `fixedbugs/issue9110.go` | `gc-observation` | `runtime.MemStats` object counts (leaked sudogs) | Goroutines abandoning a select on timeout all complete. |
 | `nilptr.go` | `unsafe-reinterpretation` | placement of a global in the first 256 MB of the address space | Nil pointer indirection through large arrays and structs panics recoverably. |

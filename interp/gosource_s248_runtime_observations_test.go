@@ -6,7 +6,7 @@ import "testing"
 
 // Sprint: #248; Stories: #700, #701, #702
 //
-// Six upstream roots assert gc toolchain or runtime implementation
+// Seven upstream roots assert gc toolchain or runtime implementation
 // observations that Bash#'s interpreted mode deliberately does not mimic
 // (bashsharp docs/bashpp-go-implementation-claim.md, "Language, not
 // implementation"; sh docs/bashpp-compiler-artifact-contracts.md, Sprint 248
@@ -65,6 +65,26 @@ func main() {
 	_, d := w.(interface{ XGood() })
 	_, f := w.(interface{ Missing() })
 	fmt.Println(a, b, c, d, f)
+}
+`,
+		// bug260.go: element addresses printed through %p are memory
+		// layout; the language guarantees sizes and alignments.
+		"packed-struct-sizes-and-alignments": `package main
+import (
+	"fmt"
+	"unsafe"
+)
+type T1 struct{ x uint8 }
+type T2 struct{ x uint16 }
+type T4 struct{ x uint32 }
+func main() {
+	var b1 [10]T1
+	var b2 [10]T2
+	var b4 [10]T4
+	fmt.Println(unsafe.Sizeof(b1[0]), unsafe.Alignof(b1[0]), unsafe.Sizeof(b1))
+	fmt.Println(unsafe.Sizeof(b2[0]), unsafe.Alignof(b2[0]), unsafe.Sizeof(b2))
+	fmt.Println(unsafe.Sizeof(b4[0]), unsafe.Alignof(b4[0]), unsafe.Sizeof(b4))
+	fmt.Println(&b1[0] != &b1[1], &b1[1] == &b1[1])
 }
 `,
 		// issue15277.go: heap deltas are a GC observation; a KeepAlive'd
