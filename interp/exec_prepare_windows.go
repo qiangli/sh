@@ -26,6 +26,17 @@ func preparePlatformExec(dir, execPath, diagnosticPath string, args []string) (s
 		if path, cleanup, ok := planExtensionlessPEExec(execPath, data, self, os.TempDir()); ok {
 			return path, args, "", cleanup
 		}
+		// Go's os/exec refuses an extensionless plain script during its
+		// Windows suffix lookup, before CreateProcess can report ENOEXEC.
+		// Run it through this shell just as the Unix exec-format fallback
+		// does. A prior LookPathDir check admitted this name under the
+		// Windows executable rule; this second stat prevents a vanished file
+		// from turning a genuine not-found into a shell invocation.
+		if !winHasExt(execPath) {
+			if info, statErr := os.Stat(execPath); statErr == nil && info.Mode().IsRegular() && self != "" {
+				return self, shebangArgs(self, "", execPath, args), "", nil
+			}
+		}
 		return execPath, args, "", nil
 	}
 	if strings.ContainsAny(interp, "\x00") {

@@ -1030,7 +1030,21 @@ func windowsExecutableFile(target string, exts []string) bool {
 	// on any name must mean what it says (winmode).
 	if info, err := os.Stat(target); err == nil {
 		if applied := winmode.Apply(target, info); winmode.Recorded(applied) {
-			return applied.Mode().Perm()&0o111 != 0
+			perm := applied.Mode().Perm()
+			owner, ownerKnown := winmode.IsOwner(target)
+			if ownerKnown && owner {
+				return perm&0o100 != 0
+			}
+			group, groupKnown := winmode.InGroup(target)
+			if groupKnown && group {
+				return perm&0o010 != 0
+			}
+			// A readable owner/group identity gives the other class. If
+			// Windows withheld either SID, retain the prior any-X fallback.
+			if ownerKnown && groupKnown {
+				return perm&0o001 != 0
+			}
+			return perm&0o111 != 0
 		}
 	}
 	if !winHasExt(target) {
@@ -1096,7 +1110,8 @@ func findExecutable(dir, file string, exts []string) (string, error) {
 		// already willing to run one: type5.sub does `touch e; chmod +x e`
 		// and then wants `type -p e` to report it. PATHEXT has had its turn
 		// above, so a foo.exe beside a plain foo still wins.
-		if _, err := checkStat(dir, file, true); err == nil {
+		if _, err := checkStat(dir, file, true); err == nil &&
+			windowsExecutableFile(lookupStatPath(dir, file), exts) {
 			return file, nil
 		}
 	}

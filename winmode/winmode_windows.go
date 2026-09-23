@@ -260,7 +260,7 @@ func IsOwner(path string) (bool, bool) {
 	if user, err := token.GetTokenUser(); err == nil && user.User.Sid.Equals(owner) {
 		return true, true
 	}
-	member, err := token.IsMember(owner)
+	member, err := tokenHasGroup(token, owner)
 	if err != nil {
 		return false, false
 	}
