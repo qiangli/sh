@@ -404,7 +404,7 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 		} else {
 			// The child is a native process: hand it $TEMP, $HOME, PATH
 			// entries and friends in the OS spelling (C:\…) on Windows.
-			env = nativeExecEnv(hc.runner.execEnvWithFuncs())
+			env = nativeExecEnvForChild(hc.runner.execEnvWithFuncs(), execPath)
 		}
 		// GNU Bash always injects `_` into an external command's environment
 		// as the resolved command pathname, even though `_` is not exported as
