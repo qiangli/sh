@@ -690,9 +690,8 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 			}
 			derivedCopy := reflectedCopyDerived(req, q)
 			for i := range reply.Values {
-				reply.Values[i].reflectCopy = false
+				bashPPMarkReflectCopy(&reply.Values[i], derivedCopy)
 				if reply.Values[i].Kind == "handle" {
-					reply.Values[i].reflectCopy = derivedCopy
 					reply.Values[i].Session = s.id
 					s.rememberNativeHandleType(reply.Values[i])
 					if reply.Values[i].Origin != 0 && reply.Values[i].Function {

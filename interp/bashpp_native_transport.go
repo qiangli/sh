@@ -234,12 +234,31 @@ func reflectedCopyDerivedCall(q bashPPBridgeRequest) bool {
 
 // reflectedCopyDerived reports a request whose handle results are still the
 // admitted reflect copy: the ValueOf itself, an admitted call on a derived
-// handle, or a member read (a method value) of one.
+// handle, or a read of one — a member (method value), field or element.
 func reflectedCopyDerived(req bashPPEvalRequest, q bashPPBridgeRequest) bool {
-	if q.Op == "member" {
+	switch q.Op {
+	case "member", "field", "index":
 		return q.Receiver != nil && q.Receiver.Kind == "handle" && q.Receiver.reflectCopy
 	}
 	return reflectedValueCopy(req, q) || reflectedCopyDerivedCall(q)
+}
+
+// bashPPMarkReflectCopy sets the host-only reflect-copy mark on every handle
+// a reply carries — a result slice of reflect.Values (Call) nests them — and
+// clears it everywhere else, so the mark never survives from the wire.
+func bashPPMarkReflectCopy(v *bashPPBridgeValue, derived bool) {
+	v.reflectCopy = derived && v.Kind == "handle"
+	for i := range v.Elements {
+		bashPPMarkReflectCopy(&v.Elements[i], derived)
+	}
+	for name, field := range v.Fields {
+		bashPPMarkReflectCopy(&field, derived)
+		v.Fields[name] = field
+	}
+	for i := range v.Entries {
+		bashPPMarkReflectCopy(&v.Entries[i].Key, derived)
+		bashPPMarkReflectCopy(&v.Entries[i].Value, derived)
+	}
 }
 
 // reflectCopyReconciled reports a transported value none of whose storage a
