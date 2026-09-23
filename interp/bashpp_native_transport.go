@@ -143,7 +143,7 @@ func validateLocalTransport(req bashPPEvalRequest, q bashPPBridgeRequest) error 
 	if synchronousReaderCallback(req, q) || synchronousImageCallback(req, q) || !functionCallbacks && (synchronousUnwrapCallback(req, q) || synchronousErrorsAsType(req, q)) {
 		return nil
 	}
-	if reflectedMethodValueOf(req, q) {
+	if reflectedMethodValueOf(req, q) || reflectedValueCopy(req, q) || reflectedCopyDerivedCall(q) {
 		return nil
 	}
 	// A reviewed synchronous methods-driven consumer over origin-bearing
@@ -190,6 +190,87 @@ func reflectedMethodValueOf(req bashPPEvalRequest, q bashPPBridgeRequest) bool {
 	}
 	alias, name, ok := strings.Cut(q.Selector, ".")
 	return ok && req.Imports[alias] == "reflect" && name == "ValueOf" && requestHasCallbacks(req, q)
+}
+
+// reflectedValueCopy admits reflect.ValueOf over an interpreter value whose
+// every write the dependency could perform is either impossible or
+// reconciled. reflect.ValueOf copies its operand, exactly as Go does: the
+// copy is unaddressable, so no Set* reaches a direct field, and a mirrored
+// value-receiver method invoked through the resulting Value runs on a copy
+// in Go as well. What such a copy can still reach is referenced storage: a
+// pointer is admitted only with an authenticated origin, whose pointee the
+// native pointer writeback reconciles on every reply, while a copied slice,
+// map or channel, or an original function value, stays refused because a
+// native write or retained call through it would not reach the original.
+func reflectedValueCopy(req bashPPEvalRequest, q bashPPBridgeRequest) bool {
+	if q.Op != "call" || q.Receiver != nil || len(q.Args) != 1 {
+		return false
+	}
+	alias, name, ok := strings.Cut(q.Selector, ".")
+	if !ok || req.Imports[alias] != "reflect" || name != "ValueOf" {
+		return false
+	}
+	return reflectCopyReconciled(q.Args[0])
+}
+
+// reflectedCopyDerivedCall admits a call on a handle the host derived from an
+// admitted reflect copy — Elem, Field, Interface, a mirrored method of the
+// value Interface returned — whose arguments satisfy the same rule. Every
+// value such a call can reach is still the copy or origin-reconciled storage,
+// so it neither mutates nor retains interpreter storage the host cannot see.
+// The mark is host-only (reflectCopy is never decoded from the wire), and the
+// result stays callback-tainted, so a retaining dependency still refuses it.
+func reflectedCopyDerivedCall(q bashPPBridgeRequest) bool {
+	if q.Op != "call" || q.Receiver == nil || q.Receiver.Kind != "handle" || !q.Receiver.reflectCopy {
+		return false
+	}
+	for _, arg := range q.Args {
+		if !reflectCopyReconciled(arg) {
+			return false
+		}
+	}
+	return true
+}
+
+// reflectedCopyDerived reports a request whose handle results are still the
+// admitted reflect copy: the ValueOf itself, an admitted call on a derived
+// handle, or a member read (a method value) of one.
+func reflectedCopyDerived(req bashPPEvalRequest, q bashPPBridgeRequest) bool {
+	if q.Op == "member" {
+		return q.Receiver != nil && q.Receiver.Kind == "handle" && q.Receiver.reflectCopy
+	}
+	return reflectedValueCopy(req, q) || reflectedCopyDerivedCall(q)
+}
+
+// reflectCopyReconciled reports a transported value none of whose storage a
+// native write could change unseen: scalars, value aggregates, origin-bearing
+// pointers (reconciled by the pointer writeback) and native handles that do
+// not carry an original callback from anywhere but an admitted reflect copy.
+func reflectCopyReconciled(v bashPPBridgeValue) bool {
+	switch v.Kind {
+	case "struct", "array", "bool", "int", "uint", "float", "complex", "string", "nil":
+	case "handle":
+		if v.Callbacks && !v.reflectCopy {
+			return false
+		}
+	case "pointer":
+		if v.Origin == 0 {
+			return false
+		}
+	default:
+		return false
+	}
+	for _, child := range v.Elements {
+		if !reflectCopyReconciled(child) {
+			return false
+		}
+	}
+	for _, child := range v.Fields {
+		if !reflectCopyReconciled(child) {
+			return false
+		}
+	}
+	return len(v.Entries) == 0
 }
 
 // bashPPReflectTypeOnly rewrites original function arguments of reflect.TypeOf

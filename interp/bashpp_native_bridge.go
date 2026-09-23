@@ -45,6 +45,11 @@ type bashPPBridgeValue struct {
 	CallArgs                []bashPPBridgeValue `json:"call_args,omitempty"`
 	sliceView               *bashPPNativeSlice  // host-only original backing view
 
+	// reflectCopy marks a handle derived from an admitted reflect.ValueOf
+	// copy (reflectedValueCopy). Host-only: it is set on replies by the
+	// session itself and never trusted from the wire.
+	reflectCopy bool
+
 	// Callable is derived by the interpreter from authenticated native type or
 	// import metadata; the dependency worker cannot set callback policy itself.
 	Callable     string                       `json:"-"`
@@ -683,8 +688,11 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 			if err := s.applyNativeSliceTransfers(q, reply); err != nil {
 				return nil, err
 			}
+			derivedCopy := reflectedCopyDerived(req, q)
 			for i := range reply.Values {
+				reply.Values[i].reflectCopy = false
 				if reply.Values[i].Kind == "handle" {
+					reply.Values[i].reflectCopy = derivedCopy
 					reply.Values[i].Session = s.id
 					s.rememberNativeHandleType(reply.Values[i])
 					if reply.Values[i].Origin != 0 && reply.Values[i].Function {
