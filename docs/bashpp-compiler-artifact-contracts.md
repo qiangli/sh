@@ -38,3 +38,24 @@ three-mode conformance test for these replacement contracts.  It compares
 unchanged Go execution, interpreted Bash#, and the compiled Bash# artifact;
 therefore it cannot turn a missing optimizer artifact into an administrative
 PASS.
+
+## Sprint 248: runtime and toolchain observations
+
+**Ratified by the operator, 2026-09-22 (Sprint 248 decision D1).** The same
+policy covers five runtime/native-bridge roots whose assertions are about the
+gc toolchain or runtime, not the language. Each passes natively and in
+compiled mode (the compiled artifact is built by gc). Interpreted mode has no gc
+compiler hook, experiment or heap to observe, so each stays **FAIL by ID in
+interpreted mode**, with no synthetic PASS and no reduction of the 21-root
+Sprint 248 denominator.
+
+| Root | Reason | gc-owned observation absent from interpreted Bash# | Replacement observable contract |
+| --- | --- | --- | --- |
+| `maymorestack.go` | `gc-only-check` | `-gcflags=-d=maymorestack` hook called before every stack-growth check | Deep recursion with large frames computes exactly. |
+| `fixedbugs/issue47928.go` | `gc-only-check` | `//go:nointerface` under `-goexperiment fieldtrack` | Promoted pointer methods satisfy interfaces without the experiment. |
+| `fixedbugs/issue15277.go` | `gc-observation` | `runtime.MemStats` heap deltas around `KeepAlive` | A kept-alive allocation keeps its contents; releasing it is well defined. |
+| `fixedbugs/issue9110.go` | `gc-observation` | `runtime.MemStats` object counts (leaked sudogs) | Goroutines abandoning a select on timeout all complete. |
+| `nilptr.go` | `unsafe-reinterpretation` | placement of a global in the first 256 MB of the address space | Nil pointer indirection through large arrays and structs panics recoverably. |
+
+`TestS248RuntimeObservationReplacementConformance` compares unchanged Go,
+interpreted Bash# and the compiled Bash# artifact for these contracts.
