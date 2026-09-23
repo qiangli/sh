@@ -428,6 +428,13 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 				env = setExecEnvValue(env, BashyHardIgnoreEnv, ign)
 			}
 		}
+		// A true Unix exec replacement bypasses exec.Cmd.Start. Check the
+		// complete environment before either launch path can mutate the
+		// shell's descriptors or replace its process image.
+		if err := execBudgetRefusal(execPath, cmdArgs, env); err != nil {
+			fmt.Fprintln(hc.Stderr, err)
+			return ExitStatus(126)
+		}
 		hc.runner.closeClosedInheritedFdsOnExec()
 		// If stdin is the in-memory script-source reader, back it with a
 		// seekable temp file: os/exec eagerly drains a non-File stdin, which
@@ -523,8 +530,8 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 		}()
 		startCmd := func() error {
 			var startErr error
-			if execbudget.OverBashyArgMax(cmd.Args, cmd.Env) {
-				startErr = &os.PathError{Op: "fork/exec", Path: cmd.Path, Err: execBudgetErr()}
+			if refusal := execBudgetRefusal(cmd.Path, cmd.Args, cmd.Env); refusal != nil {
+				startErr = refusal
 			} else if start, ok := ctx.Value(execStartOverrideCtxKey{}).(func(*exec.Cmd) error); ok {
 				startErr = start(&cmd)
 			} else if hc.runner != nil {
@@ -752,6 +759,15 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			return err
 		}
 	}
+}
+
+// execBudgetRefusal is shared by true execve replacement and os/exec Start.
+// The latter also checks re-exec fallback commands, whose argv/env can differ.
+func execBudgetRefusal(path string, args, env []string) error {
+	if !execbudget.OverBashyArgMax(args, env) {
+		return nil
+	}
+	return &os.PathError{Op: "fork/exec", Path: path, Err: execBudgetErr()}
 }
 
 // shellVisibleLookupError removes the retained Linux cwd descriptor from a
