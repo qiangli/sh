@@ -188,3 +188,21 @@ also rejected by existing value construction before launch. Closures created
 only after the task's registry snapshot are outside this bounded registry
 preservation change. Raw source-bound probes remain in the review evidence;
 these unsupported or mismatching cases are not counted as coverage.
+
+## Deferred native method cost
+
+Sprint 250 Story #140 profiled the exact pinned `mutexes.go` after semantic
+completion. The map increment path itself was negligible; the dominant cost
+was dependency-socket traffic for `sync.Mutex`. In particular, every
+`defer c.mu.Unlock()` first asked the dependency to create a bound method
+handle and later sent another request to invoke it. The defer statement had
+already evaluated and captured the receiver, so that first request added no Go
+semantics. Captured native calls now retain the receiver and selector in the
+eventual call request, just as direct native method calls do.
+
+On the profiling host, the unchanged three-worker, 30,000-increment original
+fell from 8.485 seconds to 3.413 seconds under the same focused test command and
+passed with the original 20-second deadline. A request-count regression proves
+that direct and deferred calls of the same native method issue the same number
+of bridge requests; the original three-mode differential and WaitGroup controls
+continue to compare against compiled Go.

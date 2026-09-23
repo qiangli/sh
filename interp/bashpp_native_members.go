@@ -26,8 +26,12 @@ func (r *Runner) bashPPNativeReceiver(expr syntax.BashPPExpr) (bashPPBridgeValue
 	return r.bashPPBridgeExpr(expr)
 }
 
-// Capture the callee and typed operands now; later rebinding cannot redirect
-// a deferred cleanup. No original statement or expression reaches the helper.
+// Capture the receiver and typed operands now; later rebinding cannot redirect
+// a deferred cleanup. The captured receiver is already the value Go evaluates
+// at the defer statement, so keep its selector on the eventual call request.
+// Binding a native method value first would preserve no additional semantics
+// and would cost a second dependency round trip for every deferred method call.
+// No original statement or expression reaches the helper.
 func (r *Runner) bashPPNativeCapture(ctx context.Context, call *syntax.BashPPCall) (func(context.Context) error, bool, error) {
 	if !r.bashPPBridgeHandles(call) {
 		return nil, false, nil
@@ -35,13 +39,6 @@ func (r *Runner) bashPPNativeCapture(ctx context.Context, call *syntax.BashPPCal
 	q, err := r.bashPPPrepareNativeCall(ctx, call)
 	if err != nil {
 		return nil, true, err
-	}
-	if q.Receiver != nil && q.Selector != "" {
-		bound, err := r.bashPPBindNativeMethod(ctx, *q.Receiver, q.Selector)
-		if err != nil {
-			return nil, true, err
-		}
-		q.Receiver, q.Selector = &bound, ""
 	}
 	return func(ctx context.Context) error {
 		req, err := r.bashPPEvalRequest()
