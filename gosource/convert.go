@@ -1301,6 +1301,16 @@ func (c *converter) exprValue(e ast.Expr) s.BashPPExpr {
 				typeLit.ValueEnd = c.pos(x.Fun.End())
 			}
 			value := c.info.Types[x.Args[0]].Value
+			if value != nil && value.Kind() == constant.Int && constant.Sign(value) == 0 && types.Identical(c.info.TypeOf(x.Fun), types.Typ[types.UnsafePointer]) {
+				// unsafe.Pointer(uintptr(0)) is the nil unsafe.Pointer: the
+				// type checker has proven the operand the integer constant 0,
+				// so it lowers to the same typed nil as unsafe.Pointer(nil).
+				// No other integer spells an address here; a nonzero or
+				// runtime uintptr keeps its conversion and is refused (or
+				// authenticated) by the interpreter.
+				nilIdent := &s.BashPPIdent{Name: c.lit(x.Args[0].Pos(), "nil")}
+				return &s.BashPPConvertExpr{ConvType: typeLit, ConvTypeExpr: c.typ(x.Fun), Lparen: c.pos(x.Lparen), Rparen: c.pos(x.Rparen), X: nilIdent}
+			}
 			stringConstant := value != nil && value.Kind() == constant.String
 			return &s.BashPPConvertExpr{GoStringConstant: stringConstant, ConvType: typeLit, ConvTypeExpr: c.typ(x.Fun), Lparen: c.pos(x.Lparen), Rparen: c.pos(x.Rparen), X: c.expr(x.Args[0])}
 		}

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"go/constant"
+	"strings"
 
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
@@ -248,6 +249,12 @@ func (r *Runner) bashPPPointerExprValue(expr syntax.BashPPExpr) (ptr *bashPPPoin
 	case *syntax.BashPPConvertExpr:
 		if r.bashPPGoSource && r.goSourceUnsafePointerType(r.bashPPConvertTarget(x)) {
 			ptr, err := r.bashPPPointerExprValue(x.X)
+			if err != nil && strings.HasPrefix(err.Error(), "BASHPP-EPOINTER-TARGET:") {
+				// The operand names no interpreter storage — typically an
+				// integer spelled as an address. Integers are never trusted
+				// as addresses (the constant 0 lowers to nil beforehand).
+				return nil, fmt.Errorf("BASHPP-EUNSAFE-ADDRESS: unsafe.Pointer operand is not an interpreter-owned live pointer (%v)", err)
+			}
 			if err != nil || ptr == nil {
 				return ptr, err
 			}

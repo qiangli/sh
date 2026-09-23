@@ -840,6 +840,13 @@ func (r *Runner) bashPPConvertNamedScalar(name string, target syntax.BashPPTypeE
 	if instantiated, ok := target.(*syntax.BashPPNamedType); ok && instantiated.Name != nil && instantiated.Name.Value == name && len(instantiated.TypeArgs) > 0 {
 		named = instantiated
 	}
+	if r.bashPPGoSource && r.goSourceUnsafePointerType(named) && x.value != nil && x.value.Kind() == constant.Int {
+		// An integer is never trusted as an address. The constant 0 lowers to
+		// unsafe.Pointer(nil) before evaluation; any other integer reaching
+		// here — forged, stale or read back from a native dependency — has no
+		// interpreter storage behind it.
+		return bashPPScalar{}, fmt.Errorf("BASHPP-EUNSAFE-ADDRESS: uintptr %s is not an interpreter-owned live pointer; refusing conversion to %s", x.value, name)
+	}
 	shape, ok := r.bashPPUnderlyingType(named).(*syntax.BashPPNamedType)
 	if !ok || shape == named || !bashPPBuiltinType(shape.Name.Value) {
 		return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-CONVERT: cannot convert %s to %s", x.value.Kind(), name)

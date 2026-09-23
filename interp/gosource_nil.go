@@ -43,14 +43,19 @@ func (r *Runner) goSourceExpectedCell(cell *bashPPCell, expected syntax.BashPPTy
 		// does. bashPPNativeType is Go-source only, so this stays inert in
 		// the classic/POSIX dialect.
 		if r.bashPPNativeType(expected) {
-			if r.goSourceUnsafePointerType(expected) {
+			_, nativePointer := expected.(*syntax.BashPPPointerType)
+			if nativePointer || r.goSourceUnsafePointerType(expected) {
+				// unsafe.Pointer and a pointer to an imported type are never
+				// interfaces: their nil is the dependency's typed zero value,
+				// so (*os.File)(nil) keeps *os.File as its dynamic type.
 				value, err := r.bashPPNativeTypeRequest("new", expected)
 				if err != nil {
 					return nil, err
 				}
-				cell.declType = expected
-				cell.vr = expand.Variable{Set: true, Kind: expand.Object, Obj: &value}
-				return cell, nil
+				// A typed nil of either kind is a non-nil interface operand:
+				// drop the untyped-nil interface marker so a later interface
+				// admission keeps the unsafe.Pointer dynamic type.
+				return &bashPPCell{declType: expected, vr: expand.Variable{Set: true, Kind: expand.Object, Obj: &value}}, nil
 			}
 			cell.declType = expected
 			return cell, nil
@@ -118,6 +123,14 @@ func (r *Runner) goSourceNilValueCell(expr syntax.BashPPExpr) (*bashPPCell, bool
 		return nil, false, nil
 	}
 	literal := goSourceNilLiteral(expr)
+	// Parentheses are transparent: ((*T)(nil)) is the same typed nil.
+	for {
+		paren, ok := expr.(*syntax.BashPPParenExpr)
+		if !ok {
+			break
+		}
+		expr = paren.X
+	}
 	conversion, convert := expr.(*syntax.BashPPConvertExpr)
 	if !literal && (!convert || !goSourceNilLiteral(conversion.X)) {
 		return nil, false, nil
