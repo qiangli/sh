@@ -62,18 +62,22 @@ Sprint 248 denominator.
 `TestS248RuntimeObservationReplacementConformance` compares unchanged Go,
 interpreted Bash# and the compiled Bash# artifact for these contracts.
 
-## Sprint 247: field-tracking experiment
+## Sprint 247: field-tracking experiment and string layout
 
-**Ratified by the operator, 2026-09-22 (Sprint 247 lane D, provisional: "for
-now").** Two value/provenance roots assert the gc field-tracking experiment
-rather than the language. Both pass natively and in compiled mode. They stay
+**Ratified by the operator, 2026-09-22 (Sprint 247: the field-tracking pair
+provisionally, "for now"; the string-layout pair without qualification).** Two value/provenance roots assert the gc field-tracking experiment
+rather than the language, and two more read gc's string memory layout
+(same class as `nilptr.go` and `bug260.go`). All four
+pass natively and in compiled mode. They stay
 **FAIL by ID in interpreted mode**, with no synthetic PASS and no reduction of
-the 17-root Sprint 247 denominator. They are the same class as
+the 17-root Sprint 247 denominator. The field-tracking pair is the same class as
 `fixedbugs/issue47928.go` and `typeparam/mdempsky/15.go` above.
 
 | Root | Reason | gc-owned observation absent from interpreted Bash# | Replacement observable contract |
 | --- | --- | --- | --- |
 | `fixedbugs/issue20014.go` | `gc-only-check` | `-goexperiment fieldtrack` with `-ldflags -k=main.fieldTrackInfo`: the linker writes the set of tracked fields it saw into a string variable | `go:"track"` is an ordinary struct tag; tracked fields read and write like any other. |
+| `strcopy.go` | `unsafe-reinterpretation` | string data addresses compared through `reflect.StringHeader` over `unsafe.Pointer(&s)`; interpreted strings have no backing-array identity, so any address would be synthetic | A string converted from bytes is independent of them and compares by content. |
+| `fixedbugs/issue8606b.go` | `unsafe-reinterpretation` | string data pointed at an mmap `PROT_NONE` page through `reflect.StringHeader`; relies on gc's comparison order never reading it | Struct and interface values with string fields compare equal exactly when their contents are equal. |
 | `fixedbugs/issue30862.go` | `gc-only-check` | `//go:nointerface` under `-goexperiment fieldtrack`, across an imported embedded struct | A pointer method promoted through an embedded struct satisfies interfaces through the pointer and the embedding pointer, not the embedding value. |
 
 `TestS247DecisionReplacementConformance` compares unchanged Go, interpreted

@@ -61,6 +61,53 @@ func main() {
 	fmt.Println(a, b, c, d)
 }
 `,
+		// strcopy.go: the root compares string data addresses through
+		// reflect.StringHeader. Whether equal strings share memory is not
+		// observable in the language; that a string converted from bytes is
+		// independent of them, and compares by content, is.
+		"string-conversion-copies": `package main
+import "fmt"
+func main() {
+	buf := make([]byte, 2<<10)
+	for i := range buf {
+		buf[i] = byte('a' + i%26)
+	}
+	large := string(buf)
+	sub := large[10:12]
+	b := []byte(sub)
+	subcopy := string(b)
+	b[0] = 'Z'
+	buf[10] = 'Y'
+	fmt.Println(sub, subcopy, string(b), large[10:12], sub == subcopy, len(large))
+}
+`,
+		// fixedbugs/issue8606b.go: the root points string data at an
+		// inaccessible mmap page and relies on gc's comparison order never
+		// reading it. The language contract is content equality of struct
+		// and interface values with string fields.
+		"struct-string-interface-equality": `package main
+import "fmt"
+type SI struct {
+	s string
+	i int
+}
+type SS struct {
+	s string
+	t string
+}
+func main() {
+	for _, test := range []struct{ a, b interface{} }{
+		{SI{s: "foo", i: 1}, SI{s: "foo", i: 2}},
+		{SS{s: "foo", t: "a"}, SS{s: "foo", t: "aa"}},
+		{SS{s: "a", t: "foo"}, SS{s: "b", t: "foo"}},
+		{SS{s: "x", t: "y"}, SS{s: "x", t: "y"}},
+		{SI{s: "ab", i: 3}, SI{s: string([]byte{'a', 'b'}), i: 3}},
+	} {
+		fmt.Print(test.a == test.b, " ")
+	}
+	fmt.Println()
+}
+`,
 	} {
 		t.Run(name, func(t *testing.T) { typedSendThreeModes(t, source) })
 	}
