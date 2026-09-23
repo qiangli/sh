@@ -157,6 +157,8 @@ type bashPPNativeSession struct {
 	// bashPPMadeFuncUse.
 	madeFuncs           map[uint64]bool
 	origins             map[uint64]*bashPPPointer
+	originIndex         map[bashPPOriginKey]uint64 // protected by mu; see bashPPTransportOrigin
+	originIndexed       int                        // len(origins) the index covers
 	originNext          uint64
 	start               sync.Mutex
 	write               sync.Mutex

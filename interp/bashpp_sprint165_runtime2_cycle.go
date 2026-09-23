@@ -23,6 +23,7 @@ package interp
 import (
 	"fmt"
 	"reflect"
+	"strconv"
 
 	"mvdan.cc/sh/v3/syntax"
 )
@@ -36,14 +37,70 @@ func bashPPTransportOrigin(session *bashPPNativeSession, ptr *bashPPPointer) uin
 	if session.origins == nil {
 		session.origins = map[uint64]*bashPPPointer{}
 	}
-	for id, existing := range session.origins {
-		if existing.target == ptr.target && reflect.DeepEqual(existing.path, ptr.path) {
+	// The index answers the storage identity (target cell + path) in O(1).
+	// Registered paths are never rewritten in place, so a hit is verified
+	// exactly as the former table scan compared, and a miss means no
+	// registered pointer names that storage.
+	key := bashPPOriginKeyOf(ptr)
+	if session.originIndex == nil || session.originIndexed != len(session.origins) {
+		session.reindexOriginsLocked()
+	}
+	if id, ok := session.originIndex[key]; ok {
+		if existing := session.origins[id]; existing != nil && existing.target == ptr.target && reflect.DeepEqual(existing.path, ptr.path) {
 			return id
 		}
 	}
 	session.originNext++
 	session.origins[session.originNext] = ptr
+	session.originIndex[key] = session.originNext
+	session.originIndexed = len(session.origins)
 	return session.originNext
+}
+
+// bashPPOriginKey is the storage identity a transport origin names: the root
+// cell and an exact spelling of the step path. A nil path and an empty path
+// spell differently, as reflect.DeepEqual distinguishes them.
+type bashPPOriginKey struct {
+	target *bashPPCell
+	path   string
+}
+
+func bashPPOriginKeyOf(ptr *bashPPPointer) bashPPOriginKey {
+	if ptr.path == nil {
+		return bashPPOriginKey{target: ptr.target}
+	}
+	b := make([]byte, 0, 1+len(ptr.path)*8)
+	b = append(b, '[')
+	for _, step := range ptr.path {
+		// Length-prefixed field names keep arbitrary names unambiguous.
+		b = strconv.AppendInt(b, int64(len(step.field)), 10)
+		b = append(b, ':')
+		b = append(b, step.field...)
+		b = append(b, ',')
+		b = strconv.AppendInt(b, int64(step.index), 10)
+		if step.deref {
+			b = append(b, '*')
+		}
+		b = append(b, ';')
+	}
+	return bashPPOriginKey{target: ptr.target, path: string(b)}
+}
+
+// reindexOriginsLocked rebuilds the identity index from the origin table.
+// It keeps the lowest origin for a duplicated identity, which is the only
+// one the table registration itself could have produced.
+func (s *bashPPNativeSession) reindexOriginsLocked() {
+	s.originIndex = make(map[bashPPOriginKey]uint64, len(s.origins))
+	for id, ptr := range s.origins {
+		if ptr == nil {
+			continue
+		}
+		key := bashPPOriginKeyOf(ptr)
+		if prev, ok := s.originIndex[key]; !ok || id < prev {
+			s.originIndex[key] = id
+		}
+	}
+	s.originIndexed = len(s.origins)
 }
 
 // bashPPTransportEnter marks origin as being transported on this runner's
