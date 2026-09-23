@@ -3,13 +3,15 @@ id: 6404343b27f2
 kind: enhancement
 title: S250 Windows callback mailbox parity for original Tour image deadline
 seq: 147
-status: todo
+status: assigned
 priority: p0
 labels:
     - windows
     - callback
     - tour
 created: 2026-09-23T17:04:45.094173Z
+weave: 241
+assignee: qiangli
 sprint: 250
 sprint_id: c912e608-edfe-59b8-bd36-a98f6dad1634
 sprint_title: Validate Go by Example, Go Tour and BashSharp Tour on three hosts
