@@ -91,6 +91,9 @@ type bashPPBridgeRequest struct {
 	Transfers     []int `json:"transfers,omitempty"`
 	argCells      []*bashPPCell
 	transferProof []bool
+	// coherence, when set, re-reads the storage a read-only request copied
+	// after every callback it serves. See bashpp_native_coherence.go.
+	coherence     *goSourceCopyCoherence
 	sourceProgram bool   // the call site is in the program package itself
 	ID            uint64 `json:"id"`
 	Op            string `json:"op"`
@@ -512,7 +515,7 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 						return
 					}
 				} else {
-					s.serveCallback(ctx, nil, reply)
+					s.serveCallback(ctx, nil, reply, nil)
 				}
 				continue
 			}
@@ -620,7 +623,7 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 			// The callback body may write to the caller's streams directly;
 			// child output raised before the callback must land first.
 			s.drainOutputs()
-			s.serveCallback(ctx, req.CallbackOwner, callback)
+			s.serveCallback(ctx, req.CallbackOwner, callback, q.coherence)
 			if owner := req.CallbackOwner; owner != nil {
 				if owner.exit.err != nil {
 					return nil, owner.exit.err

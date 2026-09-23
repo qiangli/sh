@@ -282,6 +282,14 @@ func prepareNativeSliceBuffers(req bashPPEvalRequest, q *bashPPBridgeRequest) er
 		if hasSlice && !hasDirectSlice && nativeSharedReferenceConsumer(req, *q) {
 			return nil
 		}
+		// A read-only emitter reaching a formatting callback is admitted when
+		// every argument's live storage can be re-read: each callback is then
+		// followed by a coherence check against the dependency's copy
+		// (bashpp_native_coherence.go), and a write the copy cannot observe
+		// fails the callback instead of printing stale.
+		if nativeSliceReadOnly(callable) && prepareNativeCopyCoherence(req, q) {
+			return nil
+		}
 		return fmt.Errorf("gosource: original callback with copied slice references is unsupported")
 	}
 	if nativeSliceCallable(req, *q) == "*text/template.Template.Execute" {

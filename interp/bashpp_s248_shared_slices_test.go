@@ -159,6 +159,29 @@ import ("fmt";"sort")
 	}()
 	fmt.Println(s, calls)
 }`,
+		"fmt walk over a direct slice whose element callback writes its own receiver": `package main
+import "fmt"
+type pwn struct { a [3]uint }
+func (p *pwn) String() string { p.a[1] = 7; return fmt.Sprint("pwn", p.a[0]) }
+func main() {
+	var a, b pwn
+	b.a[0] = 4
+	s := [][][]*pwn{{{&a, &b}}}
+	out := fmt.Sprint(s)
+	fmt.Println(out, len(s[0][0]), a.a, b.a)
+}`,
+		"fmt walk over value-receiver elements and a pointer argument": `package main
+import "fmt"
+type item struct{ n int }
+func (i item) String() string { return fmt.Sprint("item", i.n) }
+type counter struct{ hits int }
+func (c *counter) String() string { c.hits++; return fmt.Sprint("hits", c.hits) }
+var items = []item{{1}, {2}}
+func main() {
+	c := &counter{}
+	fmt.Println(items, c, items[1:])
+	fmt.Printf("%v %s %d\n", items, c, c.hits)
+}`,
 	} {
 		t.Run(name, func(t *testing.T) { differGoSource(t, source, nil, "") })
 	}
@@ -182,6 +205,28 @@ func main() {
 	sort.Sort(sort.Reverse(bySlice(s)))
 	fmt.Println(s)
 }`, "original callback with copied slice references is unsupported", "[3 2 1]"},
+		// A formatting callback that rewrites an element the dependency has
+		// not printed yet: the dependency's copy is now stale.
+		"fmt callback rewrites the printed slice": {`package main
+import "fmt"
+type T struct { n int }
+var s []*T
+func (t *T) String() string { if t.n == 1 { s[1] = &T{99} }; return fmt.Sprint(t.n) }
+func main() {
+	s = []*T{{1}, {2}}
+	fmt.Println(s)
+}`, "wrote storage the dependency holds a copy of", "[1 2]"},
+		// A formatting callback that writes a pointee other than its own
+		// receiver: only the receiver's pointee is reconciled.
+		"fmt callback writes a sibling pointee": {`package main
+import "fmt"
+type T struct { n int }
+var s []*T
+func (t *T) String() string { if t.n == 1 { s[1].n = 42 }; return fmt.Sprint(t.n) }
+func main() {
+	s = []*T{{1}, {2}}
+	fmt.Println(s)
+}`, "wrote storage the dependency holds a copy of", "[1 2]"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			got := s248RunRefused(t, tc.source)

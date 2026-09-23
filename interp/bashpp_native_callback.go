@@ -61,7 +61,12 @@ func (s *bashPPNativeSession) enterCallbacks(ctx context.Context, req bashPPEval
 
 // serveCallback executes synchronously in the parked request's goroutine. The
 // socket reader stays free, and nested imports can service their own callbacks.
-func (s *bashPPNativeSession) serveCallback(ctx context.Context, owner *Runner, q bashPPBridgeResponse) {
+//
+// coherence, when the parked request copied original storage for a read-only
+// emitter, is checked after the body and after the receiver reconciliation
+// is computed: a stale copy fails this callback before the dependency reads
+// any further.
+func (s *bashPPNativeSession) serveCallback(ctx context.Context, owner *Runner, q bashPPBridgeResponse, coherence *goSourceCopyCoherence) {
 	answer := bashPPBridgeRequest{ID: q.ID, Op: "callback-reply"}
 	if owner == nil || q.Receiver == nil {
 		answer.Error = "gosource: callback has no original owner or receiver"
@@ -99,6 +104,14 @@ func (s *bashPPNativeSession) serveCallback(ctx context.Context, owner *Runner, 
 					answer.Error = err.Error()
 				} else {
 					answer.Receiver = &v
+				}
+			}
+		}
+		if coherence != nil && answer.Error == "" {
+			if err := coherence.afterCallback(owner, answer.Receiver); err != nil {
+				answer.Error, answer.Values = err.Error(), nil
+				if !owner.exit.exiting {
+					owner.exit.fatal(err)
 				}
 			}
 		}
