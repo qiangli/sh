@@ -1282,10 +1282,15 @@ func (r *Runner) bashPPBridgeRegisterScalarTypes(ctx context.Context, req bashPP
 
 // A sibling may have passed its initial context check before EOF cancellation
 // closed the shared connection. Only that causally identified local close is
-// cancellation; ordinary network failures and live-context requests stay errors.
+// cancellation; ordinary network failures and live-context requests stay errors,
+// except a live request that lost the connection to a forwarded program signal
+// (bashpp_s248_forwarded_close.go).
 func (s *bashPPNativeSession) closedWriteError(ctx context.Context, err error) error {
-	if ctx.Err() == nil || !errors.Is(err, net.ErrClosed) {
+	if !errors.Is(err, net.ErrClosed) {
 		return err
+	}
+	if ctx.Err() == nil {
+		return s.forwardedDeathWriteError(err)
 	}
 	s.mu.Lock()
 	canceled := s.closeCancellation != nil || s.processCanceledLocked(s.waitErr)
