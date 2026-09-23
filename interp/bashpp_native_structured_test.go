@@ -36,6 +36,9 @@ type goSourceOutcome struct {
 func runNativeOracle(t *testing.T, dir, path string, args []string, stdin string) goSourceOutcome {
 	t.Helper()
 	binary := filepath.Join(t.TempDir(), "oracle")
+	if runtime.GOOS == "windows" {
+		binary += ".exe"
+	}
 	build := exec.Command(filepath.Join(runtime.GOROOT(), "bin", "go"), "build", "-p", "2", "-o", binary, path)
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("oracle build: %v %s", err, out)
