@@ -6,7 +6,6 @@ seq: 141
 status: todo
 priority: p0
 created: 2026-09-23T11:36:53.923078Z
-assignee: qiangli
 sprint: 250
 sprint_id: c912e608-edfe-59b8-bd36-a98f6dad1634
 sprint_title: Validate Go by Example, Go Tour and BashSharp Tour on three hosts
