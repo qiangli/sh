@@ -97,6 +97,14 @@ func TestS248SharedOrderingStaleAndForged(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			// The probe names the program's variables from outside it, after
+			// their last use in the source; keep them live past the capture so
+			// statement-level binding release does not drop them first.
+			var uses []string
+			for _, arg := range tc.args {
+				uses = append(uses, "_ = "+arg)
+			}
+			keepAlive := strings.Join(uses, ";")
 			for round = 0; round < rounds; round++ {
 				if round > 0 {
 					r.Reset()
@@ -107,7 +115,7 @@ type box struct{xs []int}
 func (b *box) Len() int { return len(b.xs) }
 func (b *box) Less(i, j int) bool { return b.xs[i] < b.xs[j] }
 func (b *box) Swap(i, j int) { b.xs[i], b.xs[j] = b.xs[j], b.xs[i] }
-func main(){%s;println("capture");sort.Ints(nil)}`, tc.setup)
+func main(){%s;println("capture");sort.Ints(nil);%s}`, tc.setup, keepAlive)
 				p, err := gosource.Parse(strings.NewReader(source), filepath.Join(r.Dir, "original.go"), gosource.Options{RunMain: true})
 				if err != nil {
 					t.Fatal(err)

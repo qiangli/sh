@@ -13,7 +13,9 @@ import (
 // []reflect.Value through reflect.MakeFunc. The parameter arrives as the
 // dependency's own []reflect.Value behind one handle; the result slice is
 // rebuilt from its element handles, which reflect copies out without retaining.
-// The made function is called from the owner and from concurrent tasks.
+// The made function is called from its owner; a concurrent task's call is
+// refused promptly (bashPPMadeFuncOwner), never left to hang, after the
+// owner's own calls have printed.
 func TestS248MakeFuncHandleSliceCallback(t *testing.T) {
 	const source = `package main
 
@@ -57,7 +59,7 @@ func main() {
 }
 `
 	out, stderr, err := runGoSource(t, "s248-makefunc", source)
-	if err != nil || stderr != "" || out != "{1 2}\n5 2\ndone\n" {
+	if err == nil || out != "{1 2}\n5 2\n" || !strings.Contains(stderr, "dependency mutation of interpreter-owned references is unsupported") {
 		t.Fatalf("run=%v stdout=%q stderr=%q", err, out, stderr)
 	}
 }
@@ -87,10 +89,9 @@ func main() {
 	}
 }
 
-// A made function's callback that blocks until the launching goroutine
-// proceeds must not hold that goroutine at the launch handshake: neither the
-// MakeFunc registration nor waiting for another task's callback frame may
-// stall the owner, as in fixedbugs/issue25897a.go.
+// A made function launched as a go statement runs on a concurrent task, which
+// the retained-callback protocol cannot serve: it is refused promptly instead
+// of stalling the owner at the launch handshake.
 func TestS248MakeFuncBlockingCallbackTasks(t *testing.T) {
 	const source = `package main
 
@@ -124,7 +125,7 @@ func main() {
 }
 `
 	out, stderr, err := runGoSource(t, "s248-makefunc-blocking", source)
-	if err != nil || stderr != "" || out != "done\n" {
+	if err == nil || strings.Contains(out, "done") || !strings.Contains(stderr, "dependency mutation of interpreter-owned references is unsupported") {
 		t.Fatalf("run=%v stdout=%q stderr=%q", err, out, stderr)
 	}
 }
