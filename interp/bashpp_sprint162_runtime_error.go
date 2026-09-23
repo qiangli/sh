@@ -405,6 +405,15 @@ func (r *Runner) bashPPPanicValueText(value any, fallback string) string {
 			return r.goSourcePanicNativeText(*native, fallback)
 		}
 	}
+	if r.bashPPGoSource && iv.cell.vr.Kind == expand.String {
+		// A dependency can implement error with a defined scalar, notably
+		// syscall.Errno. Ask that concrete value for Error() only when the
+		// unrecovered panic is rendered; recover keeps the original value.
+		boxed := &bashPPCell{declType: &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "error"}}, interfaceValue: iv}
+		if native, err := r.bashPPBridgeCell(boxed); err == nil {
+			return r.goSourcePanicNativeText(native, fallback)
+		}
+	}
 	named, ok := iv.dynamic.(*syntax.BashPPNamedType)
 	if !ok || named.Name == nil || iv.cell.vr.Kind != expand.String {
 		return fallback

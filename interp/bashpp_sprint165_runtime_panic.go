@@ -136,7 +136,7 @@ func (r *Runner) goSourcePanicNativeValue(expr syntax.BashPPExpr) (*bashPPInterf
 // runtime prints it: an error by its Error text; anything else by the text
 // the value already has.
 func (r *Runner) goSourcePanicNativeText(value bashPPBridgeValue, fallback string) string {
-	if value.Kind != "handle" {
+	if value.Kind != "handle" && value.Interface != "error" {
 		return fallback
 	}
 	req, err := r.bashPPEvalRequest()

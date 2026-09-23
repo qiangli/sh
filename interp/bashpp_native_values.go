@@ -1160,6 +1160,14 @@ func (r *Runner) bashPPBindNativeValue(name string, value bashPPBridgeValue) {
 		cell.nonFiniteComplex, cell.hasNonFiniteComplex = scalar.nonFiniteComplex, scalar.hasNonFiniteComplex
 		cell.typeName = value.Type
 		cell.declType = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.Type}}
+		if value.Interface != "" {
+			// A defined scalar such as syscall.Errno can arrive as an error
+			// interface. Keep the static interface and its concrete payload so
+			// `err != nil` observes a non-nil interface, not a loose scalar.
+			boxed := goSourceNativeValueCell(value)
+			cell.declType = boxed.declType
+			cell.interfaceValue = boxed.interfaceValue
+		}
 		return
 	}
 	copy := value
