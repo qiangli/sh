@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"mvdan.cc/sh/v3/execbudget"
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/pathconv"
 	"mvdan.cc/sh/v3/syntax"
@@ -522,7 +523,9 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 		}()
 		startCmd := func() error {
 			var startErr error
-			if start, ok := ctx.Value(execStartOverrideCtxKey{}).(func(*exec.Cmd) error); ok {
+			if execbudget.OverBashyArgMax(cmd.Args, cmd.Env) {
+				startErr = &os.PathError{Op: "fork/exec", Path: cmd.Path, Err: execBudgetErr()}
+			} else if start, ok := ctx.Value(execStartOverrideCtxKey{}).(func(*exec.Cmd) error); ok {
 				startErr = start(&cmd)
 			} else if hc.runner != nil {
 				startErr = hc.runner.startExecCmdWithUmask(ctx, &cmd, hc.runner.umask)
