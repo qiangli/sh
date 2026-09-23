@@ -88,6 +88,21 @@ func TestTextVerbCRLFHelper(t *testing.T) {
 	os.Exit(0)
 }
 
+func TestNativeTextProcessorEnvKeepsShellProfileSeparate(t *testing.T) {
+	shell := []string{"USERPROFILE=/c/Users/agent", "TEMP=/c/Users/agent/AppData/Local/Temp", "TMP=/c/tmp", "HOME=/c/Users/agent", "CUSTOM=/c/data"}
+	windows := nativeTextProcessorEnv(shell, true)
+	if windows[0] != `USERPROFILE=C:\Users\agent` || windows[1] != `TEMP=C:\Users\agent\AppData\Local\Temp` || windows[2] != `TMP=C:\tmp` || windows[3] != shell[3] || windows[4] != shell[4] {
+		t.Fatalf("native Windows processor env = %#v", windows)
+	}
+	if shell[0] != "USERPROFILE=/c/Users/agent" {
+		t.Fatalf("shell environment mutated: %#v", shell)
+	}
+	other := nativeTextProcessorEnv(shell, false)
+	if other[0] != shell[0] {
+		t.Fatalf("non-Windows environment changed: %#v", other)
+	}
+}
+
 func TestRunnerFenceDeclaresMethods(t *testing.T) {
 	var seen [][]string
 	fence := RunnerFence{Type: "notes", Runner: "tally", Invoke: func(_ context.Context, argv []string) (string, error) {

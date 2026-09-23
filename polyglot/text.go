@@ -12,7 +12,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
+
+	"mvdan.cc/sh/v3/pathconv"
 )
 
 // A text fence carries a declarative artifact — a Dockerfile, an OpenTofu
@@ -450,9 +453,28 @@ func foreignText(value any) string {
 
 func environOf(environ []string) []string {
 	if len(environ) == 0 {
-		return os.Environ()
+		environ = os.Environ()
 	}
-	return append([]string(nil), environ...)
+	return nativeTextProcessorEnv(environ, runtime.GOOS == "windows")
+}
+
+// A text-fence verb is a native processor, even when its caller is a shell
+// script. Bashy spells these OS-owned paths as /c/... in that script. Windows
+// tools such as Podman require their native drive spelling. Leave user-defined
+// values under the shell's usual BASHYENV contract.
+func nativeTextProcessorEnv(environ []string, windows bool) []string {
+	result := append([]string(nil), environ...)
+	if !windows {
+		return result
+	}
+	for i, entry := range result {
+		name, value, ok := strings.Cut(entry, "=")
+		if !ok || !(strings.EqualFold(name, "USERPROFILE") || strings.EqualFold(name, "TEMP") || strings.EqualFold(name, "TMP")) {
+			continue
+		}
+		result[i] = name + "=" + pathconv.NativePath(value)
+	}
+	return result
 }
 
 // shadowEntries links each named entry of the caller's directory into the
