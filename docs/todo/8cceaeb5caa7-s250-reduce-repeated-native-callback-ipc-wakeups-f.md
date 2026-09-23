@@ -3,12 +3,14 @@ id: 8cceaeb5caa7
 kind: enhancement
 title: S250 reduce repeated native callback IPC wakeups for image
 seq: 143
-status: todo
+status: assigned
 priority: p0
 labels:
     - callback
     - tour
 created: 2026-09-23T16:29:31.440949Z
+weave: 239
+assignee: qiangli
 sprint: 250
 sprint_id: c912e608-edfe-59b8-bd36-a98f6dad1634
 sprint_title: Validate Go by Example, Go Tour and BashSharp Tour on three hosts
