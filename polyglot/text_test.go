@@ -55,6 +55,39 @@ func TestTextRowMaterializesAndRunsTool(t *testing.T) {
 	}
 }
 
+func TestTextVerbNormalizesCRLFValue(t *testing.T) {
+	saved := ToolResolver
+	ToolResolver = func(string) ([]string, string, error) {
+		return []string{os.Args[0], "-test.run=^TestTextVerbCRLFHelper$"}, "helper", nil
+	}
+	t.Cleanup(func() { ToolResolver = saved })
+	text := Text{
+		Type: "crlf", FileName: "fence.crlf", Tool: "helper",
+		Environ: append(os.Environ(), "BASHPP_TEXT_CRLF_HELPER=1"),
+		Verbs:   []Verb{{Name: "show"}},
+	}
+	plans, err := Prepare(t.Context(), []Block{{Language: "crlf", Alias: "c", Source: "sample\n"}}, map[string]Analyzer{"crlf": text})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := Start(plans[0], text).Call(t.Context(), "show")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Value != "first\nsecond\nthird\rfourth" || got.Stderr != "warning\r\n" {
+		t.Fatalf("text value or raw stderr changed: %+v", got)
+	}
+}
+
+func TestTextVerbCRLFHelper(t *testing.T) {
+	if os.Getenv("BASHPP_TEXT_CRLF_HELPER") != "1" {
+		return
+	}
+	_, _ = os.Stdout.Write([]byte("first\r\nsecond\r\nthird\rfourth\r\n"))
+	_, _ = os.Stderr.Write([]byte("warning\r\n"))
+	os.Exit(0)
+}
+
 func TestRunnerFenceDeclaresMethods(t *testing.T) {
 	var seen [][]string
 	fence := RunnerFence{Type: "notes", Runner: "tally", Invoke: func(_ context.Context, argv []string) (string, error) {

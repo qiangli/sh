@@ -389,9 +389,11 @@ func (m *Module) callText(ctx context.Context, text Text, name string, args []an
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	err = cmd.Run()
-	// The processor's stdout is the value with its trailing newlines
-	// removed, as a command substitution reads a command.
-	result := CallResult{Value: strings.TrimRight(stdout.String(), "\n"), Stderr: stderr.String()}
+	// A text-fence verb returns text, so CRLF from Windows processors is
+	// normalized before removing trailing newlines. Preserve lone CR bytes
+	// and the raw stderr stream; only the text value has this contract.
+	value := strings.ReplaceAll(stdout.String(), "\r\n", "\n")
+	result := CallResult{Value: strings.TrimRight(value, "\n"), Stderr: stderr.String()}
 	if err != nil {
 		var exit *exec.ExitError
 		if errors.As(err, &exit) {
