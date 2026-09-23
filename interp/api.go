@@ -3812,6 +3812,7 @@ func (r *Runner) subshell(background bool) *Runner {
 	dirFile, _ := dupRunnerDir(r.dirFile)
 	r2 := &Runner{
 		goSourceEnvironment:  slices.Clone(r.goSourceEnvironment),
+		ownedExecPaths:       slices.Clone(r.ownedExecPaths),
 		bashPPAgentic:        r.bashPPAgentic,
 		Dir:                  r.Dir,
 		dirFile:              dirFile,

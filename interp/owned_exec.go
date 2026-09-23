@@ -1,12 +1,11 @@
 package interp
 
 import (
-	"crypto/sha256"
-	"io"
 	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
+	"strings"
 
 	"mvdan.cc/sh/v3/interp/ownedexec"
 )
@@ -40,41 +39,28 @@ func (r *Runner) ownsExecutable(path string) bool {
 	if err != nil || !candidate.Mode().IsRegular() {
 		return false
 	}
+	var candidateHash [32]byte
+	var candidateHashErr error
+	hashed := false
 	for _, owned := range r.ownedExecPaths {
 		info, err := os.Stat(owned)
 		if err == nil && os.SameFile(candidate, info) {
 			return true
 		}
-		if err == nil && info.Mode().IsRegular() && info.Size() == candidate.Size() && sameExecutableDigest(path, owned) {
-			// The fixture builder copies applets when hard-link creation is
-			// unavailable. Exact content equality still verifies ownership.
-			return true
+		if err == nil && info.Mode().IsRegular() && info.Size() == candidate.Size() {
+			if !hashed {
+				candidateHash, candidateHashErr = executableContentHash(path)
+				hashed = true
+			}
+			ownedHash, ownedErr := executableContentHash(owned)
+			if candidateHashErr == nil && ownedErr == nil && candidateHash == ownedHash {
+				// The fixture builder copies applets when hard-link creation is
+				// unavailable. Exact content equality still verifies ownership.
+				return true
+			}
 		}
 	}
 	return false
-}
-
-func sameExecutableDigest(a, b string) bool {
-	digest := func(path string) ([32]byte, error) {
-		f, err := os.Open(path)
-		if err != nil {
-			return [32]byte{}, err
-		}
-		defer f.Close()
-		h := sha256.New()
-		if _, err := io.Copy(h, f); err != nil {
-			return [32]byte{}, err
-		}
-		var sum [32]byte
-		copy(sum[:], h.Sum(nil))
-		return sum, nil
-	}
-	x, err := digest(a)
-	if err != nil {
-		return false
-	}
-	y, err := digest(b)
-	return err == nil && x == y
 }
 
 // ownedExecNeeded leaves ordinary launches on their native fast path. The
@@ -115,16 +101,22 @@ func prepareOwnedExec(r *Runner, path string, args, env []string, extraFiles []*
 	nativeEnv := append([]string(nil), env...)
 	if runtime.GOOS != "windows" {
 		frame.Env = env
-		// Keep normal small settings available to package initializers; omit
-		// oversized strings and trim the native block to a safe small size.
+		// Keep startup controls visible to the Go runtime, loader and package
+		// initializers, even when earlier ordinary variables fill the native
+		// block. The full original environment is restored before main.
 		nativeEnv = nativeEnv[:0]
 		bytes := 0
-		for _, entry := range env {
-			if len(entry) > 64<<10 || bytes+len(entry)+1 > 64<<10 {
-				continue
+		for pass := 0; pass < 2; pass++ {
+			for _, entry := range env {
+				if earlyNativeEnv(entry) != (pass == 0) {
+					continue
+				}
+				if len(entry) > 64<<10 || bytes+len(entry)+1 > 64<<10 {
+					continue
+				}
+				nativeEnv = append(nativeEnv, entry)
+				bytes += len(entry) + 1
 			}
-			nativeEnv = append(nativeEnv, entry)
-			bytes += len(entry) + 1
 		}
 	}
 	if runtime.GOOS == "windows" {
@@ -156,4 +148,19 @@ func prepareOwnedExec(r *Runner, path string, args, env []string, extraFiles []*
 	// only needs to name the program while its startup adopts the frame.
 	shortArgs := []string{path, ownedexec.Sentinel}
 	return h, shortArgs, nativeEnv, extraFiles, nil
+}
+
+func earlyNativeEnv(entry string) bool {
+	name, _, ok := strings.Cut(entry, "=")
+	if !ok {
+		return false
+	}
+	if strings.HasPrefix(name, "GO") || strings.HasPrefix(name, "LD_") || strings.HasPrefix(name, "DYLD_") || strings.HasPrefix(name, "LC_") || strings.HasPrefix(name, "XDG_") {
+		return true
+	}
+	switch name {
+	case "PATH", "HOME", "TMPDIR", "TZ", "LANG", "BASHY_ROOT":
+		return true
+	}
+	return false
 }
