@@ -5,6 +5,7 @@ package lower_test
 import (
 	"bytes"
 	"context"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -197,5 +198,24 @@ echo "[$w] status=$?"
 				t.Fatalf("output = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+// An embed lowers like the inline fence it stands for: the file's bytes are
+// the plan's Source, so the compiled program carries them.
+func TestLowerEmbed(t *testing.T) {
+	polyglot.RegisterLanguage(polyglot.TextRow("fakecfg3", nil, polyglot.Text{Type: "fakecfg3", FileName: "fake.cfg", Tool: "fake-tool",
+		Verbs: []polyglot.Verb{{Name: "show", Args: []string{"show", "{file}"}}}}))
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "app.cfg"), []byte("k = v\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	file := parse(t, "embed fakecfg3 \"./app.cfg\" as cfg\nout := cfg.show()\necho \"$out\"\n", filepath.Join(dir, "embed.bpp"))
+	result, err := lower.Compile(file, lower.Options{})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	if !strings.Contains(string(result.Source), `Source: "k = v\n"`) {
+		t.Errorf("generated source lacks the embedded bytes:\n%s", result.Source)
 	}
 }

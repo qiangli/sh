@@ -1514,7 +1514,11 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 	p.spacePad(cmd.Pos())
 	switch cmd := cmd.(type) {
 	case *SourceBlock:
-		p.writeLit(cmd.Fence + cmd.Language.Value)
+		if cmd.Src != nil {
+			p.writeLit(`embed ` + cmd.Language.Value + ` "` + cmd.Src.Value + `"`)
+		} else {
+			p.writeLit(cmd.Fence + cmd.Language.Value)
+		}
 		switch {
 		case cmd.Alias != nil && cmd.Runner != nil && cmd.Alias.Value == cmd.Runner.Value:
 			p.writeLit(" as !" + cmd.Runner.Value)
@@ -1524,6 +1528,10 @@ func (p *Printer) command(cmd Command, redirs []*Redirect) (startRedirs int) {
 			p.writeLit(" as " + cmd.Alias.Value)
 		case cmd.Runner != nil:
 			p.writeLit(" !" + cmd.Runner.Value)
+		}
+		if cmd.Src != nil {
+			p.wantSpace = spaceRequired
+			break
 		}
 		p.w.WriteByte('\n')
 		p.w.WriteString(cmd.Body)

@@ -4,12 +4,16 @@
 package interp
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"mvdan.cc/sh/v3/polyglot"
+	"mvdan.cc/sh/v3/syntax"
 )
 
 // A runner fence: the runner declares its methods, the alias exposes exactly
@@ -204,5 +208,40 @@ echo "status=$? a=[$a]"
 	}
 	if strings.Join(asked, " ") != "x.plan:read x.apply:read,world" {
 		t.Fatalf("gate asked %v", asked)
+	}
+}
+
+// An embed runs exactly like the same bytes written as an inline fence, the
+// path relative to the script, not the cwd.
+func TestBashPPEmbedRunnerFence(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "list.notes"), []byte("one\ntwo\nthree\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	src := `
+tally() {
+  case "$1" in
+    methods) echo '{"name":"count"}' ;;
+    count) wc -l < "$2" | tr -d ' ' ;;
+  esac
+}
+embed notes "./list.notes" as n !tally
+c := n.count()
+echo "count=$c"
+`
+	var stdout, stderr bytes.Buffer
+	r, err := New(StdIO(nil, &stdout, &stderr), Dir(t.TempDir()), Lang(syntax.LangBashPP))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(src), filepath.Join(dir, "s.bsh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Run(context.Background(), f); err != nil {
+		t.Fatalf("run: %v\nstderr: %s", err, stderr.String())
+	}
+	if stdout.String() != "count=3\n" {
+		t.Fatalf("stdout = %q (stderr %q)", stdout.String(), stderr.String())
 	}
 }

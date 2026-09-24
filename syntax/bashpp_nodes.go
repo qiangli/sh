@@ -10,12 +10,15 @@ import "fmt"
 // opaque to the shell parser; the selected language adapter owns its text.
 // Runner, when set, names the function or registered command that processes
 // the body instead of the language's own adapter (`~~~tf as iac !my-tofu`).
+// Src, when set, is the file the body was read from: the one-line form
+// `embed tf "./main.tf" as iac`, which has no fence and no closing line.
 type SourceBlock struct {
 	Fence      string
 	FencePos   Pos
 	Language   *Lit
 	Alias      *Lit
 	Runner     *Lit
+	Src        *Lit
 	Body       string
 	BodyPos    Pos
 	ClosingPos Pos

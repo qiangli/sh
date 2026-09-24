@@ -4336,6 +4336,10 @@ loop:
 			s.Cmd = imp
 			return
 		}
+		if block := p.bashppEmbed(ce, s.Redirs); block != nil {
+			s.Cmd = block
+			return
+		}
 		if ret := p.bashppReturn(ce, s.Redirs); ret != nil {
 			s.Cmd = ret
 			return

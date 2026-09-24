@@ -282,6 +282,23 @@ in it). A materialized manifest is left alone once written — the fence
 directory is keyed by content, and a processor's own edits to it (`go mod
 tidy`) belong to that fence.
 
+### Embed: the fence body from a file
+
+A body too large to carry inline, or a file other tools also read
+(`package.json`, `pyproject.toml`, a Dockerfile), is embedded instead:
+
+```
+embed <type> "./<path>" [as <alias>] [!<runner>]
+```
+
+It is exactly the fence `~~~<type> [as <alias>] [!<runner>]` with the file's
+bytes as its body: same alias, verbs, runner, effects and lowering. The path
+is a double-quoted literal starting with `./` or `../`, resolved against the
+directory of the script that holds it; the file is read when the script is
+parsed (lowered: when it is compiled). Like a fence it is claimed only at
+column 1 and only in Bash++; any other shape — or `command embed …` — is an
+ordinary command.
+
 ### Write your own fence
 
 A language or a toolchain the engine has never heard of needs a runner and

@@ -2,6 +2,8 @@ package syntax
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"testing/iotest"
@@ -265,5 +267,53 @@ func TestBashPPSourceBlockRunnerOverride(t *testing.T) {
 			}
 			return true
 		})
+	}
+}
+
+// `embed TYPE "PATH" …` is the file's bytes written as an inline fence, the
+// path relative to the parsed file's directory; other shapes stay commands.
+func TestBashPPEmbed(t *testing.T) {
+	dir := t.TempDir()
+	body := "def add(a: int, b: int) -> int:\n    return a + b\n~~~\n"
+	if err := os.WriteFile(filepath.Join(dir, "m.py"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	parse := func(src string) (*File, error) {
+		return NewParser(Variant(LangBashPP)).Parse(strings.NewReader(src), filepath.Join(dir, "s.bsh"))
+	}
+	src := "embed python \"./m.py\" as py\npy.add(2, 3)\nembed notes \"./m.py\" as !tally\n"
+	f, err := parse(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Stmts) != 3 {
+		t.Fatalf("statements = %d", len(f.Stmts))
+	}
+	block, ok := f.Stmts[0].Cmd.(*SourceBlock)
+	if !ok || block.Src.Value != "./m.py" || block.Language.Value != "python" || block.Alias.Value != "py" || block.Body != body {
+		t.Fatalf("block = %#v", f.Stmts[0].Cmd)
+	}
+	runner, ok := f.Stmts[2].Cmd.(*SourceBlock)
+	if !ok || runner.Alias.Value != "tally" || runner.Runner.Value != "tally" {
+		t.Fatalf("runner block = %#v", f.Stmts[2].Cmd)
+	}
+	var out bytes.Buffer
+	if err := NewPrinter().Print(&out, f); err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != src {
+		t.Fatalf("printed:\n%s", out.String())
+	}
+	for _, miss := range []string{"embed foo bar\n", "embed py ./m.py as m\n", "embed py \"m.py\"\n", "embed py \"./$x\"\n", "  embed py \"./m.py\"\n", "embed py \"./m.py\" > out\n"} {
+		f, err := parse(miss)
+		if err != nil {
+			t.Fatalf("%q: %v", miss, err)
+		}
+		if _, ok := f.Stmts[0].Cmd.(*SourceBlock); ok {
+			t.Fatalf("%q claimed as embed", miss)
+		}
+	}
+	if _, err := parse("embed python \"./missing.py\" as py\n"); err == nil || !strings.Contains(err.Error(), "missing.py") {
+		t.Fatalf("missing file: err = %v", err)
 	}
 }
