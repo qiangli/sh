@@ -262,9 +262,11 @@ func (r *Runner) goSourceNativeSleepBoundary(ctx context.Context, req bashPPEval
 // advances the same monotonic clock without paying a request/reply round trip.
 // That distinction matters on Windows, where the bridge latency between a
 // select default arm and its 50 ms sleep can consume the next timer boundary.
-// Launched tasks retain the dependency path and its launch-handshake rules.
+// Launched tasks retain the dependency path and its launch-handshake rules,
+// and so does a sleep inside a callback: cancelling it must tear down the
+// dependency call that is waiting on the callback, not fail the callback.
 func (r *Runner) goSourceLocalTimeSleep(ctx context.Context, req bashPPEvalRequest, q bashPPBridgeRequest) (bool, error) {
-	if !r.bashPPGoSource || r.bashPPGoTask || q.Op != "call" || len(q.Args) != 1 || q.Spread {
+	if !r.bashPPGoSource || r.bashPPGoTask || req.CallbackDepth > 0 || q.Op != "call" || len(q.Args) != 1 || q.Spread {
 		return false, nil
 	}
 	sleep := false

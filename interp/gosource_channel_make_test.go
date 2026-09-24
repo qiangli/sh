@@ -96,7 +96,9 @@ func TestGoSourceChannelCapacityTypedJSON(t *testing.T) {
 
 func TestGoSourceUnifiedChannelCancellationReset(t *testing.T) {
 	for _, operation := range []string{"<-c", "c<-7", "select{case <-c:}"} {
-		source := `package main;import "fmt";func main(){c:=make(chan int);fmt.Println("ready");` + operation + `;fmt.Println("UNREACHABLE")}`
+		// A sleeping goroutine keeps the program alive: with the main
+		// goroutine alone blocked, Go reports a deadlock instead.
+		source := `package main;import "fmt";import "time";func main(){go func(){for{time.Sleep(time.Hour)}}();c:=make(chan int);fmt.Println("ready");` + operation + `;fmt.Println("UNREACHABLE")}`
 		p, err := gosource.Parse(strings.NewReader(source), "blocked.go", gosource.Options{RunMain: true})
 		if err != nil {
 			t.Fatal(err)
@@ -122,7 +124,7 @@ func TestGoSourceUnifiedChannelCancellationReset(t *testing.T) {
 		select {
 		case err := <-done:
 			cancel()
-			t.Fatalf("did not block: %v", err)
+			t.Fatalf("did not block: %v %q", err, errs.String())
 		case <-time.After(50 * time.Millisecond):
 		}
 		cancel()

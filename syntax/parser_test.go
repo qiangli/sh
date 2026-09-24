@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"runtime"
@@ -426,9 +427,21 @@ func TestMain(m *testing.M) {
 }
 
 var (
-	onceHasBash53 = sync.OnceValue(func() bool {
-		return cmdContains("version 5.3", "bash", "--version")
+	// onceGNUBash is the first bash on PATH that is GNU bash 5.3. bashy
+	// installs itself as bash, and confirming our parser against it would
+	// only compare the parser with itself.
+	onceGNUBash = sync.OnceValue(func() string {
+		for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+			for _, name := range []string{"bash", "bash.exe"} {
+				path := filepath.Join(dir, name)
+				if cmdContains("version 5.3", path, "--version") && !cmdContains("bashy", path, "--version") {
+					return path
+				}
+			}
+		}
+		return ""
 	})
+	onceHasBash53 = sync.OnceValue(func() bool { return onceGNUBash() != "" })
 
 	onceHasDash059 = sync.OnceValue(func() bool {
 		// dash provides no way to check its version, so we have to
@@ -535,6 +548,9 @@ func confirmParse(in, cmd string, wantErr bool) func(*testing.T) {
 		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 		defer cancel()
 
+		if cmd == "bash" {
+			cmd = onceGNUBash()
+		}
 		cmd := exec.CommandContext(ctx, cmd, opts...)
 		killCommandOnTestExit(cmd)
 		cmd.Dir = t.TempDir() // to be safe

@@ -32,6 +32,9 @@ func TestS243NativeAdmissionCache(t *testing.T) {
 		iface := syntax.BashPPTypeExprFromText("interface{ RGBA()(uint32,uint32,uint32,uint32) }").(*syntax.BashPPInterfaceType)
 		admit := func(name string, target *syntax.BashPPInterfaceType) error {
 			cell := r.bashPPScope.lookup(name)
+			if cell == nil {
+				return fmt.Errorf("%s: no binding at the probe", name)
+			}
 			claimed, err := r.goSourceNativeImplements(cell, cell.declType, target)
 			if !claimed {
 				return fmt.Errorf("%s not claimed", name)
@@ -39,6 +42,10 @@ func TestS243NativeAdmissionCache(t *testing.T) {
 			return err
 		}
 		requestCell := r.bashPPScope.lookup("request")
+		if requestCell == nil {
+			checks = append(checks, fmt.Errorf("request: no binding at the probe"))
+			return len(p), nil
+		}
 		requestValue, err := r.bashPPBridgeCell(requestCell)
 		if err != nil {
 			checks = append(checks, err)
@@ -109,12 +116,14 @@ func TestS243NativeAdmissionCache(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Every binding the probe reads is used after it: a Go local stops being
+	// reachable at its last use, and the interpreter drops it there.
 	src := `package main
 import ("image/color";"strings";"net/http";"os")
 type Byte byte
 type Different interface { Read([]Byte)(int,error) }
 var _ Different
-func main(){request:=&http.Request{Body:os.Stdin};_ =request;first:=color.RGBA{1,2,3,255};second:=color.RGBA{7,8,9,255};reader:=strings.NewReader("abc");readerValue:=strings.Reader{};_ =reader;println("probe");r,_,_,_:=second.RGBA();if r!=1799{panic("cached payload")};_ =first;_=readerValue}`
+func main(){request:=&http.Request{Body:os.Stdin};first:=color.RGBA{1,2,3,255};second:=color.RGBA{7,8,9,255};reader:=strings.NewReader("abc");readerValue:=strings.Reader{};println("probe");r,_,_,_:=second.RGBA();if r!=1799{panic("cached payload")};_ =first;_=readerValue;_ =request;_ =reader}`
 	parsed, err := gosource.Parse(strings.NewReader(src), filepath.Join(r.Dir, "cache.go"), gosource.Options{RunMain: true})
 	if err != nil {
 		t.Fatal(err)

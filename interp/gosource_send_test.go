@@ -233,10 +233,13 @@ func TestGoSourceTypedSendCancellation(t *testing.T) {
 		"select_nil": `var c chan int;select{case c<-value():}`,
 	} {
 		t.Run(name, func(t *testing.T) {
+			// A sleeping goroutine keeps the program alive: with the main
+			// goroutine alone blocked, Go reports a deadlock instead.
 			source := `package main
 import "fmt"
+import "time"
 func value()int{fmt.Println("rhs");return 7}
-func main(){` + body + `;fmt.Println("UNREACHABLE")}`
+func main(){go func(){for{time.Sleep(time.Hour)}}();` + body + `;fmt.Println("UNREACHABLE")}`
 			program, err := gosource.Parse(strings.NewReader(source), "cancel.go", gosource.Options{RunMain: true})
 			if err != nil {
 				t.Fatal(err)
@@ -260,7 +263,7 @@ func main(){` + body + `;fmt.Println("UNREACHABLE")}`
 			}
 			select {
 			case err := <-done:
-				t.Fatalf("send did not block: %v", err)
+				t.Fatalf("send did not block: %v %q", err, errout.String())
 			case <-time.After(50 * time.Millisecond):
 			}
 			cancel()

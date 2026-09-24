@@ -63,6 +63,8 @@ func TestS219NativeInterfaceRefusals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// w is used after the probe: a Go local stops being reachable at its last
+	// use, and the interpreter drops its binding there.
 	source := `package main
 import ("bufio";"os")
 type Writer interface { Write(p []byte) (n int, err error) }
@@ -73,7 +75,7 @@ var _ Writer
 var _ Namer
 var _ Flusher
 var _ hidden
-func main(){w:=bufio.NewWriter(os.Stdout);w.Flush();println("probe")}`
+func main(){w:=bufio.NewWriter(os.Stdout);println("probe");w.Flush()}`
 	p, err := gosource.Parse(strings.NewReader(source), filepath.Join(r.Dir, "original.go"), gosource.Options{RunMain: true})
 	if err != nil {
 		t.Fatal(err)

@@ -588,7 +588,7 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 	}
 	prepareCgoCheckerFile(goFile)
 	var diagnostics ErrorList
-	conf := types.Config{FakeImportC: len(file.CgoPackages) > 0, Importer: bridgeImporter{fallback: e.moduleImporter, path: options.Runtime, cache: map[string]*types.Package{}}, Error: func(err error) {
+	conf := types.Config{FakeImportC: len(file.CgoPackages) > 0, Importer: bridgeImporter{fallback: e.moduleImporter, path: options.Runtime, cache: map[string]*types.Package{}, foreign: e.hasForeign()}, Error: func(err error) {
 		te, ok := err.(types.Error)
 		pos := file.Pos()
 		node := "File"
@@ -761,6 +761,11 @@ type bridgeImporter struct {
 	fallback types.Importer
 	path     string
 	cache    map[string]*types.Package
+	// foreign reports that the unit carries foreign fences or imports: only
+	// then does the shellexec stub declare the interp and polyglot seams, so
+	// a unit without them never resolves the compiler's own packages from
+	// the caller's module.
+	foreign bool
 }
 
 func (i bridgeImporter) Import(path string) (*types.Package, error) {

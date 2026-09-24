@@ -51,7 +51,7 @@ func (e *emitter) lexicalValues(source []byte) ([]byte, error) {
 		e.moduleImporter = newModuleImporter(e.options.Dir)
 	}
 	info := &types.Info{Uses: map[*ast.Ident]types.Object{}, Defs: map[*ast.Ident]types.Object{}, Types: map[ast.Expr]types.TypeAndValue{}, Selections: map[*ast.SelectorExpr]*types.Selection{}}
-	conf := types.Config{Importer: bridgeImporter{fallback: e.moduleImporter, path: e.options.Runtime, cache: map[string]*types.Package{}}}
+	conf := types.Config{Importer: bridgeImporter{fallback: e.moduleImporter, path: e.options.Runtime, cache: map[string]*types.Package{}, foreign: e.hasForeign()}}
 	pkg, err := conf.Check(file.Name.Name, fs, []*ast.File{file}, info)
 	if err != nil {
 		return nil, fmt.Errorf("lexical values: %w", err)

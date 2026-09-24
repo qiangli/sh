@@ -44,16 +44,21 @@ func (i bridgeImporter) importRuntime(path string) (*types.Package, error) {
 
 func (i bridgeImporter) importShellExec(path string) (*types.Package, error) {
 	positions := token.NewFileSet()
-	source := `package shellexec
-import rt "` + i.path + `"
-import interp "mvdan.cc/sh/v3/interp"
+	imports, decls := "", ""
+	if i.foreign {
+		imports = `import interp "mvdan.cc/sh/v3/interp"
 import polyglot "mvdan.cc/sh/v3/polyglot"
-type Option func()
-func BashPP() Option
-func New(options ...Option) rt.ShellFactory
-func RunnerOptions(opts ...interp.RunnerOption) Option
+`
+		decls = `func RunnerOptions(opts ...interp.RunnerOption) Option
 func NewForeignIterator(module *polyglot.Module,name string,args []any) *rt.ForeignIterator
 `
+	}
+	source := `package shellexec
+import rt "` + i.path + `"
+` + imports + `type Option func()
+func BashPP() Option
+func New(options ...Option) rt.ShellFactory
+` + decls
 	file, err := parser.ParseFile(positions, "shellexec.go", source, 0)
 	if err != nil {
 		return nil, err

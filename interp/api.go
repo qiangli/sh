@@ -3477,7 +3477,12 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 		savedGoSource := r.bashPPGoSource
 		r.bashPPGoSource = node.GoSource
 		savedConvertHashQY := r.bashPPConvertHashQY
-		r.bashPPConvertHashQY = node.GoSource && bashPPGoFlagsConvertHashQY(r.Env.Get("GOFLAGS").String())
+		// A Subshell carries its parent's variables but no Env of its own.
+		goflags := ""
+		if r.Env != nil {
+			goflags = r.Env.Get("GOFLAGS").String()
+		}
+		r.bashPPConvertHashQY = node.GoSource && bashPPGoFlagsConvertHashQY(goflags)
 		if node.GoSource && r.goSourceTesting == nil {
 			defer r.closeGoSourceBridge()
 		}

@@ -56,6 +56,11 @@ func (e *emitter) loweredRuntimeImports() []string {
 // its direct Python imports: a mixed unit hands them to the region backend
 // through interp.ForeignImports so `alias.fn args` in a region reaches the
 // program's own worker (B8), not an external lookup.
+// hasForeign reports whether the unit carries foreign fences or imports.
+func (e *emitter) hasForeign() bool {
+	return len(e.foreignPlans) > 0 || len(e.foreignImports) > 0
+}
+
 func (e *emitter) seedsForeignImports() bool {
 	return e.mixedShell && (len(e.foreignImports) > 0 || e.hasForeignStreams())
 }

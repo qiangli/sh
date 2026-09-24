@@ -57,9 +57,11 @@ func TestGoSourceNativeAssignableAuthenticatedValue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// good and bad are used after the probe: a Go local stops being reachable
+	// at its last use, and the interpreter drops its binding there.
 	source := `package main
 import("fmt";"io";"strings";"time")
-func main(){good:=strings.NewReader("x");bad:=time.Now();fmt.Fprintf(io.Discard,"%T %T",good,bad);println("probe")}`
+func main(){good:=strings.NewReader("x");bad:=time.Now();println("probe");fmt.Fprintf(io.Discard,"%T %T",good,bad)}`
 	p, err := gosource.Parse(strings.NewReader(source), filepath.Join(r.Dir, "original.go"), gosource.Options{RunMain: true})
 	if err != nil {
 		t.Fatal(err)

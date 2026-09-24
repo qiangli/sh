@@ -62,7 +62,7 @@ func (e *emitter) libraryResult(file *syntax.File, options Options, globalTypes 
 	sort.Strings(result.Imports)
 
 	var diagnostics ErrorList
-	conf := types.Config{FakeImportC: len(file.CgoPackages) > 0, Importer: bridgeImporter{fallback: e.moduleImporter, path: options.Runtime, cache: map[string]*types.Package{}}, Error: func(err error) {
+	conf := types.Config{FakeImportC: len(file.CgoPackages) > 0, Importer: bridgeImporter{fallback: e.moduleImporter, path: options.Runtime, cache: map[string]*types.Package{}, foreign: e.hasForeign()}, Error: func(err error) {
 		te, ok := err.(types.Error)
 		pos := file.Pos()
 		node := "File"

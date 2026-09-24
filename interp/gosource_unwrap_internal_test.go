@@ -53,12 +53,14 @@ func TestGoSourceUnwrapCallbackProtocolAndStale(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// err is used after the probe: a Go local stops being reachable at its
+	// last use, and the interpreter drops its binding there.
 	source := `package main
 import "errors"
 type wrapped struct{}
 func(w wrapped)Error()string{return "wrapped"}
 func(w wrapped)Unwrap()error{println("original-body");return nil}
-func main(){err:=errors.New("x");_=err;println("probe")}`
+func main(){err:=errors.New("x");println("probe");_=err}`
 	for i := 0; i < 2; i++ {
 		if i > 0 {
 			r.Reset()

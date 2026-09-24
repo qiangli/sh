@@ -76,10 +76,13 @@ func TestGoSourceComputedReceiveCancellation(t *testing.T) {
 		"unbuffered": `c:=make(chan int);<-pick(c)`,
 	} {
 		t.Run(name, func(t *testing.T) {
+			// A sleeping goroutine keeps the program alive: with the main
+			// goroutine alone blocked, Go reports a deadlock instead.
 			source := `package main
 import "fmt"
+import "time"
 func pick(c chan int)chan int{fmt.Println("operand");return c}
-func main(){` + body + `;fmt.Println("UNREACHABLE")}`
+func main(){go func(){for{time.Sleep(time.Hour)}}();` + body + `;fmt.Println("UNREACHABLE")}`
 			program, err := gosource.Parse(strings.NewReader(source), "cancel-receive.go", gosource.Options{RunMain: true})
 			if err != nil {
 				t.Fatal(err)
@@ -103,7 +106,7 @@ func main(){` + body + `;fmt.Println("UNREACHABLE")}`
 			}
 			select {
 			case err := <-done:
-				t.Fatalf("receive did not block: %v", err)
+				t.Fatalf("receive did not block: %v %q", err, errout.String())
 			case <-time.After(50 * time.Millisecond):
 			}
 			cancel()

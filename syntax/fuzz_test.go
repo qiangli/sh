@@ -64,7 +64,11 @@ func FuzzQuote(f *testing.F) {
 		// The process below shouldn't run arbitrary code,
 		// since our parser checks above should catch the use of ';' or '$',
 		// in the case that Quote were too naive to quote them.
-		out, err := exec.Command(external.cmd, "-c", "printf %s "+quoted).CombinedOutput()
+		cmd := external.cmd
+		if cmd == "bash" {
+			cmd = onceGNUBash()
+		}
+		out, err := exec.Command(cmd, "-c", "printf %s "+quoted).CombinedOutput()
 		if err != nil {
 			t.Fatalf("%s error on %q quoted as %s: %v: %s", external.cmd, s, quoted, err, out)
 		}

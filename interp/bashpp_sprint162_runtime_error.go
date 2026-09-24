@@ -405,10 +405,11 @@ func (r *Runner) bashPPPanicValueText(value any, fallback string) string {
 			return r.goSourcePanicNativeText(*native, fallback)
 		}
 	}
-	if r.bashPPGoSource && iv.cell.vr.Kind == expand.String {
+	if r.bashPPGoSource && iv.cell.vr.Kind == expand.String && bashPPQualifiedDynamic(iv) {
 		// A dependency can implement error with a defined scalar, notably
 		// syscall.Errno. Ask that concrete value for Error() only when the
 		// unrecovered panic is rendered; recover keeps the original value.
+		// The program's own scalar types (MyInt) are rendered below.
 		boxed := &bashPPCell{declType: &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "error"}}, interfaceValue: iv}
 		if native, err := r.bashPPBridgeCell(boxed); err == nil {
 			return r.goSourcePanicNativeText(native, fallback)
@@ -540,4 +541,11 @@ func (r *Runner) bashPPReturnRecover(call *syntax.BashPPCall) (*bashPPCell, bool
 		return nil, false
 	}
 	return r.bashPPRecoverCell(), true
+}
+
+// bashPPQualifiedDynamic reports whether an interface holds a value of a
+// package-qualified (dependency) named type, such as syscall.Errno.
+func bashPPQualifiedDynamic(iv *bashPPInterfaceValue) bool {
+	named, ok := iv.dynamic.(*syntax.BashPPNamedType)
+	return ok && named.Name != nil && strings.Contains(named.Name.Value, ".")
 }

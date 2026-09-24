@@ -141,6 +141,16 @@ func (r *Runner) bashPPNativeCompareValues(lv bashPPBridgeValue, op token.Token,
 	}
 	values, err := r.bashPPNativeRequest(r.ectx, req, bashPPBridgeRequest{Op: "equal", Args: []bashPPBridgeValue{lv, rv}})
 	if err != nil {
+		// Comparing identical uncomparable dynamic types (a func value in an
+		// interface, say) is a recoverable run-time panic in Go, not a
+		// dependency failure: reword reflect's refusal as the runtime does.
+		const prefix, suffix = "native dependency panic: reflect.Value.Equal: values of type ", " are not comparable"
+		if _, rest, ok := strings.Cut(err.Error(), prefix); ok {
+			if typ, ok := strings.CutSuffix(strings.SplitN(rest, "\n", 2)[0], suffix); ok {
+				r.bashPPRaise("runtime error: comparing uncomparable type " + typ)
+				return false, errBashPPScalarInterrupted
+			}
+		}
 		return false, err
 	}
 	if len(values) != 1 || values[0].Kind != "bool" {
