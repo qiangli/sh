@@ -41,12 +41,15 @@ func TestShellPathWindowsRootTranslation(t *testing.T) {
 			wantAbsPath: `D:\bin\tool.exe`,
 		},
 		{
+			// A backslash in a relative shell operand is a filename
+			// character, not a separator (pathconv 27ef173e, Sprint 253):
+			// it is carried as its Cygwin/MSYS private-use spelling.
 			name:        "relative joins with cwd",
 			dir:         `C:\work`,
 			path:        `bin\tool.exe`,
 			wantAbs:     false,
-			wantOS:      `bin\tool.exe`,
-			wantAbsPath: `C:\work\bin\tool.exe`,
+			wantOS:      "bin\uf05ctool.exe",
+			wantAbsPath: "C:\\work\\bin\uf05ctool.exe",
 		},
 		{
 			name:        "missing drive defaults to c",

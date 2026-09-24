@@ -91,8 +91,11 @@ func TestExecStartErrorWindowsRule(t *testing.T) {
 func TestExecRefusedKeepsTraps(t *testing.T) {
 	// Not parallel: the ignored TERM (trap "" TERM) and the USR1 trap install process-wide
 	// dispositions (signal.Ignore/Notify) that the carrier tests would
-	// observe. The script restores them with `trap - TERM USR1` after the
-	// listing, but the ignore must not be live while those tests run.
+	// observe. The script resets them with `trap - TERM USR1` after the
+	// listing, but an embedded Runner (no SignalResetter) leaves the OS
+	// SIG_IGN in place on reset, which later tests would read as a
+	// startup-ignored TERM. Restore the real default when the test ends.
+	t.Cleanup(func() { OSSignalResetter{}.ResetDefault(0, "TERM") })
 
 	tdir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(tdir, "x.sh"), []byte("echo bar\n"), 0o644); err != nil {

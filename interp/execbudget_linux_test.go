@@ -46,7 +46,9 @@ func TestExecReplacementHonorsBashyArgMax(t *testing.T) {
 		return
 	}
 	cmd := exec.Command(os.Args[0], "-test.run=^TestExecReplacementHonorsBashyArgMax$")
-	cmd.Env = append(os.Environ(), helper+"=1")
+	// Clear GOSH_PROG: TestMain sets it, and a child that inherits it takes
+	// the gosh re-exec path instead of running this test.
+	cmd.Env = append(os.Environ(), "GOSH_PROG=", helper+"=1")
 	out, err := cmd.CombinedOutput()
 	if err != nil || !strings.Contains(string(out), "budget-refused") || !strings.Contains(string(out), "argument list too long") {
 		t.Fatalf("exec helper = %v, output=%q", err, out)

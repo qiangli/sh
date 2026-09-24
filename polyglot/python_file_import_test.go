@@ -132,7 +132,9 @@ func TestPythonFileImportPathResolution(t *testing.T) {
 		{"/c/tools/x.py", `C:\proj`, `C:\tools\x.py`, true},
 		{"/mnt/c/tools/x.py", `C:\proj`, `C:\tools\x.py`, true},
 		{"./tools/x.py", `C:\proj`, `C:\proj\tools\x.py`, true},
-		{`tools\x.py`, `C:\proj`, `C:\proj\tools\x.py`, true},
+		// A backslash in a relative shell operand is a filename character,
+		// not a separator (pathconv 27ef173e, Sprint 253).
+		{`tools\x.py`, `C:\proj`, "C:\\proj\\tools\uf05cx.py", true},
 		{"../x.PY", `C:\proj\sub`, `C:\proj\x.PY`, true},
 	}
 	for _, c := range cases {
