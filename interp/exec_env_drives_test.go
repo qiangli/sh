@@ -12,7 +12,7 @@ import (
 
 // varenv.tests: `HOME=/a/b/c /bin/echo $HOME` must hand the child /a/b/c.
 // Since story 682 that holds for every value, mounted or not: only PATH and
-// the BASHYENV opt-ins are converted. A single-letter first component is a
+// the BASHYENV opt-ins (and the host variables TMP, TEMP, USERPROFILE) are converted. A single-letter first component is a
 // drive only when that drive is present; with the drive set pinned to C:
 // and D:, /a/b/c is a POSIX PATH element (and stays one) while /c/… and
 // /d/… become drive paths.
@@ -34,7 +34,7 @@ func TestNativeExecEnvHonoursLogicalDrives(t *testing.T) {
 	want := []string{
 		"HOME=/a/b/c",
 		"TMPDIR=/mnt/a/tmp",
-		"USERPROFILE=/c/Users/me",
+		`USERPROFILE=C:\Users\me`,
 		`PATH=/a/bin;C:\Go\bin;D:\tools`,
 		"BASHYENV=X/p:Y/l",
 		"X=/e/x",
@@ -50,7 +50,7 @@ func TestNativeExecEnvHonoursLogicalDrives(t *testing.T) {
 	want = []string{
 		"HOME=/a/b/c",
 		"TMPDIR=/mnt/a/tmp",
-		"USERPROFILE=/c/Users/me",
+		`USERPROFILE=C:\Users\me`,
 		`PATH=D:\w\root\a\bin;C:\Go\bin;D:\tools`,
 		"BASHYENV=X/p:Y/l",
 		"X=/e/x",

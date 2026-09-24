@@ -154,10 +154,12 @@ func nativeExecEnvForChildMountsMode(m *pathconv.Mounts, env []string, windows, 
 
 // nativeExecEnvMountsMode is [nativeExecEnvMode] with an explicit mount
 // table, so the virtual root (/bin, /tmp) can be exercised on any host.
-// windowsHostTempEnv reports the host's own temp-directory variables, the
-// ones os.TempDir consults.
+// windowsHostTempEnv reports the host's own directory variables: TMP and
+// TEMP, which os.TempDir consults, and USERPROFILE, which os.UserHomeDir
+// and Windows programs such as podman read as the home directory.
 func windowsHostTempEnv(name string) bool {
-	return strings.EqualFold(name, "TMP") || strings.EqualFold(name, "TEMP")
+	return strings.EqualFold(name, "TMP") || strings.EqualFold(name, "TEMP") ||
+		strings.EqualFold(name, "USERPROFILE")
 }
 
 func nativeExecEnvMountsMode(m *pathconv.Mounts, env []string, windows bool) []string {
@@ -193,7 +195,8 @@ func nativeExecEnvMountsMode(m *pathconv.Mounts, env []string, windows bool) []s
 			// child the shell's spelling makes ITS /tmp resolve to a
 			// drive-relative \tmp that does not exist, which took 15
 			// fixtures with it. The POSIX spelling belongs in TMPDIR, which
-			// the shell owns and passes through untouched.
+			// the shell owns and passes through untouched. USERPROFILE is
+			// the same kind of variable: podman panicked on /c/Users/x.
 			conv = pathconv.NativePathMounts(m, value)
 		} else {
 			continue

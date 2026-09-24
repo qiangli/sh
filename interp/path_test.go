@@ -183,7 +183,7 @@ func TestNativeExecEnvWindows(t *testing.T) {
 		{
 			name: "drive root",
 			env:  []string{"HOME=/c", "USERPROFILE=/c/"},
-			want: []string{"HOME=/c", "USERPROFILE=/c/"},
+			want: []string{"HOME=/c", `USERPROFILE=C:\`},
 		},
 		{
 			name: "a bare posix path reaches the child intact",

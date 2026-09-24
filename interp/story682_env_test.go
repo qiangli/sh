@@ -18,7 +18,6 @@ func TestNativeExecEnvKeepsShellSpelling(t *testing.T) {
 		"HOME=/a/b/c",
 		"TMPDIR=/tmp",
 		"GOPATH=/c/go",
-		"USERPROFILE=/c/Users/me",
 		"SYSTEMROOT=/c/Windows",
 	}
 	got := nativeExecEnvMountsMode(m, append([]string(nil), env...), true)
@@ -30,8 +29,9 @@ func TestNativeExecEnvKeepsShellSpelling(t *testing.T) {
 	// TMP and TEMP are the host's own variables — os.TempDir reads them and
 	// the /tmp mount is built from that, so a child shell handed the shell's
 	// spelling loses its temp directory. They convert; TMPDIR does not.
-	env = []string{"TMP=/tmp", "TEMP=/c/Users/x/AppData/Local/Temp", "TMPDIR=/tmp"}
-	want2 := []string{`TMP=C:\Temp\bash53-1\tmp`, `TEMP=C:\Users\x\AppData\Local\Temp`, "TMPDIR=/tmp"}
+	// USERPROFILE is the host's home directory variable in the same way.
+	env = []string{"TMP=/tmp", "TEMP=/c/Users/x/AppData/Local/Temp", "TMPDIR=/tmp", "USERPROFILE=/c/Users/me"}
+	want2 := []string{`TMP=C:\Temp\bash53-1\tmp`, `TEMP=C:\Users\x\AppData\Local\Temp`, "TMPDIR=/tmp", `USERPROFILE=C:\Users\me`}
 	got = nativeExecEnvMountsMode(m, append([]string(nil), env...), true)
 	for i := range want2 {
 		if got[i] != want2[i] {
