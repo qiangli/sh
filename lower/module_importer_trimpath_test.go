@@ -66,7 +66,8 @@ func TestModuleImporterTrimpathResolvesInstalledSDK(t *testing.T) {
 	}
 
 	binary := filepath.Join(t.TempDir(), "lower.trimpath.test")
-	build := exec.Command(sdk.Bin, "test", "-c", "-trimpath", "-o", binary, ".")
+	// The child test lives in this full-tier file, so the child needs the tag.
+	build := exec.Command(sdk.Bin, "test", "-c", "-trimpath", "-tags", "full", "-o", binary, ".")
 	build.Dir = packageDir
 	build.Env = sdk.env(os.Environ())
 	if output, err := build.CombinedOutput(); err != nil {

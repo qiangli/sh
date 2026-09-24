@@ -8,6 +8,7 @@ import (
 	"go/parser"
 	"go/scanner"
 	"go/token"
+	"go/types"
 	"mvdan.cc/sh/v3/syntax"
 	"strconv"
 	"strings"
@@ -210,6 +211,11 @@ func (e *emitter) callProjection(c *syntax.BashPPCall, index int) projection {
 		return scalarProjection()
 	}
 	if len(c.Fun) > 1 && e.imports[c.Fun[0].Value] != "" {
+		// The engine binds a string, boolean or integer result of an imported
+		// call as a shell scalar, and any other result as an object.
+		if e.importedScalarResult(c, index) {
+			return scalarProjection()
+		}
 		return objectProjection()
 	}
 	if len(c.Fun) > 1 {
@@ -377,4 +383,26 @@ func (e *emitter) findProjectionWrites(file *syntax.File) {
 		}
 		return true
 	})
+}
+
+// importedScalarResult reports whether result index of an imported package
+// function has a string, boolean or integer underlying type.
+func (e *emitter) importedScalarResult(c *syntax.BashPPCall, index int) bool {
+	if len(c.Fun) != 2 || e.moduleImporter == nil {
+		return false
+	}
+	pkg, err := e.moduleImporter.Import(e.imports[c.Fun[0].Value])
+	if err != nil {
+		return false
+	}
+	fn, ok := pkg.Scope().Lookup(c.Fun[1].Value).(*types.Func)
+	if !ok {
+		return false
+	}
+	results := fn.Type().(*types.Signature).Results()
+	if index < 0 || index >= results.Len() {
+		return false
+	}
+	basic, ok := results.At(index).Type().Underlying().(*types.Basic)
+	return ok && basic.Info()&(types.IsString|types.IsBoolean|types.IsInteger) != 0
 }
