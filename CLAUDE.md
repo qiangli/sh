@@ -36,9 +36,10 @@ The `Makefile` wraps the common flows: `make build`, `make test-quick` (the push
 # Build everything
 go build ./...
 
-# Run all tests (mirrors the full-tests workflow; push CI runs `make test-quick`)
-go test -tags full ./...
-cd moreinterp && go test ./...   # separate Go module, must be tested independently
+# Run all tests (mirrors the full-tests workflow; push CI runs `make test-quick`).
+# -timeout=30m as in `make test-full`: ./lower alone takes ~11 min, past go's 10m default.
+go test -tags full -timeout=30m ./...
+cd moreinterp && go test -timeout=30m ./...   # separate Go module, must be tested independently
 
 # Race detector and 32-bit (CI runs both on Linux only)
 go test -race ./...
