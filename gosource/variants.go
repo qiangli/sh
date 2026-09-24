@@ -127,7 +127,7 @@ func (m *mapImporter) reachesMapped(pkg *types.Package, srcDir string, seen map[
 	// package. Complete them through the SAME importer before inspecting their
 	// dependency graph; keep package identity owned by that importer.
 	if !pkg.Complete() {
-		complete, err := m.fallbackImport(pkg.Path(), srcDir, 0)
+		complete, err := m.completeImport(pkg.Path(), srcDir)
 		if err != nil {
 			return false, err
 		}
@@ -142,6 +142,19 @@ func (m *mapImporter) reachesMapped(pkg *types.Package, srcDir string, seen map[
 		}
 	}
 	return false, nil
+}
+
+// completeImport re-reads an already imported, incomplete transitive package
+// so its dependency graph can be walked. It is not an import by the package
+// being checked — the package was reached through a legal chain (fmt reaches
+// internal/poll) — so the importer's visibility rule must not be applied to
+// it: prefer the policy-free IdentityImporter, asking under the package's own
+// identity, and fall back to the ordinary path otherwise.
+func (m *mapImporter) completeImport(path, srcDir string) (*types.Package, error) {
+	if by, ok := m.fallback.(IdentityImporter); ok {
+		return by.ImportFromPackage(path, path, srcDir)
+	}
+	return m.fallbackImport(path, srcDir, 0)
 }
 
 var _ = token.NoPos
