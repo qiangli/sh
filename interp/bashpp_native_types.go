@@ -128,16 +128,19 @@ func (r *Runner) goSourceNativeHandleIsNil(value bashPPBridgeValue) (bool, error
 }
 
 func (r *Runner) bashPPNativeCompareValues(lv bashPPBridgeValue, op token.Token, rv bashPPBridgeValue) (bool, error) {
-	req, err := r.bashPPEvalRequest()
-	if err != nil {
-		return false, err
-	}
 	lv, rv = bashPPBridgeCompareOperands(lv, rv)
 	if equal, handled := bashPPNativeScalarEqual(lv, rv); handled {
 		if op == token.NEQ {
 			equal = !equal
 		}
 		return equal, nil
+	}
+	// Building an evaluator request snapshots environment and local-type state.
+	// Scalar values never cross the bridge, so defer that work until the local
+	// comparison above has proved it is actually necessary.
+	req, err := r.bashPPEvalRequest()
+	if err != nil {
+		return false, err
 	}
 	values, err := r.bashPPNativeRequest(r.ectx, req, bashPPBridgeRequest{Op: "equal", Args: []bashPPBridgeValue{lv, rv}})
 	if err != nil {

@@ -77,6 +77,11 @@ type bashPPFunc struct {
 	// goError marks @go.error(), which adapts the public result surface while
 	// leaving the body/decorator chain on the original results.
 	goError bool
+	// scalarInt is an immutable, eligibility-checked execution plan for a
+	// side-effect-free function whose complete signature and body use only
+	// int values. Unsupported functions leave this nil and keep using the
+	// general evaluator.
+	scalarInt *bashPPScalarIntFunc
 }
 
 // bashPPType is one script-local named type. Aliases intentionally cannot own
@@ -363,7 +368,9 @@ func (r *Runner) bashPPFuncDecl(d *syntax.BashPPFuncDecl) {
 			captured = r.bashPPScope.snapshot()
 		}
 	}
-	r.bashPPFuncs[name] = &bashPPFunc{decl: d, scope: captured, advised: advised, goError: bashPPGoErrorDecorated(d)}
+	fn := &bashPPFunc{decl: d, scope: captured, advised: advised, goError: bashPPGoErrorDecorated(d)}
+	fn.scalarInt = bashPPCompileScalarIntFunc(fn)
+	r.bashPPFuncs[name] = fn
 }
 
 func bashPPValidateTypeParamDecls(params []*syntax.BashPPTypeParam) error {
@@ -2155,6 +2162,13 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 	}
 	if !r.bashPPCheckChannelArgs(fn, params, callChannels, callCells) {
 		return nil
+	}
+	// The scalar plan is selected only after the ordinary argument and channel
+	// gates have run. It either completes the call without touching runner
+	// frame state, or declines before observable work and lets the general
+	// evaluator below retain all semantics and diagnostics.
+	if results, handled := r.bashPPTryScalarIntInvoke(ctx, fn, args, callCells); handled {
+		return results
 	}
 	if limit := r.bashPPFuncNest(); limit > 0 && len(r.callStack) >= limit {
 		r.errf("%s: maximum function nesting level exceeded (%d)\n", fn.name(), limit)
