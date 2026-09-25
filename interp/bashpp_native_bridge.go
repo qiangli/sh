@@ -187,6 +187,10 @@ type bashPPNativeSession struct {
 	activeCallbacks     chan bashPPBridgeResponse
 	callbackOwner       *Runner
 	mailbox             *bashPPCallbackMailbox
+	// callbackRefusal is the first diagnostic from an interpreter-refused
+	// dependency callback. The dependency exits nonzero after the refusal, so
+	// exit-status adoption must preserve this original cause.
+	callbackRefusal error
 	// retained records that this session was handed an original callback it
 	// keeps past the handing-over call. Every later request then parks as a
 	// callback server; see requestCallbackCapable.

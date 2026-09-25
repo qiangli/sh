@@ -81,6 +81,13 @@ func (s *bashPPNativeSession) callbackAnswer(ctx context.Context, owner *Runner,
 	answer := bashPPBridgeRequest{ID: q.ID, Op: "callback-reply"}
 	if owner == nil || q.Receiver == nil {
 		answer.Error = "gosource: callback has no original owner or receiver"
+	} else if coherence != nil && bashPPNativeProtocolCallback(q) {
+		err := errGoSourceCopiedSliceCallback
+		answer.Error = err.Error()
+		if !owner.exit.exiting {
+			owner.exit.fatal(err)
+			s.recordCallbackRefusal(err)
+		}
 	} else {
 		// The dependency may have written to its pipes before asking for this
 		// callback. Wait for those bytes only if the interpreted body writes to
@@ -108,6 +115,7 @@ func (s *bashPPNativeSession) callbackAnswer(ctx context.Context, owner *Runner,
 			}
 			if answer.Error != "" && !owner.exit.exiting {
 				owner.exit.fatal(err)
+				s.recordCallbackRefusal(err)
 			}
 		} else {
 			answer.Values = values
@@ -130,11 +138,41 @@ func (s *bashPPNativeSession) callbackAnswer(ctx context.Context, owner *Runner,
 				answer.Error, answer.Values = err.Error(), nil
 				if !owner.exit.exiting {
 					owner.exit.fatal(err)
+					s.recordCallbackRefusal(callbackRefusalDiagnostic(err))
 				}
 			}
 		}
 	}
 	return answer
+}
+
+var errGoSourceCopiedSliceCallback = errors.New("gosource: original callback with copied slice references is unsupported")
+
+func bashPPNativeProtocolCallback(q bashPPBridgeResponse) bool {
+	_, method, ok := strings.Cut(q.Selector, ".")
+	if !ok {
+		return false
+	}
+	switch method {
+	case "String", "Error", "Format", "GoString":
+		return true
+	}
+	return false
+}
+
+func callbackRefusalDiagnostic(err error) error {
+	if errors.Is(err, errGoSourceStaleCopy) {
+		return errGoSourceCopiedSliceCallback
+	}
+	return err
+}
+
+func (s *bashPPNativeSession) recordCallbackRefusal(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.callbackRefusal == nil {
+		s.callbackRefusal = err
+	}
 }
 
 func (s *bashPPNativeSession) serveCallback(ctx context.Context, owner *Runner, q bashPPBridgeResponse, coherence *goSourceCopyCoherence) {

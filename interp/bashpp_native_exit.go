@@ -44,6 +44,12 @@ func (r *Runner) bashPPNativeExitStatus(err error) bool {
 	if status < 0 || status > 255 && !windowsBreak {
 		return false
 	}
+	var refusal error
+	if session := r.bashPPTools.bridge; session != nil {
+		session.mu.Lock()
+		refusal = session.callbackRefusal
+		session.mu.Unlock()
+	}
 	r.closeGoSourceBridge()
 	code := uint8(status)
 	if windowsBreak {
@@ -70,7 +76,11 @@ func (r *Runner) bashPPNativeExitStatus(err error) bool {
 		// every later exit.fatal on this unwind a no-op, so the program's own
 		// status is not replaced by a bridge diagnostic.
 		r.exit.fatalExit = true
-		r.exit.err = ExitStatus(code)
+		if refusal != nil {
+			r.exit.err = refusal
+		} else {
+			r.exit.err = ExitStatus(code)
+		}
 	}
 	return true
 }
