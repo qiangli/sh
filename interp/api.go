@@ -3955,6 +3955,11 @@ func (r *Runner) subshell(background bool) *Runner {
 	r2.Funcs = maps.Clone(r.Funcs)
 	r2.bashPPAgenticFuncs = maps.Clone(r.bashPPAgenticFuncs)
 	r2.bashPPDecoratedFuncs = maps.Clone(r.bashPPDecoratedFuncs)
+	// The native decorator registry and the advice hook are host wiring, not
+	// per-run state: without them a decorated call in ( … ), a pipeline stage
+	// or $( … ) fails with BASHPP-EDECO-UNDEF.
+	r2.bashPPNativeDecorators = r.bashPPNativeDecorators
+	r2.bashPPAdvice = r.bashPPAdvice
 	// A chain in flight belongs to the parent's frames; a subshell that
 	// calls Next on an inherited Call gets the outside-a-chain diagnostic.
 	r2.bashPPDecoratorChains = nil

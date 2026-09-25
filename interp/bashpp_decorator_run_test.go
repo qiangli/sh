@@ -64,3 +64,25 @@ func TestBashPPDecoratorCallRunFaults(t *testing.T) {
 	qt.Assert(t, qt.Equals(none.Run(context.Background(), "true", nil), 1))
 	qt.Assert(t, qt.Equals((&interp.Call{}).Run(context.Background(), "true", nil), 1))
 }
+
+// TestBashPPDecoratorInSubshells pins that a native decorator resolves in
+// every subshell form — ( … ), a pipeline stage, $( … ) — not only at top
+// level: the registry is host wiring the subshell must inherit.
+func TestBashPPDecoratorInSubshells(t *testing.T) {
+	natives := map[string]interp.DecoratorFunc{
+		"tag": func(ctx context.Context, c *interp.Call, args []interp.DecoratorArg) error {
+			c.Next(ctx)
+			return nil
+		},
+	}
+	out, stderr, err := runDecorated(t, `@tag()
+function f() { echo ran; }
+f
+( f )
+f | cat
+x=$(f); echo "$x"
+`, interp.Decorators(natives))
+	qt.Assert(t, qt.Equals(stderr, ""))
+	qt.Assert(t, qt.IsNil(err))
+	qt.Assert(t, qt.Equals(out, "ran\nran\nran\nran\n"))
+}
