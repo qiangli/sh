@@ -330,6 +330,12 @@ func (r *Runner) bashPPFuncDecl(d *syntax.BashPPFuncDecl) {
 		r.bashPPMethodDecl(d)
 		return
 	}
+	// The blank identifier declares no package-level function. Go permits any
+	// number of `func _` declarations (stringer emits one in each generated
+	// file), and none can be called or participate in a redeclaration.
+	if name == "_" {
+		return
+	}
 	if bashPPGoErrorDecorated(d) {
 		if len(d.TypeParams) > 0 || bashPPTrailingErrorResult(d.Results) {
 			r.errf("BASHPP-EDECO-GOERROR: @go.error requires a receiver-less non-generic function with no trailing error result\n")
