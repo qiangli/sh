@@ -1920,7 +1920,7 @@ func indexedNegativeOffset(vr expand.Variable, n int) int {
 func (r *Runner) unsetArrayElem(name, idx string) bool {
 	if idx == "*" || idx == "@" {
 		vr := r.lookupVar(name)
-		if vr.Kind == expand.Indexed && vr.IndexedCount() > 0 {
+		if vr.Kind == expand.Indexed {
 			vr.Set = true
 			vr.List = []string{}
 			vr.ListSet = nil

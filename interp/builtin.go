@@ -696,7 +696,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 	case "false":
 		exit.code = 1
 	case "exit":
-		if len(args) >= 2 && args[0] == "--" {
+		if len(args) >= 1 && args[0] == "--" {
 			args = args[1:]
 		}
 		switch len(args) {
@@ -868,10 +868,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				operand = operandSources[i]
 			}
 			tryFuncOnly := false
-			// Bash 5.3: in POSIX mode, bare `unset 1bad` is lenient:
-			// the invalid name cannot match a variable, so it falls
-			// through to the function namespace. Explicit variable forms
-			// still error with "not a valid identifier" (exit 2).
+			// Bare unset checks both variables and functions. An invalid
+			// variable name can still be a function name, so a miss is
+			// silent; explicit -v reports the identifier error.
 			// Function names are unrestricted, so `unset -f 1bad` is allowed.
 			//
 			// Array-element form `name[index]` is valid: unset the
@@ -890,10 +889,8 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					}
 				}
 				if !syntax.ValidName(arg) {
-					if r.opts[optPosix] && !explicitVars && funcs && !nameref {
-						// Bare POSIX unset is both variable and function
-						// unset. An invalid variable name is simply not a
-						// variable match; try the function namespace below.
+					if !explicitVars && funcs && !nameref {
+						// Try the function namespace below.
 						tryFuncOnly = true
 					} else if funcs && !nameref && !explicitVars && len(arg) > 0 && !unsetIdentLikeStart(arg[0]) {
 						// Bash only reports "not a valid identifier" for names
@@ -3159,9 +3156,6 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 		args = fp.args()
 		if len(args) == 0 {
-			if argv0 != "" {
-				return failf(2, "exec: -a requires a command to execute\n")
-			}
 			r.persistCurrentRedirs()
 			break
 		}

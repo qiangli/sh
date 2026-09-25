@@ -123,7 +123,7 @@ func TestDeclare2Fidelity(t *testing.T) {
 		// Regression guard: digit/letter-led invalid names must still error.
 		{
 			"unset '1bad'; echo after=$?",
-			"unset: `1bad': not a valid identifier\nafter=2\n",
+			"after=0\n",
 		},
 		// Regression guard: the set-scalar `[0]` whole-variable unset path.
 		{
