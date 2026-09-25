@@ -43,6 +43,12 @@ func newBashPPCallbackMailbox() (*bashPPCallbackMailbox, error) {
 	}}, nil
 }
 
+// bashPPMailboxOpenWorkerSource maps the mailbox in the dependency process and
+// then unlinks it. The name is only a rendezvous — one session creates exactly
+// one mailbox for exactly one helper — and both ends hold the shared mapping
+// open, so removing it costs nothing and keeps the caller's TMPDIR free of
+// helper storage for the whole life of the session. The host's own cleanup
+// tolerates the name being gone already.
 func bashPPMailboxOpenWorkerSource() string {
-	return fmt.Sprintf(`func openCallbackMailbox(){if callbackMailboxPath==""{return};f,err:=os.OpenFile(callbackMailboxPath,os.O_RDWR,0);if err!=nil{return};defer f.Close();callbackMailbox,err=syscall.Mmap(int(f.Fd()),0,%d,syscall.PROT_READ|syscall.PROT_WRITE,syscall.MAP_SHARED);if err!=nil{callbackMailbox=nil}}`, bashPPMailboxSize)
+	return fmt.Sprintf(`func openCallbackMailbox(){if callbackMailboxPath==""{return};f,err:=os.OpenFile(callbackMailboxPath,os.O_RDWR,0);if err!=nil{return};defer f.Close();callbackMailbox,err=syscall.Mmap(int(f.Fd()),0,%d,syscall.PROT_READ|syscall.PROT_WRITE,syscall.MAP_SHARED);if err!=nil{callbackMailbox=nil;return};os.Remove(callbackMailboxPath)}`, bashPPMailboxSize)
 }
