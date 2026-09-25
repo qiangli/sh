@@ -30,7 +30,7 @@ that this engine is STABLE (bug fixes against the pinned coordinate only).
 
 ## Build / test / lint
 
-The `Makefile` wraps the common flows: `make build`, `make test-quick` (the push gate, `make test` is its alias: build + `go test -short`, without the test files tagged `//go:build full`), `make test-full` (every test: `-tags full`), `make tidy`, `make clean`. CI runs `test-quick` on every push (`.github/workflows/test.yml`) and the full suite plus the race gate and the Bash 5.2 confirm on `v*` tags / `workflow_dispatch` (`full-tests.yml`) — split 2026-09-17, when the full suite passed two hours per push. For finer-grained control use the underlying `go` commands:
+The `Makefile` wraps the common flows: `make build`, `make test-quick` (the push gate, `make test` is its alias: build + `go test -short`, without the test files tagged `//go:build full`), `make test-full` (the release runner: compiles every full-tag package test binary once, then runs every top-level test, example and fuzz seed corpus in a separate bounded process), `make tidy`, `make clean`. It writes reconciled package/test/subtest inventory and result files to `artifacts/full-test/`. CI runs `test-quick` on every push (`.github/workflows/test.yml`) and the full suite plus the race gate and the Bash 5.2 confirm on `v*` tags / `workflow_dispatch` (`full-tests.yml`) — split 2026-09-17, when the full suite passed two hours per push. For finer-grained control use the underlying `go` commands:
 
 ```sh
 # Build everything

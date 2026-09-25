@@ -38,22 +38,16 @@ jobs:
         go-version: ${{ matrix.go-version }}
         cache: false
 
-    # Darwin signal dispositions are process-global. Isolate the large interp
-    # suite into bounded processes so signal conformance cases cannot leave
-    # runtime receiver state that affects hundreds of later tests. Every test
-    # still runs; the regexes partition Test* names and examples run last.
-    - name: Test with isolated Darwin signal state
-      run: |
-        go list ./... | grep -v '/interp$' | xargs go test -timeout=30m
-        for group in 'A-E' 'F-J' 'K-O' 'P-T' 'U-Z'; do
-          go test ./interp -timeout=30m -run "^Test[$group]"
-        done
-        go test ./interp -timeout=30m -run '^Example'
-      if: matrix.os == 'macos-latest'
+    # Compile every full-tag package once, then isolate every top-level test,
+    # example, and fuzz seed corpus in its own bounded test-binary process.
+    # The runner writes an inventory and result reconciliation on both lanes.
     - run: make test-full
-      if: matrix.os != 'macos-latest'
-    - run: cd moreinterp && go test -timeout=30m ./...
-      if: matrix.os == 'macos-latest'
+    - uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: full-test-inventory-${{ matrix.os }}-${{ matrix.go-version }}
+        path: artifacts/full-test
+        if-no-files-found: error
 
     - name: Bash++ race lifecycle gate
       run: make bashpp-race-gate
