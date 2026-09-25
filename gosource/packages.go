@@ -18,6 +18,12 @@ import (
 type PackageSpec struct {
 	Path    string
 	Sources []Source
+	// SourceDir is the original package directory used only when
+	// CompanionFiles is non-empty. CompanionFiles is the caller's exact
+	// host-selected non-Go input set; gosource never discovers files from the
+	// directory or sends them through Go parsing.
+	SourceDir      string
+	CompanionFiles []string
 }
 
 // Resolution is one recorded import resolution. Load records every import
@@ -188,6 +194,9 @@ func (m *mapImporter) checkDependency(fset *token.FileSet, spec PackageSpec, che
 	}
 	if len(spec.Sources) == 0 {
 		return ErrorList{fmt.Errorf("gosource: explicit package %q has no source files", spec.Path)}
+	}
+	if len(spec.CompanionFiles) > 0 && spec.SourceDir == "" {
+		return ErrorList{fmt.Errorf("gosource: explicit package %q companions require the original source directory", spec.Path)}
 	}
 	sources := append([]Source(nil), spec.Sources...)
 	sort.SliceStable(sources, func(i, j int) bool { return sources[i].Name < sources[j].Name })

@@ -330,7 +330,7 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 		if s.embeds != bashPPEmbedIdentity(req.EmbedDecls) {
 			return errors.New("gosource: embed declarations changed after native dependency initialization")
 		}
-		if s.companions != bashPPNativeCompanionIdentity(req.CompanionFiles, req.NativeFuncs, req.CompanionTrampolines, req.CompanionUnmappedFrames) {
+		if s.companions != bashPPNativeCompanionIdentity(req.CompanionFiles, req.NativeFuncs, req.MappedCompanions, req.CompanionTrampolines, req.CompanionUnmappedFrames) {
 			return errors.New("gosource: native companions changed after native dependency initialization")
 		}
 		if s.cgo != bashPPCgoIdentity(req.CgoPackages) {
@@ -394,6 +394,13 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 	if len(req.EmbedDecls) > 0 || len(req.CompanionFiles) > 0 {
 		sourceDir = req.SourceDir
 		policy = bashPPScratchSourceRoot
+	} else if len(req.MappedCompanions) > 0 {
+		// Put the command helper inside the first mapped package's visibility
+		// tree. A package such as cmd/compile/internal/ssa may be imported only
+		// from there; the helper remains a named command file while the package
+		// directory itself sees only overlaid package declarations.
+		sourceDir = req.MappedCompanions[0].SourceDir
+		policy = bashPPScratchIsolated
 	}
 	file, err := bashPPImportTempSource(sourceDir, "bashpp-session-*.go", scratchEnv, policy)
 	if err != nil {
@@ -414,6 +421,12 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 	buildEnv := setEnvString(req.Env, "CGO_ENABLED", "0")
 	if len(req.CgoPackages) > 0 {
 		buildEnv = setEnvString(req.Env, "CGO_ENABLED", "1")
+	}
+	if len(req.MappedCompanions) > 0 {
+		if err = bashPPOverlayMappedCompanions(ctx, req, file, buildEnv); err != nil {
+			cleanup()
+			return err
+		}
 	}
 	if len(req.CgoPackages) > 0 {
 		// cmd/cgo changes into the logical source directory. Give the overlay
@@ -490,6 +503,15 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 		if err = build.Run(); err != nil {
 			cleanup()
 			return fmt.Errorf("gosource: build dependency bridge: %w: %s", err, diagnostics.String())
+		}
+	} else if len(req.MappedCompanions) > 0 {
+		build := exec.CommandContext(ctx, req.Go, "build", "-p", "2", "-overlay="+file.overlay, "-o", binary, file.buildPath)
+		build.Dir, build.Env = file.sourceDir, setEnvString(buildEnv, "PWD", file.sourceDir)
+		var diagnostics bytes.Buffer
+		build.Stdout, build.Stderr = &diagnostics, &diagnostics
+		if err = build.Run(); err != nil {
+			cleanup()
+			return fmt.Errorf("gosource: build mapped companion dependency bridge: %w: %s", err, diagnostics.String())
 		}
 	} else if policy == bashPPScratchSourceRoot {
 		// go:embed patterns resolve against the worker's logical location;
@@ -612,7 +634,7 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 	s.imports = bridgeImportIdentity(req.Imports)
 	s.locals = bashPPLocalTypeIdentity(req.LocalTypes)
 	s.embeds = bashPPEmbedIdentity(req.EmbedDecls)
-	s.companions = bashPPNativeCompanionIdentity(req.CompanionFiles, req.NativeFuncs, req.CompanionTrampolines, req.CompanionUnmappedFrames)
+	s.companions = bashPPNativeCompanionIdentity(req.CompanionFiles, req.NativeFuncs, req.MappedCompanions, req.CompanionTrampolines, req.CompanionUnmappedFrames)
 	s.cgo = bashPPCgoIdentity(req.CgoPackages)
 	s.instances = bashPPImportedInstanceIdentity(req.Instances)
 	s.genericTypes = bashPPGenericTypeIdentity(req.GenericTypes)
@@ -1034,6 +1056,25 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 	for _, local := range req.LocalTypes {
 		materialised[local.Name] = true
 	}
+	usedAliases := make(map[string]bool, len(req.Imports)+len(req.MappedCompanions))
+	for alias := range req.Imports {
+		usedAliases[alias] = true
+	}
+	for i, pkg := range req.MappedCompanions {
+		alias := fmt.Sprintf("bppcompanion%d", i)
+		for usedAliases[alias] {
+			alias += "_"
+		}
+		usedAliases[alias] = true
+		fmt.Fprintf(&imports, "%s %q\n", alias, pkg.Path)
+		for _, fn := range pkg.Funcs {
+			if !syntax.BashPPValidIdent(fn.RuntimeName) {
+				return "", fmt.Errorf("gosource: invalid mapped companion runtime function %q", fn.RuntimeName)
+			}
+			fmt.Fprintf(&symbols, "%q: reflect.ValueOf(%s.%s()[%q]),\n", fn.RuntimeName, alias, pkg.Hook, fn.Name)
+			fmt.Fprintf(&companionSymbols, "%q: true,\n", fn.RuntimeName)
+		}
+	}
 	// Every package's helper alias is settled before any symbol is
 	// emitted: an instantiation registered under one package names types
 	// of others (`errors.AsType[*fs.PathError]`), whichever order the
@@ -1397,13 +1438,14 @@ func bashPPGenericTypesUsePackage(types, keys []string, path string) bool {
 	return false
 }
 
-func bashPPNativeCompanionIdentity(files []string, funcs []bashPPNativeFuncDecl, trampolines []bashPPCompanionTrampoline, unmapped []string) string {
+func bashPPNativeCompanionIdentity(files []string, funcs []bashPPNativeFuncDecl, mapped []bashPPMappedCompanion, trampolines []bashPPCompanionTrampoline, unmapped []string) string {
 	data, _ := json.Marshal(struct {
 		Files          []string
 		Funcs          []bashPPNativeFuncDecl
+		Mapped         []bashPPMappedCompanion
 		Trampolines    []bashPPCompanionTrampoline
 		UnmappedFrames []string
-	}{files, funcs, trampolines, unmapped})
+	}{files, funcs, mapped, trampolines, unmapped})
 	return string(data)
 }
 

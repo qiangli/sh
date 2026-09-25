@@ -147,9 +147,11 @@ type Program struct {
 
 // LinkedPackage is one explicit package lowered into Program.File.
 type LinkedPackage struct {
-	Path  string
-	Name  string
-	Files []string
+	Path           string
+	Name           string
+	Files          []string
+	SourceDir      string
+	CompanionFiles []string
 }
 
 // SourceAt maps an AST offset to the original source identity and byte offset.
@@ -523,12 +525,43 @@ func Load(sources []Source, options Options) (*Program, error) {
 	}
 	for _, path := range linkedPaths {
 		checked := imp.checked[path]
-		p.Packages = append(p.Packages, LinkedPackage{Path: path, Name: checked.pkg.Name(), Files: imp.files[path]})
+		p.Packages = append(p.Packages, LinkedPackage{Path: path, Name: checked.pkg.Name(), Files: imp.files[path], SourceDir: checked.spec.SourceDir, CompanionFiles: append([]string(nil), checked.spec.CompanionFiles...)})
 		// A checked package parsed every source, so files and sources align.
 		for i, src := range checked.sources {
 			tf := c.fset.File(checked.files[i].FileStart)
 			p.Sources = append(p.Sources, SourceInfo{Name: src.Name, SHA256: fmt.Sprintf("%x", sha256.Sum256(src.Data)), Base: uint(tf.Base() - 1), Size: uint(len(src.Data)), Package: checked.pkg.Name(), PackagePath: path, LineDirectives: lineDirectives(tf, checked.files[i])})
 		}
+	}
+	for i, path := range linkedPaths {
+		checked := imp.checked[path]
+		if len(checked.spec.CompanionFiles) == 0 {
+			continue
+		}
+		companion := syntax.GoPackageCompanion{
+			Path: path, Name: checked.pkg.Name(), SourceDir: checked.spec.SourceDir,
+			SourceFiles: append([]string(nil), imp.files[path]...),
+			Files:       append([]string(nil), checked.spec.CompanionFiles...),
+		}
+		companion.Hook = "BashPPGoSourceCompanionValues"
+		for checked.pkg.Scope().Lookup(companion.Hook) != nil {
+			companion.Hook += "_"
+		}
+		for _, file := range checked.files {
+			for _, decl := range file.Decls {
+				fn, ok := decl.(*ast.FuncDecl)
+				if !ok || fn.Recv != nil || fn.Body != nil || fn.Name == nil {
+					continue
+				}
+				obj := checked.info.Defs[fn.Name]
+				runtimeName := c.renames[obj]
+				if runtimeName == "" {
+					runtimeName = c.mangledName(i, fn.Name.Name)
+				}
+				companion.Symbols = append(companion.Symbols, syntax.GoPackageCompanionSymbol{Name: fn.Name.Name, RuntimeName: runtimeName})
+			}
+		}
+		sort.Slice(companion.Symbols, func(i, j int) bool { return companion.Symbols[i].Name < companion.Symbols[j].Name })
+		p.File.GoPackageCompanions = append(p.File.GoPackageCompanions, companion)
 	}
 	c.attachEmbedDirectives(p.File, linked)
 	p.File.Sources = append([]syntax.SourceFile(nil), p.Sources...)

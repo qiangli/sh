@@ -94,6 +94,14 @@ func (r *Runner) bashPPGoSourceNativeFunc(name string) bool {
 			return true
 		}
 	}
+	mapped, _ := r.bashPPGoSourceMappedCompanions()
+	for _, pkg := range mapped {
+		for _, fn := range pkg.Funcs {
+			if fn.RuntimeName == name {
+				return true
+			}
+		}
+	}
 	return false
 }
 func (r *Runner) bashPPBridgeCall(ctx context.Context, call *syntax.BashPPCall) ([]bashPPBridgeValue, error) {
