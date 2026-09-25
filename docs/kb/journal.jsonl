@@ -50,3 +50,4 @@
 {"op":"add","slug":"synthesize-imports-for-generated-helper-type-spellings","id":"01a0da0c-b857-77d3-b728-57c5c9387e50","tool":"codex-gpt-5.5-m","host":"dragon","episode":"weave-issue-13","at":"2026-09-25T19:31:01.848691Z"}
 {"op":"note-add","slug":"isolate-interpreted-self-reexec-from-replacement-goroot-tools","id":"01a0da29-3775-7791-8e16-c097a66fa557","tool":"codex-gpt5.6-sol-n","host":"dragon","episode":"weave-issue-14","at":"2026-09-25T20:02:09.39886Z"}
 {"op":"update","slug":"isolate-interpreted-self-reexec-from-replacement-goroot-tools","id":"01a0da29-3775-7791-8e16-c097a66fa557","tool":"codex-gpt5.6-sol-n","host":"dragon","episode":"weave-issue-14","at":"2026-09-25T20:02:23.416916Z"}
+{"op":"add","slug":"bridge-function-typed-collection-elements-as-callbacks","id":"01a0da43-cdc2-7cfc-a6a0-1c1cf9ba43b4","tool":"codex-gpt-5.5-o","host":"dragon","episode":"weave-issue-15","at":"2026-09-25T20:31:11.812245Z"}
