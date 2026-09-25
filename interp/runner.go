@@ -453,6 +453,13 @@ func standaloneArithParseError(err error) bool {
 	return false
 }
 
+// discardExpansionLine unwinds the current command and skips the remaining
+// statements on its physical input line. Run resumes at the next line.
+func (r *Runner) discardExpansionLine() {
+	r.exit.discarding = true
+	r.discardRestOfLine = r.curStmtPos.Line()
+}
+
 func (r *Runner) expandErr(err error) {
 	if err == nil {
 		return
@@ -508,8 +515,7 @@ func (r *Runner) expandErr(err error) {
 		r.exit.code = 1
 		r.exit.exiting = true
 		if !r.opts[optPosix] {
-			r.exit.discarding = true
-			r.discardNextStmt = true
+			r.discardExpansionLine()
 		}
 	}
 	switch {
@@ -547,12 +553,14 @@ func (r *Runner) expandErr(err error) {
 		}
 		return
 	case errors.As(err, &badSubst):
-		// In a non-interactive Bash script, malformed parameter expansion
-		// stops the shell after reporting the offending expression.
+		// Bash discards the rest of the input line, then reads the next one.
 		r.exit.code = 1
 		r.lastExpandExit = exitStatus{code: 1}
 		if r.opts[optPosix] || (r.bashCompatErrors && !r.interactiveShell) {
 			r.exit.exiting = true
+			if !r.opts[optPosix] {
+				r.discardExpansionLine()
+			}
 		}
 		return
 	case strings.Contains(errMsg, "bad substitution"):
@@ -560,6 +568,9 @@ func (r *Runner) expandErr(err error) {
 		r.lastExpandExit = exitStatus{code: 1}
 		if r.bashCompatErrors && !r.interactiveShell {
 			r.exit.exiting = true
+			if !r.opts[optPosix] {
+				r.discardExpansionLine()
+			}
 		}
 		return
 	case strings.Contains(errMsg, "cannot assign in this way"):
@@ -586,6 +597,9 @@ func (r *Runner) expandErr(err error) {
 		r.lastExpandExit = exitStatus{code: 1}
 		if r.bashCompatErrors && !r.interactiveShell {
 			r.exit.exiting = true
+			if !r.opts[optPosix] {
+				r.discardExpansionLine()
+			}
 		}
 		return
 	case strings.Contains(errMsg, "no match: "):
@@ -599,6 +613,7 @@ func (r *Runner) expandErr(err error) {
 		// Subsequent commands on the same physical line still run.
 		r.expandRunExit = exitStatus{code: 1}
 		r.exit.exiting = true
+		r.exit.discarding = true
 		return
 	case errors.As(err, &indirErr):
 		if indirErr.NonFatal {
@@ -608,6 +623,9 @@ func (r *Runner) expandErr(err error) {
 			r.lastExpandExit = exitStatus{code: 1}
 			if r.bashCompatErrors && !r.interactiveShell {
 				r.exit.exiting = true
+				if !r.opts[optPosix] {
+					r.discardExpansionLine()
+				}
 			}
 			return
 		}
@@ -5808,10 +5826,13 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			var arithErr *expand.ArithmError
 			if errors.As(expandErr, &arithErr) &&
 				(arithErr.Standalone || strings.Contains(expandErr.Error(), "arithmetic syntax error")) {
-				// Bash terminates a non-interactive script after an
-				// arithmetic expansion error in a command word.
+				// An arithmetic expansion error discards this input line;
+				// POSIX mode exits the shell instead.
 				r.exit.code = 1
 				r.exit.exiting = true
+				if !r.opts[optPosix] {
+					r.discardExpansionLine()
+				}
 			}
 		}
 		if r.exit.exiting {

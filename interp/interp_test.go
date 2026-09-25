@@ -7408,7 +7408,7 @@ func TestBashCompatMalformedLengthSubstitution(t *testing.T) {
 	qt.Assert(t, qt.IsNil(err))
 
 	err = r.Run(context.Background(), file)
-	qt.Assert(t, qt.IsNil(err))
+	qt.Assert(t, qt.Equals(err.Error(), "exit status 1"))
 	qt.Assert(t, qt.Equals(cb.String(),
 		"./more-exp.tests: line 1: ${#:}: bad substitution\n"+
 			"./more-exp.tests: line 2: ${#/}: bad substitution\n"+
