@@ -529,7 +529,7 @@ func Load(sources []Source, options Options) (*Program, error) {
 			p.Sources = append(p.Sources, SourceInfo{Name: src.Name, SHA256: fmt.Sprintf("%x", sha256.Sum256(src.Data)), Base: uint(tf.Base() - 1), Size: uint(len(src.Data)), Package: checked.pkg.Name(), PackagePath: path, LineDirectives: lineDirectives(tf, checked.files[i])})
 		}
 	}
-	c.attachEmbedDirectives(p.File)
+	c.attachEmbedDirectives(p.File, linked)
 	p.File.Sources = append([]syntax.SourceFile(nil), p.Sources...)
 	c.attachFloatingDirectives(p.File)
 	return p, nil

@@ -409,6 +409,9 @@ func (r *Runner) bashPPImplements(actual syntax.BashPPTypeExpr, iface *syntax.Ba
 			// so a generic method is not in the method set an interface can
 			// name. Reporting it as a distinct error rather than a signature
 			// mismatch keeps the reason visible.
+			if r.goSourceNointerfaceMethod(sel.method.decl) {
+				return fmt.Errorf("BASHPP-EINTERFACE-MISSING: %s does not implement interface (%s method is marked 'nointerface')", bashPPTypeText(actual), name)
+			}
 			if sel.method.decl != nil && len(sel.method.decl.TypeParams) > 0 {
 				return fmt.Errorf("BASHPP-EINTERFACE-GENERIC: %s method %s declares type parameters and cannot implement an interface method", bashPPTypeText(actual), name)
 			}

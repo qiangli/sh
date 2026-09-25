@@ -60,12 +60,18 @@ func lineDirectives(tf *token.File, f *ast.File) []syntax.LineDirective {
 // comment to be adjacent. //go:build and //go:generate address the file and
 // the tooling, not a declaration. The name is historical: the //go:embed path
 // was the first to exist.
-func (c *converter) attachEmbedDirectives(file *syntax.File) {
+//
+// A linked (flattened) dependency package contributes only its
+// //go:nointerface lines: that pragma changes the package's method sets as
+// every importer observes them (under GOEXPERIMENT=fieldtrack), while the
+// dependency's other directives keep their existing treatment.
+func (c *converter) attachEmbedDirectives(file *syntax.File, linked []*converter) {
 	byNamePos := map[uint][]syntax.Comment{}
+	keep := isDeclDirective
 	attach := func(name *ast.Ident, groups []*ast.CommentGroup) {
 		for _, group := range groups {
 			for _, comment := range group.List {
-				if !isDeclDirective(comment.Text) {
+				if !keep(comment.Text) {
 					continue
 				}
 				pos := c.pos(name.Pos()).Offset()
@@ -73,45 +79,16 @@ func (c *converter) attachEmbedDirectives(file *syntax.File) {
 			}
 		}
 	}
-	for _, f := range c.files {
-		previousEnd := f.Package
-		for _, decl := range f.Decls {
-			var groups []*ast.CommentGroup
-			for _, group := range f.Comments {
-				if group.Pos() > previousEnd && group.End() < decl.Pos() {
-					groups = append(groups, group)
-				}
-			}
-			switch d := decl.(type) {
-			case *ast.FuncDecl:
-				attach(d.Name, groups)
-			case *ast.GenDecl:
-				if d.Tok != token.VAR {
-					previousEnd = decl.End()
-					continue
-				}
-				declGroups := groups
-				if len(d.Specs) != 1 && d.Doc != nil {
-					declGroups = nil
-					for _, group := range groups {
-						if group != d.Doc {
-							declGroups = append(declGroups, group)
-						}
-					}
-				}
-				for _, spec := range d.Specs {
-					v := spec.(*ast.ValueSpec)
-					if len(v.Names) != 1 {
-						continue
-					}
-					specGroups := declGroups
-					if v.Doc != nil && v.Doc != d.Doc {
-						specGroups = append(append([]*ast.CommentGroup(nil), declGroups...), v.Doc)
-					}
-					attach(v.Names[0], specGroups)
-				}
-			}
-			previousEnd = decl.End()
+	scan := func(files []*ast.File) {
+		for _, f := range files {
+			c.attachFileDirectives(f, attach)
+		}
+	}
+	scan(c.files)
+	keep = isNointerfaceDirective
+	for _, lc := range linked {
+		if lc != c {
+			scan(lc.files)
 		}
 	}
 	for _, stmt := range file.Stmts {
@@ -125,6 +102,56 @@ func (c *converter) attachEmbedDirectives(file *syntax.File) {
 		if name != nil {
 			stmt.Comments = append(stmt.Comments, byNamePos[name.Pos().Offset()]...)
 		}
+	}
+}
+
+// isNointerfaceDirective reports whether a comment line is //go:nointerface.
+func isNointerfaceDirective(text string) bool {
+	fields := strings.Fields(strings.TrimPrefix(text, "//"))
+	return len(fields) > 0 && fields[0] == "go:nointerface" && strings.HasPrefix(text, "//go:")
+}
+
+// attachFileDirectives hands each declaration of f the comment groups that
+// stand between it and the preceding declaration.
+func (c *converter) attachFileDirectives(f *ast.File, attach func(*ast.Ident, []*ast.CommentGroup)) {
+	previousEnd := f.Package
+	for _, decl := range f.Decls {
+		var groups []*ast.CommentGroup
+		for _, group := range f.Comments {
+			if group.Pos() > previousEnd && group.End() < decl.Pos() {
+				groups = append(groups, group)
+			}
+		}
+		switch d := decl.(type) {
+		case *ast.FuncDecl:
+			attach(d.Name, groups)
+		case *ast.GenDecl:
+			if d.Tok != token.VAR {
+				previousEnd = decl.End()
+				continue
+			}
+			declGroups := groups
+			if len(d.Specs) != 1 && d.Doc != nil {
+				declGroups = nil
+				for _, group := range groups {
+					if group != d.Doc {
+						declGroups = append(declGroups, group)
+					}
+				}
+			}
+			for _, spec := range d.Specs {
+				v := spec.(*ast.ValueSpec)
+				if len(v.Names) != 1 {
+					continue
+				}
+				specGroups := declGroups
+				if v.Doc != nil && v.Doc != d.Doc {
+					specGroups = append(append([]*ast.CommentGroup(nil), declGroups...), v.Doc)
+				}
+				attach(v.Names[0], specGroups)
+			}
+		}
+		previousEnd = decl.End()
 	}
 }
 

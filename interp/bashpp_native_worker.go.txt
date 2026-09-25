@@ -311,6 +311,19 @@ func callback(selector string, recv value) ([]value,error) {
 // fmt may recover this panic, but it cannot convert that failed request to PASS.
 func callbackFailed(err error) string {panic(err)}
 type originalCallbackPanic struct {value value}
+// dependencyStringPanic is a panic(string) raised by the dependency code a
+// "call" request ran, the way reflect.MakeFunc or regexp.MustCompile panic:
+// in Go the caller can recover that value, so it travels back as a program
+// panic carrying the same string rather than as a bridge failure. Only the
+// called function's own string panics qualify; the worker's validation
+// errors, runtime errors and callback implementation failures keep their
+// existing paths.
+type dependencyStringPanic string
+func callDependency(fn reflect.Value,args []reflect.Value,spread bool)(returned []reflect.Value){
+ defer func(){if e:=recover();e!=nil{if text,ok:=e.(string);ok{panic(dependencyStringPanic(text))};panic(e)}}()
+ if spread{return fn.CallSlice(args)}
+ return fn.Call(args)
+}
 func(p originalCallbackPanic)Error()string{return p.value.Text}
 
 func resolveType(name string) reflect.Type {
@@ -567,7 +580,7 @@ func primitiveTemplateTree(node bppTemplateParse.Node)bool {
 }
 func dispatch(q request)(reply response){
  reply.ID=q.ID
- defer func(){if e:=recover();e!=nil{if original,ok:=e.(originalCallbackPanic);ok{reply.Panic=&original.value}else{reply.Error=fmt.Sprintf("native dependency panic: %v",e)}}}()
+ defer func(){if e:=recover();e!=nil{if original,ok:=e.(originalCallbackPanic);ok{reply.Panic=&original.value}else if raised,ok:=e.(dependencyStringPanic);ok{reply.Panic=&value{Kind:"panic",Type:"string",Text:string(raised)}}else{reply.Error=fmt.Sprintf("native dependency panic: %v",e)}}}()
  if q.Op=="channel-make" {
   typ:=resolveType(q.Selector);if typ==nil||typ.Kind()!=reflect.Chan||len(q.Args)!=1{reply.Error="channel make requires one capacity and a registered channel type";return}
   n,err:=strconv.Atoi(q.Args[0].Text);if err!=nil||n<0{panic("makechan: size out of range")}
@@ -656,7 +669,8 @@ func dispatch(q request)(reply response){
  // that frame asks the runtime to move it again, and collection is paced off for
  // the whole call, so nothing scans it.
  if companionGuarded(q.Selector+q.Instance) {companionEnterUnmapped();defer companionExitUnmapped();companionSink(companionGrowStack(companionStackDepth))}
- if q.Spread {if !signature.IsVariadic()||len(args)!=n{reply.Error="invalid spread call";return};returned=fn.CallSlice(args)}else{returned=fn.Call(args)}
+ if q.Spread&&(!signature.IsVariadic()||len(args)!=n){reply.Error="invalid spread call";return}
+ returned=callDependency(fn,args,q.Spread)
  for _,v:=range returned{encoded:=encode(v);if encoded.Kind=="handle" {
    var ctx reflectedMethodContext;valid:=false
    if q.Receiver==nil&&len(q.Args)==1&&q.Args[0].Origin!=0&&v.Type()==reflect.TypeFor[reflect.Value](){snapshot:=reflect.New(args[0].Type()).Elem();snapshot.Set(args[0]);ctx=reflectedMethodContext{receiver:snapshot};if args[0].Kind()==reflect.Pointer{ctx.origin=q.Args[0].Origin};valid=true
