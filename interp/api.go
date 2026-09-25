@@ -3490,6 +3490,9 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 		if node.GoSource && r.goSourceTesting == nil {
 			defer r.closeGoSourceBridge()
 		}
+		if node.GoSource {
+			defer goSourceRaiseGCPacing()()
+		}
 		defer func() {
 			r.bashPPGoSource = savedGoSource
 			r.bashPPConvertHashQY = savedConvertHashQY
