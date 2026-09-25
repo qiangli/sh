@@ -296,6 +296,34 @@ func (r *Runner) bashPPUnderlyingType(typ syntax.BashPPTypeExpr) syntax.BashPPTy
 	}
 }
 
+// bashPPUnderlyingTypeName resolves the named-type chain for a type spelled
+// `name` and returns the underlying type's name when the underlying type is
+// itself a named type — the same result as asserting bashPPUnderlyingType's
+// return to *syntax.BashPPNamedType and reading Name.Value. It differs only in
+// cost: when `name` has no user type declaration (a predeclared type such as
+// int, float64 or string) the underlying type is the name itself, so it
+// returns immediately without allocating the wrapper AST nodes
+// bashPPUnderlyingType requires. The scalar arithmetic hot path resolves the
+// underlying type of every operand and result, so that predeclared case
+// dominates; see the Sprint 270 G2 measurements. Ok is false only when the
+// underlying type is not a plain named type (e.g. a slice or map).
+func (r *Runner) bashPPUnderlyingTypeName(name string) (string, bool) {
+	if name == "" {
+		return "", false
+	}
+	if _, declared := r.bashPPTypes[name]; !declared {
+		// bashPPTypeDeclarationForReference finds nothing, so
+		// bashPPUnderlyingType returns the reference unchanged: the underlying
+		// name is `name` itself.
+		return name, true
+	}
+	named, ok := r.bashPPUnderlyingType(&syntax.BashPPNamedType{Name: &syntax.Lit{Value: name}}).(*syntax.BashPPNamedType)
+	if !ok || named.Name == nil {
+		return "", false
+	}
+	return named.Name.Value, true
+}
+
 // bashPPUnderlyingTypeKey is the cycle-guard identity of a named reference:
 // its spelling plus the lexical scope of the local declaration it names.
 func (r *Runner) bashPPUnderlyingTypeKey(name *syntax.BashPPNamedType) string {

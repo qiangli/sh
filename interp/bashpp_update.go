@@ -304,8 +304,8 @@ func (r *Runner) bashPPUpdateResult(op string, left, right bashPPScalar) (any, c
 		(right.value.Kind() == constant.Int || right.value.Kind() == constant.Float) && constant.Sign(right.value) == 0 {
 		compatible := left.typ == "" && right.typ == "" || left.typ != "" && (right.typ == "" || right.typ == left.typ)
 		if compatible && left.typ != "" {
-			underlying, ok := r.bashPPUnderlyingType(&syntax.BashPPNamedType{Name: &syntax.Lit{Value: left.typ}}).(*syntax.BashPPNamedType)
-			compatible = ok && (underlying.Name.Value == "float32" || underlying.Name.Value == "float64")
+			underlying, ok := r.bashPPUnderlyingTypeName(left.typ)
+			compatible = ok && (underlying == "float32" || underlying == "float64")
 			if compatible && right.typ == "" {
 				compatible = r.bashPPValidateUntypedScalarOperand(right.value, left.typ) == nil
 			}

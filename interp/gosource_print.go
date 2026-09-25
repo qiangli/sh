@@ -33,8 +33,8 @@ func (r *Runner) goSourcePrintScalar(scalar bashPPScalar) string {
 	}
 	bits := 64
 	if scalar.typ != "" {
-		if named, ok := r.bashPPUnderlyingType(&syntax.BashPPNamedType{Name: &syntax.Lit{Value: scalar.typ}}).(*syntax.BashPPNamedType); ok {
-			switch named.Name.Value {
+		if named, ok := r.bashPPUnderlyingTypeName(scalar.typ); ok {
+			switch named {
 			case "float32", "complex64":
 				bits = 32
 			}

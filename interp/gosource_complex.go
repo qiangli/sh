@@ -102,8 +102,8 @@ func (r *Runner) bashPPComplexRuntimeOp(op token.Token, left, right bashPPScalar
 		return bashPPScalar{}, false, nil
 	}
 	base := typ
-	if named, ok := r.bashPPUnderlyingType(&syntax.BashPPNamedType{Name: &syntax.Lit{Value: typ}}).(*syntax.BashPPNamedType); ok {
-		base = named.Name.Value
+	if named, ok := r.bashPPUnderlyingTypeName(typ); ok {
+		base = named
 	}
 	a, aok := bashPPScalarComplex128(left)
 	b, bok := bashPPScalarComplex128(right)
@@ -215,11 +215,11 @@ func (r *Runner) bashPPComplexBuiltinValues(name string, args []bashPPScalar) (b
 		runtime := args[0].runtime || args[1].runtime
 		for _, a := range args {
 			if a.typ != "" {
-				underlying, ok := r.bashPPUnderlyingType(&syntax.BashPPNamedType{Name: &syntax.Lit{Value: a.typ}}).(*syntax.BashPPNamedType)
-				if !ok || (underlying.Name.Value != "float32" && underlying.Name.Value != "float64") {
+				underlying, ok := r.bashPPUnderlyingTypeName(a.typ)
+				if !ok || (underlying != "float32" && underlying != "float64") {
 					return bashPPScalar{}, fmt.Errorf("complex requires floating-point arguments")
 				}
-				if underlying.Name.Value == "float32" {
+				if underlying == "float32" {
 					typ = "complex64"
 				} else {
 					typ = "complex128"
@@ -251,11 +251,11 @@ func (r *Runner) bashPPComplexBuiltinValues(name string, args []bashPPScalar) (b
 	}
 	typ := ""
 	if a.typ != "" {
-		underlying, ok := r.bashPPUnderlyingType(&syntax.BashPPNamedType{Name: &syntax.Lit{Value: a.typ}}).(*syntax.BashPPNamedType)
+		underlying, ok := r.bashPPUnderlyingTypeName(a.typ)
 		if !ok {
 			return bashPPScalar{}, fmt.Errorf("%s requires complex argument", name)
 		}
-		switch underlying.Name.Value {
+		switch underlying {
 		case "complex64":
 			typ = "float32"
 		case "complex128":
