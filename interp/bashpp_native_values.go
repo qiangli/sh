@@ -1115,6 +1115,13 @@ func (r *Runner) bashPPBridgeCollection(value any, meta *bashPPCollectionMeta, t
 			return result, fmt.Errorf("gosource: missing mapping type schema")
 		}
 	case string:
+		if meta != nil && meta.kind == "func" {
+			cell := &bashPPCell{
+				vr:       expand.Variable{Set: true, Kind: expand.String, Str: value},
+				declType: typ,
+			}
+			return r.bashPPBridgeCell(cell)
+		}
 		// Scalar collection storage is text-shaped. Recover its wire kind from
 		// the declared element type before transport; otherwise complex and
 		// defined numeric elements become Go strings at the native boundary.
