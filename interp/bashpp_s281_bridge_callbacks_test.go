@@ -34,9 +34,32 @@ type tag struct{ n int }
 func (t tag) String() string { return fmt.Sprint("tag", t.n) }
 func main() {
 	var buf bytes.Buffer
-	logger := log.New(&buf, "", 0)
-	logger.Printf("saw %v", tag{3})
+logger := log.New(&buf, "", 0)
+logger.Printf("saw %v", tag{3})
 	fmt.Print(buf.String())
+}`,
+		"original writer receives a copied variadic slice": `package main
+import (
+	"bufio"
+	"fmt"
+	"os"
+)
+type writer struct{ w *bufio.Writer }
+func (w *writer) Write(p []byte) (int, error) { return w.w.Write(p) }
+type node struct{ name string }
+var values []any
+func (n node) String() string {
+	values[1] = "changed"
+	return "<" + n.name + ">"
+}
+func (w *writer) printf(format string, args ...any) {
+	fmt.Fprintf(w, format, args...)
+}
+func main() {
+	w := &writer{w: bufio.NewWriter(os.Stdout)}
+	values = []any{node{name: "seven"}, "before"}
+	w.printf("node=%v text=%s\\n", values...)
+	w.w.Flush()
 }`,
 	} {
 		t.Run(name, func(t *testing.T) {

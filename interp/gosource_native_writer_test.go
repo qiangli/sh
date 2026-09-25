@@ -144,7 +144,7 @@ func main(){fmt.Fprintln(os.Stdout,Tag(7))}`
 		t.Fatalf("reset: %q", output.String())
 	}
 }
-func TestGoSourceOriginalWriterBoundary(t *testing.T) {
+func TestGoSourceOriginalWriterCallback(t *testing.T) {
 	source := `package main
 import "fmt"
 type Writer struct{}
@@ -171,8 +171,8 @@ func main(){fmt.Fprintf(Writer{},"%s",Tag(1));println("after")}`
 		t.Fatal(err)
 	}
 	err = r.Run(context.Background(), p.File)
-	if err == nil || !strings.Contains(err.Error(), "original Write callbacks are unsupported") || strings.Contains(output.String(), "-ran") || strings.Contains(output.String(), "after") {
-		t.Fatalf("boundary: %v %q", err, output.String())
+	if err != nil || output.String() != want.stderr {
+		t.Fatalf("callback: err=%v output=%q want=%q", err, output.String(), want.stderr)
 	}
 	if after, err := os.ReadFile(path); err != nil || string(after) != source {
 		t.Fatal("original source changed")

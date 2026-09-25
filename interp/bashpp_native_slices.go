@@ -297,6 +297,19 @@ func prepareNativeSliceBuffers(req bashPPEvalRequest, q *bashPPBridgeRequest) er
 		if hasSlice && !hasDirectSlice && nativeSharedReferenceConsumer(req, *q) {
 			return nil
 		}
+		// A read-only dependency handed a direct original slice can keep the
+		// copy live across synchronous callbacks. Register it as a normal slice
+		// buffer; each callback first publishes the dependency's current backing
+		// contents to the interpreter and then refreshes that same backing from
+		// the interpreter before the dependency resumes. This is especially
+		// important for a spread variadic slice: its elements remain aliased to
+		// the caller, so a formatting callback may mutate a later argument.
+		if nativeSliceReadOnly(callable) && hasDirectSlice {
+			if err := prepareNativeSliceReconcile(req, q); err == nil {
+				q.sliceCallbackSync = true
+				return nil
+			}
+		}
 		// A read-only emitter reaching a formatting callback is admitted when
 		// every argument's live storage can be re-read: each callback is then
 		// followed by a coherence check against the dependency's copy
@@ -612,6 +625,32 @@ func applyNativeSliceBuffers(runner *Runner, q bashPPBridgeRequest, reply bashPP
 		}
 	}
 	return nil
+}
+
+// nativeCallbackSliceBuffers snapshots the interpreter side of every direct
+// slice registered on an in-flight callback-capable request. The dependency
+// applies these elements to its existing backing array before returning from
+// the callback, preserving the header and every alias it has already handed
+// to the callee.
+func nativeCallbackSliceBuffers(runner *Runner, q bashPPBridgeRequest) ([]bashPPNativeSliceBuffer, error) {
+	if !q.sliceCallbackSync {
+		return nil, nil
+	}
+	if runner == nil || len(q.sliceTargets) != len(q.SliceBuffers) {
+		return nil, fmt.Errorf("gosource: callback slice ownership was lost")
+	}
+	buffers := make([]bashPPNativeSliceBuffer, len(q.SliceBuffers))
+	for i, target := range q.sliceTargets {
+		value, err := runner.bashPPBridgeCollection(target.view, target.meta, target.typ)
+		if err != nil {
+			return nil, err
+		}
+		if value.Kind != "slice" || len(value.Elements) != len(target.view) {
+			return nil, fmt.Errorf("gosource: callback slice refresh has invalid shape")
+		}
+		buffers[i] = bashPPNativeSliceBuffer{Index: q.SliceBuffers[i].Index, Length: len(target.view), Value: value}
+	}
+	return buffers, nil
 }
 
 // nativeSliceGenericHelper answers the two generic slices helpers the dependency

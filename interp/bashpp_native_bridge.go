@@ -129,12 +129,17 @@ type bashPPBridgeRequest struct {
 	transferProof []bool
 	// coherence, when set, re-reads the storage a read-only request copied
 	// after every callback it serves. See bashpp_native_coherence.go.
-	coherence     *goSourceCopyCoherence
-	sourceProgram bool   // the call site is in the program package itself
-	ID            uint64 `json:"id"`
-	Op            string `json:"op"`
-	PanicOnFault  bool   `json:"panic_on_fault,omitempty"`
-	Selector      string `json:"selector"`
+	coherence *goSourceCopyCoherence
+	// sliceCallbackSync marks read-only dependency calls whose direct original
+	// slices are synchronized in both directions at each callback boundary.
+	// The worker and interpreter therefore keep one logical backing store even
+	// though the transport itself necessarily decoded a copy.
+	sliceCallbackSync bool
+	sourceProgram     bool   // the call site is in the program package itself
+	ID                uint64 `json:"id"`
+	Op                string `json:"op"`
+	PanicOnFault      bool   `json:"panic_on_fault,omitempty"`
+	Selector          string `json:"selector"`
 	// Instance is the type-argument suffix of an instantiated imported
 	// generic function; the helper resolves Selector+Instance.
 	Instance   string              `json:"instance,omitempty"`
@@ -810,7 +815,7 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 		s.mu.Unlock()
 		if mailboxActive {
 			if slot, callback, ok := requestMailbox.take(); ok {
-				answer := s.callbackAnswer(ctx, req.CallbackOwner, callback, q.coherence)
+				answer := s.callbackAnswer(ctx, req.CallbackOwner, callback, &q)
 				s.mu.Lock()
 				mailboxAlive, waitErr := s.mailbox == requestMailbox, s.waitErr
 				s.mu.Unlock()
@@ -892,7 +897,7 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 			if routed {
 				req.CallbackOwner.bashPPTools.routedDepth++
 			}
-			s.serveCallback(ctx, req.CallbackOwner, callback, q.coherence)
+			s.serveCallback(ctx, req.CallbackOwner, callback, &q)
 			if routed {
 				req.CallbackOwner.bashPPTools.routedDepth--
 			}

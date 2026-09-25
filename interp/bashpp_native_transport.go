@@ -241,6 +241,9 @@ func synchronousOriginalMethodCallback(req bashPPEvalRequest, q bashPPBridgeRequ
 	if q.coherence != nil {
 		return true
 	}
+	if q.sliceCallbackSync {
+		return true
+	}
 	if len(q.SliceBuffers) > 0 {
 		return false
 	}

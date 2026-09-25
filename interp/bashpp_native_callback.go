@@ -77,9 +77,28 @@ func (s *bashPPNativeSession) enterCallbacks(ctx context.Context, req bashPPEval
 // emitter, is checked after the body and after the receiver reconciliation
 // is computed: a stale copy fails this callback before the dependency reads
 // any further.
-func (s *bashPPNativeSession) callbackAnswer(ctx context.Context, owner *Runner, q bashPPBridgeResponse, coherence *goSourceCopyCoherence) bashPPBridgeRequest {
+func (s *bashPPNativeSession) callbackAnswer(ctx context.Context, owner *Runner, q bashPPBridgeResponse, outer *bashPPBridgeRequest) bashPPBridgeRequest {
 	answer := bashPPBridgeRequest{ID: q.ID, Op: "callback-reply"}
-	if owner == nil || q.Receiver == nil {
+	var coherence *goSourceCopyCoherence
+	if outer != nil {
+		coherence = outer.coherence
+	}
+	if owner != nil && outer != nil && outer.sliceCallbackSync {
+		for i := range q.SliceUpdates {
+			s.bashPPAuthenticateCallbackValue(&q.SliceUpdates[i].Value)
+		}
+		if err := applyNativeSliceBuffers(owner, *outer, bashPPBridgeResponse{SliceUpdates: q.SliceUpdates}); err != nil {
+			answer.Error = err.Error()
+			if !owner.exit.exiting {
+				owner.exit.fatal(err)
+				s.recordCallbackRefusal(err)
+			}
+		}
+	}
+	if answer.Error != "" {
+		// The dependency's copy could not be reconciled, so no original body
+		// may run against a different view of the backing storage.
+	} else if owner == nil || q.Receiver == nil {
 		answer.Error = "gosource: callback has no original owner or receiver"
 	} else if coherence != nil && bashPPNativeProtocolCallback(q) && q.Receiver.Origin == 0 && !bashPPPureValueStringCallback(owner, q) {
 		// A value receiver has no live pointee to reconcile. A pointer with
@@ -144,6 +163,18 @@ func (s *bashPPNativeSession) callbackAnswer(ctx context.Context, owner *Runner,
 					s.recordCallbackRefusal(err)
 				}
 			}
+		}
+	}
+	if owner != nil && outer != nil && answer.Error == "" {
+		buffers, err := nativeCallbackSliceBuffers(owner, *outer)
+		if err != nil {
+			answer.Error, answer.Values = err.Error(), nil
+			if !owner.exit.exiting {
+				owner.exit.fatal(err)
+				s.recordCallbackRefusal(err)
+			}
+		} else {
+			answer.SliceBuffers = buffers
 		}
 	}
 	return answer
@@ -237,8 +268,8 @@ func (s *bashPPNativeSession) recordCallbackRefusal(err error) {
 	}
 }
 
-func (s *bashPPNativeSession) serveCallback(ctx context.Context, owner *Runner, q bashPPBridgeResponse, coherence *goSourceCopyCoherence) {
-	answer := s.callbackAnswer(ctx, owner, q, coherence)
+func (s *bashPPNativeSession) serveCallback(ctx context.Context, owner *Runner, q bashPPBridgeResponse, outer *bashPPBridgeRequest) {
+	answer := s.callbackAnswer(ctx, owner, q, outer)
 	s.mu.Lock()
 	conn := s.conn
 	s.mu.Unlock()

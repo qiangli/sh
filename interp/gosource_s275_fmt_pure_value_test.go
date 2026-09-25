@@ -3,13 +3,13 @@
 package interp_test
 
 import (
-	"strings"
 	"testing"
 )
 
-// The formatter may walk a copied slice only when an original value method
-// has no side-effecting work hidden in its returned formatting expression.
-func TestS275FmtPureValueProofRefusesEffects(t *testing.T) {
+// A formatter walking a copied slice synchronizes that backing at every
+// callback boundary, so arbitrary value-receiver bodies retain their effects
+// and later elements are read from the refreshed copy.
+func TestS275FmtValueCallbacksPreserveEffects(t *testing.T) {
 	for name, src := range map[string]string{
 		"named field method": `package main
 import "fmt"
@@ -26,10 +26,7 @@ func (i item) String() string { return fmt.Sprint("item", effect()) }
 func main() { fmt.Println([]item{{1}}); println("after") }`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			out, stderr, err := runGoSource(t, "s275-fmt-value-proof", src)
-			if err == nil || !strings.Contains(err.Error()+stderr, "original callback with copied slice references is unsupported") || strings.Contains(out+stderr, "effect") || strings.Contains(out+stderr, "after") {
-				t.Fatalf("impure method crossed fmt copy: out=%q stderr=%q err=%v", out, stderr, err)
-			}
+			differGoSource(t, src, nil, "")
 		})
 	}
 }

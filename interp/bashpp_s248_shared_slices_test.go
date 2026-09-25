@@ -182,6 +182,24 @@ func main() {
 	fmt.Println(items, c, items[1:])
 	fmt.Printf("%v %s %d\n", items, c, c.hits)
 }`,
+		"fmt callback rewrites a later slice element": `package main
+import "fmt"
+type T struct { n int }
+var s []*T
+func (t *T) String() string { if t.n == 1 { s[1] = &T{99} }; return fmt.Sprint(t.n) }
+func main() {
+	s = []*T{{1}, {2}}
+	fmt.Println(s)
+}`,
+		"fmt callback writes a sibling pointee": `package main
+import "fmt"
+type T struct { n int }
+var s []*T
+func (t *T) String() string { if t.n == 1 { s[1].n = 42 }; return fmt.Sprint(t.n) }
+func main() {
+	s = []*T{{1}, {2}}
+	fmt.Println(s)
+}`,
 	} {
 		t.Run(name, func(t *testing.T) { differGoSource(t, source, nil, "") })
 	}
@@ -205,28 +223,6 @@ func main() {
 	sort.Sort(sort.Reverse(bySlice(s)))
 	fmt.Println(s)
 }`, "original callback with copied slice references is unsupported", "[3 2 1]"},
-		// A formatting callback that rewrites an element the dependency has
-		// not printed yet: the dependency's copy is now stale.
-		"fmt callback rewrites the printed slice": {`package main
-import "fmt"
-type T struct { n int }
-var s []*T
-func (t *T) String() string { if t.n == 1 { s[1] = &T{99} }; return fmt.Sprint(t.n) }
-func main() {
-	s = []*T{{1}, {2}}
-	fmt.Println(s)
-}`, "wrote storage the dependency holds a copy of", "[1 2]"},
-		// A formatting callback that writes a pointee other than its own
-		// receiver: only the receiver's pointee is reconciled.
-		"fmt callback writes a sibling pointee": {`package main
-import "fmt"
-type T struct { n int }
-var s []*T
-func (t *T) String() string { if t.n == 1 { s[1].n = 42 }; return fmt.Sprint(t.n) }
-func main() {
-	s = []*T{{1}, {2}}
-	fmt.Println(s)
-}`, "wrote storage the dependency holds a copy of", "[1 2]"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			got := s248RunRefused(t, tc.source)
