@@ -149,10 +149,25 @@ func TestGoSourceNativeChannelsThreeModes(t *testing.T) {
 		})
 	}
 }
-func TestGoSourceNativeChannelsRejectedReferencesAndMixed(t *testing.T) {
+
+// A select mixing dependency channels with interpreter-owned ones commits
+// exactly one arm (Sprint 275, gosource_mixed_select.go). Both-ready shapes
+// print only what holds whichever arm wins, so the three modes must agree.
+func TestGoSourceNativeChannelsMixedSelect(t *testing.T) {
+	for name, body := range map[string]string{
+		"mixed_receive":             `func main(){a:=dep.Buffer();a<-7;b:=make(chan []int,1);b<-[]int{8};n:=0;select{case v:=<-a:n=v+100*len(b);case v:=<-b:n=v[0]+100*len(a)};fmt.Println(n==107||n==108,len(a)+len(b))}`,
+		"mixed_send":                `func main(){a:=dep.Buffer();b:=make(chan []int,1);select{case a<-7:fmt.Println(len(b)==0&&<-a==7);case b<-[]int{8}:fmt.Println(dep.Len(a)==0&&(<-b)[0]==8);default:fmt.Println("default")}}`,
+		"mixed_send_default":        `func main(){a:=dep.Empty();b:=make(chan int);select{case a<-7:fmt.Println("a");case b<-8:fmt.Println("b");default:fmt.Println("default")}}`,
+		"mixed_send_blocking_wakes": `func main(){a:=dep.Empty();b:=make(chan int);done:=make(chan int);go func(){done<- <-a}();select{case a<-5:fmt.Println("sent");case v:=<-b:fmt.Println("b",v)};fmt.Println(<-done)}`,
+		"mixed_receive_closed":      `func main(){a:=dep.Closed();b:=make(chan int);select{case v,ok:=<-a:fmt.Println("a",v,ok);case v:=<-b:fmt.Println("b",v)}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			nativeChannelThreeModes(t, `package main;import("fmt";"example.test/nativechannels/dep");`+body)
+		})
+	}
+}
+func TestGoSourceNativeChannelsRejectedReferences(t *testing.T) {
 	for name, test := range map[string]struct{ body, want string }{
-		"mixed_receive":   {`func main(){a:=dep.Buffer();a<-7;b:=make(chan []int,1);b<-[]int{8};select{case <-a:case <-b:};fmt.Println("UNREACHABLE")}`, "mixed native/interpreted channel select"},
-		"mixed_send":      {`func main(){a:=dep.Buffer();b:=make(chan []int,1);select{case a<-7:case b<-[]int{8}:default:};fmt.Println("UNREACHABLE")}`, "mixed native/interpreted channel select"},
 		"retained_method": {`type Item struct{N int};func(i Item)String()string{return "item"};func main(){c:=dep.Anys();c<-Item{1};fmt.Println("UNREACHABLE")}`, "cannot retain original callback identity"},
 		"reference":       {`func main(){c:=dep.Bytes();c<-[]byte{1};fmt.Println("UNREACHABLE")}`, "cannot retain interpreter-owned reference values"},
 	} {

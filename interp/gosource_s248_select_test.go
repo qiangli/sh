@@ -5,7 +5,6 @@ package interp_test
 // Sprint: #248; Story: #700; Story-ID: 14e8b88629e0
 
 import (
-	"strings"
 	"testing"
 )
 
@@ -51,9 +50,10 @@ func main() {
 	}
 }
 
-// A live dependency channel still cannot share one atomic select with an
-// interpreter-owned channel: that shape keeps its prompt refusal.
-func TestS248LiveNativeChannelMixedSelectRefusal(t *testing.T) {
+// A live dependency channel sharing a select with an interpreter-owned one
+// was refused until Sprint 275 arbitrated the two owners
+// (gosource_mixed_select.go); the ready interpreter-owned arm now wins.
+func TestS248LiveNativeChannelMixedSelect(t *testing.T) {
 	const source = `package main
 
 import (
@@ -76,8 +76,8 @@ func main() {
 	}
 }
 `
-	got := runGoSourceRunnerError(t, source)
-	if !strings.Contains(got, "mixed native/interpreted channel select requires atomic arbitration") {
-		t.Fatalf("live mixed select was not refused: %q", got)
+	out, stderr, err := runGoSource(t, "s248-live-native-mixed", source)
+	if err != nil || stderr != "" || out != "1 2\n" {
+		t.Fatalf("run=%v stdout=%q stderr=%q", err, out, stderr)
 	}
 }

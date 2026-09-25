@@ -1569,12 +1569,8 @@ func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
 	// Communication on a nil channel never proceeds, so dependency arms whose
 	// channels are all nil need no arbitration against interpreter-owned arms:
 	// the interpreter's select runs with those arms disabled.
-	if len(nativeCases) > 0 && (!hasLocal || liveNative) {
-		if hasLocal {
-			r.errf("%sgosource: mixed native/interpreted channel select requires atomic arbitration\n", r.bashErrPrefix(s.Pos()))
-			r.exit.code = 2
-			return
-		}
+	mixed := len(nativeCases) > 0 && hasLocal && liveNative
+	if len(nativeCases) > 0 && !hasLocal {
 		r.goSourceNativeSelect(ctx, nativeCases, nativeArms, def)
 		return
 	}
@@ -1608,6 +1604,29 @@ func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
 	if err := taskCtx.Err(); err != nil {
 		r.bashPPTaskCanceled = true
 		r.exit.code = 1
+		return
+	}
+	if mixed {
+		// Dependency arms are disabled (nil) entries in cases; the
+		// arbitration commits at most one operation on either side.
+		choice, ok := r.bashPPMixedSelect(ctx, cases, nativeCases, def != nil)
+		releaseSends()
+		if !ok {
+			return
+		}
+		if choice.native >= 0 {
+			r.goSourceNativeSelectArm(ctx, nativeArms[choice.native], choice.cell, choice.open)
+			return
+		}
+		if choice.local < 0 {
+			r.goSourceNativeSelectArm(ctx, def, nil, false)
+			return
+		}
+		if closingCases[choice.local] {
+			r.bashPPClosedSend()
+			return
+		}
+		r.bashPPSelectLocalArm(ctx, arms[choice.local], caseElems[choice.local], choice.v, choice.open)
 		return
 	}
 	ctxIndex := len(cases)
@@ -1644,6 +1663,16 @@ func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
 	if arm == nil {
 		arm = arms[i]
 	}
+	var elem *bashPPChannel
+	if i >= 0 {
+		elem = caseElems[i]
+	}
+	r.bashPPSelectLocalArm(ctx, arm, elem, v, open)
+}
+
+// bashPPSelectLocalArm binds an interpreter-owned select arm's received value
+// and runs its body.
+func (r *Runner) bashPPSelectLocalArm(ctx context.Context, arm *syntax.BashPPSelectCase, elem *bashPPChannel, v reflect.Value, open bool) {
 	leave := r.bashPPPushScope()
 	defer leave()
 	if decl, yes := arm.Comm.(*syntax.BashPPShortDecl); yes {
@@ -1651,7 +1680,7 @@ func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
 		if v.IsValid() {
 			value = v.Interface()
 		}
-		r.bashPPBindReceivedCell(decl.Lhs[0].Value, r.bashPPReceivedCell(caseElems[i], value, open))
+		r.bashPPBindReceivedCell(decl.Lhs[0].Value, r.bashPPReceivedCell(elem, value, open))
 		if len(decl.Lhs) == 2 {
 			r.bashPPDeclareName(decl.Lhs[1].Value, expand.Variable{Set: true, Kind: expand.String, Str: strconv.FormatBool(open)})
 		}
@@ -1660,7 +1689,7 @@ func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
 		if v.IsValid() {
 			value = v.Interface()
 		}
-		r.bashPPSelectReceiveAssign(assign, r.bashPPReceivedCell(caseElems[i], value, open), open)
+		r.bashPPSelectReceiveAssign(assign, r.bashPPReceivedCell(elem, value, open), open)
 	}
 	r.stmts(r.bashPPTaskContext(ctx), arm.Stmts)
 	if r.bashPPBranch == bashPPBranchBreak {

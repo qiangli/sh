@@ -29,15 +29,17 @@ import (
 //     once with its own object, and an object reachable from another
 //     finalizable object is finalized only after it.
 //
-// typeparam/orderedmap.go registers its finalizer without refusal now; it
-// still stops at the select that mixes a dependency channel with an
-// interpreter-owned one, which is pinned so that residual stays explicit.
+// typeparam/orderedmap.go registers its finalizer without refusal; since
+// Sprint 275 its select mixing a dependency channel (ctx.Done) with
+// interpreter-owned ones is arbitrated (gosource_mixed_select.go), so it
+// runs to completion like the other roots.
 func TestS243RetainedFinalizerRefusal(t *testing.T) {
 	for _, rel := range []string{
 		filepath.Join("abi", "map.go"),
 		filepath.Join("fixedbugs", "issue46725.go"),
 		"tinyfin.go",
 		"mallocfin.go",
+		filepath.Join("typeparam", "orderedmap.go"),
 	} {
 		t.Run(filepath.ToSlash(rel), func(t *testing.T) {
 			source, err := os.ReadFile(filepath.Join(runtime.GOROOT(), "test", rel))
@@ -50,15 +52,4 @@ func TestS243RetainedFinalizerRefusal(t *testing.T) {
 			}
 		})
 	}
-	t.Run("typeparam/orderedmap.go", func(t *testing.T) {
-		source, err := os.ReadFile(filepath.Join(runtime.GOROOT(), "test", "typeparam", "orderedmap.go"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		got := runGoSourceRunnerError(t, string(source))
-		if strings.Contains(got, "original callback signature requires value-semantics parameters") ||
-			!strings.Contains(got, "mixed native/interpreted channel select requires atomic arbitration") {
-			t.Fatalf("unchanged orderedmap.go did not reach its select residual: %q", got)
-		}
-	})
 }

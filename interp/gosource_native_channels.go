@@ -162,6 +162,12 @@ func (r *Runner) goSourceNativeSelect(ctx context.Context, cases []bashPPBridgeV
 	if i >= 0 {
 		arm = arms[i]
 	}
+	r.goSourceNativeSelectArm(ctx, arm, cell, open)
+}
+
+// goSourceNativeSelectArm binds a dependency-selected arm's received value
+// and runs its body; a default arm receives nothing.
+func (r *Runner) goSourceNativeSelectArm(ctx context.Context, arm *syntax.BashPPSelectCase, cell *bashPPCell, open bool) {
 	if arm == nil {
 		r.exit.fatal(fmt.Errorf("gosource: native selection has no winning arm"))
 		return
