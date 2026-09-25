@@ -26,6 +26,11 @@ type bashPPNativeFuncDecl struct {
 	Name    string
 	Params  string
 	Results string
+	// Linkname is the linker target of a two-argument //go:linkname on this
+	// bodyless declaration. The dependency helper must repeat the directive:
+	// a bare declaration creates a reference to a local object which does not
+	// exist, rather than the alias the original package declared.
+	Linkname string
 }
 
 const bashPPEmbedSymbolPrefix = "\x00gosource.embed."
@@ -122,10 +127,19 @@ func (r *Runner) bashPPGoSourceNativeCompanions(sourceDir string) ([]string, []b
 		if !ok || decl.Body != nil || decl.Receiver != nil || decl.Name == nil || len(decl.TypeParams) > 0 {
 			continue
 		}
+		linkname := ""
+		for _, comment := range stmt.Comments {
+			fields := strings.Fields(comment.Text)
+			if len(fields) == 3 && fields[0] == "go:linkname" && fields[1] == decl.Name.Value {
+				linkname = fields[2]
+				break
+			}
+		}
 		funcs = append(funcs, bashPPNativeFuncDecl{
-			Name:    decl.Name.Value,
-			Params:  bashPPBridgeFieldsTextIn(decl.Params, r.bashPPScopedLocalTypeName),
-			Results: bashPPBridgeFieldsTextIn(decl.Results, r.bashPPScopedLocalTypeName),
+			Name:     decl.Name.Value,
+			Params:   bashPPBridgeFieldsTextIn(decl.Params, r.bashPPScopedLocalTypeName),
+			Results:  bashPPBridgeFieldsTextIn(decl.Results, r.bashPPScopedLocalTypeName),
+			Linkname: linkname,
 		})
 	}
 	if len(funcs) == 0 {

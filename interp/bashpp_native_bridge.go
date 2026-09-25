@@ -1058,6 +1058,9 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 					used = used || emitted
 					continue
 				}
+				if !bashPPNativeFuncValueAvailable(path, name) {
+					continue
+				}
 				for _, key := range keyNames {
 					if strings.HasPrefix(key, "_:") {
 						continue
@@ -1219,6 +1222,9 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 		if err != nil {
 			return "", err
 		}
+		if fn.Linkname != "" {
+			fmt.Fprintf(&locals, "//go:linkname %s %s\n", fn.Name, fn.Linkname)
+		}
 		if results == "" {
 			fmt.Fprintf(&locals, "func %s(%s)\n", fn.Name, params)
 		} else {
@@ -1270,6 +1276,23 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 	source = strings.Replace(source, "//UNMAPPEDFRAMES", unmappedFrames.String(), 1)
 	source = strings.Replace(source, "//FORCESGC", forcing.String(), 1)
 	return source, nil
+}
+
+// bashPPNativeFuncValueAvailable reports exported dependency functions which
+// can exist as ordinary Go function values in the pinned toolchain. FuncPCABI0
+// and FuncPCABIInternal are Go 1.27.1 compiler intrinsics with declarations but
+// no linker bodies. A direct compiler-recognised call is valid, but wrapping
+// either in reflect.ValueOf asks the linker for FuncPCABI0·f/ABIInternal·f and
+// then for the deliberately nonexistent underlying symbol.
+func bashPPNativeFuncValueAvailable(path, name string) bool {
+	if path != "internal/abi" {
+		return true
+	}
+	switch name {
+	case "FuncPCABI0", "FuncPCABIInternal":
+		return false
+	}
+	return true
 }
 
 func bashPPEmbedIdentity(decls []bashPPEmbedDecl) string {
