@@ -40,17 +40,10 @@ func goSourceInstructionPos(command syntax.Command) syntax.Pos {
 		if len(x.Fun) > 1 {
 			return faultLine(x.Fun[len(x.Fun)-1].Pos())
 		}
-	case *syntax.BashPPAssign:
-		if pos := exprPos(x.TargetExpr); pos.IsValid() {
-			return faultLine(pos)
-		}
-		if pos := exprPos(x.ValueExpr); pos.IsValid() {
-			return faultLine(pos)
-		}
-	case *syntax.BashPPShortDecl:
-		if pos := exprPos(x.Expr); pos.IsValid() {
-			return faultLine(pos)
-		}
 	}
+	// An assignment's or declaration's index, slice or selector operand is
+	// emitted by expr, which leads its '[' or selector with the token's own
+	// inline directive when it is on another line (faultTokenDirective);
+	// the statement keeps its own line for its other operands.
 	return command.Pos()
 }

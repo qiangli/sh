@@ -98,7 +98,7 @@ func (e *emitter) checkedSelector(n *syntax.BashPPSelectorExpr) (string, error) 
 	if e.goSource {
 		// Go selects through a pointer itself; the explicit dereference is
 		// the runtime path's nil check and the parentheses its spelling.
-		return base + "." + n.Sel.Value, nil
+		return base + "." + e.faultTokenDirective(n.X, n.Sel.Pos()) + n.Sel.Value, nil
 	}
 	if info := e.projectionExpr(n.X); info.kind == projectPointer {
 		base = e.checkedDeref(n, base, "")

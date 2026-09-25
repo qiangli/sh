@@ -350,7 +350,10 @@ func (e *emitter) statementList(stmts []*syntax.Stmt) ([]string, error) {
 	var out []string
 	for i := 0; i < len(stmts); i++ {
 		if e.goSource {
+			saved := e.exprLine
+			e.exprLine = stmts[i].Pos().Line()
 			text, consumed, err := e.constDeclGroup(stmts[i:])
+			e.exprLine = saved
 			if err != nil {
 				return nil, err
 			}
@@ -359,7 +362,12 @@ func (e *emitter) statementList(stmts []*syntax.Stmt) ([]string, error) {
 				i += consumed - 1
 				continue
 			}
+			// A converter split re-emits one source statement: its
+			// expressions are positioned against that statement's line.
+			saved = e.exprLine
+			e.exprLine = stmts[i].Pos().Line()
 			text, consumed, err = e.tupleSplit(stmts[i:])
+			e.exprLine = saved
 			if err != nil {
 				return nil, err
 			}

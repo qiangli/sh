@@ -89,6 +89,11 @@ type emitter struct {
 	// names the unit's shell functions for the decorator diagnostics.
 	predeclaredCall bool
 	shellFuncs      map[string]bool
+
+	// exprLine is the source line of the Go-source expression or statement
+	// being emitted; a sub-expression on another source line is led by an
+	// inline /*line*/ directive (see expr).
+	exprLine uint
 }
 
 type lowerBranchTarget struct {
@@ -923,7 +928,11 @@ func (e *emitter) statement(s *syntax.Stmt) (string, error) {
 	if s.Cmd == nil {
 		return "", nil
 	}
-	text, err := e.command(s.Cmd)
+	anchor := s.Cmd.Pos()
+	if e.goSource {
+		anchor = goSourceInstructionPos(s.Cmd)
+	}
+	text, err := e.withExprLine(anchor, func() (string, error) { return e.command(s.Cmd) })
 	if err != nil {
 		return "", err
 	}
@@ -946,11 +955,7 @@ func (e *emitter) statement(s *syntax.Stmt) (string, error) {
 		failure := e.prefix + "expansionError"
 		text = "if " + failure + " := " + e.prefix + "rt.TryShellStatement(func(){\n" + text + "\n}); " + failure + " != nil {" + e.operationFailure(failure) + "}"
 	}
-	pos := s.Cmd.Pos()
-	if e.goSource {
-		pos = goSourceInstructionPos(s.Cmd)
-	}
-	return e.markAt(s.Cmd, pos) + reset + text + "\n", nil
+	return e.markAt(s.Cmd, anchor) + reset + text + "\n", nil
 }
 func (e *emitter) block(b *syntax.Block) (string, error) {
 	parts, err := e.blockParts(b)
@@ -1593,9 +1598,42 @@ func (e *emitter) ifStmt(n *syntax.BashPPIf) (string, error) {
 		out += " else " + x
 	}
 	if init != "" {
+		if header, ok := e.goSourceHeaderInit(init); ok {
+			// Go source keeps its own `if init; cond {` header: hoisting the
+			// initializer into an enclosing block moves it to a line of its
+			// own, and gc then reports its operations on the wrong line.
+			return "if " + header + "; " + cond + " {\n" + body + "}" + strings.TrimPrefix(out, "if "+cond+" {\n"+body+"}"), nil
+		}
 		out = "{\n" + init + out + "\n}"
 	}
 	return out, nil
+}
+
+// goSourceHeaderInit reports whether an emitted if/switch initializer is the
+// one simple statement a Go statement header can carry, and returns it
+// without its trailing newline. Anything else (a checked binding's guard, a
+// sink, several statements) keeps the enclosing-block form.
+func (e *emitter) goSourceHeaderInit(init string) (string, bool) {
+	if !e.goSource {
+		return "", false
+	}
+	init = strings.TrimSuffix(init, "\n")
+	if strings.TrimSpace(init) == "" {
+		return "", false
+	}
+	f, err := parser.ParseFile(token.NewFileSet(), "", "package p\nfunc _() {\nif "+init+"; true {}\n}\n", parser.SkipObjectResolution)
+	if err != nil || len(f.Decls) != 1 {
+		return "", false
+	}
+	fn, ok := f.Decls[0].(*ast.FuncDecl)
+	if !ok || fn.Body == nil || len(fn.Body.List) != 1 {
+		return "", false
+	}
+	stmt, ok := fn.Body.List[0].(*ast.IfStmt)
+	if !ok || stmt.Init == nil {
+		return "", false
+	}
+	return init, true
 }
 func (e *emitter) forStmt(n *syntax.BashPPFor) (string, error) {
 	e.push()
@@ -1652,7 +1690,70 @@ func (e *emitter) forStmt(n *syntax.BashPPFor) (string, error) {
 	}
 	return out, nil
 }
+
+// expr emits one expression. Under goSource an expression written on a
+// different source line than the expression or statement containing it is led
+// by an inline /*line file:L:C*/ directive: the generated file lays a
+// multi-line source expression out on fewer lines, and gc reports each
+// operation (bounds and nil checks, inlining, escape and liveness notes, the
+// assembly of each operand) on the line the directive in effect names, so
+// every operand keeps the source line it was written on.
 func (e *emitter) expr(x syntax.BashPPExpr) (string, error) {
+	if !e.goSource || x == nil {
+		return e.exprText(x)
+	}
+	if v := reflect.ValueOf(x); v.Kind() == reflect.Pointer && v.IsNil() {
+		return e.exprText(x)
+	}
+	pos := x.Pos()
+	if !pos.IsValid() || pos.Line() == 0 {
+		return e.exprText(x)
+	}
+	prefix := ""
+	if e.exprLine != 0 && pos.Line() != e.exprLine {
+		prefix = e.inlineSourceLineDirective(pos)
+	}
+	saved := e.exprLine
+	e.exprLine = pos.Line()
+	text, err := e.exprText(x)
+	e.exprLine = saved
+	if err != nil || text == "" || prefix == "" {
+		return text, err
+	}
+	// The directive governs the character right after it: keep it after
+	// any leading line break of the emitted text.
+	rest := strings.TrimLeft(text, " \t\n")
+	return text[:len(text)-len(rest)] + prefix + rest, nil
+}
+
+// faultTokenDirective positions the token of an index, slice or selector
+// operation (its '[' or selector name) that gc reports the operation's bounds
+// or nil check on, when it was written on another line than the operand.
+func (e *emitter) faultTokenDirective(operand syntax.BashPPExpr, token syntax.Pos) string {
+	if !e.goSource || operand == nil || !token.IsValid() {
+		return ""
+	}
+	if v := reflect.ValueOf(operand); v.Kind() == reflect.Pointer && v.IsNil() {
+		return ""
+	}
+	if start := operand.Pos(); start.IsValid() && start.Line() == token.Line() {
+		return ""
+	}
+	return e.inlineSourceLineDirective(token)
+}
+
+// withExprLine emits under the source line of pos as the enclosing position
+// for expr's inline directives.
+func (e *emitter) withExprLine(pos syntax.Pos, emit func() (string, error)) (string, error) {
+	saved := e.exprLine
+	if e.goSource && pos.IsValid() {
+		e.exprLine = pos.Line()
+	}
+	defer func() { e.exprLine = saved }()
+	return emit()
+}
+
+func (e *emitter) exprText(x syntax.BashPPExpr) (string, error) {
 	switch n := x.(type) {
 	case *syntax.BashPPFuncLit:
 		if e.goSource {
@@ -1699,14 +1800,14 @@ func (e *emitter) expr(x syntax.BashPPExpr) (string, error) {
 			}
 			bounds = append(bounds, x)
 		}
-		return base + "[" + strings.Join(bounds, ":") + "]", nil
+		return base + e.faultTokenDirective(n.X, n.Lbrack) + "[" + strings.Join(bounds, ":") + "]", nil
 	case *syntax.BashPPIndexExpr:
 		a, err := e.expr(n.X)
 		if err != nil {
 			return "", err
 		}
 		b, err := e.expr(n.Index)
-		return a + "[" + b + "]", err
+		return a + e.faultTokenDirective(n.X, n.Lbrack) + "[" + b + "]", err
 	case *syntax.BashPPAddressExpr:
 		a, err := e.expr(n.X)
 		return "&" + a, err
@@ -2042,6 +2143,11 @@ func (e *emitter) callArgs(c *syntax.BashPPCall, args []string, spread string) s
 	starts, ends := make([]syntax.Pos, len(c.Args)), make([]syntax.Pos, len(c.Args))
 	for i, w := range c.Args {
 		starts[i], ends[i] = w.Pos(), w.End()
+		// goBracketed puts the argument on its own source line: a leading
+		// inline directive naming exactly that position is redundant.
+		if directive := e.inlineSourceLineDirective(starts[i]); directive != "" {
+			items[i] = strings.TrimPrefix(items[i], directive)
+		}
 	}
 	return goBracketed("(", ")", c.Lparen, c.Rparen, items, starts, ends, ",")
 }

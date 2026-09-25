@@ -79,6 +79,18 @@ func (e *emitter) goSourceLineDirective(pos syntax.Pos) string {
 	return fmt.Sprintf("//line %s:%d\n", name, pos.Line())
 }
 
+// inlineSourceLineDirective is goSourceLineDirective in its inline
+// /*line file:L:C*/ form, which gc applies to the character right after the
+// comment. It needs a column; without one (or with a filename that would end
+// the comment) no directive is emitted.
+func (e *emitter) inlineSourceLineDirective(pos syntax.Pos) string {
+	line := strings.TrimSuffix(e.goSourceLineDirective(pos), "\n")
+	if line == "" || pos.Col() == 0 || strings.Contains(line, "*/") {
+		return ""
+	}
+	return "/*" + strings.TrimPrefix(line, "//") + "*/"
+}
+
 // nativeMain reports whether the source's own func main is the program entry:
 // Go source that declares main and needs no generated boundary around it. The
 // converter's synthetic entry calls are then folded into a Go init function
@@ -352,15 +364,21 @@ func (e *emitter) switchStmt(n *syntax.BashPPSwitch) (string, error) {
 	var out strings.Builder
 	target := e.pushBranchTarget(false)
 	defer e.popBranchTarget()
-	out.WriteString("switch " + tag + " {\n")
+	header, headerInit := e.goSourceHeaderInit(init)
+	if headerInit {
+		out.WriteString("switch " + header + "; " + tag + " {\n")
+	} else {
+		out.WriteString("switch " + tag + " {\n")
+	}
 	for _, arm := range n.Arms {
 		e.push()
+		out.WriteString(e.caseClauseDirective(arm))
 		if len(arm.Exprs) == 0 {
 			out.WriteString("default:\n")
 		} else {
 			var cases []string
 			for _, expr := range arm.Exprs {
-				x, err := e.expr(expr)
+				x, err := e.withExprLine(arm.Case, func() (string, error) { return e.expr(expr) })
 				if err != nil {
 					e.pop()
 					return "", err
@@ -385,10 +403,20 @@ func (e *emitter) switchStmt(n *syntax.BashPPSwitch) (string, error) {
 	if target.label != "" {
 		text = target.label + ":\n" + text
 	}
-	if init != "" {
+	if init != "" && !headerInit {
 		return "{\n" + init + "\n" + text + "\n}", nil
 	}
 	return text, nil
+}
+
+// caseClauseDirective positions a Go-source case clause: the clause's own
+// comparisons are compiled where its case keyword was written, not on the
+// line after the previous clause's last statement.
+func (e *emitter) caseClauseDirective(arm *syntax.BashPPSwitchArm) string {
+	if !e.goSource || arm == nil || !arm.Case.IsValid() {
+		return ""
+	}
+	return e.goSourceLineDirective(arm.Case)
 }
 
 func (e *emitter) isRecover(c *syntax.BashPPCall) bool {
@@ -893,6 +921,7 @@ func (e *emitter) typeSwitchStmt(n *syntax.BashPPSwitch) (string, error) {
 			e.bind(name)
 			e.projections.projectionBind(name, interfaceProjection())
 		}
+		out.WriteString(e.caseClauseDirective(arm))
 		if len(arm.Exprs) == 0 && len(arm.Types) == 0 {
 			out.WriteString("default:\n")
 		} else {
@@ -906,7 +935,7 @@ func (e *emitter) typeSwitchStmt(n *syntax.BashPPSwitch) (string, error) {
 				values = append(values, v)
 			}
 			for _, x := range arm.Exprs {
-				v, err := e.expr(x)
+				v, err := e.withExprLine(arm.Case, func() (string, error) { return e.expr(x) })
 				if err != nil {
 					e.pop()
 					return "", err

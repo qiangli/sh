@@ -393,23 +393,31 @@ func (e *emitter) compositeExpr(n *syntax.BashPPCompositeLit) (string, error) {
 		if elem == nil {
 			return "", e.fail(n, CodeExpr, "missing composite element")
 		}
-		value, err := e.compositeValue(elem.Value)
-		if err != nil {
-			return "", err
-		}
-		if elem.Key != nil {
-			var key string
-			// Go's checker distinguishes struct field identifiers from map key values.
-			// The emitter must not look up a field name as a surrounding local variable.
-			if id, ok := elem.Key.(*syntax.BashPPIdent); ok {
-				key = id.Name.Value
-			} else {
-				key, err = e.expr(elem.Key)
-			}
+		// Under goSource goBracketed puts the element on its own source
+		// line, so that line is the context of its inline directives.
+		value, err := e.withExprLine(elem.Pos(), func() (string, error) {
+			value, err := e.compositeValue(elem.Value)
 			if err != nil {
 				return "", err
 			}
-			value = key + ": " + value
+			if elem.Key != nil {
+				var key string
+				// Go's checker distinguishes struct field identifiers from map key values.
+				// The emitter must not look up a field name as a surrounding local variable.
+				if id, ok := elem.Key.(*syntax.BashPPIdent); ok {
+					key = id.Name.Value
+				} else {
+					key, err = e.expr(elem.Key)
+				}
+				if err != nil {
+					return "", err
+				}
+				value = key + ": " + value
+			}
+			return value, nil
+		})
+		if err != nil {
+			return "", err
 		}
 		elems = append(elems, value)
 		starts, ends = append(starts, elem.Pos()), append(ends, elem.End())
@@ -500,7 +508,7 @@ func (e *emitter) selectorExpr(n *syntax.BashPPSelectorExpr) (string, error) {
 	if id, ok := n.X.(*syntax.BashPPIdent); ok && e.cgoAliases[id.Name.Value] {
 		value = "C"
 	}
-	return e.group(value) + "." + n.Sel.Value, nil
+	return e.group(value) + "." + e.faultTokenDirective(n.X, n.Sel.Pos()) + n.Sel.Value, nil
 }
 func (e *emitter) typeAssertExpr(n *syntax.BashPPTypeAssertExpr) (string, error) {
 	value, err := e.expr(n.X)
