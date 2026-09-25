@@ -457,6 +457,33 @@ func (c *bashPPConcurrent) primaryFailureLocked() *bashPPTaskFailure {
 	return result
 }
 
+// bashPPTaskRunCanceled recognizes the task's cancellation even when a nested
+// dependency helper reports its process status before the bridge can preserve
+// context.Canceled. This race occurs when the task's final callback wakes main:
+// main reaches File EOF and cancels the group while the task is still returning
+// through the helper. Native Go abandons that goroutine successfully when main
+// returns, so an ExitStatus observed only after group cancellation is not a
+// task failure. Live-context statuses and non-status callback errors remain
+// genuine failures.
+func bashPPTaskRunCanceled(ctx context.Context, child *Runner) bool {
+	if child == nil {
+		return false
+	}
+	if child.bashPPTaskCanceled || errors.Is(child.exit.err, context.Canceled) || errors.Is(child.exit.err, context.DeadlineExceeded) {
+		return true
+	}
+	if ctx == nil || ctx.Err() == nil || !child.exit.fatalExit {
+		return false
+	}
+	var status ExitStatus
+	if !errors.As(child.exit.err, &status) {
+		return false
+	}
+	child.exit = exitStatus{}
+	child.bashPPTaskCanceled = true
+	return true
+}
+
 func newBashPPChannelCapability() (string, error) {
 	var raw [24]byte
 	if _, err := cryptorand.Read(raw[:]); err != nil {
@@ -1196,7 +1223,7 @@ func (r *Runner) bashPPGo(ctx context.Context, g *syntax.BashPPGo) {
 			child.bashPPCall(c.ctx, call)
 		}
 		code := child.exit.code
-		canceled := child.bashPPTaskCanceled || errors.Is(child.exit.err, context.Canceled) || errors.Is(child.exit.err, context.DeadlineExceeded)
+		canceled := bashPPTaskRunCanceled(c.ctx, child)
 		if canceled {
 			return
 		}
