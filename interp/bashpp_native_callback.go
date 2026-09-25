@@ -141,7 +141,7 @@ func (s *bashPPNativeSession) callbackAnswer(ctx context.Context, owner *Runner,
 				answer.Error, answer.Values = err.Error(), nil
 				if !owner.exit.exiting {
 					owner.exit.fatal(err)
-					s.recordCallbackRefusal(callbackRefusalDiagnostic(err))
+					s.recordCallbackRefusal(err)
 				}
 			}
 		}
@@ -161,13 +161,6 @@ func bashPPNativeProtocolCallback(q bashPPBridgeResponse) bool {
 		return true
 	}
 	return false
-}
-
-func callbackRefusalDiagnostic(err error) error {
-	if errors.Is(err, errGoSourceStaleCopy) {
-		return errGoSourceCopiedSliceCallback
-	}
-	return err
 }
 
 func (s *bashPPNativeSession) recordCallbackRefusal(err error) {
