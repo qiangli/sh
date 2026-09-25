@@ -1172,6 +1172,12 @@ type callFrame struct {
 	callPos  syntax.Pos
 	bashPPFn *bashPPFunc
 	seq      uint64
+	// frameScope is the typed scope this frame's parameters and named results
+	// are declared in — the block the function body itself runs in. Source-level
+	// liveness uses it to tell a named result rebound by `:=` (which must stay
+	// live until the frame returns) apart from a fresh local that merely shadows
+	// a result's name inside a nested block; see goSourceReleaseDead.
+	frameScope *bashPPScope
 	// goSourceName is set only on a synthetic package-initializer frame.
 	// Ordinary frames derive their identity from bashPPFn and source metadata.
 	goSourceName string

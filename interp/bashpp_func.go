@@ -2477,7 +2477,7 @@ func (r *Runner) bashPPEnterFrame(fn *bashPPFunc, args []string) *bashPPFrame {
 		}
 	}
 	r.goSourceEnterInitializerFrame()
-	r.callStack = append(r.callStack, callFrame{funcName: fn.name(), callPos: r.curStmtPos, bashPPFn: fn, seq: r.goSourceNextFrameSeq()})
+	r.callStack = append(r.callStack, callFrame{funcName: fn.name(), callPos: r.curStmtPos, bashPPFn: fn, seq: r.goSourceNextFrameSeq(), frameScope: r.bashPPScope})
 	r.bashPPReturn = bashPPReturnState{}
 	r.bashPPFuncActive++
 	return frame

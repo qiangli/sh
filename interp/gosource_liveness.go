@@ -212,6 +212,35 @@ func (r *Runner) goSourceReleaseDead(plan *goSourceLivenessPlan, scope *bashPPSc
 		return
 	}
 	for _, name := range plan.release[i] {
+		// A `:=` that rebinds one of the frame's named results reuses the
+		// result's binding rather than declaring a fresh local, so the release
+		// plan — which reads only the statement list's own tokens — must not
+		// drop it. A named result is read by every `return`, bare or not, so it
+		// stays live until the frame returns. The guard is confined to the
+		// block the results live in: a nested block that merely shadows a
+		// result's name with a genuinely new local still releases that local.
+		if r.goSourceFrameNamedResult(scope, name) {
+			continue
+		}
 		delete(scope.entries, name)
 	}
+}
+
+// goSourceFrameNamedResult reports whether name is a named result of the
+// function whose body block is scope, so that source-level liveness leaves the
+// result's binding in place until the frame returns.
+func (r *Runner) goSourceFrameNamedResult(scope *bashPPScope, name string) bool {
+	if len(r.callStack) == 0 {
+		return false
+	}
+	frame := &r.callStack[len(r.callStack)-1]
+	if frame.frameScope != scope || frame.bashPPFn == nil {
+		return false
+	}
+	for _, result := range bashppResultNames(frame.bashPPFn.bodyResults()) {
+		if result == name {
+			return true
+		}
+	}
+	return false
 }
