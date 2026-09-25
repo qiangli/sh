@@ -69,6 +69,9 @@ func bashPPWorkerImportcfg(ctx context.Context, goBinary, dir string, env []stri
 	var out, diagnostics bytes.Buffer
 	list.Stdout, list.Stderr = &out, &diagnostics
 	if err := list.Run(); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
 		return nil, fmt.Errorf("gosource: build dependency bridge: %w: %s", err, diagnostics.String())
 	}
 	var cfg bytes.Buffer
@@ -108,6 +111,9 @@ func bashPPBuildWorkerImportcfg(ctx context.Context, goBinary, dir string, env [
 		var diagnostics bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &diagnostics, &diagnostics
 		if err := cmd.Run(); err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return ctxErr
+			}
 			return fmt.Errorf("gosource: build dependency bridge: %w: %s", err, diagnostics.String())
 		}
 		return nil
