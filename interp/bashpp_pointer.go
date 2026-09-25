@@ -805,6 +805,17 @@ func (r *Runner) bashPPGoSourceCollectionCarrier(value any, meta *bashPPCollecti
 	return expand.Variable{Set: true, Kind: expand.Object, Obj: value}, true
 }
 
+func (r *Runner) bashPPGoSourceObjectCarrier(value any, meta *bashPPCollectionMeta) (expand.Variable, bool) {
+	if meta != nil && meta.kind == "struct" && meta.typ != nil {
+		if _, _, ok := r.bashPPStructFields(meta.typ); ok {
+			if _, ok := value.(map[string]any); ok {
+				return expand.Variable{Set: true, Kind: expand.Object, Obj: value}, true
+			}
+		}
+	}
+	return r.bashPPGoSourceCollectionCarrier(value, meta)
+}
+
 func bashPPStoreCellValue(cell *bashPPCell, value any, meta *bashPPCollectionMeta) {
 	if meta != nil && meta.interfaceValue != nil {
 		cell.pointer, cell.pointerValue, cell.nilPointer = false, nil, false

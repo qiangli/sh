@@ -563,10 +563,18 @@ func (r *Runner) bashPPScalarFromCell(cell *bashPPCell) bashPPScalar {
 		return value
 	}
 	if cell.hasNonFiniteComplex {
-		return bashPPNonFiniteComplexScalar(cell.nonFiniteComplex, cell.typeName)
+		typ := cell.typeName
+		if typ == "" {
+			typ = bashPPTypeText(cell.declType)
+		}
+		return bashPPNonFiniteComplexScalar(cell.nonFiniteComplex, typ)
 	}
 	if cell.hasNonFinite {
-		return bashPPScalar{value: constant.MakeFloat64(0), typ: cell.typeName, runtime: true, nonFinite: cell.nonFinite, hasNonFinite: true}
+		typ := cell.typeName
+		if typ == "" {
+			typ = bashPPTypeText(cell.declType)
+		}
+		return bashPPScalar{value: constant.MakeFloat64(0), typ: typ, runtime: true, nonFinite: cell.nonFinite, hasNonFinite: true}
 	}
 	if r.bashPPGoSource && cell.constant && cell.exactScalar != nil {
 		value := bashPPScalar{value: cell.exactScalar}

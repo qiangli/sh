@@ -410,9 +410,10 @@ func (e *emitter) constDeclGroup(stmts []*syntax.Stmt) (string, int, error) {
 		if i > 0 && decl.End_ != previousEnd {
 			iotaIndex++
 		}
+		implicit := decl.InitExpr != nil && len(decl.Init) == 1 && decl.Init[0].Pos() == decl.Name.Pos()
 		group.Specs = append(group.Specs, &syntax.BashPPConstSpec{
 			Name: decl.Name, DeclType: decl.DeclType, DeclTypeExpr: decl.DeclTypeExpr,
-			Init: decl.Init, InitExpr: decl.InitExpr, Iota: iotaIndex,
+			Init: decl.Init, InitExpr: decl.InitExpr, ImplicitInit: implicit, Iota: iotaIndex,
 		})
 		previousEnd = decl.End_
 	}
