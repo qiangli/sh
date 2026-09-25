@@ -13,8 +13,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"go/ast"
 	"go/constant"
 	"go/importer"
+	"go/parser"
 	"go/token"
 	"go/types"
 	"io"
@@ -1050,6 +1052,15 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 	for alias, path := range req.Imports {
 		paths[path] = append(paths[path], alias)
 	}
+	typeImports, err := bashPPNativeSyntheticTypeImports(ctx, req)
+	if err != nil {
+		return "", err
+	}
+	typeImportPaths := map[string]bool{}
+	for alias, path := range typeImports {
+		paths[path] = append(paths[path], alias)
+		typeImportPaths[path] = true
+	}
 	ordered := make([]string, 0, len(paths))
 	for path := range paths {
 		ordered = append(ordered, path)
@@ -1117,7 +1128,7 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 		}
 		alias := fmt.Sprintf("bpppkg%d", i)
 		fmt.Fprintf(&imports, "%s %q\n", alias, path)
-		used := bashPPGenericTypesUsePackage(req.GenericTypes, paths[path], path)
+		used := typeImportPaths[path] || bashPPGenericTypesUsePackage(req.GenericTypes, paths[path], path)
 		for _, name := range pkg.Scope().Names() {
 			obj := pkg.Scope().Lookup(name)
 			if !obj.Exported() {
@@ -1398,6 +1409,138 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 	source = strings.Replace(source, "//UNMAPPEDFRAMES", unmappedFrames.String(), 1)
 	source = strings.Replace(source, "//FORCESGC", forcing.String(), 1)
 	return source, nil
+}
+
+// bashPPNativeSyntheticTypeImports finds package-qualified names that appear
+// only in generated helper type positions. These can come from export-data
+// type strings, for example strings.SplitSeq's iter.Seq result: the original
+// program imported strings, not iter, but generated signatures still need a
+// real helper import for the named result type.
+func bashPPNativeSyntheticTypeImports(ctx context.Context, req bashPPEvalRequest) (map[string]string, error) {
+	known := map[string]bool{}
+	for alias := range req.Imports {
+		known[strings.TrimPrefix(strings.TrimPrefix(alias, "_:"), ".:")] = true
+	}
+	needed := map[string]bool{}
+	addExpr := func(text string) error {
+		if text == "" {
+			return nil
+		}
+		expr, err := parser.ParseExpr(text)
+		if err != nil {
+			return err
+		}
+		ast.Inspect(expr, func(node ast.Node) bool {
+			if sel, ok := node.(*ast.SelectorExpr); ok {
+				if id, ok := sel.X.(*ast.Ident); ok && !known[id.Name] {
+					needed[id.Name] = true
+				}
+			}
+			return true
+		})
+		return nil
+	}
+	addDecl := func(decl string) error {
+		if decl == "" {
+			return nil
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), "generated.go", "package main\n"+decl, 0)
+		if err != nil {
+			return err
+		}
+		ast.Inspect(file, func(node ast.Node) bool {
+			if sel, ok := node.(*ast.SelectorExpr); ok {
+				if id, ok := sel.X.(*ast.Ident); ok && !known[id.Name] {
+					needed[id.Name] = true
+				}
+			}
+			return true
+		})
+		return nil
+	}
+	addSignature := func(params, results string) error {
+		source := "func _(" + params + ")"
+		if results != "" {
+			source += "(" + results + ")"
+		}
+		return addDecl(source)
+	}
+	for _, typ := range req.GenericTypes {
+		if err := addExpr(typ); err != nil {
+			return nil, err
+		}
+	}
+	for _, embed := range req.EmbedDecls {
+		if err := addExpr(embed.Type); err != nil {
+			return nil, err
+		}
+	}
+	for _, local := range req.LocalTypes {
+		for _, text := range []string{local.Decl, local.PublicType} {
+			if err := addExpr(text); err != nil {
+				return nil, err
+			}
+		}
+		if err := addDecl(local.GenericDecl); err != nil {
+			return nil, err
+		}
+		for _, method := range append(append([]bashPPLocalMethod(nil), local.Methods...), local.GenericMethods...) {
+			if err := addExpr(method.Receiver); err != nil {
+				return nil, err
+			}
+			for _, text := range append(append([]string(nil), method.Params...), method.Results...) {
+				if err := addExpr(text); err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+	for _, fn := range req.NativeFuncs {
+		if err := addSignature(fn.Params, fn.Results); err != nil {
+			return nil, err
+		}
+	}
+	for _, fn := range req.CompanionTrampolines {
+		for _, text := range append(append([]string(nil), fn.Params...), fn.Results...) {
+			if err := addExpr(text); err != nil {
+				return nil, err
+			}
+		}
+	}
+	if len(needed) == 0 {
+		return nil, nil
+	}
+	out := map[string]string{}
+	names := make([]string, 0, len(needed))
+	for name := range needed {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		path, err := bashPPNativeResolveTypeImport(ctx, req, name)
+		if err != nil {
+			return nil, err
+		}
+		out[name] = path
+	}
+	return out, nil
+}
+
+func bashPPNativeResolveTypeImport(ctx context.Context, req bashPPEvalRequest, name string) (string, error) {
+	if req.Go == "" {
+		return "", fmt.Errorf("gosource: generated type %s needs a package import but no Go toolchain is configured", name)
+	}
+	cmd := exec.CommandContext(ctx, req.Go, "list", "-f", "{{.Name}}\n{{.ImportPath}}", name)
+	cmd.Dir, cmd.Env = req.Dir, req.Env
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("gosource: resolve generated type import %s: %w", name, err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
+	if len(lines) != 2 || lines[0] != name || lines[1] == "" {
+		return "", fmt.Errorf("gosource: generated type import %s resolved to %q", name, strings.TrimSpace(string(out)))
+	}
+	return lines[1], nil
 }
 
 // bashPPNativeFuncValueAvailable reports exported dependency functions which
