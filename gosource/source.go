@@ -225,10 +225,9 @@ func Load(sources []Source, options Options) (*Program, error) {
 		if f == nil {
 			continue
 		}
-		// Under either policy go/types checks what types2 checks: gc's
-		// tree records its parser's recoveries, go/parser's keeps the
-		// rejected text and would repeat the parser's diagnostic.
-		if len(syntaxErrors) > 0 {
+		// The gc policy checks gc's recovered tree. The go/types test
+		// runner checks go/parser's tree, including its recovery nodes.
+		if len(syntaxErrors) > 0 && !options.GoTypesParserDiagnostics {
 			mirrorGCTree(c.fset, f, gcFiles[i])
 		}
 		if p.Package == "" {
