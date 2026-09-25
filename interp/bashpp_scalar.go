@@ -121,17 +121,19 @@ func (r *Runner) bashPPEvalScalarExpr(expr syntax.BashPPExpr) (result bashPPScal
 		}
 		// A selector callee is a method value — `v.Abs()`, `p.q.M()` — which
 		// the callable lookup resolves against the receiver's type. Only the
-		// bare `len`/`cap`/`copy` spellings are builtins with a scalar result.
-		if len(x.Fun) > 1 || (x.Fun[0].Value != "len" && x.Fun[0].Value != "cap" && x.Fun[0].Value != "copy") {
+		// bare `len`/`cap`/`copy`/`min`/`max` spellings are builtins with a
+		// scalar result.
+		if len(x.Fun) > 1 || (x.Fun[0].Value != "len" && x.Fun[0].Value != "cap" && x.Fun[0].Value != "copy" && x.Fun[0].Value != "min" && x.Fun[0].Value != "max") {
 			return r.bashPPScalarFuncCall(x)
 		}
 		name := x.Fun[0].Value
 		if r.bashPPFuncs[name] != nil || (r.bashPPScope != nil && r.bashPPScope.lookup(name) != nil) {
 			return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-CALL: scalar %s requires the unshadowed builtin", name)
 		}
-		// `copy(dst, src)` used as a value — `if copy(s1, s2) != n` — is the
-		// same mutation the statement position runs; its count is the scalar.
-		if name == "copy" {
+		// `copy(dst, src)` and `min`/`max` used as values — `if copy(s1, s2)
+		// != n`, `1 + max(a, b)` — share the general builtin evaluator rather
+		// than the len/cap-only path below.
+		if name == "copy" || name == "min" || name == "max" {
 			cell, produced := r.bashPPRunValueBuiltin(name, x)
 			if !produced || cell == nil {
 				return bashPPScalar{}, errBashPPScalarInterrupted
