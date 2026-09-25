@@ -54,6 +54,10 @@ type bashPPBridgeValue struct {
 	// copy (reflectedValueCopy). Host-only: it is set on replies by the
 	// session itself and never trusted from the wire.
 	reflectCopy bool
+	// reflectFunction marks a reflect.Value created from an original function.
+	// Only synchronous Call and type inspection may use this callback-bearing
+	// handle; it is never accepted as an arbitrary dependency argument.
+	reflectFunction bool
 
 	// Callable is derived by the interpreter from authenticated native type or
 	// import metadata; the dependency worker cannot set callback policy itself.
@@ -647,6 +651,7 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 		}
 	}
 	bashPPReflectTypeOnly(req, &q)
+	bashPPReflectFunctionType(req, &q)
 	if err := validateLocalTransport(req, q); err != nil {
 		return nil, err
 	}
@@ -873,6 +878,12 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 			for i := range reply.Values {
 				bashPPMarkReflectCopy(&reply.Values[i], derivedCopy)
 				if reply.Values[i].Kind == "handle" {
+					if reflectedOriginalFunctionValueOf(req, q) {
+						reply.Values[i].reflectFunction = true
+					}
+					if q.Receiver != nil && q.Receiver.reflectFunction && q.Selector == "Type" {
+						reply.Values[i].Callbacks = false
+					}
 					reply.Values[i].Session = s.id
 					s.rememberNativeHandleType(reply.Values[i])
 					if reply.Values[i].Origin != 0 && reply.Values[i].Function {
@@ -884,7 +895,7 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 					// parked as a callback server for the session — every
 					// request once a retained handler is registered — hands
 					// its callbacks to nothing and marks nothing.
-					if requestHasCallbacks(req, q) && !synchronousFunctionCallback(req, q) && !bashPPTypeDescriptorResult(req, q) && !reflectedMethodValueOf(req, q) {
+					if requestHasCallbacks(req, q) && !synchronousFunctionCallback(req, q) && !bashPPTypeDescriptorResult(req, q) && !reflectedMethodValueOf(req, q) && !(q.Receiver != nil && q.Receiver.reflectFunction && q.Selector == "Type") {
 						reply.Values[i].Callbacks = true
 					}
 				}

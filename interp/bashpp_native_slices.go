@@ -247,6 +247,21 @@ func prepareNativeSliceBuffers(req bashPPEvalRequest, q *bashPPBridgeRequest) er
 	if !hasSlice {
 		return nil
 	}
+	// reflect.Value.Call reads a slice of dependency-owned Value handles. The
+	// slice itself is an interpreter allocation, but neither the callee nor the
+	// reflected original function can retain or mutate that argument slice.
+	if reflectedOriginalFunctionUse(*q) && (q.Selector == "Call" || q.Selector == "CallSlice") && len(q.Args) == 1 && q.Args[0].Kind == "slice" {
+		nativeValues := true
+		for _, v := range q.Args[0].Elements {
+			if v.Kind != "handle" || v.NativeType != "reflect.Value" {
+				nativeValues = false
+				break
+			}
+		}
+		if nativeValues {
+			return nil
+		}
+	}
 	// The refusal below guards a dependency that would RETAIN or MUTATE a
 	// decoded copy of interpreter storage while an original callback runs. Two
 	// kinds of callable are outside that hazard and are admitted with their

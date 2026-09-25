@@ -358,6 +358,7 @@ func decodeIn(st *decodeState, v value, target reflect.Type)(reflect.Value,error
   result=reflect.New(typ).Elem()
   switch v.Kind {
   case "callback":
+   if (target==nil||target.Kind()!=reflect.Func)&&typ!=nil&&typ.Kind()==reflect.Func{target=typ}
    if target==nil||target.Kind()!=reflect.Func{return result,fmt.Errorf("original callback requires a typed function parameter")}
    result=reflect.MakeFunc(target,func(args []reflect.Value)[]reflect.Value{
     inputs:=make([]value,len(args));for i,arg:=range args {inputs[i]=encode(arg)}

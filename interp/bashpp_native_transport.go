@@ -14,6 +14,9 @@ func validateLocalTransport(req bashPPEvalRequest, q bashPPBridgeRequest) error 
 	if q.Op != "call" {
 		return nil
 	}
+	if q.Receiver != nil && q.Receiver.reflectFunction && !reflectedOriginalFunctionUse(q) {
+		return fmt.Errorf("gosource: reflected original function only supports synchronous Call and type inspection")
+	}
 	alias, name, selected := strings.Cut(q.Selector, ".")
 	nativeWriterFormat := selected && req.Imports[alias] == "fmt" && (name == "Fprint" || name == "Fprintln" || name == "Fprintf")
 	if nativeWriterFormat && !bashPPDependencyOwnedWriter(q.Args) {
@@ -148,7 +151,7 @@ func validateLocalTransport(req bashPPEvalRequest, q bashPPBridgeRequest) error 
 	if synchronousReaderCallback(req, q) || synchronousImageCallback(req, q) || !functionCallbacks && (synchronousUnwrapCallback(req, q) || synchronousErrorsAsType(req, q)) {
 		return nil
 	}
-	if reflectedMethodValueOf(req, q) || reflectedValueCopy(req, q) || reflectedCopyDerivedCall(q) {
+	if reflectedMethodValueOf(req, q) || reflectedValueCopy(req, q) || reflectedCopyDerivedCall(q) || reflectedOriginalFunctionValueOf(req, q) || reflectedOriginalFunctionUse(q) {
 		return nil
 	}
 	// A reviewed synchronous methods-driven consumer over origin-bearing
@@ -216,6 +219,31 @@ func reflectedMethodValueOf(req bashPPEvalRequest, q bashPPBridgeRequest) bool {
 	}
 	alias, name, ok := strings.Cut(q.Selector, ".")
 	return ok && req.Imports[alias] == "reflect" && name == "ValueOf" && requestHasCallbacks(req, q)
+}
+
+// ValueOf may preserve an original function as a reflected handle when the
+// only admitted uses are synchronous Call and immutable type inspection. The
+// callback server remains parked for Call; a native retainer receives no
+// permission merely because the handle exists.
+func reflectedOriginalFunctionValueOf(req bashPPEvalRequest, q bashPPBridgeRequest) bool {
+	if q.Op != "call" || q.Receiver != nil || len(q.Args) != 1 || q.Args[0].Kind != "callback" {
+		return false
+	}
+	alias, name, ok := strings.Cut(q.Selector, ".")
+	return ok && req.Imports[alias] == "reflect" && name == "ValueOf"
+}
+
+func reflectedOriginalFunctionUse(q bashPPBridgeRequest) bool {
+	if q.Op != "call" || q.Receiver == nil || q.Receiver.Kind != "handle" || !q.Receiver.reflectFunction {
+		return false
+	}
+	switch q.Selector {
+	case "Call", "CallSlice":
+		return len(q.Args) == 1
+	case "Type", "Kind":
+		return len(q.Args) == 0
+	}
+	return false
 }
 
 // reflectedValueCopy admits reflect.ValueOf over an interpreter value whose
@@ -348,6 +376,29 @@ func bashPPReflectTypeOnly(req bashPPEvalRequest, q *bashPPBridgeRequest) {
 		if text, ok := bashPPFunctionTypeText(fn); ok {
 			q.Args[i] = bashPPBridgeValue{Kind: "nil", Type: text}
 		}
+	}
+}
+
+// ValueOf accepts an interface, so its formal parameter cannot tell the
+// worker which function signature to use for an original callback. Supply
+// the registered signature from the callback owner without changing the
+// callback value or its session identity.
+func bashPPReflectFunctionType(req bashPPEvalRequest, q *bashPPBridgeRequest) {
+	if !reflectedOriginalFunctionValueOf(req, *q) || req.Bridge == nil {
+		return
+	}
+	arg := &q.Args[0]
+	if arg.Session != req.Bridge.id {
+		return
+	}
+	req.Bridge.mu.Lock()
+	fn := req.Bridge.functions[arg.Handle]
+	req.Bridge.mu.Unlock()
+	if fn == nil {
+		return
+	}
+	if text, ok := bashPPFunctionTypeText(fn); ok {
+		arg.Type = text
 	}
 }
 
