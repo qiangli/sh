@@ -20,6 +20,7 @@ import (
 	"regexp"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -593,9 +594,21 @@ func runJobControlTestShell(src string) {
 }
 
 func findGNUBash53() string {
-	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+	seen := make(map[string]bool)
+	dirs := filepath.SplitList(os.Getenv("PATH"))
+	dirs = append(dirs,
+		"/opt/homebrew/bin",
+		"/usr/local/bin",
+		"/usr/bin",
+		"/bin",
+	)
+	for _, dir := range dirs {
 		for _, name := range []string{"bash", "bash.exe"} {
 			path := filepath.Join(dir, name)
+			if seen[path] {
+				continue
+			}
+			seen[path] = true
 			out, err := exec.Command(path, "--version").CombinedOutput()
 			if err != nil {
 				continue
@@ -8120,7 +8133,7 @@ func TestRunnerRunConfirm(t *testing.T) {
 			cmd := exec.CommandContext(ctx, gnuBash53)
 			cmd.Args[0] = "bash"
 			cmd.Dir = tdir
-			cmd.Env = bashConfirmEnv(tdir)
+			cmd.Env = bashConfirmEnv(t, tdir, c.in)
 			cmd.Stdin = strings.NewReader(c.in)
 			out, err := cmd.CombinedOutput()
 			if strings.Contains(c.want, " #JUSTERR") {
@@ -8144,10 +8157,11 @@ func TestRunnerRunConfirm(t *testing.T) {
 	}
 }
 
-func bashConfirmEnv(tdir string) []string {
+func bashConfirmEnv(t *testing.T, tdir, src string) []string {
+	t.Helper()
 	path := strings.Join([]string{"/bin", "/usr/bin", "/usr/sbin", "/sbin", "/opt/homebrew/bin", "/usr/local/bin"}, string(os.PathListSeparator))
 	env := []string{
-		"HOME=/h",
+		"HOME=" + bashConfirmHome(t, tdir, src),
 		"PATH=" + path,
 		"SHELL=" + gnuBash53,
 		"LANG=C.UTF-8",
@@ -8167,6 +8181,28 @@ func bashConfirmEnv(tdir string) []string {
 		env = append(env, "MIXEDCASE_INTERP_GLOBAL=value")
 	}
 	return env
+}
+
+func bashConfirmHome(t *testing.T, tdir, src string) string {
+	t.Helper()
+	if !strings.HasPrefix(src, "HOME=") {
+		return tdir
+	}
+	value, _, _ := strings.Cut(strings.TrimPrefix(src, "HOME="), ";")
+	value, _, _ = strings.Cut(value, "\n")
+	value = strings.TrimSpace(value)
+	if value == "$PWD/home" {
+		return filepath.Join(tdir, "home")
+	}
+	if unquoted, err := strconv.Unquote(value); err == nil {
+		value = unquoted
+	} else {
+		value = strings.Trim(value, `"'`)
+	}
+	if filepath.IsAbs(value) {
+		return value
+	}
+	return tdir
 }
 
 func bashVersion(path string) string {
@@ -8191,14 +8227,18 @@ func buildStrmatchLoadable(t *testing.T, dir string) {
 	if err := os.WriteFile(src, []byte(strmatchLoadableSource), 0o666); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command("cc",
-		"-I"+filepath.Join(filepath.Dir(filepath.Dir(gnuBash53)), "include", "bash"),
-		"-I"+filepath.Join(filepath.Dir(filepath.Dir(gnuBash53)), "include", "bash", "include"),
-		"-dynamiclib",
-		"-undefined", "dynamic_lookup",
+	args := []string{
+		"-I" + filepath.Join(filepath.Dir(filepath.Dir(gnuBash53)), "include", "bash"),
+		"-I" + filepath.Join(filepath.Dir(filepath.Dir(gnuBash53)), "include", "bash", "include"),
 		"-o", filepath.Join(dir, "strmatch.so"),
 		src,
-	)
+	}
+	if runtime.GOOS == "darwin" {
+		args = append(args[:2], append([]string{"-dynamiclib", "-undefined", "dynamic_lookup"}, args[2:]...)...)
+	} else {
+		args = append(args[:2], append([]string{"-shared", "-fPIC"}, args[2:]...)...)
+	}
+	cmd := exec.Command("cc", args...)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		if requireShells {
 			t.Fatalf("building strmatch.so: %v\n%s", err, out)
