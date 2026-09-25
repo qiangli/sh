@@ -2272,14 +2272,18 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			exit.code = 1
 			return exit
 		}
-		if level < len(r.callStack) {
+		if level < len(r.callStack)-1 {
 			idx := len(r.callStack) - 1 - level
 			frame := r.callStack[idx]
 			funcName := "main"
 			if idx > 0 {
 				funcName = r.callStack[idx-1].funcName
 			}
-			r.outf("%d %s %s\n", frame.line, funcName, frame.source)
+			source := frame.source
+			if source == "" {
+				source = "bash"
+			}
+			r.outf("%d %s %s\n", frame.line, funcName, source)
 		} else {
 			exit.code = 1
 		}

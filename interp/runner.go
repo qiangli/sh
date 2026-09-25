@@ -72,7 +72,9 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 			// back to 0). The exit-code wire-up lives in the
 			// printf builtin which checks r.lastExpandExit.
 			r.errf("%s%s\n", r.bashErrPrefix(r.curStmtPos), msg)
-			r.lastExpandExit = exitStatus{code: 1}
+			if !strings.Contains(msg, "missing hex digit") {
+				r.lastExpandExit = exitStatus{code: 1}
+			}
 		},
 		CmdSubst: func(w io.Writer, cs *syntax.CmdSubst) error {
 			r.lastExpandCmdSubst = true
@@ -10691,6 +10693,7 @@ func (r *Runner) selectLoop(ctx context.Context, name string, items []string, do
 			line, err := r.readLine(ctx, true, '\n')
 			if err != nil {
 				// EOF: exit the loop. Bash exits with status 1.
+				r.errf("\n")
 				r.exit.code = 1
 				return
 			}

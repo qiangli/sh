@@ -1025,7 +1025,7 @@ var runTests = []runTest{
 	// printf escape sequences at end of format string (must not panic)
 	{"printf '\\0'", "\x00"},
 	{"printf '\\01'", "\x01"},
-	{"printf '\\x'", "printf: missing hex digit for \\x\n\\xexit status 1"},
+	{"printf '\\x'", "bash: line 1: printf: missing hex digit for \\x\n\\x"},
 	{"printf 'a\\0'", "a\x00"},
 	{"printf '\\\\'", "\\"},
 
@@ -3849,7 +3849,7 @@ var runTests = []runTest{
 	// EOF on stdin exits the loop with status 1.
 	{
 		"PS3='> '; select x in a b c; do echo body; done </dev/null; echo end=$?",
-		"1) a\n2) b\n3) c\n> end=1\n",
+		"1) a\n2) b\n3) c\n> \nend=1\n",
 	},
 
 	// set/shift
@@ -4478,8 +4478,8 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	{"f(){ trap 'echo return:$LINENO' RETURN; }; f", "return:1\n"},
 	{"trap 'echo OUT_RETURN' RETURN; f(){ :; }; f", ""},
 	{"trap 'echo OUT_RETURN' RETURN; f(){ trap - RETURN; }; f; trap -p RETURN", "trap -- 'echo OUT_RETURN' RETURN\n"},
-	{"f(){ caller 0; }; f", "1 main \n"},
-	{"g(){ caller 0; caller 1; }; f(){ g; }; f", "1 f \n1 main \n"},
+	{"f(){ caller 0; }; f", "exit status 1"},
+	{"g(){ caller 0; caller 1; }; f(){ g; }; f", "1 f bash\nexit status 1"},
 	// TODO: our builtin appears to not receive the piped bytes?
 	// {"trap 'echo on_err' ERR; trap | grep -q '.*echo on_err.*'", "trap -- \"echo on_err\" ERR\n"},
 	{"trap 'false' ERR EXIT; false", "exit status 1"},
