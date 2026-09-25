@@ -17,6 +17,9 @@ func (r *Runner) bashPPBridgeFunction(fn *bashPPFunc) (bashPPBridgeValue, error)
 	iteratorYield, _ := r.goSourceIteratorYield(fn)
 	makeFunc := r.bashPPReflectMakeFuncShape(fn)
 	copiedResults := false
+	callRefusal := ""
+	reflecting := r.goSourceReflectingFunction
+	r.goSourceReflectingFunction = false
 	for group, fields := range [][]*syntax.BashPPField{fn.params(), fn.results()} {
 		if makeFunc {
 			break
@@ -63,7 +66,21 @@ func (r *Runner) bashPPBridgeFunction(fn *bashPPFunc) (bashPPBridgeValue, error)
 			if _, ok := r.bashPPInterfaceType(field.FieldTypeExpr); ok {
 				continue
 			}
-			return bashPPBridgeValue{}, fmt.Errorf("gosource: original callback signature requires value-semantics parameters and supported results")
+			const refusal = "gosource: original callback signature requires value-semantics parameters and supported results"
+			// reflect.ValueOf only wraps the function: its Pointer, Type and
+			// Kind never transport a value, and Call is the one synchronous
+			// use (see reflectedOriginalFunctionUse). A parameter the
+			// dependency hands over as its own value behind a handle is bound
+			// as that handle (bashPPRunCallbackFunc), so the callee shares
+			// exactly the storage reflect passes it; any other signature
+			// defers the refusal to Call.
+			if reflecting {
+				if group == 1 || !r.goSourceReflectHandleParam(field.FieldTypeExpr, 0) {
+					callRefusal = refusal
+				}
+				continue
+			}
+			return bashPPBridgeValue{}, fmt.Errorf(refusal)
 		}
 	}
 	req, err := r.bashPPEvalRequest()
@@ -78,13 +95,73 @@ func (r *Runner) bashPPBridgeFunction(fn *bashPPFunc) (bashPPBridgeValue, error)
 	}
 	for id, existing := range s.functions {
 		if existing == fn {
-			return bashPPBridgeValue{Kind: "callback", Handle: id, Session: s.id, Callbacks: true, copiedResults: copiedResults}, nil
+			return bashPPBridgeValue{Kind: "callback", Handle: id, Session: s.id, Callbacks: true, copiedResults: copiedResults, callRefusal: callRefusal}, nil
 		}
 	}
 	s.functionNext++
 	id := s.functionNext
 	s.functions[id] = fn
-	return bashPPBridgeValue{Kind: "callback", Handle: id, Session: s.id, Callbacks: true, copiedResults: copiedResults}, nil
+	return bashPPBridgeValue{Kind: "callback", Handle: id, Session: s.id, Callbacks: true, copiedResults: copiedResults, callRefusal: callRefusal}, nil
+}
+
+// goSourceReflectValueOfOperand reports the operand of a reflect.ValueOf
+// call that denotes a function value directly.
+func goSourceReflectValueOfOperand(imports map[string]string, q bashPPBridgeRequest, expr syntax.BashPPExpr) bool {
+	alias, name, ok := strings.Cut(q.Selector, ".")
+	if q.Op != "call" || q.Receiver != nil || !ok || imports[alias] != "reflect" || name != "ValueOf" {
+		return false
+	}
+	for {
+		paren, ok := expr.(*syntax.BashPPParenExpr)
+		if !ok {
+			break
+		}
+		expr = paren.X
+	}
+	switch expr.(type) {
+	case *syntax.BashPPIdent, *syntax.BashPPFuncLit:
+		return true
+	}
+	return false
+}
+
+// goSourceReflectHandleParam reports a parameter type whose value a
+// reflected Call hands the callback as the dependency's own value behind a
+// handle, with nothing the interpreter keeps elsewhere: scalars, imported
+// types, and slices, arrays, maps, structs and pointers built from them. A
+// pointer to a program type is excluded: it would name the dependency's
+// mirror of that type, not the program's own storage.
+func (r *Runner) goSourceReflectHandleParam(typ syntax.BashPPTypeExpr, depth int) bool {
+	if typ == nil || depth > 8 {
+		return false
+	}
+	if r.bashPPCallbackScalarType(typ) || r.bashPPCallbackNativeType(typ) {
+		return true
+	}
+	switch shape := r.bashPPUnderlyingType(typ).(type) {
+	case *syntax.BashPPStructType:
+		for _, field := range bashPPFlatFields(shape.Fields) {
+			if !r.goSourceReflectHandleParam(field.typ, depth+1) {
+				return false
+			}
+		}
+		return true
+	case *syntax.BashPPCollectionType:
+		switch shape.Kind {
+		case "slice", "array":
+			return r.goSourceReflectHandleParam(shape.Element, depth+1)
+		}
+	case *syntax.BashPPPointerType:
+		if r.bashPPCallbackNativeType(shape.Element) {
+			return true
+		}
+		if named, ok := shape.Element.(*syntax.BashPPNamedType); ok {
+			text := bashPPTypeText(named)
+			return bashPPBuiltinType(text) && text != "error" && text != "struct"
+		}
+		return r.goSourceReflectHandleParam(shape.Element, depth+1)
+	}
+	return false
 }
 
 // bashPPFunctionTypeText renders an original function's type in the original

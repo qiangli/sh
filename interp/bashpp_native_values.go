@@ -319,7 +319,9 @@ func (r *Runner) bashPPPrepareNativeCall(ctx context.Context, call *syntax.BashP
 		}
 	}
 	for _, expr := range call.ArgExprs {
+		r.goSourceReflectingFunction = len(call.ArgExprs) == 1 && goSourceReflectValueOfOperand(r.bashPPImports, q, expr)
 		value, err := r.bashPPBridgeExpr(expr)
+		r.goSourceReflectingFunction = false
 		if err != nil {
 			var positioned *goSourceError
 			if errors.As(err, &positioned) {

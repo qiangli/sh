@@ -188,12 +188,15 @@ func main(){calls:=0;wc.Test(func(s string)map[string]int{calls++;m:=make(map[st
 
 func TestGoSourceTourCallbackReferenceBoundaries(t *testing.T) {
 	for name, tc := range map[string]struct{ source, diagnostic string }{
+		// reflect.ValueOf only wraps an original function (Pointer, Type and a
+		// synchronous Call; see reflectedOriginalFunctionUse), so these
+		// boundaries are held by consumers that retain the callback.
 		"aggregate_parameter": {`package main
-import "reflect"
-func main(){reflect.ValueOf(func(b []byte){println("callback-ran")});println("after")}`, "signature requires value-semantics parameters"},
+import ("bufio";"strings")
+func main(){s:=bufio.NewScanner(strings.NewReader(""));s.Split(func(b []byte,e bool)(int,[]byte,error){println("callback-ran");return 0,nil,nil});println("after")}`, "signature requires value-semantics parameters"},
 		"unreviewed_consumer": {`package main
-import "reflect"
-func main(){reflect.ValueOf(func()map[string]int{println("callback-ran");return nil});println("after")}`, "retained original function callbacks are unsupported"},
+import "sync"
+func main(){sync.OnceValue(func()map[string]int{println("callback-ran");return nil});println("after")}`, "retained original function callbacks are unsupported"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()

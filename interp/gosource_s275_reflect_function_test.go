@@ -79,3 +79,40 @@ func main() {
 		t.Fatalf("reflected original pointer: err=%v stderr=%q want %q", err, stderr, want)
 	}
 }
+
+func TestS275ReflectedOriginalFunctionHandleParams(t *testing.T) {
+	src := `package main
+import "reflect"
+type E struct{ p *byte; _ struct{} }
+func F(e E, s []string) { println(len(s), s[0]) }
+func main() {
+	arg := reflect.ValueOf([]string{"hi"})
+	reflect.ValueOf(F).Call([]reflect.Value{reflect.ValueOf(E{}), arg})
+	println(arg.Index(0).String())
+}`
+	out, stderr, err := runGoSource(t, "s275-reflect-function-handle-params", src)
+	if err != nil || stderr != "1 hi\nhi\n" {
+		t.Fatalf("reflected original handle params: err=%v stderr=%q out=%q", err, stderr, out)
+	}
+}
+
+func TestS275ReflectedOriginalFunctionLocalPointerParam(t *testing.T) {
+	src := `package main
+import (
+	"reflect"
+	"runtime"
+)
+type T struct{ a, b int }
+func f(t *T) int { if t != nil { t.b++ }; return 0 }
+func main() {
+	v := reflect.ValueOf(f)
+	println(runtime.FuncForPC(v.Pointer()).Name(), v.Type().NumIn())
+	t := &T{}
+	v.Call([]reflect.Value{reflect.ValueOf(t)})
+	println("after", t.b)
+}`
+	out, stderr, err := runGoSource(t, "s275-reflect-function-local-pointer", src)
+	if !strings.HasPrefix(stderr, "main.f 1\n") || err == nil || !strings.Contains(err.Error()+stderr, "requires value-semantics parameters") || strings.Contains(out+stderr, "after") {
+		t.Fatalf("reflected original local pointer param: out=%q stderr=%q err=%v", out, stderr, err)
+	}
+}

@@ -17,6 +17,9 @@ func validateLocalTransport(req bashPPEvalRequest, q bashPPBridgeRequest) error 
 	if q.Receiver != nil && q.Receiver.reflectFunction && !reflectedOriginalFunctionUse(q) {
 		return fmt.Errorf("gosource: reflected original function only supports synchronous Call and type inspection")
 	}
+	if q.Receiver != nil && q.Receiver.reflectFunction && q.Receiver.callRefusal != "" && (q.Selector == "Call" || q.Selector == "CallSlice") {
+		return fmt.Errorf("%s", q.Receiver.callRefusal)
+	}
 	alias, name, selected := strings.Cut(q.Selector, ".")
 	nativeWriterFormat := selected && req.Imports[alias] == "fmt" && (name == "Fprint" || name == "Fprintln" || name == "Fprintf")
 	if nativeWriterFormat && !bashPPDependencyOwnedWriter(q.Args) {

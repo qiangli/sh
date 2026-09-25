@@ -807,6 +807,9 @@ type Runner struct {
 	// goSourceLiteralNameIndex names the program's function literals as Go
 	// names their frames; see bashpp_sprint165_frames_names.go.
 	goSourceLiteralNameIndex map[*syntax.BashPPFuncLit]string
+	// goSourceReflectingFunction is set while the operand of reflect.ValueOf
+	// is bridged; see bashPPBridgeFunction.
+	goSourceReflectingFunction bool
 
 	// exitTrapCallStack preserves the function stack for an EXIT trap
 	// triggered by `exit` from inside a function.

@@ -61,6 +61,10 @@ type bashPPBridgeValue struct {
 	// reflectFunc is the original function a reflectFunction handle wraps,
 	// so Pointer can name it in the interpreter's frame table. Host-only.
 	reflectFunc *bashPPFunc
+	// callRefusal, on an original callback registered for reflect.ValueOf,
+	// is the diagnostic its signature earns: the reflected handle may be
+	// inspected, but Call refuses it. Host-only.
+	callRefusal string
 
 	// Callable is derived by the interpreter from authenticated native type or
 	// import metadata; the dependency worker cannot set callback policy itself.
@@ -883,6 +887,7 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 				if reply.Values[i].Kind == "handle" {
 					if reflectedOriginalFunctionValueOf(req, q) {
 						reply.Values[i].reflectFunction = true
+						reply.Values[i].callRefusal = q.Args[0].callRefusal
 						if q.Args[0].Session == s.id {
 							s.mu.Lock()
 							reply.Values[i].reflectFunc = s.functions[q.Args[0].Handle]
