@@ -1101,6 +1101,23 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 	// emitted: an instantiation registered under one package names types
 	// of others (`errors.AsType[*fs.PathError]`), whichever order the
 	// packages come in.
+	// referenced restricts the exported func/var/const entries to the selectors
+	// the program actually reaches (bashPPReferencedSelectors). An empty set
+	// means the caller could not prove the program's reach, so nothing is
+	// filtered and every export is registered as before. keepSymbol is asked
+	// per emitted key; a dot-imported package contributes bare-name symbols the
+	// selector walk does not collect, so those are never filtered.
+	referenced := make(map[string]bool, len(req.Selectors))
+	for _, sel := range req.Selectors {
+		referenced[sel] = true
+	}
+	filterSymbols := len(referenced) > 0
+	keepSymbol := func(key, name string) bool {
+		if !filterSymbols || strings.HasPrefix(key, ".:") {
+			return true
+		}
+		return referenced[key+"."+name]
+	}
 	blankOnly := map[string]bool{}
 	for i, path := range ordered {
 		if path == "C" {
@@ -1183,7 +1200,7 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 					continue
 				}
 				for _, key := range keyNames {
-					if strings.HasPrefix(key, "_:") {
+					if strings.HasPrefix(key, "_:") || !keepSymbol(key, name) {
 						continue
 					}
 					symbol := key + "." + name
@@ -1194,11 +1211,11 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 					if bashPPForcesCollection(path, name) {
 						fmt.Fprintf(&forcing, "%q: true,\n", symbol)
 					}
+					used = true
 				}
-				used = true
 			case *types.Var:
 				for _, key := range keyNames {
-					if strings.HasPrefix(key, "_:") {
+					if strings.HasPrefix(key, "_:") || !keepSymbol(key, name) {
 						continue
 					}
 					symbol := key + "." + name
@@ -1206,8 +1223,8 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 						symbol = name
 					}
 					fmt.Fprintf(&symbols, "%q: reflect.ValueOf(&%s.%s).Elem(),\n", symbol, alias, name)
+					used = true
 				}
-				used = true
 			case *types.Const:
 				expression := alias + "." + name
 				if basic, ok := obj.Type().(*types.Basic); ok && basic.Info()&types.IsUntyped != 0 {
@@ -1225,7 +1242,7 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 					}
 				}
 				for _, key := range keyNames {
-					if strings.HasPrefix(key, "_:") {
+					if strings.HasPrefix(key, "_:") || !keepSymbol(key, name) {
 						continue
 					}
 					symbol := key + "." + name
@@ -1233,8 +1250,8 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 						symbol = name
 					}
 					fmt.Fprintf(&symbols, "%q: reflect.ValueOf(%s),\n", symbol, expression)
+					used = true
 				}
-				used = true
 			}
 		}
 		if !used {

@@ -89,8 +89,15 @@ type bashPPEvalRequest struct {
 	LocalTypes []bashPPLocalType
 	// Instances registers the instantiations of imported generic functions
 	// the program reaches; see bashpp_sprint171_imported_instances.go.
-	Instances     []bashPPImportedInstance
-	GenericTypes  []string
+	Instances    []bashPPImportedInstance
+	GenericTypes []string
+	// Selectors is the sorted set of imported package-qualified selectors
+	// ("alias.Name") the program's source references. When non-empty, the
+	// dependency bridge registers reflect entries only for these exported
+	// symbols instead of every export of every imported package; empty means
+	// no filtering (register everything, the conservative default). See
+	// [Runner.bashPPReferencedSelectors].
+	Selectors     []string
 	CallbackOwner *Runner
 	CallbackDepth int
 	// ImportPath is the program's declared identity (the compiler's -p,
@@ -671,7 +678,7 @@ func (r *Runner) bashPPEvalRequest() (bashPPEvalRequest, error) {
 	if err != nil {
 		return bashPPEvalRequest{}, err
 	}
-	return bashPPEvalRequest{CallbackOwner: r, CallbackDepth: r.bashPPTools.callbackDepth, PanicOnFault: r.bashPPTools.panicOnFault, LocalTypes: r.bashPPLocalTypeDescriptors(), Instances: r.bashPPImportedInstances(), GenericTypes: r.bashPPGenericBridgeTypes(), RuntimeEnv: runtimeEnv, ModuleDir: moduleDir, ImportPath: importPath, TestMain: testMain, Argv: append([]string{r.filename}, r.Params...), Bridge: r.bashPPTools.bridge, Go: r.bashPPTools.goBinary, BuildGo: r.bashPPTools.buildGoBinary, BuildEnv: buildEnv, Dir: r.Dir, Env: env, Stdin: r.stdin,
+	return bashPPEvalRequest{CallbackOwner: r, CallbackDepth: r.bashPPTools.callbackDepth, PanicOnFault: r.bashPPTools.panicOnFault, LocalTypes: r.bashPPLocalTypeDescriptors(), Instances: r.bashPPImportedInstances(), GenericTypes: r.bashPPGenericBridgeTypes(), Selectors: r.bashPPReferencedSelectors(), RuntimeEnv: runtimeEnv, ModuleDir: moduleDir, ImportPath: importPath, TestMain: testMain, Argv: append([]string{r.filename}, r.Params...), Bridge: r.bashPPTools.bridge, Go: r.bashPPTools.goBinary, BuildGo: r.bashPPTools.buildGoBinary, BuildEnv: buildEnv, Dir: r.Dir, Env: env, Stdin: r.stdin,
 		Stdout: r.bashPPWriter(r.stdout), Stderr: r.bashPPWriter(r.stderr), Imports: r.bashPPImports, SourceDir: sourceDir, SourceFile: sourceFile, EmbedDecls: embedDecls, CompanionFiles: companionFiles, NativeFuncs: nativeFuncs, MappedCompanions: mappedCompanions, CompanionTrampolines: trampolines, CompanionUnmappedFrames: unmappedFrames, RootFiles: r.bashPPGoSourceRootFiles(), CgoPackages: r.bashPPGoSourceCgoPackages()}, nil
 }
 
@@ -702,6 +709,65 @@ func (r *Runner) bashPPGenericBridgeTypes() []string {
 		}
 		return true
 	})
+	sort.Strings(out)
+	return out
+}
+
+// bashPPReferencedSelectors returns the sorted set of imported
+// package-qualified selectors ("alias.Name") the program's source references.
+// The dependency bridge uses it to register reflect entries for only the
+// exported symbols the program can reach, rather than every exported symbol of
+// every imported package. A program that imports a package with a large
+// exported surface (the compiler internals, say) reaches only a fraction of it;
+// emitting the rest forces the helper's compiler to build reflect data for
+// thousands of unreached symbols in one generated file, whose peak memory the
+// build cannot afford.
+//
+// The set is deliberately a superset: an extra selector only keeps a symbol
+// that already exists, but a missing one would make the runner send a Selector
+// the helper cannot resolve, so this walks both forms the runner turns into a
+// symbols-table key — every call target (a [syntax.BashPPCall] whose selector
+// chain begins with an imported identifier) and every package-qualified
+// expression (a [syntax.BashPPSelectorExpr] on an imported identifier), the
+// same shapes bashPPPrepareNativeCall and the native expression evaluator
+// resolve to a "get"/"call" request Selector.
+// Returning nil (no source file, or no imports) disables filtering, so a caller
+// that cannot prove the whole program's reach keeps the register-everything
+// default.
+func (r *Runner) bashPPReferencedSelectors() []string {
+	if r.bashPPGoSourceFile == nil || len(r.bashPPImports) == 0 {
+		return nil
+	}
+	seen := map[string]bool{}
+	add := func(alias, name string) {
+		if alias == "" || name == "" {
+			return
+		}
+		if _, ok := r.bashPPImports[alias]; !ok {
+			return
+		}
+		seen[alias+"."+name] = true
+	}
+	syntax.Walk(r.bashPPGoSourceFile, func(n syntax.Node) bool {
+		switch x := n.(type) {
+		case *syntax.BashPPCall:
+			if len(x.Fun) >= 2 {
+				add(x.Fun[0].Value, x.Fun[1].Value)
+			}
+		case *syntax.BashPPSelectorExpr:
+			if id, ok := x.X.(*syntax.BashPPIdent); ok && id.Name != nil && x.Sel != nil {
+				add(id.Name.Value, x.Sel.Value)
+			}
+		}
+		return true
+	})
+	if len(seen) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(seen))
+	for sel := range seen {
+		out = append(out, sel)
+	}
 	sort.Strings(out)
 	return out
 }
