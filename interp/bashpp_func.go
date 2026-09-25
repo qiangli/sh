@@ -202,6 +202,21 @@ const bashPPFuncHandlePrefix = "func@bashpp:"
 // cells. That is Go's rule, and it is why the registry is appended to rather
 // than memoized on the syntax node.
 func (r *Runner) bashPPMakeClosure(lit *syntax.BashPPFuncLit) (*bashPPFunc, expand.Variable) {
+	fn := r.bashPPNewClosure(lit)
+	return fn, r.bashPPStoreFunc(fn)
+}
+
+// bashPPNewClosure is [Runner.bashPPMakeClosure] without the registry entry.
+//
+// The registry exists so a closure can travel as a handle string; it is
+// append-only because a handle may have been copied anywhere. A literal that is
+// the callee of its own call — `func() {…}()`, `defer func() {…}()`, `go
+// func() {…}()` — never becomes a value, so no handle to it can exist and the
+// caller (or the deferred entry) holds the only reference. Registering it
+// anyway retained every such closure, and its captured scope, for the life of
+// the runner: a loop over a function with `defer func() {}()` grew without
+// bound.
+func (r *Runner) bashPPNewClosure(lit *syntax.BashPPFuncLit) *bashPPFunc {
 	fn := &bashPPFunc{lit: lit}
 	if r.bashPPScope != nil {
 		if r.bashPPGoSource && r.bashPPFuncActive == 0 {
@@ -216,7 +231,7 @@ func (r *Runner) bashPPMakeClosure(lit *syntax.BashPPFuncLit) (*bashPPFunc, expa
 	// escapes and is invoked later. The bindings travel with the closure for
 	// the same reason its captured scope does.
 	fn.typeArgs = r.bashPPTypeParamArgs
-	return fn, r.bashPPStoreFunc(fn)
+	return fn
 }
 
 // bashPPFuncLitType is the concrete signature a function literal names as a
@@ -572,8 +587,7 @@ func (r *Runner) bashPPLookupFunc(c *syntax.BashPPCall) (*bashPPFunc, bool) {
 		return r.bashPPClosure(cell.vr.Str)
 	}
 	if c.FuncLit != nil {
-		fn, _ := r.bashPPMakeClosure(c.FuncLit)
-		return fn, true
+		return r.bashPPNewClosure(c.FuncLit), true
 	}
 	foreignName := make([]string, len(c.Fun))
 	for i, part := range c.Fun {
