@@ -298,9 +298,8 @@ func TestSyntaxVerdictNegatives(t *testing.T) {
 
 // TestSyntaxVerdictReproducers wires the S154.3 reproducer pairs to the gc
 // wording: every reject.go now fails with exactly the diagnostics gc prints
-// (parser-range-three is the documented divergence — gc's parser accepts it,
-// so the go/parser diagnostic of the previous front end remains), and every
-// accept.go still loads cleanly.
+// (parser-range-three: gc's parser accepts the clause and types2 diagnoses
+// it, range_arity.go), and every accept.go still loads cleanly.
 func TestSyntaxVerdictReproducers(t *testing.T) {
 	base := filepath.Join("testdata", "sprint154", "parser", "testdata", "reproducers")
 	for _, tc := range []struct {
@@ -311,7 +310,7 @@ func TestSyntaxVerdictReproducers(t *testing.T) {
 		{"checker-label-unused", []string{"reject.go:4:1: label L defined and not used"}},
 		{"parser-case-colon", []string{"reject.go:5:8: syntax error: unexpected newline, expected :"}},
 		{"parser-else", []string{"reject.go:5:9: syntax error: else must be followed by if or statement block"}},
-		{"parser-range-three", []string{"reject.go:4:12: expected at most 2 expressions"}},
+		{"parser-range-three", []string{"reject.go:4:12: range clause permits at most two iteration variables", "reject.go:5:19: undefined: c"}},
 	} {
 		t.Run(tc.dir, func(t *testing.T) {
 			// reject.go.src: deliberately invalid Go, kept outside the *.go set the

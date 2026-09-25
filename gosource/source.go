@@ -212,11 +212,20 @@ func Load(sources []Source, options Options) (*Program, error) {
 	c := &converter{fset: token.NewFileSet(), info: newTypeInfo(), renames: map[types.Object]string{}}
 	p := &Program{File: &syntax.File{Name: sources[0].Name, GoSource: true}}
 	parseErrors := append(ErrorList(nil), syntaxErrors...)
+	var rangeClauses []rangeArity
 	for i, s := range sources {
 		if i > 0 && s.Name == sources[i-1].Name {
 			return nil, fmt.Errorf("gosource: duplicate file %q", s.Name)
 		}
-		f, err := parseGoFile(c.fset, s.Name, s.Data, parser.ParseComments|parser.AllErrors)
+		data := s.Data
+		if len(syntaxErrors) == 0 && !options.GoTypesParserDiagnostics && i < len(gcFiles) {
+			// gc accepts a range clause with extra iteration variables and
+			// its checker diagnoses them (range_arity.go).
+			var clauses []rangeArity
+			data, clauses = rangeArityImage(s.Name, s.Data, gcFiles[i])
+			rangeClauses = append(rangeClauses, clauses...)
+		}
+		f, err := parseGoFile(c.fset, s.Name, data, parser.ParseComments|parser.AllErrors)
 		if err != nil && len(syntaxErrors) == 0 {
 			parseErrors = appendDiagnostics(parseErrors, err)
 		}
@@ -285,6 +294,7 @@ func Load(sources []Source, options Options) (*Program, error) {
 	// parser diagnostics first, followed by semantic diagnostics from every
 	// recoverable file.
 	diagnostics := append(parseErrors, dropRecoveredCallUnused(typeErrors.result(err), c.fset, c.info, gcFiles)...)
+	diagnostics = append(diagnostics, rangeArityDiagnostics(c.fset, c.files, c.info, rangeClauses)...)
 	if len(diagnostics) > 0 {
 		if checker.gcStderr() {
 			diagnostics = sortGCStderr(c.fset, sources, diagnostics)

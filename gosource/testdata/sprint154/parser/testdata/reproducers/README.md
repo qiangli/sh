@@ -10,8 +10,8 @@ Since S154.1 the gc column IS what the front end emits: gosource parses
 with the vendored gc parser first (`gosource/internal/gcsyntax`), and a
 gc rejection is the complete diagnostic set. `gosource/verdict_test.go`
 (`TestSyntaxVerdictReproducers`) asserts the exact gc line for every
-`reject.go.src` below — except `parser-range-three`, where gc's parser
-accepts and the go/parser diagnostic remains. The "Bash++ (go/parser)"
+`reject.go.src` below — for `parser-range-three`, where gc's parser accepts,
+the types2 diagnostics gc prints (`gosource/range_arity.go`, Sprint 270). The "Bash++ (go/parser)"
 columns below are the S154.3 pre-verdict findings, kept for the record.
 
 ## Parser rows (three)
