@@ -102,6 +102,14 @@ func (r *Runner) goSourceBuiltinTupleArgs(call *syntax.BashPPCall) ([]bashPPBuil
 	if !ok {
 		return nil, false, nil
 	}
+	// A call the dependency owns has no local callee, and the callable lookup
+	// is not a probe: asked for `out.String()` where out is a native value it
+	// reports "type bytes.Buffer has no method String" and sets the exit code,
+	// because String is only in the native type's method set. Such a call is
+	// the bridge's to run, from the ordinary single-argument path.
+	if r.bashPPBridgeHandles(inner) {
+		return nil, false, nil
+	}
 	fn, ok := r.bashPPLookupFunc(inner)
 	if !ok || bashppResultCount(fn.results()) < 2 {
 		return nil, false, nil
