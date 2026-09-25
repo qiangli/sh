@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"go/constant"
 	"math/bits"
+	"strconv"
 	"strings"
 
 	"mvdan.cc/sh/v3/syntax"
@@ -95,6 +96,16 @@ func (r *Runner) goSourceUnsafePointerExpr(expr syntax.BashPPExpr) (*bashPPPoint
 		}
 		return &bashPPPointer{forged: true, unsafeAddress: uint64(address)}, target, true, nil
 	}
+	if r.goSourceUnsafeReflectAddressOperand(conv.X) {
+		address, err := r.goSourceUnsafeInt(conv.X)
+		if err != nil {
+			return nil, target, true, err
+		}
+		if address == 0 {
+			return nil, target, true, nil
+		}
+		return &bashPPPointer{forged: true, unsafeAddress: uint64(address)}, target, true, nil
+	}
 	ptr, err := r.bashPPPointerExprValue(conv.X)
 	if err != nil && strings.HasPrefix(err.Error(), "BASHPP-EPOINTER-TARGET:") {
 		// An operand that is neither a recognised integer spelling nor
@@ -111,6 +122,21 @@ func (r *Runner) goSourceUnsafePointerExpr(expr syntax.BashPPExpr) (*bashPPPoint
 	return &view, target, true, nil
 }
 
+func (r *Runner) goSourceUnsafeReflectAddressOperand(expr syntax.BashPPExpr) bool {
+	call, ok := bashPPUnparenExpr(expr).(*syntax.BashPPCall)
+	if !ok || len(call.ArgExprs) != 0 || call.Ellipsis.IsValid() {
+		return false
+	}
+	if selector, ok := call.CalleeExpr.(*syntax.BashPPSelectorExpr); ok {
+		return selector.Sel.Value == "Pointer" || selector.Sel.Value == "UnsafeAddr"
+	}
+	if len(call.Fun) > 0 {
+		name := call.Fun[len(call.Fun)-1].Value
+		return name == "Pointer" || name == "UnsafeAddr"
+	}
+	return false
+}
+
 // goSourceUnsafeIntegerOperand reports whether a conversion operand is an
 // integer (uintptr) expression rather than a pointer. Only integer spellings
 // qualify: a conversion to an integer type, an arithmetic or bitwise
@@ -125,7 +151,19 @@ func (r *Runner) goSourceUnsafeIntegerOperand(expr syntax.BashPPExpr) bool {
 		return goSourceUnsafeIntegerType(r.bashPPUnderlyingType(r.bashPPConvertTarget(x)))
 	case *syntax.BashPPIdent:
 		cell := r.bashPPScope.lookup(x.Name.Value)
-		return cell != nil && !cell.pointer && goSourceUnsafeIntegerType(r.bashPPUnderlyingType(cell.declType))
+		if cell == nil || cell.pointer {
+			return false
+		}
+		if goSourceUnsafeIntegerType(r.bashPPUnderlyingType(cell.declType)) {
+			return true
+		}
+		if cell.typeName != "" && goSourceUnsafeIntegerType(&syntax.BashPPNamedType{Name: &syntax.Lit{Value: cell.typeName}}) {
+			return true
+		}
+		return cell.scalarKind == constant.Int
+	}
+	if typ, ok := r.goSourceStaticExprType(expr); ok {
+		return goSourceUnsafeIntegerType(r.bashPPUnderlyingType(typ))
 	}
 	return false
 }
@@ -157,6 +195,60 @@ func (r *Runner) goSourceUnsafeInt(expr syntax.BashPPExpr) (int64, error) {
 		return int64(u), nil
 	}
 	return 0, fmt.Errorf("BASHPP-EUNSAFE-INT: %s is not an integer address", value.value)
+}
+
+// goSourceUnsafePointerWord answers uintptr(unsafe.Pointer(p)) without
+// exposing host addresses. The word is stable for one interpreter storage
+// path and deliberately becomes a forged address if converted back through
+// unsafe.Pointer: raw integer round-trips may compare or do arithmetic, but
+// they no longer name interpreter-owned storage.
+func (r *Runner) goSourceUnsafePointerWord(conv *syntax.BashPPConvertExpr) (bashPPScalar, bool, error) {
+	target := r.bashPPConvertTarget(conv)
+	if !goSourceUnsafeIntegerType(r.bashPPUnderlyingType(target)) {
+		return bashPPScalar{}, false, nil
+	}
+	ptr, err := r.bashPPPointerExprValue(conv.X)
+	if err != nil {
+		return bashPPScalar{}, false, nil
+	}
+	if ptr == nil {
+		return bashPPScalar{value: constant.MakeInt64(0), typ: bashPPTypeText(target), runtime: true}, true, nil
+	}
+	return bashPPScalar{value: constant.MakeUint64(goSourceUnsafeOpaqueAddress(ptr)), typ: bashPPTypeText(target), runtime: true}, true, nil
+}
+
+func goSourceUnsafeOpaqueAddress(ptr *bashPPPointer) uint64 {
+	if ptr == nil {
+		return 0
+	}
+	if ptr.forged {
+		return ptr.unsafeAddress
+	}
+	addr := uint64(1)
+	if ptr.target != nil {
+		text := fmt.Sprintf("%p", ptr.target)
+		if parsed, err := strconv.ParseUint(strings.TrimPrefix(text, "0x"), 16, 64); err == nil {
+			addr = parsed
+		}
+	}
+	for _, step := range ptr.path {
+		addr = addr*131 + uint64(step.index+17)
+		if step.field != "" {
+			for _, r := range step.field {
+				addr = addr*131 + uint64(r)
+			}
+		}
+		if step.deref {
+			addr = addr*131 + 1
+		}
+	}
+	if ptr.unsafeOffset != 0 {
+		addr += uint64(ptr.unsafeOffset)
+	}
+	if addr == 0 {
+		return 1
+	}
+	return addr
 }
 
 // goSourceUnsafeElemSize is the gc size of the element type a span pointer

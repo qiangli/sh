@@ -851,9 +851,9 @@ func (r *Runner) bashPPConvertNamedScalar(name string, target syntax.BashPPTypeE
 	if r.bashPPGoSource && r.goSourceUnsafePointerType(named) && x.value != nil && x.value.Kind() == constant.Int {
 		// An integer is never trusted as an address. The constant 0 lowers to
 		// unsafe.Pointer(nil) before evaluation; any other integer reaching
-		// here — forged, stale or read back from a native dependency — has no
-		// interpreter storage behind it.
-		return bashPPScalar{}, fmt.Errorf("BASHPP-EUNSAFE-ADDRESS: uintptr %s is not an interpreter-owned live pointer; refusing conversion to %s", x.value, name)
+		// here is an opaque forged address. It may be stored or discarded, but
+		// dereferencing it still refuses via the pointer path.
+		return bashPPScalar{value: x.value, typ: name, runtime: true}, nil
 	}
 	shape, ok := r.bashPPUnderlyingType(named).(*syntax.BashPPNamedType)
 	base := ""

@@ -153,10 +153,11 @@ func (r *Runner) bashPPPointerConversion(expr syntax.BashPPExpr) (*bashPPPointer
 	}
 	retyped := *ptr
 	if ptr.unsafeSource != nil && bashPPTypeText(ptr.unsafeSource) != bashPPTypeText(target.Element) {
-		if err := r.goSourceUnsafeBlankView(ptr.unsafeSource, target.Element); err != nil {
+		if err := r.goSourceUnsafeBlankView(ptr.unsafeSource, target.Element); err == nil {
+			retyped.unsafeView = target.Element
+		} else if r.goSourceUnsafeBlankTarget(target.Element) {
 			return nil, target, true, err
 		}
-		retyped.unsafeView = target.Element
 	}
 	retyped.elem = target.Element
 	return &retyped, spelled, true, nil
@@ -640,8 +641,12 @@ func (p *bashPPPointer) read() (any, *bashPPCollectionMeta, syntax.BashPPTypeExp
 			}
 		}
 	}
-	if p.unsafeView != nil {
-		value, meta = bashPPUnsafeBlankZero(p.unsafeView)
+	if p.unsafeSource != nil && bashPPTypeText(p.unsafeSource) != bashPPTypeText(p.elem) {
+		if p.unsafeView != nil {
+			value, meta = bashPPUnsafeBlankZero(p.unsafeView)
+		} else {
+			return nil, nil, nil, fmt.Errorf("BASHPP-EUNSAFE-VIEW: target %s is not a supported blank-field struct", bashPPTypeText(p.elem))
+		}
 	}
 	return value, meta, p.elem, nil
 }
@@ -996,6 +1001,11 @@ func (r *Runner) bashPPDerefAssign(target *syntax.BashPPDerefExpr, rhs syntax.Ba
 	}
 	if err := goSourceUnsafeDerefCheck(ptr); err != nil {
 		r.errf("%v\n", err)
+		r.exit.code = 2
+		return
+	}
+	if ptr.unsafeSource != nil && bashPPTypeText(ptr.unsafeSource) != bashPPTypeText(ptr.elem) && ptr.unsafeView == nil {
+		r.errf("BASHPP-EUNSAFE-VIEW: target %s is not a supported blank-field struct\n", bashPPTypeText(ptr.elem))
 		r.exit.code = 2
 		return
 	}

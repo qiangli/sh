@@ -227,6 +227,11 @@ func (r *Runner) bashPPEvalScalarExpr(expr syntax.BashPPExpr) (result bashPPScal
 		if scalar, handled, err := r.bashPPConvertCollectionScalar(x); handled {
 			return scalar, err
 		}
+		if r.bashPPGoSource {
+			if scalar, handled, err := r.goSourceUnsafePointerWord(x); handled {
+				return scalar, err
+			}
+		}
 		v, err := r.bashPPEvalScalarExpr(x.X)
 		if err != nil {
 			return bashPPScalar{}, err
