@@ -669,6 +669,10 @@ func (r *Runner) bashPPBridgeExpr(expr syntax.BashPPExpr) (bashPPBridgeValue, er
 		return value, err
 	}
 	value, err = r.bashPPBridgeDefinedScalar(value)
+	if boxed := r.bashPPConvertBoxedType(expr, nil, value.Type); boxed != nil {
+		value.Type = r.bashPPBridgeTypeIdentity(boxed)
+		return value, err
+	}
 	return bashPPBridgeInstantiatedScalar(value, r.bashPPExprScalarType(expr)), err
 }
 

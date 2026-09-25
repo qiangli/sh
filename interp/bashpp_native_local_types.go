@@ -73,6 +73,10 @@ type bashPPLocalType struct {
 	// its original method bodies live on the base generic declaration, which
 	// is how the interpreter's method table knows them.
 	Callback string
+	// Nest is the helper source of the functions that mirror local types
+	// declared inside generic functions (bashpp_s275_nested_local_types.go),
+	// emitted before every other declaration.
+	Nest string
 	// refs are the other local names this rendered declaration mentions;
 	// host-only, used to keep the materialised set dependency-closed.
 	refs map[string]bool
@@ -115,6 +119,10 @@ type bashPPLocalTypeCache struct {
 	// (bashPPScopedLocalKey) to the helper identity it is registered
 	// under; see bashpp_s243_scoped_local_types.go.
 	scoped map[string]string
+	// nest maps a local declaration of a mirrored function to its
+	// enclosing function's type parameters; see
+	// bashpp_s275_nested_local_types.go.
+	nest map[string]bashPPNestDecl
 }
 
 // bashPPLocalTypeDescriptors renders every original named type the helper can
@@ -135,7 +143,11 @@ func (r *Runner) bashPPLocalTypeDescriptors() []bashPPLocalType {
 		return cache.types
 	}
 	types, scoped := r.bashPPBuildLocalTypeDescriptors()
-	r.bashPPTools.localTypes = &bashPPLocalTypeCache{file: r.bashPPGoSourceFile, imports: maps.Clone(r.bashPPImports), types: types, scoped: scoped}
+	nest, mirror := r.bashPPNestMirror(types, scoped)
+	if mirror != "" {
+		types = append([]bashPPLocalType{{Name: bashPPNestMirrorName, Decl: "struct{}", Nest: mirror}}, types...)
+	}
+	r.bashPPTools.localTypes = &bashPPLocalTypeCache{file: r.bashPPGoSourceFile, imports: maps.Clone(r.bashPPImports), types: types, scoped: scoped, nest: nest}
 	return types
 }
 
@@ -1258,6 +1270,9 @@ func (l *bashPPLocalTypeSet) signature(spec *syntax.BashPPMethodSpec, depth int)
 // protocol code; the original body stays interpreted on the other side of the
 // callback.
 func bashPPLocalTypeGo(local bashPPLocalType) string {
+	if local.Nest != "" {
+		return "type " + local.Name + " " + local.Decl + "\n" + local.Nest
+	}
 	if local.PublicType != "" {
 		var b strings.Builder
 		b.WriteString(local.GenericDecl)
@@ -1414,7 +1429,7 @@ func (r *Runner) bashPPBridgeResolvableArrayType(typ syntax.BashPPTypeExpr, coll
 func bashPPLocalTypeIdentity(locals []bashPPLocalType) string {
 	var b strings.Builder
 	for _, local := range locals {
-		fmt.Fprintf(&b, "%s|%s|%s|%s|%t|%s|%s|", local.Name, local.PublicType, local.GenericDecl, local.Decl, local.Alias, local.WireType, local.Callback)
+		fmt.Fprintf(&b, "%s|%s|%s|%s|%t|%s|%s|%s|", local.Name, local.PublicType, local.GenericDecl, local.Decl, local.Alias, local.WireType, local.Callback, local.Nest)
 		for _, method := range local.GenericMethods {
 			fmt.Fprintf(&b, "%s:%s:%t:%t:%t:%v:%v,", method.Receiver, method.Name, method.Pointer, method.ReaderLocalBuffer, method.General, method.Params, method.Results)
 		}

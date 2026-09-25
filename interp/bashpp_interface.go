@@ -946,6 +946,7 @@ func (r *Runner) bashPPScalarInterfaceCell(expr syntax.BashPPExpr) (*bashPPCell,
 		return nil, nil, fmt.Errorf("BASHPP-EINTERFACE-VALUE: interface assignment requires a named value")
 	}
 	actual, name := bashPPScalarNamedType(name)
+	actual = r.bashPPConvertBoxedType(expr, actual, name)
 	// A runtime float or complex result keeps its IEEE carrier in the boxed
 	// cell: a non-finite value has no exact constant to spell, and a complex
 	// signed zero survives only in the carrier.

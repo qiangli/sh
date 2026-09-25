@@ -119,7 +119,13 @@ func (r *Runner) bashPPScopedLocalTypeName(named *syntax.BashPPNamedType) (strin
 	}
 	r.bashPPLocalTypeDescriptors()
 	cache := r.bashPPTools.localTypes
-	if cache == nil || len(cache.scoped) == 0 {
+	if cache == nil {
+		return "", false
+	}
+	if name, ok := r.bashPPNestTypeName(named, cache.nest, cache.scoped, r.bashPPTypeParamArgs); ok {
+		return name, true
+	}
+	if len(cache.scoped) == 0 {
 		return "", false
 	}
 	scope, known := r.goSourceLocalTypeScope(named)

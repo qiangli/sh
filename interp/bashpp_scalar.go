@@ -1548,6 +1548,16 @@ func bashPPCompareValuesWithRunner(r *Runner, left any, leftMeta *bashPPCollecti
 			return equal, err
 		}
 	}
+	// A dependency-owned element of an array or struct — a reflect.Type in
+	// a [2]reflect.Type — is a bridge handle; the dependency decides its
+	// equality exactly as it does for a handle compared on its own.
+	if r != nil && r.bashPPGoSource {
+		if l, ok := left.(*bashPPBridgeValue); ok && l != nil {
+			if rv, ok := right.(*bashPPBridgeValue); ok && rv != nil {
+				return r.bashPPNativeCompareValues(*l, token.EQL, *rv)
+			}
+		}
+	}
 	if leftMeta == nil && rightMeta == nil {
 		// The Go checker already established compatible operand types. A
 		// contextual integer constant and a float returned by a call can
