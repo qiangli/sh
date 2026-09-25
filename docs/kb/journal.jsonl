@@ -55,3 +55,5 @@
 {"op":"add","slug":"keep-primitive-fmt-writes-to-local-writers-in-the-interpreter","id":"01a0da76-ca1d-7979-8594-2e1b72661b56","tool":"codex-gpt-5.5-s","host":"dragon","episode":"weave-issue-19","at":"2026-09-25T21:26:53.216177Z"}
 {"op":"add","slug":"batch-mapped-companion-validation-before-bridge-build","id":"01a0da85-3b03-713c-bc48-fd96acdab611","tool":"codex-gpt-5.5-w","host":"dragon","episode":"weave-issue-23","at":"2026-09-25T21:42:39.620618Z"}
 {"op":"add","slug":"synchronize-copied-slices-for-bounded-callbacks","id":"01a0da9b-966b-7af8-8ef4-2a2568b7d39a","tool":"codex-gpt-5.5-a","host":"dragon","episode":"weave-issue-27","at":"2026-09-25T22:07:04.813293Z"}
+{"op":"update","slug":"isolate-interpreted-self-reexec-from-replacement-goroot-tools","id":"01a0da29-3775-7791-8e16-c097a66fa557","tool":"codex-gpt5.6-sol-d","host":"dragon","episode":"weave-issue-30","at":"2026-09-25T22:24:49.23241Z"}
+{"op":"update","slug":"isolate-interpreted-self-reexec-from-replacement-goroot-tools","id":"01a0da29-3775-7791-8e16-c097a66fa557","tool":"codex-gpt5.6-sol-d","host":"dragon","episode":"weave-issue-30","at":"2026-09-25T22:25:05.157199Z"}

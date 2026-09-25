@@ -29,6 +29,9 @@ import (
 // program environment, but pins the private BASHPP_GO selector to the
 // authenticated SDK used to build interpreter helpers. Thus a test may replace
 // a tool in its GOROOT without making the replaying front end compile itself.
+// Concurrent Go tool identity probes (-V=full) are single-flighted and their
+// successful output is cached for the launcher's lifetime and relevant build
+// configuration, rather than starting one interpreter per probing go command.
 // Without this option, os.Executable retains its former dependency-bridge
 // behavior.
 func GoSourceReexecPlan(plan ...string) RunnerOption {
@@ -94,28 +97,102 @@ func (s *bashPPNativeSession) goSourceReexecLauncher(ctx context.Context, req ba
 		quoted = append(quoted, strconv.Quote(arg))
 	}
 	quotedBuildGo := strconv.Quote(req.internalBuildGo())
+	quotedVersionCache := strconv.Quote(filepath.Join(s.reexecDir, "tool-version"))
 	source := `package main
 import (
+	"bytes"
+	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
+	"time"
 )
 func main() {
 	plan := []string{` + strings.Join(quoted, ",") + `}
+	if len(os.Args) == 2 && os.Args[1] == "-V=full" {
+		os.Exit(versionProbe(plan, ` + quotedVersionCache + `))
+	}
+	os.Exit(run(plan, os.Stdin, os.Stdout))
+}
+func command(plan []string) *exec.Cmd {
 	args := append(append([]string(nil), plan[1:]...), os.Args[1:]...)
 	cmd := exec.Command(plan[0], args...)
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	for _, entry := range os.Environ() {
 		name, _, _ := strings.Cut(entry, "=")
 		if !strings.EqualFold(name, "BASHPP_GO") { cmd.Env = append(cmd.Env, entry) }
 	}
 	cmd.Env = append(cmd.Env, "BASHPP_GO=" + ` + quotedBuildGo + `)
+	return cmd
+}
+func run(plan []string, stdin *os.File, stdout *os.File) int {
+	cmd := command(plan)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdin, stdout, os.Stderr
 	err := cmd.Run()
-	if err == nil { return }
-	if exit, ok := err.(*exec.ExitError); ok { os.Exit(exit.ExitCode()) }
+	if err == nil { return 0 }
+	if exit, ok := err.(*exec.ExitError); ok { return exit.ExitCode() }
 	fmt.Fprintf(os.Stderr, "gosource reexec %q: %v\n", plan, err)
-	os.Exit(127)
+	return 127
+}
+func versionProbe(plan []string, cache string) int {
+	identity := filepath.Base(os.Args[0]) + "\x00" + os.Getenv("GOOS") + "\x00" + os.Getenv("GOARCH") + "\x00" + os.Getenv("GOEXPERIMENT")
+	cache += fmt.Sprintf("-%x", sha256.Sum256([]byte(identity)))
+	lock := cache + ".lock"
+	for {
+		if output, err := os.ReadFile(cache); err == nil {
+			_, _ = os.Stdout.Write(output)
+			return 0
+		}
+		file, err := os.OpenFile(lock, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+		if err == nil {
+			_ = file.Close()
+			return populateVersionCache(plan, cache, lock)
+		}
+		if !errors.Is(err, os.ErrExist) {
+			return run(plan, os.Stdin, os.Stdout)
+		}
+		if info, statErr := os.Stat(lock); statErr == nil && time.Since(info.ModTime()) > 30*time.Second {
+			_ = os.Remove(lock)
+			continue
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+func populateVersionCache(plan []string, cache, lock string) int {
+	done := make(chan struct{})
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case now := <-ticker.C:
+				_ = os.Chtimes(lock, now, now)
+			case <-done:
+				return
+			}
+		}
+	}()
+	defer func() { close(done); <-stopped; _ = os.Remove(lock) }()
+	var output bytes.Buffer
+	cmd := command(plan)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, &output, os.Stderr
+	if err := cmd.Run(); err != nil {
+		if exit, ok := err.(*exec.ExitError); ok { return exit.ExitCode() }
+		fmt.Fprintf(os.Stderr, "gosource reexec %q: %v\n", plan, err)
+		return 127
+	}
+	if temp, err := os.CreateTemp(filepath.Dir(cache), ".tool-version-"); err == nil {
+		name := temp.Name()
+		if _, err = temp.Write(output.Bytes()); err == nil { err = temp.Close() } else { _ = temp.Close() }
+		if err == nil { err = os.Rename(name, cache) }
+		if err != nil { _ = os.Remove(name) }
+	}
+	_, _ = os.Stdout.Write(output.Bytes())
+	return 0
 }
 `
 	sourcePath := filepath.Join(s.reexecDir, "bashpp-reexec-launcher.go")

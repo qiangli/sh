@@ -7,11 +7,14 @@ package interp_test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -50,6 +53,22 @@ func main() {
 	out, err := cmd.CombinedOutput()
 	if err != nil { panic(fmt.Sprintf("child: %v: %s", err, out)) }
 	fmt.Print(string(out))
+}
+`
+
+const s281ReexecVersionFanoutSource = `package main
+import (
+	"os"
+	"os/exec"
+)
+func main() {
+	executable, err := os.Executable()
+	if err != nil { panic(err) }
+	os.Unsetenv("GOSH_PROG")
+	cmd := exec.Command(executable, "__fanout__")
+	cmd.Env = append(os.Environ(), "BASHPP_S281_VERSION_PROBE_LAUNCHER=" + executable)
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	if err := cmd.Run(); err != nil { panic(err) }
 }
 `
 
@@ -120,6 +139,101 @@ func TestGoSourceS281SelfReexecReplacementToolIsolation(t *testing.T) {
 	}
 }
 
+// TestGoSourceS281SelfReexecVersionProbeSingleflight models the Go command's
+// toolID probe. Each Go command caches -V=full only in-process, so parallel
+// script tests otherwise replay the entire interpreted replacement compiler
+// once per command. The replay launcher must obtain the real replay result,
+// but share that stable tool identity across its own processes.
+func TestGoSourceS281SelfReexecVersionProbeSingleflight(t *testing.T) {
+	args := os.Args
+	for len(args) > 0 && args[0] != "--" {
+		args = args[1:]
+	}
+	if len(args) == 2 && args[1] == "-V=full" {
+		marker := os.Getenv("BASHPP_S281_VERSION_PROBE_MARKER")
+		file, err := os.OpenFile(marker, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := file.WriteString("x"); err != nil {
+			t.Fatal(err)
+		}
+		if err := file.Close(); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(250 * time.Millisecond)
+		version := "compile version go1.27.1"
+		if experiment := os.Getenv("GOEXPERIMENT"); experiment != "" {
+			version += " X:" + experiment
+		}
+		_, _ = io.WriteString(os.Stdout, version+"\n")
+		return
+	}
+	if len(args) == 2 && args[1] == "__fanout__" {
+		launcher := os.Getenv("BASHPP_S281_VERSION_PROBE_LAUNCHER")
+		if err := os.Unsetenv("GOSH_PROG"); err != nil {
+			t.Fatal(err)
+		}
+		const processes = 16
+		outputs := make(chan []byte, processes)
+		errs := make(chan error, processes)
+		var group sync.WaitGroup
+		for range processes {
+			group.Add(1)
+			go func() {
+				defer group.Done()
+				output, err := exec.Command(launcher, "-V=full").CombinedOutput()
+				if err != nil {
+					errs <- fmt.Errorf("version probe: %w: %s", err, output)
+					return
+				}
+				outputs <- output
+			}()
+		}
+		group.Wait()
+		close(outputs)
+		close(errs)
+		for err := range errs {
+			t.Error(err)
+		}
+		for output := range outputs {
+			_, _ = os.Stdout.Write(output)
+		}
+		if err := os.Setenv("GOEXPERIMENT", "cachekey"); err != nil {
+			t.Fatal(err)
+		}
+		output, err := exec.Command(launcher, "-V=full").CombinedOutput()
+		if err != nil {
+			t.Fatalf("experiment version probe: %v: %s", err, output)
+		}
+		_, _ = os.Stdout.Write(output)
+		return
+	}
+
+	marker := filepath.Join(t.TempDir(), "version-probes")
+	t.Setenv("BASHPP_S281_VERSION_PROBE_MARKER", marker)
+	t.Setenv("GOEXPERIMENT", "")
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := runS281ReexecSourceProgram(t, s281ReexecVersionFanoutSource, nil, nil,
+		[]string{self, "-test.run=^TestGoSourceS281SelfReexecVersionProbeSingleflight$", "--"})
+	if got, want := strings.Count(output, "compile version go1.27.1\n"), 16; got != want {
+		t.Errorf("version output count = %d, want %d; output=%q", got, want, output)
+	}
+	if got, want := strings.Count(output, "compile version go1.27.1 X:cachekey\n"), 1; got != want {
+		t.Errorf("experiment version output count = %d, want %d; output=%q", got, want, output)
+	}
+	data, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(data); got != 2 {
+		t.Fatalf("replayed version probes = %d, want 2 configurations", got)
+	}
+}
+
 func s281ReplacementGOROOT(t *testing.T) (goBinary, compileTool string) {
 	t.Helper()
 	realRoot := runtime.GOROOT()
@@ -174,9 +288,13 @@ func s281CopyExecutable(t *testing.T, source, target string) {
 }
 
 func runS281ReexecProgram(t *testing.T, stdout io.Writer, args, plan []string) string {
+	return runS281ReexecSourceProgram(t, s281ReexecSource, stdout, args, plan)
+}
+
+func runS281ReexecSourceProgram(t *testing.T, source string, stdout io.Writer, args, plan []string) string {
 	t.Helper()
 	dir := t.TempDir()
-	program, err := gosource.Parse(strings.NewReader(s281ReexecSource), "reexec.go", gosource.Options{RunMain: true, Importer: lower.NewModuleImporter(dir)})
+	program, err := gosource.Parse(strings.NewReader(source), "reexec.go", gosource.Options{RunMain: true, Importer: lower.NewModuleImporter(dir)})
 	if err != nil {
 		t.Fatal(err)
 	}
