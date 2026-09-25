@@ -15,13 +15,36 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
+// goSourceRangeState mirrors the states Go's own rangefunc rewrite tracks per
+// range statement (abi.RF_READY/RF_PANIC/RF_DONE/RF_EXHAUSTED): exactly one is
+// current at a time, and a yield call made while it is anything but READY is a
+// misuse whose message depends on which state it finds — see
+// [Runner.goSourceInvokeRangeYield].
+type goSourceRangeState uint8
+
+const (
+	// goSourceRangeReady: the body has not exited yet and is not running.
+	goSourceRangeReady goSourceRangeState = iota
+	// goSourceRangePanic: the body is either currently running, or the yield
+	// call that ran it panicked and the panic has not yet been resolved (either
+	// still unwinding, or swallowed by the iterator without calling yield
+	// again — see the post-call check in [Runner.goSourceRangeFunction]).
+	goSourceRangePanic
+	// goSourceRangeDone: the body has exited in a non-panic way (break,
+	// continue past this loop, or return).
+	goSourceRangeDone
+	// goSourceRangeExhausted: the iterator call itself has returned, so the
+	// whole range statement is finished.
+	goSourceRangeExhausted
+)
+
 // goSourceRangeYield is the interpreter-owned callback supplied to an iterator.
-// Its body is still the authored range body; this state only carries the bool
-// continuation result and an outer return across the iterator's call frame.
+// Its body is still the authored range body; this state only carries the
+// per-loop misuse state, the continuation result, and an outer return across
+// the iterator's call frame.
 type goSourceRangeYield struct {
 	rng       *syntax.BashPPRange
-	stopped   bool
-	exhausted bool
+	state     goSourceRangeState
 	returning bool
 	ret       bashPPReturnState
 	// deferBuf collects the defers executed directly inside the range body
@@ -30,6 +53,26 @@ type goSourceRangeYield struct {
 	// stack the iterator would truncate — and spliced onto the enclosing frame
 	// once the iterator returns; see [Runner.goSourceRangeFunction].
 	deferBuf []bashPPDeferred
+	// pendingBranch, pendingBranchDepth and pendingGotoLabel hold a labeled
+	// break/continue/goto that escaped this loop (bashPPBranchEscapesEligible
+	// found more levels still to unwind) but has not yet reached the range
+	// statement it targets. Go's own generated code threads this purely
+	// through closure-captured #next variables the iterator function never
+	// sees; our interpreter instead runs the range body directly, at whatever
+	// call-stack depth the iterator happens to be invoking yield from, so the
+	// runner-global branch state would otherwise stay visible to that
+	// iterator's OWN unrelated loops for the rest of its call — for example
+	// rangefunc_test.go's BadOfSliceIndex keeps calling yield in its own for
+	// loop after a labeled continue escapes the range body, and that for
+	// loop's own control check must not mistake the escaping label for its
+	// own. [Runner.goSourceInvokeRangeYield] hides the escape here and clears
+	// the runner-global state for the rest of the iterator's call;
+	// [Runner.goSourceRangeFunction] reinstates it once the iterator call
+	// returns, so it becomes visible again to the range statement's own
+	// enclosing function.
+	pendingBranch      bashPPBranchKind
+	pendingBranchDepth int
+	pendingGotoLabel   string
 }
 
 func (r *Runner) goSourceIteratorYield(fn *bashPPFunc) (*syntax.BashPPFuncType, error) {
@@ -120,7 +163,7 @@ func (r *Runner) goSourceRangeFunction(ctx context.Context, rng *syntax.BashPPRa
 		r.bashPPRangeError(rng, "BASHPP-ERANGE-ARITY: iterator yields %d value(s)", len(bashppParams(yieldType.Params)))
 		return true
 	}
-	state := &goSourceRangeYield{rng: rng}
+	state := &goSourceRangeYield{rng: rng, state: goSourceRangeReady}
 	yield := &bashPPFunc{
 		rangeYield: state,
 		lit:        &syntax.BashPPFuncLit{Params: yieldType.Params, Results: yieldType.Results},
@@ -129,13 +172,40 @@ func (r *Runner) goSourceRangeFunction(ctx context.Context, rng *syntax.BashPPRa
 	vr := r.bashPPStoreFunc(yield)
 	r.bashPPCallCells = []*bashPPCell{{vr: vr, declType: yieldType}}
 	r.bashPPInvoke(ctx, fn, []string{vr.Str})
-	// The iterator call above has now returned, so the whole range statement
-	// is exhausted: any further call to the yield closure — typically one the
-	// iterator squirreled away and invokes later, after escaping this frame —
-	// is a distinct misuse from the body having already returned false while
-	// the iterator was still running, and Go reports it with a different
-	// runtime error; see [Runner.goSourceInvokeRangeYield].
-	state.exhausted = true
+	// A labeled break/continue/goto that escaped this range's own body was
+	// hidden from the runner-global branch state for the rest of the
+	// iterator's call, so its own unrelated loops could not mistake it for
+	// theirs; see the [goSourceRangeYield] field comments. Reinstate it now
+	// that the iterator call has returned, so the enclosing function's own
+	// statement execution and loop control see it again.
+	if state.pendingBranch != bashPPBranchNone {
+		r.bashPPBranch, r.bashPPBranchDepth, r.bashPPGotoLabel = state.pendingBranch, state.pendingBranchDepth, state.pendingGotoLabel
+	}
+	// The iterator call above has now returned or is still unwinding an
+	// unrecovered panic. Go's own generated exhausted-check never runs while a
+	// panic is still propagating past this frame — control simply never
+	// reaches it — so only decide the post-call state when nothing is still
+	// unwinding through us.
+	if !r.bashPPPanicking() {
+		if state.state == goSourceRangePanic {
+			// The last body call panicked, and the iterator's own code
+			// recovered that panic (directly or through a helper) without
+			// ever calling yield again to transition the state away from
+			// PANIC. That is a distinct misuse from either an ordinary false
+			// return or the whole loop already having exited, and Go reports
+			// it with its own runtime error.
+			r.bashPPRaise("runtime error: range function recovered a loop body panic and did not resume panicking")
+		} else {
+			// The iterator call above has now returned normally, so the whole
+			// range statement is exhausted: any further call to the yield
+			// closure — typically one the iterator squirreled away and
+			// invokes later, after escaping this frame — is a distinct misuse
+			// from the body having already returned false while the iterator
+			// was still running, and Go reports it with a different runtime
+			// error; see [Runner.goSourceInvokeRangeYield].
+			state.state = goSourceRangeExhausted
+		}
+	}
 	// The body's defers were collected off the live stack so the iterator's
 	// return could not run or discard them. They belong to the enclosing
 	// function, so splice them onto its region now, in registration order: onto
@@ -158,54 +228,88 @@ func (r *Runner) goSourceRangeFunction(ctx context.Context, rng *syntax.BashPPRa
 
 func (r *Runner) goSourceInvokeRangeYield(ctx context.Context, fn *bashPPFunc, args []string, cells []*bashPPCell) []string {
 	state := fn.rangeYield
-	if state.exhausted {
+	// Capture the state found on entry, then mark the body running before
+	// checking it: Go's own generated check sets #state = RF_PANIC
+	// unconditionally before testing the old value, so a misbehaving iterator
+	// that swallows this call's panic (below) and calls yield again still
+	// finds PANIC rather than the stale DONE/EXHAUSTED — that is what lets the
+	// post-iterator-call check in [Runner.goSourceRangeFunction] recognize a
+	// loop body panic that was never resumed, instead of it looking like an
+	// ordinary repeated misuse.
+	entry := state.state
+	state.state = goSourceRangePanic
+	switch entry {
+	case goSourceRangeExhausted:
 		r.bashPPRaise("runtime error: range function continued iteration after whole loop exit")
 		return nil
-	}
-	if state.stopped {
+	case goSourceRangeDone:
 		r.bashPPRaise("runtime error: range function continued iteration after function for loop body returned false")
 		return nil
+	case goSourceRangePanic:
+		r.bashPPRaise("runtime error: range function continued iteration after loop body panic")
+		return nil
 	}
-	more := !state.stopped
+	params := bashppParams(fn.params())
+	if len(args) != len(params) {
+		r.exit.fatal(fmt.Errorf("gosource: iterator yield argument count mismatch"))
+		return nil
+	}
+	values := make([]string, len(args))
+	for i := range args {
+		values[i] = args[i]
+		if i < len(cells) && cells[i] != nil {
+			values[i] = cells[i].vr.String()
+		}
+	}
+	savedScope := r.bashPPScope
+	r.bashPPScope = fn.scope
+	var key, value any
+	var keyType, valueType syntax.BashPPTypeExpr
+	if len(values) > 0 {
+		key, keyType = values[0], params[0].typ
+	}
+	if len(values) > 1 {
+		value, valueType = values[1], params[1].typ
+	}
+	// A defer executed directly in the body binds to the enclosing function,
+	// so divert it to the state's buffer for the length of the body. A frame
+	// entered for an ordinary call the body makes clears the sink itself, so
+	// only the body's own defers are captured here.
+	savedSink := r.bashPPRangeDefer
+	r.bashPPRangeDefer = &state.deferBuf
+	more := r.bashPPRangeIteration(ctx, state.rng, key, keyType, value, nil, valueType)
+	r.bashPPRangeDefer = savedSink
+	r.bashPPScope = savedScope
+	// A labeled break/continue/goto that still needs to unwind past this range
+	// statement (bashPPRangeControl found it escaping, so more is already
+	// false) must not stay visible to the iterator's OWN loops for the rest
+	// of its call — see the [goSourceRangeYield] field comments. Hide it here;
+	// [Runner.goSourceRangeFunction] reinstates it once the iterator call
+	// returns.
+	if r.bashPPBranch != bashPPBranchNone {
+		state.pendingBranch, state.pendingBranchDepth, state.pendingGotoLabel = r.bashPPBranch, r.bashPPBranchDepth, r.bashPPGotoLabel
+		r.bashPPBranch, r.bashPPBranchDepth, r.bashPPGotoLabel = bashPPBranchNone, 0, ""
+	}
+	if r.bashPPPanicking() {
+		// The body panicked with a real Go panic (as opposed to break,
+		// continue, or return) and that panic is still unwinding. Leave the
+		// state at PANIC — a misbehaving iterator that swallows this panic and
+		// calls yield again must see the distinct "after loop body panic"
+		// error, not be treated as though the body merely returned false —
+		// and report no result: the panic already carries the control
+		// transfer out of this call.
+		return nil
+	}
+	if r.exit.returning {
+		state.returning, state.ret = true, r.bashPPReturn
+		r.bashPPReturn = bashPPReturnState{}
+		r.exit.returning = false
+		more = false
+	}
 	if more {
-		params := bashppParams(fn.params())
-		if len(args) != len(params) {
-			r.exit.fatal(fmt.Errorf("gosource: iterator yield argument count mismatch"))
-			return nil
-		}
-		values := make([]string, len(args))
-		for i := range args {
-			values[i] = args[i]
-			if i < len(cells) && cells[i] != nil {
-				values[i] = cells[i].vr.String()
-			}
-		}
-		savedScope := r.bashPPScope
-		r.bashPPScope = fn.scope
-		var key, value any
-		var keyType, valueType syntax.BashPPTypeExpr
-		if len(values) > 0 {
-			key, keyType = values[0], params[0].typ
-		}
-		if len(values) > 1 {
-			value, valueType = values[1], params[1].typ
-		}
-		// A defer executed directly in the body binds to the enclosing function,
-		// so divert it to the state's buffer for the length of the body. A frame
-		// entered for an ordinary call the body makes clears the sink itself, so
-		// only the body's own defers are captured here.
-		savedSink := r.bashPPRangeDefer
-		r.bashPPRangeDefer = &state.deferBuf
-		more = r.bashPPRangeIteration(ctx, state.rng, key, keyType, value, nil, valueType)
-		r.bashPPRangeDefer = savedSink
-		r.bashPPScope = savedScope
-		if r.exit.returning {
-			state.returning, state.ret = true, r.bashPPReturn
-			r.bashPPReturn = bashPPReturnState{}
-			r.exit.returning = false
-			more = false
-		}
-		state.stopped = !more
+		state.state = goSourceRangeReady
+	} else {
+		state.state = goSourceRangeDone
 	}
 	text := strconv.FormatBool(more)
 	cell := &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: text}, scalarKind: constant.Bool, typeName: "bool", declType: bashPPRangeNamedType("bool")}

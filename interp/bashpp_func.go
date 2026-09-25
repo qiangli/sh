@@ -2473,6 +2473,21 @@ type bashPPFrame struct {
 	// typeArgs is the caller's type parameter bindings, restored on leave so
 	// a generic frame's `T` cannot outlive the call that bound it.
 	typeArgs map[string]syntax.BashPPTypeExpr
+	// branch, branchDepth and gotoLabel are the caller's pending Go-form
+	// break/continue/goto, saved so the callee starts clean. A labeled
+	// break/continue can never target a loop outside its own function — go/
+	// types rejects that statically — so a callee's OWN loops must never see,
+	// let alone consume, a level of a label escape that belongs to the
+	// caller's labeled statement. Without this a callee that ranges over its
+	// own unrelated slice (for instance a range-over-func iterator like
+	// rangefunc_test.go's BadOfSliceIndex, called from inside the loop body
+	// the caller's escaping branch is unwinding through) steals one level of
+	// the caller's escape budget merely by also being "a loop" as far as
+	// [Runner.bashPPRangeControl] can tell, which then targets the wrong
+	// ancestor. See [Runner.bashPPEnterFrame].
+	branch      bashPPBranchKind
+	branchDepth int
+	gotoLabel   string
 }
 
 // bashPPEnterFrame pushes the frame fn's body runs in: its own shell function
@@ -2482,23 +2497,30 @@ type bashPPFrame struct {
 // mark on the deferred-call stack.
 func (r *Runner) bashPPEnterFrame(fn *bashPPFunc, args []string) *bashPPFrame {
 	frame := &bashPPFrame{
-		agentic:    r.bashPPAgentic,
-		r:          r,
-		params:     r.Params,
-		inFunc:     r.inFunc,
-		writeEnv:   r.writeEnv,
-		scope:      r.bashPPScope,
-		callDepth:  len(r.callStack),
-		deferMark:  len(r.bashPPDeferStack),
-		rangeDefer: r.bashPPRangeDefer,
-		ret:        r.bashPPReturn,
-		deferDepth: r.bashPPDeferDepth,
-		typeArgs:   r.bashPPTypeParamArgs,
+		agentic:     r.bashPPAgentic,
+		r:           r,
+		params:      r.Params,
+		inFunc:      r.inFunc,
+		writeEnv:    r.writeEnv,
+		scope:       r.bashPPScope,
+		callDepth:   len(r.callStack),
+		deferMark:   len(r.bashPPDeferStack),
+		rangeDefer:  r.bashPPRangeDefer,
+		ret:         r.bashPPReturn,
+		deferDepth:  r.bashPPDeferDepth,
+		typeArgs:    r.bashPPTypeParamArgs,
+		branch:      r.bashPPBranch,
+		branchDepth: r.bashPPBranchDepth,
+		gotoLabel:   r.bashPPGotoLabel,
 	}
 	// A call made from a range-over-function body starts a frame of its own, so
 	// its defers belong to it and not to the range's enclosing function. Clear
 	// the sink for the callee; leave restores it for the body that resumes.
 	r.bashPPRangeDefer = nil
+	// A function call is a break/continue/goto boundary: the callee's own
+	// loops must start clean, not see a caller's still-unresolved labeled
+	// branch. See the field comments on [bashPPFrame].
+	r.bashPPBranch, r.bashPPBranchDepth, r.bashPPGotoLabel = bashPPBranchNone, 0, ""
 	// The callee's own type arguments REPLACE the caller's rather than
 	// extending them. An ordinary function called from inside a generic body
 	// has none, and must not inherit a `T` it never declared.
@@ -2588,6 +2610,11 @@ func (f *bashPPFrame) leave() {
 	r.bashPPReturn = f.ret
 	r.bashPPDeferDepth = f.deferDepth
 	r.bashPPRangeDefer = f.rangeDefer
+	// Restore the caller's own pending branch, discarding anything the callee
+	// left behind: a callee's loops are none of the caller's labels' business
+	// on the way in (see bashPPEnterFrame) or out. See the field comments on
+	// [bashPPFrame].
+	r.bashPPBranch, r.bashPPBranchDepth, r.bashPPGotoLabel = f.branch, f.branchDepth, f.gotoLabel
 	r.bashPPTypeParamArgs = f.typeArgs
 	r.bashPPFuncActive--
 }

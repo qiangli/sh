@@ -118,6 +118,159 @@ func main() {
 	}
 }
 
+// TestGoSourceRangeFunctionSwallowedPanicMissingReport pins Go's fourth
+// rangefunc misuse report — RF_MISSING_PANIC, "recovered a loop body panic
+// and did not resume panicking" — for an iterator that wraps each yield call
+// in its own defer/recover (as cmd/compile/internal/rangefunc's
+// SwallowPanicOfSliceIndex does) and lets a body panic be swallowed there
+// instead of resuming it. Go's rangefunc rewrite records the per-loop state
+// as PANIC the moment the body starts running and only clears it once the
+// body finishes normally; the iterator call returning with state still PANIC
+// (nothing having resumed the panic or called yield again) is itself the
+// misuse, reported once the iterator's own call to the range function
+// returns. Sprint #281 Story #809: the interpreter used to fold this into an
+// ordinary false return and let the iterator return with no report at all.
+func TestGoSourceRangeFunctionSwallowedPanicMissingReport(t *testing.T) {
+	const source = `package main
+import "fmt"
+func swallow(yield func(int) bool) {
+	for _, v := range []int{1, 2, 3, 4} {
+		done := false
+		func() {
+			defer func() {
+				if r := recover(); r != nil { done = true }
+			}()
+			done = !yield(v)
+		}()
+		if done { return }
+	}
+}
+func main() {
+	var result []int
+	defer func() {
+		fmt.Println("recovered:", recover())
+		fmt.Println("result:", result)
+	}()
+	for x := range swallow {
+		result = append(result, x)
+		if x == 3 { panic("x is 3") }
+	}
+}`
+	stdout, stderr, err := runRangeFunctionSource(t, source)
+	if err != nil {
+		t.Fatalf("Run: %v stdout=%q stderr=%q", err, stdout, stderr)
+	}
+	const want = "recovered: runtime error: range function recovered a loop body panic and did not resume panicking\nresult: [1 2 3]\n"
+	if stdout != want || stderr != "" {
+		t.Fatalf("streams: stdout=%q stderr=%q", stdout, stderr)
+	}
+}
+
+// TestGoSourceRangeFunctionYieldAfterBodyPanicReportsDistinctError pins the
+// THIRD distinct rangefunc misuse message — RF_PANIC, "continued iteration
+// after loop body panic" — kept apart from the DONE case
+// (TestGoSourceRangeFunctionYieldAfterFalsePanics) and the EXHAUSTED case
+// (TestGoSourceRangeFunctionYieldAfterExhaustedPanics). Modeled on
+// cmd/compile/internal/rangefunc's `twice` helper: the iterator recovers a
+// body panic from its first yield call in a wrapper func, notices its `done`
+// flag was never set (the panic aborted the assignment that would have set
+// it), and calls yield a second time anyway — while the per-loop state is
+// still PANIC, left over from the call that panicked, rather than DONE from
+// an ordinary false return. Sprint #281 Story #809: the interpreter
+// conflated a panicking body with an ordinary `return` in the body (both set
+// the same "stop" flag), so this second call was reported as the DONE case
+// instead.
+func TestGoSourceRangeFunctionYieldAfterBodyPanicReportsDistinctError(t *testing.T) {
+	const source = `package main
+import "fmt"
+func twice(x, y int) func(func(int) bool) {
+	return func(yield func(int) bool) {
+		done := false
+		func() {
+			defer func() { recover() }()
+			done = !yield(x)
+		}()
+		if done { return }
+		yield(y)
+	}
+}
+func main() {
+	defer func() { fmt.Println("recovered:", recover()) }()
+	for x := range twice(0, 1) {
+		if x == 0 { panic("x is zero") }
+	}
+}`
+	stdout, stderr, err := runRangeFunctionSource(t, source)
+	if err != nil {
+		t.Fatalf("Run: %v stdout=%q stderr=%q", err, stdout, stderr)
+	}
+	const want = "recovered: runtime error: range function continued iteration after loop body panic\n"
+	if stdout != want || stderr != "" {
+		t.Fatalf("streams: stdout=%q stderr=%q", stdout, stderr)
+	}
+}
+
+// TestGoSourceRangeFunctionLabeledContinueSkipsUnrelatedIteratorLoop pins a
+// labeled continue escaping THREE range-over-function levels, past a
+// misbehaving innermost iterator (cmd/compile/internal/rangefunc's
+// BadOfSliceIndex, which ignores yield's false return and keeps calling it)
+// straight to the outermost loop's label — the shape TestMultiCont3 in that
+// corpus exercises. Sprint #281 Story #809: the interpreter threaded the
+// pending escape as one runner-global flag with no notion of which function
+// it belonged to, so BadOfSliceIndex's own (unrelated) slice-range loop —
+// entered by a real function call the escaping continue happened to unwind
+// through — silently consumed one level of the escape meant only for the
+// range statements textually nested in main, landing the continue one loop
+// short of its label instead of at it.
+func TestGoSourceRangeFunctionLabeledContinueSkipsUnrelatedIteratorLoop(t *testing.T) {
+	const source = `package main
+import "fmt"
+func ofSlice(s []int) func(func(int, int) bool) {
+	return func(yield func(int, int) bool) {
+		for i, v := range s {
+			if !yield(i, v) { return }
+		}
+	}
+}
+func badOfSlice(s []int) func(func(int, int) bool) {
+	return func(yield func(int, int) bool) {
+		for i, v := range s {
+			yield(i, v)
+		}
+	}
+}
+func main() {
+	var result []int
+	defer func() {
+		fmt.Println("recovered:", recover())
+		fmt.Println("result:", result)
+	}()
+W:
+	for _, w := range ofSlice([]int{1000, 2000}) {
+		result = append(result, w)
+		if w == 2000 { break }
+		for _, x := range ofSlice([]int{100, 200}) {
+			for _, y := range ofSlice([]int{10, 20}) {
+				result = append(result, y)
+				for _, z := range badOfSlice([]int{1, 2, 3, 4}) {
+					result = append(result, z)
+					if z >= 2 { continue W }
+				}
+			}
+			result = append(result, x)
+		}
+	}
+}`
+	stdout, stderr, err := runRangeFunctionSource(t, source)
+	if err != nil {
+		t.Fatalf("Run: %v stdout=%q stderr=%q", err, stdout, stderr)
+	}
+	const want = "recovered: runtime error: range function continued iteration after function for loop body returned false\nresult: [1000 10 1 2]\n"
+	if stdout != want || stderr != "" {
+		t.Fatalf("streams: stdout=%q stderr=%q", stdout, stderr)
+	}
+}
+
 func TestGoSourceRangeFunctionCallbackShapeBoundaries(t *testing.T) {
 	t.Run("aggregate yield parameter", func(t *testing.T) {
 		const source = `package main
