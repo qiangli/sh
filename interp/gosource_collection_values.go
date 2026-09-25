@@ -65,11 +65,11 @@ func (r *Runner) goSourceBuiltinArg(call *syntax.BashPPCall, index int) (bashPPB
 	if cell == nil {
 		return bashPPBuiltinArg{}, fmt.Errorf("Go builtin argument has no value")
 	}
-	arg := r.goSourceBuiltinCellArg(cell, bashPPWordSource(call.Args[index]))
-	if err := r.goSourceMaterializeBuiltinBridgeCollection(&arg); err != nil {
-		return bashPPBuiltinArg{}, err
-	}
-	return arg, nil
+	// Collection handles stay native here: len and cap only need the
+	// header, and copying a native slice's elements can fault on memory the
+	// program protected (Sprint 248 panic-on-fault). append materializes its
+	// own operands before admission (bashPPRunValueBuiltin).
+	return r.goSourceBuiltinCellArg(cell, bashPPWordSource(call.Args[index])), nil
 }
 
 func (r *Runner) goSourceBuiltinCellArg(cell *bashPPCell, text string) bashPPBuiltinArg {
