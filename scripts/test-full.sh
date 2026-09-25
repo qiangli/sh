@@ -6,7 +6,16 @@
 set -uo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-timeout=${TEST_FULL_TIMEOUT:-30m}
+# This is a release gate, not a developer convenience wrapper. Package
+# selection and the per-process timeout are fixed so an invocation cannot
+# quietly run a smaller or more permissive test tier.
+for override in FULL_TEST_ROOT_PACKAGES FULL_TEST_MOREINTERP_PACKAGES FULL_TEST_SKIP_MOREINTERP TEST_FULL_TIMEOUT; do
+	if [[ -v $override ]]; then
+		echo "ERROR: $override is not permitted by the full release test runner" >&2
+		exit 2
+	fi
+done
+timeout=30m
 workdir=${FULL_TEST_WORKDIR:-}
 evidence=${FULL_TEST_EVIDENCE_DIR:-"$root/artifacts/full-test"}
 keep_workdir=0
@@ -68,7 +77,7 @@ if ! git -C "$root" diff --quiet || ! git -C "$root" diff --cached --quiet; then
 
 status=0 discovered=0 executed=0 packages_enumerated=0 packages_compiled=0
 packages_no_test_files=0 compile_failures=0 discovery_failures=0
-top_pass=0 top_fail=0 top_skip=0 sub_pass=0 sub_fail=0 sub_skip=0 command_number=0
+top_pass=0 top_fail=0 top_skip=0 top_unrun=0 sub_pass=0 sub_fail=0 sub_skip=0 command_number=0
 
 record_command() {
 	local phase=$1 module=$2 package=$3 name=$4 cwd=$5 log=$6 result=$7
@@ -90,10 +99,8 @@ list_packages() {
 	done <"$list_log"
 }
 
-root_pattern=${FULL_TEST_ROOT_PACKAGES:-./...}
-moreinterp_pattern=${FULL_TEST_MOREINTERP_PACKAGES:-./...}
-if ! list_packages root "$root" "$root_pattern" "$logs/root.enumerate.log"; then echo 'ERROR: could not enumerate root module packages' >&2; exit 1; fi
-if [ "${FULL_TEST_SKIP_MOREINTERP:-0}" != 1 ] && ! list_packages moreinterp "$root/moreinterp" "$moreinterp_pattern" "$logs/moreinterp.enumerate.log"; then echo 'ERROR: could not enumerate moreinterp packages' >&2; exit 1; fi
+if ! list_packages root "$root" ./... "$logs/root.enumerate.log"; then echo 'ERROR: could not enumerate root module packages' >&2; exit 1; fi
+if ! list_packages moreinterp "$root/moreinterp" ./... "$logs/moreinterp.enumerate.log"; then echo 'ERROR: could not enumerate moreinterp packages' >&2; exit 1; fi
 
 # A sequential package number avoids depending on import paths being safe file
 # names and makes retained command/log paths easy to correlate with rows.
@@ -130,13 +137,29 @@ while IFS=$'\t' read -r module directory package package_dir test_go_files x_tes
 		run_log=$logs/$number.$discovered.run.log
 		# The anchored selector keeps one top-level test/example/fuzz seed corpus
 		# per fresh process; -test.v emits explicit subtest outcomes.
-		if (cd "$package_dir" && "$binary" -test.timeout="$timeout" -test.v -test.run="^${name}$") >"$run_log" 2>&1; then run_status=pass; else run_status=fail; status=1; cat "$run_log" >&2; fi
-		record_command run "$module" "$package" "$name" "$package_dir" "$run_log" "$run_status" "$binary" -test.timeout="$timeout" -test.v -test.run="^${name}$"
+		if (cd "$package_dir" && "$binary" -test.timeout="$timeout" -test.v -test.run="^${name}$") >"$run_log" 2>&1; then
+			process_status=pass
+		else
+			process_status=fail
+			status=1
+			cat "$run_log" >&2
+		fi
+		record_command run "$module" "$package" "$name" "$package_dir" "$run_log" "$process_status" "$binary" -test.timeout="$timeout" -test.v -test.run="^${name}$"
 		executed=$((executed + 1))
 		# A skipped top-level test exits zero; retain skip rather than calling it pass.
 		observed_top=$(awk -v name="$name" '$1 == "---" && ($2 == "PASS:" || $2 == "FAIL:" || $2 == "SKIP:") && $3 == name { gsub(":", "", $2); print tolower($2); exit }' "$run_log")
-		[ -n "$observed_top" ] && run_status=$observed_top
-		case "$run_status" in pass) top_pass=$((top_pass + 1)) ;; fail) top_fail=$((top_fail + 1)) ;; skip) top_skip=$((top_skip + 1)) ;; esac
+		if [ -n "$observed_top" ]; then
+			run_status=$observed_top
+		elif [ "$process_status" = pass ]; then
+			# An exit status alone is not evidence that the selected top-level
+			# name ran. Keep the raw log and fail the gate loudly for review.
+			run_status=unrun
+			status=1
+			echo "ERROR: $module $package $name exited zero without a named top-level outcome" >&2
+		else
+			run_status=fail
+		fi
+		case "$run_status" in pass) top_pass=$((top_pass + 1)) ;; fail) top_fail=$((top_fail + 1)) ;; skip) top_skip=$((top_skip + 1)) ;; unrun) top_unrun=$((top_unrun + 1)) ;; esac
 		printf '%s\t%s\t%s\t%s\t%s\n' "$module" "$package" "$name" "$kind" "$run_status" >>"$results"
 		while IFS=$'\t' read -r sub_status subtest; do
 			[ "$subtest" = "$name" ] && continue
@@ -156,7 +179,7 @@ if ((discovered != executed)); then echo "ERROR: full-tier accounting mismatch: 
 	printf 'summary\tpackages_no_test_files\t%d\n' "$packages_no_test_files"
 	printf 'summary\tcompile_failures\t%d\n' "$compile_failures"
 	printf 'summary\tdiscovery_failures\t%d\n' "$discovery_failures"
-	printf 'summary\ttop_pass\t%d\n' "$top_pass"; printf 'summary\ttop_fail\t%d\n' "$top_fail"; printf 'summary\ttop_skip\t%d\n' "$top_skip"
+	printf 'summary\ttop_pass\t%d\n' "$top_pass"; printf 'summary\ttop_fail\t%d\n' "$top_fail"; printf 'summary\ttop_skip\t%d\n' "$top_skip"; printf 'summary\ttop_unrun\t%d\n' "$top_unrun"
 	printf 'summary\tsubtest_pass\t%d\n' "$sub_pass"; printf 'summary\tsubtest_fail\t%d\n' "$sub_fail"; printf 'summary\tsubtest_skip\t%d\n' "$sub_skip"
 	printf 'summary\tdiscovered\t%d\n' "$discovered"; printf 'summary\texecuted\t%d\n' "$executed"
 } | tee -a "$results"
