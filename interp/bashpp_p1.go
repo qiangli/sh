@@ -384,6 +384,12 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 		if d.InitExpr != nil && (isStruct || isCollection) {
 			value, meta, err := r.bashPPEvalTypedValue(d.InitExpr, d.DeclTypeExpr)
 			if err != nil {
+				if errors.Is(err, errBashPPScalarInterrupted) {
+					// The initializer already raised a Go panic (a nil
+					// dereference slicing a nil array pointer); the unwind
+					// reports it, not this declaration.
+					return
+				}
 				r.errf("%v\n", err)
 				r.exit = exitStatus{code: 2}
 				return
@@ -1222,6 +1228,9 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 		if _, ok := d.Expr.(*syntax.BashPPSliceExpr); ok {
 			value, meta, err := r.bashPPReadExpr(d.Expr)
 			if err != nil {
+				if errors.Is(err, errBashPPScalarInterrupted) {
+					return
+				}
 				r.errf("%v\n", err)
 				r.exit = exitStatus{code: 2}
 				return

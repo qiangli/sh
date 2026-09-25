@@ -853,6 +853,11 @@ func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (value any, meta *bashPP
 			if err != nil {
 				return nil, nil, err
 			}
+		} else if value == nil && meta != nil && meta.kind == "pointer" {
+			// A nil pointer-to-array operand that is not a stored cell, such
+			// as the conversion `(*[1]int)(nil)`, carries only pointer
+			// metadata; slicing through it is Go's nil dereference.
+			return nil, nil, errBashPPNilDereference
 		}
 		if meta == nil || meta.kind == "struct" || meta.kind == "map" {
 			return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-SLICE: value is not sliceable")
