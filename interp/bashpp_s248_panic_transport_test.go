@@ -199,7 +199,7 @@ func main() {
 		qt.Assert(t, qt.StringContains(err.Error()+stderr, "dependency mutation of interpreter-owned references is unsupported for time.AfterFunc"))
 		qt.Assert(t, qt.IsFalse(strings.Contains(out+stderr, "scheduled")))
 	})
-	t.Run("made function in a concurrent task refused", func(t *testing.T) {
+	t.Run("made function in a concurrent task", func(t *testing.T) {
 		src := `package main
 import "reflect"
 func impl(args []reflect.Value) []reflect.Value { println("ran"); return nil }
@@ -214,9 +214,7 @@ func main() {
 	println("joined")
 }`
 		out, stderr, err := runGoSource(t, "s248-makefunc-task", src)
-		qt.Assert(t, qt.IsNotNil(err))
-		qt.Assert(t, qt.StringContains(err.Error()+stderr, "dependency mutation of interpreter-owned references is unsupported"))
-		qt.Assert(t, qt.IsFalse(strings.Contains(out+stderr, "ran")))
-		qt.Assert(t, qt.IsFalse(strings.Contains(out+stderr, "joined")))
+		qt.Assert(t, qt.IsNil(err), qt.Commentf("stderr=%q", stderr))
+		qt.Assert(t, qt.Equals(out+stderr, "ran\njoined\n"))
 	})
 }

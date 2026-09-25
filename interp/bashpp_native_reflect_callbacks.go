@@ -200,6 +200,32 @@ func (s *bashPPNativeSession) madeFuncOwnedBy(v bashPPBridgeValue, owner *Runner
 	return owner != nil && s.madeFuncOwner(v) == owner
 }
 
+// madeFuncCallable reports a made handle a runner may call or view through
+// Interface. Any runner may: a bare call is a routed request
+// (routedCallbackRequest), so the implementation runs on the calling runner's
+// own parked request — as native callReflect runs it on the calling goroutine
+// — and its closure reaches the captured cells it shares with every task.
+func (s *bashPPNativeSession) madeFuncCallable(v bashPPBridgeValue, owner *Runner) bool {
+	return owner != nil && s.madeFunc(v)
+}
+
+// routedCallbackRequest reports a request whose callbacks are delivered to it
+// by request identity instead of through the shared callback gate: a bare call
+// of a made function, and every callback-capable request a callback served
+// that way raises. Such callbacks run only on their own dispatch goroutine in
+// the helper, so no other request can be handed them, and one task blocking
+// inside an implementation never holds the gate the others need.
+func routedCallbackRequest(req bashPPEvalRequest, q bashPPBridgeRequest) bool {
+	owner := req.CallbackOwner
+	if owner == nil || req.Bridge == nil {
+		return false
+	}
+	if owner.bashPPTools.routedDepth > 0 {
+		return requestCallbackCapable(req, q)
+	}
+	return q.Op == "call" && q.Selector == "" && q.Receiver != nil && q.Receiver.Function && req.Bridge.madeFuncCallable(*q.Receiver, owner)
+}
+
 // bashPPMadeFuncOwner reports a request with a callback runner. Its identity
 // is checked against each made handle before using that handle.
 func bashPPMadeFuncOwner(req bashPPEvalRequest) bool {
@@ -208,7 +234,7 @@ func bashPPMadeFuncOwner(req bashPPEvalRequest) bool {
 
 // bashPPMadeFuncUse reports one of the two admitted uses of a made function.
 func bashPPMadeFuncUse(req bashPPEvalRequest, q bashPPBridgeRequest) bool {
-	if q.Op != "call" || q.Receiver == nil || !req.Bridge.madeFuncOwnedBy(*q.Receiver, req.CallbackOwner) {
+	if q.Op != "call" || q.Receiver == nil || !req.Bridge.madeFuncCallable(*q.Receiver, req.CallbackOwner) {
 		return false
 	}
 	switch q.Selector {

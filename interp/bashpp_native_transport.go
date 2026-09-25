@@ -176,10 +176,9 @@ func validateLocalTransport(req bashPPEvalRequest, q bashPPBridgeRequest) error 
 	if !unsafe && !requestHasCallbacks(req, q) {
 		return nil
 	}
-	// A made function is served by the retained-callback protocol. Its
-	// creating runner owns the original implementation's lexical cells, so a
-	// different task cannot call it or view it through Interface.
-	madeByOtherRunner := q.Receiver != nil && req.Bridge.madeFunc(*q.Receiver) && !req.Bridge.madeFuncOwnedBy(*q.Receiver, req.CallbackOwner)
+	// A made function is served by the retained-callback protocol, routed to
+	// the calling runner; a request with no callback runner cannot serve it.
+	madeByOtherRunner := q.Receiver != nil && req.Bridge.madeFunc(*q.Receiver) && !req.Bridge.madeFuncCallable(*q.Receiver, req.CallbackOwner)
 	if !unsafe && !functionCallbacks && !madeByOtherRunner && q.Receiver != nil && q.Receiver.Kind == "handle" && q.Receiver.Callbacks {
 		// The dependency already owns the retained function; calling it (or
 		// converting its reflect.Value back with Interface) hands over no

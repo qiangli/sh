@@ -13,9 +13,9 @@ import (
 // []reflect.Value through reflect.MakeFunc. The parameter arrives as the
 // dependency's own []reflect.Value behind one handle; the result slice is
 // rebuilt from its element handles, which reflect copies out without retaining.
-// The made function is called from its owner; a concurrent task's call is
-// refused promptly (bashPPMadeFuncOwner), never left to hang, after the
-// owner's own calls have printed.
+// The made functions are called from their owner and from concurrent tasks;
+// each task's callbacks are routed to its own request, so every task sees the
+// results of its own arguments.
 func TestS248MakeFuncHandleSliceCallback(t *testing.T) {
 	const source = `package main
 
@@ -48,6 +48,9 @@ func main() {
 				if fmt.Sprint(f()) != "{1 2}" {
 					panic("wrong result")
 				}
+				if sum, n := g(i, j); sum != i+j || n != 2 {
+					panic("wrong task result")
+				}
 			}
 			c <- true
 		}()
@@ -59,7 +62,7 @@ func main() {
 }
 `
 	out, stderr, err := runGoSource(t, "s248-makefunc", source)
-	if err == nil || out != "{1 2}\n5 2\n" || !strings.Contains(stderr, "dependency mutation of interpreter-owned references is unsupported") {
+	if err != nil || out != "{1 2}\n5 2\ndone\n" || stderr != "" {
 		t.Fatalf("run=%v stdout=%q stderr=%q", err, out, stderr)
 	}
 }
@@ -89,9 +92,10 @@ func main() {
 	}
 }
 
-// A made function launched as a go statement runs on a concurrent task, which
-// the retained-callback protocol cannot serve: it is refused promptly instead
-// of stalling the owner at the launch handshake.
+// A made function launched as a go statement runs on a concurrent task. Its
+// implementation blocks sending on the captured channel until main receives;
+// that callback is routed to the task's own request and holds no gate the
+// owner's later MakeFunc calls need.
 func TestS248MakeFuncBlockingCallbackTasks(t *testing.T) {
 	const source = `package main
 
@@ -125,7 +129,7 @@ func main() {
 }
 `
 	out, stderr, err := runGoSource(t, "s248-makefunc-blocking", source)
-	if err == nil || strings.Contains(out, "done") || !strings.Contains(stderr, "dependency mutation of interpreter-owned references is unsupported") {
+	if err != nil || out != "done\n" || stderr != "" {
 		t.Fatalf("run=%v stdout=%q stderr=%q", err, out, stderr)
 	}
 }

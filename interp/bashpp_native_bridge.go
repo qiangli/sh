@@ -141,6 +141,9 @@ type bashPPBridgeRequest struct {
 	// only when Op is "callback-reply". Sprint #118 Story #54 (c3a60493cde9).
 	Values []bashPPBridgeValue `json:"values,omitempty"`
 	Error  string              `json:"error,omitempty"`
+	// Route asks the helper to name this request as the Parent of every
+	// callback its dispatching goroutine raises; see routedCallbackRequest.
+	Route bool `json:"route,omitempty"`
 }
 type bashPPBridgeResponse struct {
 	SliceUpdates []bashPPNativeSliceBuffer `json:"slice_updates,omitempty"`
@@ -162,6 +165,8 @@ type bashPPBridgeResponse struct {
 	Receiver *bashPPBridgeValue  `json:"receiver,omitempty"`
 	Values   []bashPPBridgeValue `json:"values,omitempty"`
 	Error    string              `json:"error,omitempty"`
+	// Parent names the routed request whose dispatch raised this callback.
+	Parent uint64 `json:"parent,omitempty"`
 }
 
 func bashPPNativeSelectDefaultReply(q bashPPBridgeRequest, reply bashPPBridgeResponse) bool {
@@ -197,7 +202,10 @@ type bashPPNativeSession struct {
 	callbackGate        chan struct{}
 	activeCallbacks     chan bashPPBridgeResponse
 	callbackOwner       *Runner
-	mailbox             *bashPPCallbackMailbox
+	// routes are the callback channels of routed requests, by request ID.
+	// Protected by mu.
+	routes  map[uint64]chan bashPPBridgeResponse
+	mailbox *bashPPCallbackMailbox
 	// callbackRefusal is the first diagnostic from an interpreter-refused
 	// dependency callback. The dependency exits nonzero after the refusal, so
 	// exit-status adoption must preserve this original cause.
@@ -606,6 +614,9 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 				// remains available for nested dependency replies.
 				s.mu.Lock()
 				callbacks := s.activeCallbacks
+				if routed := s.routes[reply.Parent]; reply.Parent != 0 && routed != nil {
+					callbacks = routed
+				}
 				s.mu.Unlock()
 				if callbacks != nil {
 					select {
@@ -669,11 +680,20 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 	if retainedFunctionCallback(req, q) || len(q.Transfers) > 0 && requestHasCallbacks(req, q) {
 		s.markRetainedCallbacks()
 	}
-	release, callbacks, err := s.enterCallbacks(ctx, req, q)
-	if err != nil {
-		return nil, err
+	routed := routedCallbackRequest(req, q)
+	var callbacks chan bashPPBridgeResponse
+	var err error
+	if routed {
+		q.Route = true
+		callbacks = make(chan bashPPBridgeResponse, 1)
+	} else {
+		var release func()
+		release, callbacks, err = s.enterCallbacks(ctx, req, q)
+		if err != nil {
+			return nil, err
+		}
+		defer release()
 	}
-	defer release()
 	if err := s.begin(ctx, req); err != nil {
 		return nil, err
 	}
@@ -727,8 +747,14 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 	wait := make(chan bashPPBridgeResponse, 1)
 	s.mu.Lock()
 	s.pending[q.ID] = wait
+	if routed {
+		if s.routes == nil {
+			s.routes = map[uint64]chan bashPPBridgeResponse{}
+		}
+		s.routes[q.ID] = callbacks
+	}
 	s.mu.Unlock()
-	defer func() { s.mu.Lock(); delete(s.pending, q.ID); s.mu.Unlock() }()
+	defer func() { s.mu.Lock(); delete(s.pending, q.ID); delete(s.routes, q.ID); s.mu.Unlock() }()
 	s.write.Lock()
 	err = json.NewEncoder(s.conn).Encode(q)
 	s.write.Unlock()
@@ -820,7 +846,13 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 			// The callback installs a write barrier on the interpreter's
 			// streams. If it writes directly, earlier child output lands first;
 			// a callback with no direct output needs no pipe round trip.
+			if routed {
+				req.CallbackOwner.bashPPTools.routedDepth++
+			}
 			s.serveCallback(ctx, req.CallbackOwner, callback, q.coherence)
+			if routed {
+				req.CallbackOwner.bashPPTools.routedDepth--
+			}
 			if owner := req.CallbackOwner; owner != nil {
 				if owner.exit.err != nil {
 					return nil, owner.exit.err

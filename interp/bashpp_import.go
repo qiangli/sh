@@ -111,7 +111,10 @@ type bashPPToolchain struct {
 	eval          bashPPEvaluator
 	bridge        *bashPPNativeSession
 	callbackDepth int
-	panicOnFault  bool
+	// routedDepth counts callbacks this runner serves on a routed request;
+	// requests they raise are routed too (routedCallbackRequest).
+	routedDepth  int
+	panicOnFault bool
 
 	moduleDir  string
 	importPath string

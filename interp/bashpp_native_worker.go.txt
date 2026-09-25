@@ -60,10 +60,10 @@ type value struct {
 }
 type bppProtocolEntry struct {Key value `json:"key"`; Value value `json:"value"`}
 type sliceBuffer struct {Index int `json:"index"`;Length int `json:"length"`;Value value `json:"value"`}
-type request struct { SliceBuffers []sliceBuffer `json:"slice_buffers,omitempty"`; Transfers []int `json:"transfers,omitempty"`; ID uint64 `json:"id"`; Op string `json:"op"`; PanicOnFault bool `json:"panic_on_fault,omitempty"`; Selector string `json:"selector"`; Instance string `json:"instance,omitempty"`; Receiver *value `json:"receiver,omitempty"`; Args []value `json:"args,omitempty"`; Spread bool `json:"spread,omitempty"`; SourceFile string `json:"source_file,omitempty"`; SourceLine int `json:"source_line,omitempty"`; LogPrint string `json:"log_print,omitempty"`; Values []value `json:"values,omitempty"`; Error string `json:"error,omitempty"` }
+type request struct { SliceBuffers []sliceBuffer `json:"slice_buffers,omitempty"`; Transfers []int `json:"transfers,omitempty"`; ID uint64 `json:"id"`; Op string `json:"op"`; PanicOnFault bool `json:"panic_on_fault,omitempty"`; Selector string `json:"selector"`; Instance string `json:"instance,omitempty"`; Receiver *value `json:"receiver,omitempty"`; Args []value `json:"args,omitempty"`; Spread bool `json:"spread,omitempty"`; SourceFile string `json:"source_file,omitempty"`; SourceLine int `json:"source_line,omitempty"`; LogPrint string `json:"log_print,omitempty"`; Values []value `json:"values,omitempty"`; Error string `json:"error,omitempty"`; Route bool `json:"route,omitempty"` }
 // Op, Selector and Receiver are set only on a callback: the reverse direction
 // in which this helper asks the interpreter to run an original method body.
-type response struct { SliceUpdates []sliceBuffer `json:"slice_updates,omitempty"`; Transferred []sliceBuffer `json:"transferred,omitempty"`; PtrUpdates []value `json:"ptr_updates,omitempty"`; Panic *value `json:"panic,omitempty"`; PanicAddr *uint64 `json:"panic_addr,omitempty"`; ID uint64 `json:"id"`; Op string `json:"op,omitempty"`; Selector string `json:"selector,omitempty"`; Receiver *value `json:"receiver,omitempty"`; Values []value `json:"values,omitempty"`; Error string `json:"error,omitempty"` }
+type response struct { SliceUpdates []sliceBuffer `json:"slice_updates,omitempty"`; Transferred []sliceBuffer `json:"transferred,omitempty"`; PtrUpdates []value `json:"ptr_updates,omitempty"`; Panic *value `json:"panic,omitempty"`; PanicAddr *uint64 `json:"panic_addr,omitempty"`; ID uint64 `json:"id"`; Op string `json:"op,omitempty"`; Selector string `json:"selector,omitempty"`; Receiver *value `json:"receiver,omitempty"`; Values []value `json:"values,omitempty"`; Error string `json:"error,omitempty"`; Parent uint64 `json:"parent,omitempty"` }
 var symbols = map[string]reflect.Value{
 //SYMBOLS
 }
@@ -282,14 +282,23 @@ func structuralPath(v reflect.Value,path map[uintptr]bool) value {
 // is this protocol exchange.
 var callbacks = struct { sync.Mutex; next uint64; waiting map[uint64]chan request }{waiting: map[uint64]chan request{}}
 var outbound = struct { sync.Mutex; encoder *json.Encoder }{}
+// A routed request asks for its callbacks to name it: the host serves them on
+// the parked request whose goroutine raised them, not on whichever request
+// holds the shared callback gate. The dispatching goroutine is the only link
+// between the two, so it is recorded for the life of the request.
+var routes = struct { sync.Mutex; active int; ids map[uint64]uint64 }{ids: map[uint64]uint64{}}
+func goroutineID() uint64 {var b [64]byte;n:=bppRuntime.Stack(b[:],false);var id uint64;for _,c:=range b[len("goroutine "):n]{if c<'0'||c>'9'{break};id=id*10+uint64(c-'0')};return id}
+func routeEnter(parent uint64) func() {g:=goroutineID();routes.Lock();routes.ids[g]=parent;routes.active++;routes.Unlock();return func(){routes.Lock();delete(routes.ids,g);routes.active--;routes.Unlock()}}
+func routeParent() uint64 {routes.Lock();active:=routes.active;routes.Unlock();if active==0{return 0};g:=goroutineID();routes.Lock();defer routes.Unlock();return routes.ids[g]}
 //CALLBACKMAILBOX
 func callback(selector string, recv value) ([]value,error) {
  outbound.Lock();encoder:=outbound.encoder;outbound.Unlock()
  if encoder==nil {return nil,fmt.Errorf("no interpreter connection for %s",selector)}
  callbacks.Lock();callbacks.next++;id:=callbacks.next;wait:=make(chan request,1);callbacks.waiting[id]=wait;callbacks.Unlock()
  defer func(){callbacks.Lock();delete(callbacks.waiting,id);callbacks.Unlock()}()
- message:=response{ID:id,Op:"callback",Selector:selector,Receiver:&recv}
- reply,handled,err:=mailboxCallback(message)
+ message:=response{ID:id,Op:"callback",Selector:selector,Receiver:&recv,Parent:routeParent()}
+ var reply request;handled:=false;var err error
+ if message.Parent==0 {reply,handled,err=mailboxCallback(message)}
  if err!=nil{return nil,err}
  if !handled {outbound.Lock();err=encoder.Encode(message);outbound.Unlock();if err!=nil{return nil,err};reply=<-wait}
  if handled && reply.Op=="callback-mailbox-overflow" && reply.Error=="" {select{case reply=<-wait:case <-handles.stop:return nil,fmt.Errorf("interpreter connection closed during callback")}}
@@ -665,5 +674,5 @@ func main(){
  // Waiting for those calls would orphan listeners after host termination.
  for {var q request;if err:=decoder.Decode(&q);err!=nil{close(handles.stop);return};if q.Op=="close"{close(handles.stop);return}
   if q.Op=="callback-reply" {callbacks.Lock();wait:=callbacks.waiting[q.ID];callbacks.Unlock();if wait!=nil{wait<-q};continue}
-  go func(){if q.PanicOnFault {old:=bppDebug.SetPanicOnFault(true);defer bppDebug.SetPanicOnFault(old)};answer:=response{ID:q.ID};if q.PanicOnFault {defer func(){if r:=recover();r!=nil{answer=response{ID:q.ID,Error:fmt.Sprintf("native dependency panic: %v",r)};if a,ok:=r.(interface{Addr()uintptr});ok{addr:=uint64(a.Addr());answer.PanicAddr=&addr}else if addr,ok:=nativeFaultAddr(q);ok{answer.PanicAddr=&addr};outbound.Lock();defer outbound.Unlock();_ = outbound.encoder.Encode(answer)}}()};answer=dispatch(q);outbound.Lock();defer outbound.Unlock();_ = outbound.encoder.Encode(answer)}()}
+  go func(){if q.Route {defer routeEnter(q.ID)()};if q.PanicOnFault {old:=bppDebug.SetPanicOnFault(true);defer bppDebug.SetPanicOnFault(old)};answer:=response{ID:q.ID};if q.PanicOnFault {defer func(){if r:=recover();r!=nil{answer=response{ID:q.ID,Error:fmt.Sprintf("native dependency panic: %v",r)};if a,ok:=r.(interface{Addr()uintptr});ok{addr:=uint64(a.Addr());answer.PanicAddr=&addr}else if addr,ok:=nativeFaultAddr(q);ok{answer.PanicAddr=&addr};outbound.Lock();defer outbound.Unlock();_ = outbound.encoder.Encode(answer)}}()};answer=dispatch(q);outbound.Lock();defer outbound.Unlock();_ = outbound.encoder.Encode(answer)}()}
 }

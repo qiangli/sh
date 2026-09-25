@@ -404,7 +404,8 @@ func retainedFunctionCallback(req bashPPEvalRequest, q bashPPBridgeRequest) bool
 	case "reflect.MakeFunc":
 		// The made function retains its implementation and raises it on
 		// every call of the result — a bare handle call that parks here.
-		// The creating runner serves it; later uses check that identity.
+		// Each bare call is routed to the runner that makes it
+		// (routedCallbackRequest).
 		return bashPPMadeFuncOwner(req)
 	}
 	return false
