@@ -1034,6 +1034,14 @@ func (r *Runner) bashPPBindPointerExpr(name string, expr syntax.BashPPExpr) bool
 			r.exit.code = 2
 			return true
 		}
+		// A dereference produces the pointed-to value. Structs and arrays are
+		// values in Go, so binding that result must copy their outer storage;
+		// fields which are themselves pointers, slices, or maps still retain
+		// their reference identity through bashPPCopyArrayValue. Storing the
+		// map/sequence returned by ptr.read directly made `u := *p` alias the
+		// pointee's whole aggregate, so a later field assignment through p also
+		// rewrote u.
+		value, meta = bashPPCopyArrayValue(value, meta)
 	default:
 		return false
 	}

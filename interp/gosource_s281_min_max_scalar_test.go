@@ -40,3 +40,45 @@ func main() {
 		t.Fatalf("err=%v stdout=%q stderr=%q", err, out, stderr)
 	}
 }
+
+// TestGoSourceS281DereferencedStructValueCopy pins the value/reference split
+// used by applicative data structures. Copying *tree must detach the tree's
+// scalar and pointer fields as one struct value, while the node reached through
+// the copied pointer remains shared. cmd/compile/internal/abt relies on this in
+// T.Copy: historical tree headers are independent, but their immutable nodes
+// are shared until an updated path is installed in the current tree.
+func TestGoSourceS281DereferencedStructValueCopy(t *testing.T) {
+	out, stderr, err := runS270G1Source(t, "s281-deref-struct-copy", `package main
+import "fmt"
+
+type node struct {
+	key  int
+	next *node
+}
+
+type tree struct {
+	root *node
+	size int
+}
+
+func (t *tree) Copy() *tree {
+	u := *t
+	return &u
+}
+
+func main() {
+	shared := &node{key: 7}
+	current := &tree{root: shared, size: 1}
+	history := current.Copy()
+
+	current.size = 2
+	current.root = &node{key: 9, next: shared}
+	history.root.key = 8
+
+	fmt.Println(history.size, history.root.key)
+	fmt.Println(current.size, current.root.key, current.root.next.key)
+}`)
+	if err != nil || out != "1 8\n2 9 8\n" {
+		t.Fatalf("err=%v stdout=%q stderr=%q", err, out, stderr)
+	}
+}
