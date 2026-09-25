@@ -143,3 +143,26 @@ func TestS270UnexportedForeignConstantType(t *testing.T) {
 		t.Errorf("the unexported foreign type is spelled\n--- generated\n%s", got)
 	}
 }
+
+// A pointer method of an imported type called on an indexed array element
+// (cmd/compile/internal/ssa's poolFree[b-5].Get()) binds the element's
+// address, never a copy: vet refuses the copied lock, and Put into a copy is
+// lost.
+func TestS270ComputedPointerMethodReceiverIsAddressed(t *testing.T) {
+	generated := buildLibrary(t, []gosource.Source{
+		{Name: "a.go", Data: []byte(`package fixture
+
+import "sync"
+
+var pools [4]sync.Pool
+
+func Round(b int, v any) any {
+	pools[b-1].Put(v)
+	return pools[b-1].Get()
+}
+`)},
+	})
+	if got := generated["a.go"]; !strings.Contains(got, "&pools[b-1]") {
+		t.Errorf("the element receiver is not addressed\n--- generated\n%s", got)
+	}
+}

@@ -1631,19 +1631,34 @@ func (c *converter) computedImportedMethodCall(call *ast.CallExpr) (*s.BashPPFun
 	if !indexed || !simpleReceiver(index.X) {
 		return nil, nil, false
 	}
+	// A pointer method selected on an addressable value operates on the
+	// operand itself (Go takes its address implicitly): hand the closure the
+	// address, never a copy (a copied sync.Pool loses what Put stores).
+	receiverExpr := selector.X
+	receiverOf := c.info.TypeOf(selector.X)
+	if fn, ok := selection.Obj().(*types.Func); ok && !selection.Indirect() {
+		if recv := fn.Signature().Recv(); recv != nil {
+			if _, byPointer := recv.Type().(*types.Pointer); byPointer {
+				receiverOf = types.NewPointer(receiverOf)
+				address := &ast.UnaryExpr{OpPos: selector.X.Pos(), Op: token.AND, X: selector.X}
+				c.info.Types[address] = types.TypeAndValue{Type: receiverOf}
+				receiverExpr = address
+			}
+		}
+	}
 	signature, _ := c.checkedType(c.info.TypeOf(call.Fun), call.Fun, "computed imported method type").(*s.BashPPFuncType)
-	receiver := c.checkedType(c.info.TypeOf(selector.X), selector.X, "computed imported method receiver type")
+	receiver := c.checkedType(receiverOf, selector.X, "computed imported method receiver type")
 	if signature == nil || receiver == nil {
 		return nil, nil, false
 	}
 	copySignature := *signature
-	copySignature.Params = append([]*s.BashPPField{{FieldType: c.lit(selector.X.Pos(), c.typeString(c.info.TypeOf(selector.X))), FieldTypeExpr: receiver}}, signature.Params...)
+	copySignature.Params = append([]*s.BashPPField{{FieldType: c.lit(selector.X.Pos(), c.typeString(receiverOf)), FieldTypeExpr: receiver}}, signature.Params...)
 	closure, _ := c.forwardingClosure(call.Fun, &copySignature, func(inner *s.BashPPCall, args []*s.Lit) {
 		inner.Fun = []*s.Lit{args[0], c.ident(selector.Sel)}
 		inner.Args = inner.Args[1:]
 		inner.ArgExprs = inner.ArgExprs[1:]
 	}).(*s.BashPPFuncLit)
-	return closure, selector.X, true
+	return closure, receiverExpr, true
 }
 
 // exclusiveSliceArgs proves the narrow ownership shape used by generated
