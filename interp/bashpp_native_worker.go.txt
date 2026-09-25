@@ -367,7 +367,9 @@ func decodeIn(st *decodeState, v value, target reflect.Type)(reflect.Value,error
   if target==nil||typ.AssignableTo(target){return result,nil}
   return reflect.Value{},fmt.Errorf("nil %s is not assignable to %s",typ,target)
  }
- if v.Kind=="handle" {handles.Lock();result=handles.values[v.Handle];handles.Unlock();if !result.IsValid(){return result,fmt.Errorf("unknown native handle %d",v.Handle)}} else {
+ // A lazily answered reflect.ValueOf (bashpp_s275_lazy_valueof.go) returned
+ // by a callback: the operand decodes at ValueOf's own parameter type.
+ if v.Kind=="valueof" {if len(v.Elements)!=1{return result,fmt.Errorf("valueof needs one operand")};operand,e:=decodeIn(st,v.Elements[0],reflect.TypeFor[any]());if e!=nil{return result,e};result=reflect.ValueOf(reflect.ValueOf(operand.Interface()))} else if v.Kind=="handle" {handles.Lock();result=handles.values[v.Handle];handles.Unlock();if !result.IsValid(){return result,fmt.Errorf("unknown native handle %d",v.Handle)}} else {
   typ:=resolveType(v.Type)
   if v.Type!="" && typ==nil {return result,fmt.Errorf("unregistered bridge type %q",v.Type)}
   // A scalar carrying a declared interface identity — an element of an

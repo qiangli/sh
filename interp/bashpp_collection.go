@@ -650,17 +650,25 @@ func (r *Runner) bashPPEvalCollection(lit *syntax.BashPPCompositeLit, expected s
 	// element makes sparse large literals proportional to their length in type
 	// resolution as well as storage. Structured values still need independent
 	// payload and metadata per element to preserve Go's value semantics.
-	if len(out) > 0 {
-		zero, zeroMeta := r.bashPPZeroValue(collection.Element)
+	// Only implicit elements need one: an explicit element replaces it, and
+	// a native element type's zero is a dependency round trip.
+	var zero any
+	var zeroMeta *bashPPCollectionMeta
+	resolved := false
+	for i := range out {
+		if _, explicit := values[i]; explicit {
+			continue
+		}
+		if !resolved {
+			zero, zeroMeta = r.bashPPZeroValue(collection.Element)
+			resolved = true
+			out[i], meta.sequence[i] = zero, zeroMeta
+			continue
+		}
 		if zeroMeta == nil {
-			for i := range out {
-				out[i] = zero
-			}
+			out[i] = zero
 		} else {
-			out[0], meta.sequence[0] = zero, zeroMeta
-			for i := 1; i < len(out); i++ {
-				out[i], meta.sequence[i] = r.bashPPZeroValue(collection.Element)
-			}
+			out[i], meta.sequence[i] = r.bashPPZeroValue(collection.Element)
 		}
 	}
 	for i, value := range values {

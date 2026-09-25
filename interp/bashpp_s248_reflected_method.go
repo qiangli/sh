@@ -63,6 +63,10 @@ type goSourceLocalReflect struct {
 	// source position attributes a helper panic. The pointer argument is
 	// re-encoded at replay, so the helper sees the pointee as it is then.
 	valueOf bashPPBridgeRequest
+	// operand marks a lazily answered reflect.ValueOf of a plain value
+	// (bashpp_s275_lazy_valueof.go): valueOf already carries that operand,
+	// encoded when ValueOf was called, and replays as is.
+	operand bool
 	// parent and selection describe a method value selected from parent.
 	parent    *goSourceLocalReflect
 	selection bashPPBridgeRequest
@@ -101,6 +105,10 @@ func (r *Runner) goSourceLocalReflectRequest(ctx context.Context, req bashPPEval
 	if !r.bashPPGoSource || req.Bridge == nil {
 		return nil, false, nil
 	}
+	if value, ok := r.goSourceLazyValueOf(ctx, req, *q); ok {
+		goSourceReflectTraceStep("local:ValueOf")
+		return []bashPPBridgeValue{value}, true, nil
+	}
 	if value, ok := r.goSourceLocalReflectValueOf(ctx, req, *q); ok {
 		goSourceReflectTraceStep("local:ValueOf")
 		return []bashPPBridgeValue{value}, true, nil
@@ -109,7 +117,7 @@ func (r *Runner) goSourceLocalReflectRequest(ctx context.Context, req bashPPEval
 		lr := q.Receiver.localReflect
 		switch {
 		case lr.iface:
-		case lr.method == "" && (q.Selector == "MethodByName" || q.Selector == "Method"):
+		case !lr.operand && lr.method == "" && (q.Selector == "MethodByName" || q.Selector == "Method"):
 			if method, ok := r.goSourceLocalReflectSelect(lr, *q); ok {
 				goSourceReflectTraceStep("local:" + q.Selector)
 				value := *q.Receiver
@@ -453,7 +461,10 @@ func (r *Runner) goSourceLocalReflectMaterialize(ctx context.Context, req bashPP
 	}
 	lr.mu.Unlock()
 	q := lr.selection
-	if lr.parent == nil {
+	if lr.operand {
+		q = lr.valueOf
+		ctx = context.WithValue(ctx, goSourceLazyValueOfReplayKey{}, true)
+	} else if lr.parent == nil {
 		arg, err := r.bashPPBridgePointerValue(lr.ptr)
 		if err != nil {
 			return bashPPBridgeValue{}, err

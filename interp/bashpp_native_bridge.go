@@ -205,6 +205,9 @@ type bashPPNativeSession struct {
 	// routes are the callback channels of routed requests, by request ID.
 	// Protected by mu.
 	routes  map[uint64]chan bashPPBridgeResponse
+	// valueOfReplies are admitted reflect.ValueOf replies by operand shape,
+	// the templates of lazily answered ones. Protected by mu.
+	valueOfReplies map[string]bashPPBridgeValue
 	mailbox *bashPPCallbackMailbox
 	// callbackRefusal is the first diagnostic from an interpreter-refused
 	// dependency callback. The dependency exits nonzero after the refusal, so

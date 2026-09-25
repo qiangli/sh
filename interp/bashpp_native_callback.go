@@ -121,7 +121,7 @@ func (s *bashPPNativeSession) callbackAnswer(ctx context.Context, owner *Runner,
 				s.recordCallbackRefusal(err)
 			}
 		} else {
-			answer.Values = values
+			answer.Values = s.bashPPWireLazyValueOf(values)
 		}
 		if q.Receiver.Origin != 0 {
 			s.mu.Lock()
