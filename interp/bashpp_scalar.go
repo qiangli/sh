@@ -1234,6 +1234,33 @@ type bashPPComparableValue struct {
 	nilLiteral bool
 }
 
+// bashPPExprIsReceive reports whether expr is a channel receive (`<-ch`),
+// looking through parentheses. A receive consumes a value as it is evaluated,
+// so it is the operand whose double evaluation must be avoided.
+func bashPPExprIsReceive(expr syntax.BashPPExpr) bool {
+	switch x := expr.(type) {
+	case *syntax.BashPPParenExpr:
+		return bashPPExprIsReceive(x.X)
+	case *syntax.BashPPUnaryExpr:
+		return x.Op != nil && x.Op.Value == "<-"
+	}
+	return false
+}
+
+// bashPPExprIsPlainIdent reports whether expr is a bare identifier (looking
+// through parentheses) other than the nil literal. Such a read is pure and
+// non-blocking, so it can be evaluated ahead of a sibling receive without
+// changing observable order.
+func bashPPExprIsPlainIdent(expr syntax.BashPPExpr) bool {
+	switch x := expr.(type) {
+	case *syntax.BashPPParenExpr:
+		return bashPPExprIsPlainIdent(x.X)
+	case *syntax.BashPPIdent:
+		return x.Name != nil && x.Name.Value != "nil"
+	}
+	return false
+}
+
 func (r *Runner) bashPPCompareExpr(left syntax.BashPPExpr, op token.Token, right syntax.BashPPExpr) (bool, error) {
 	// Native values retain their authenticated dynamic payload and comparison
 	// semantics. Local scalar boxing must not intercept that transport path.
@@ -1243,13 +1270,32 @@ func (r *Runner) bashPPCompareExpr(left syntax.BashPPExpr, op token.Token, right
 	if equal, handled, err := r.goSourceInterfaceScalarComparison(left, op, right); handled {
 		return equal, err
 	}
-	lv, err := r.bashPPComparableExpr(left)
-	if err != nil {
-		return false, err
-	}
-	rv, err := r.bashPPComparableExpr(right)
-	if err != nil {
-		return false, err
+	// An inline receive is the only comparison operand that consumes state:
+	// `bashPPComparableExpr` performs the channel read as it evaluates it. When
+	// the sibling operand is a plain scalar variable it yields the scalar-only
+	// sentinel, and returning that after the receive has run makes the caller
+	// retry the whole comparison — receiving from the channel a second time and
+	// reading past the value the first receive already took (Sprint 270,
+	// Story 761). Reading the pure sibling first surfaces that fallback before
+	// the receive fires. A plain identifier read has no side effect and cannot
+	// block, so evaluating it ahead of the receive is unobservable and keeps
+	// the receive's own blocking semantics intact.
+	var lv, rv bashPPComparableValue
+	var err error
+	if r.bashPPGoSource && bashPPExprIsReceive(left) && bashPPExprIsPlainIdent(right) {
+		if rv, err = r.bashPPComparableExpr(right); err != nil {
+			return false, err
+		}
+		if lv, err = r.bashPPComparableExpr(left); err != nil {
+			return false, err
+		}
+	} else {
+		if lv, err = r.bashPPComparableExpr(left); err != nil {
+			return false, err
+		}
+		if rv, err = r.bashPPComparableExpr(right); err != nil {
+			return false, err
+		}
 	}
 	if r.bashPPGoSource {
 		lv.value = bashPPComparablePayload(lv.value, lv.meta)
