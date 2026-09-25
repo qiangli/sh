@@ -150,10 +150,12 @@ type Runner struct {
 	bashPPGoSourceDecls map[string]bool
 	// bashPPGoSourcePending holds the package-level type names installed by
 	// the pre-registration pass but not yet reached by their own statement.
-	bashPPGoSourcePending map[string]bool
-	bashPPGoSourceFile    *syntax.File
-	goSourceTesting       *GoSourceTestingSession
-	bashPPScope           *bashPPScope
+	bashPPGoSourcePending    map[string]bool
+	bashPPGoSourceFile       *syntax.File
+	goSourceFieldTrackTarget string
+	goSourceFieldTrackReport string
+	goSourceTesting          *GoSourceTestingSession
+	bashPPScope              *bashPPScope
 	// bashPPFuncScopes records, per function name, the lexical environment
 	// visible where the function was defined. It is preserved across
 	// [Runner.Reset] for the same reason Funcs is: a function that survives a
@@ -3478,6 +3480,11 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 		savedGoFile := r.bashPPGoSourceFile
 		r.bashPPGoSourceFile = node
 		defer func() { r.bashPPGoSourceFile = savedGoFile }()
+		savedFieldTarget, savedFieldReport := r.goSourceFieldTrackTarget, r.goSourceFieldTrackReport
+		r.goSourceFieldTrackTarget, r.goSourceFieldTrackReport = r.goSourceFieldTrackForFile(node)
+		defer func() {
+			r.goSourceFieldTrackTarget, r.goSourceFieldTrackReport = savedFieldTarget, savedFieldReport
+		}()
 		savedGoSource := r.bashPPGoSource
 		r.bashPPGoSource = node.GoSource
 		savedConvertHashQY := r.bashPPConvertHashQY

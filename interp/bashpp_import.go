@@ -90,6 +90,13 @@ type bashPPEvalRequest struct {
 	TestMain   bool
 }
 
+// GoSourceLinkFlags supplies the original go command's -ldflags value.
+// It is inert unless GOEXPERIMENT contains fieldtrack and the flags name
+// a fieldtrack -k target.
+func GoSourceLinkFlags(flags string) RunnerOption {
+	return func(r *Runner) error { r.bashPPTools.LinkFlags = flags; return nil }
+}
+
 type bashPPEvaluator interface {
 	Resolve(context.Context, bashPPEvalRequest, string) (string, error)
 	Call(context.Context, bashPPEvalRequest) error
@@ -119,6 +126,9 @@ type bashPPToolchain struct {
 	moduleDir  string
 	importPath string
 	testMain   bool
+	// LinkFlags are the original go command's linker flags for an interpreted
+	// Go-source program. Only fieldtrack's -k target is interpreted here.
+	LinkFlags string
 	// instantiations is the per-file closure of reached generic
 	// instantiations; see bashpp_sprint165_runtime_instantiations.go.
 	instantiations *bashPPInstantiationIndex

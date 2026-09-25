@@ -166,6 +166,7 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 		return
 	}
 	defer r.goSourceRegisterLinknameTarget(d)
+	defer r.goSourceInstallFieldTrack(d)
 	if r.goSourceChannelDeclaration(d) {
 		return
 	}
