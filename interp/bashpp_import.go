@@ -583,6 +583,10 @@ func (r *Runner) bashPPEvalRequest() (bashPPEvalRequest, error) {
 		if !connected || runtimeEnv == nil {
 			runtimeEnv = nativeExecEnv(r.bashPPGoSourceEnvironment())
 		}
+		if r.goSourceEnvironment == nil && r.bashPPTools.goRoot != "" {
+			runtimeEnv = setEnvString(runtimeEnv, "GOROOT", r.bashPPTools.goRoot)
+			runtimeEnv = setEnvString(runtimeEnv, "GOTOOLCHAIN", r.bashPPTools.goVersion)
+		}
 	}
 	// The worker receives these only while it starts. After begin has connected
 	// it, no later request reads either environment: preserving the first

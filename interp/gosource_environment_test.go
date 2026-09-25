@@ -139,7 +139,8 @@ func main(){fmt.Println(os.Environ())}
 	if err := r.Run(ctx, program.File); err != nil {
 		t.Fatalf("Runner: %v %s", err, stderr.String())
 	}
-	if out.String() != "[BASH=provided-bash KEY=value SHELL=provided-shell]\n" {
+	wantEnv := "[BASH=provided-bash KEY=value SHELL=provided-shell GOROOT=" + runtime.GOROOT() + " GOTOOLCHAIN=" + runtime.Version() + "]\n"
+	if out.String() != wantEnv {
 		t.Fatalf("default exported initial environment: %q", out.String())
 	}
 	out.Reset()
@@ -159,5 +160,56 @@ func main(){fmt.Println(os.Environ())}
 	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
 	if !slices.Contains(lines, "KEY=shell-value") || !slices.Contains(lines, "ADDED=shell-added") {
 		t.Fatalf("Go option changed shell environment: %q", out.String())
+	}
+}
+
+func TestGoSourceDefaultEnvironmentPinsSelectedToolchain(t *testing.T) {
+	goRoot := runtime.GOROOT()
+	source := `package main
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"runtime"
+	"strings"
+)
+func main(){
+	fmt.Println("runtime", runtime.GOROOT())
+	for _, entry := range os.Environ() {
+		if strings.HasPrefix(entry, "GOROOT=") || strings.HasPrefix(entry, "GOTOOLCHAIN=") {
+			fmt.Println("env", entry)
+		}
+	}
+	out, err := exec.Command("go", "env", "GOROOT", "GOTOOLCHAIN").CombinedOutput()
+	if err != nil { panic(err) }
+	fmt.Printf("child\n%s", out)
+}
+`
+	program, err := gosource.Parse(strings.NewReader(source), "toolchain-env.go", gosource.Options{RunMain: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out, stderr bytes.Buffer
+	r, err := interp.New(interp.Lang(syntax.LangBashPP), interp.Env(expand.ListEnviron("PATH="+os.Getenv("PATH"))), interp.StdIO(nil, &out, &stderr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	if err := r.Run(ctx, program.File); err != nil {
+		t.Fatalf("Runner: %v %s", err, stderr.String())
+	}
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	for _, want := range []string{
+		"runtime " + goRoot,
+		"env GOROOT=" + goRoot,
+		"env GOTOOLCHAIN=" + runtime.Version(),
+		"child",
+		goRoot,
+		runtime.Version(),
+	} {
+		if !slices.Contains(lines, want) {
+			t.Fatalf("missing %q in output lines %q", want, lines)
+		}
 	}
 }

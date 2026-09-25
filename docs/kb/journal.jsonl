@@ -43,3 +43,4 @@
 {"op":"add","slug":"gnu-bash-confirm-harness-needs-per-case-startup-home","id":"01a0d5e5-d6b5-7b1f-8a24-8f671f05a96d","tool":"codex-gpt-5.5-g","host":"dragon","episode":"weave-issue-7","at":"2026-09-25T00:10:04.854592Z"}
 {"op":"add","slug":"canonicalize-owned-pointer-selector-addresses","id":"01a0d667-9994-728c-8be4-0742bb1402c2","tool":"codex-gpt-5.5-d","host":"dragon","episode":"weave-issue-30","at":"2026-09-25T02:31:48.885143Z"}
 {"op":"add","slug":"register-concrete-generic-bridge-type-identities","id":"01a0d960-5a38-716f-b978-516f67573481","tool":"codex-gpt-5.5-c","host":"dragon","episode":"weave-issue-3","at":"2026-09-25T16:22:45.561232Z"}
+{"op":"add","slug":"pin-gosource-runtime-toolchain-environment","id":"01a0d96b-18bb-764d-afe8-6653a8944bdb","tool":"codex-gpt-5.5-f","host":"dragon","episode":"weave-issue-6","at":"2026-09-25T16:34:29.692414Z"}
