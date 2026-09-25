@@ -21,6 +21,7 @@ import (
 type goSourceRangeYield struct {
 	rng       *syntax.BashPPRange
 	stopped   bool
+	exhausted bool
 	returning bool
 	ret       bashPPReturnState
 	// deferBuf collects the defers executed directly inside the range body
@@ -128,6 +129,13 @@ func (r *Runner) goSourceRangeFunction(ctx context.Context, rng *syntax.BashPPRa
 	vr := r.bashPPStoreFunc(yield)
 	r.bashPPCallCells = []*bashPPCell{{vr: vr, declType: yieldType}}
 	r.bashPPInvoke(ctx, fn, []string{vr.Str})
+	// The iterator call above has now returned, so the whole range statement
+	// is exhausted: any further call to the yield closure — typically one the
+	// iterator squirreled away and invokes later, after escaping this frame —
+	// is a distinct misuse from the body having already returned false while
+	// the iterator was still running, and Go reports it with a different
+	// runtime error; see [Runner.goSourceInvokeRangeYield].
+	state.exhausted = true
 	// The body's defers were collected off the live stack so the iterator's
 	// return could not run or discard them. They belong to the enclosing
 	// function, so splice them onto its region now, in registration order: onto
@@ -150,6 +158,10 @@ func (r *Runner) goSourceRangeFunction(ctx context.Context, rng *syntax.BashPPRa
 
 func (r *Runner) goSourceInvokeRangeYield(ctx context.Context, fn *bashPPFunc, args []string, cells []*bashPPCell) []string {
 	state := fn.rangeYield
+	if state.exhausted {
+		r.bashPPRaise("runtime error: range function continued iteration after whole loop exit")
+		return nil
+	}
 	if state.stopped {
 		r.bashPPRaise("runtime error: range function continued iteration after function for loop body returned false")
 		return nil

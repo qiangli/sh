@@ -77,6 +77,47 @@ func main() {
 	}
 }
 
+// TestGoSourceRangeFunctionYieldAfterExhaustedPanics pins the distinct
+// runtime error Go reports when a yield closure escapes its iterator (saved
+// to an outer variable, as cmd/compile/internal/rangefunc's TrickyIterator
+// does) and is invoked after the whole range statement — and thus the
+// iterator's call — has already returned. That is a different misuse from
+// TestGoSourceRangeFunctionYieldAfterFalsePanics above, where the *same*
+// live iterator call keeps calling yield right after it returned false:
+// Go's checked rangefunc rewrite tracks state per range statement and
+// reports "after whole loop exit" only once the iterator call has actually
+// returned, not merely once the body has broken out.
+func TestGoSourceRangeFunctionYieldAfterExhaustedPanics(t *testing.T) {
+	const source = `package main
+import "fmt"
+var saved func(int) bool
+func iterAll(yield func(int) bool) {
+	saved = yield
+	for i := 0; i < 10; i++ {
+		if !yield(i) { return }
+	}
+}
+func main() {
+	sum := 0
+	for x := range iterAll {
+		sum += x
+		if sum >= 6 { break }
+	}
+	fmt.Println("sum:", sum)
+	defer func() { fmt.Println("recovered:", recover()) }()
+	saved(1)
+	fmt.Println("unreachable")
+}`
+	stdout, stderr, err := runRangeFunctionSource(t, source)
+	if err != nil {
+		t.Fatalf("Run: %v stdout=%q stderr=%q", err, stdout, stderr)
+	}
+	const want = "sum: 6\nrecovered: runtime error: range function continued iteration after whole loop exit\n"
+	if stdout != want || stderr != "" {
+		t.Fatalf("streams: stdout=%q stderr=%q", stdout, stderr)
+	}
+}
+
 func TestGoSourceRangeFunctionCallbackShapeBoundaries(t *testing.T) {
 	t.Run("aggregate yield parameter", func(t *testing.T) {
 		const source = `package main
