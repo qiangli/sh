@@ -1838,7 +1838,7 @@ var runTests = []runTest{
 	},
 	{
 		`>a.x >b.x; array2=(grep [ 123 ] \*); declare -p array2; printf '<%s>\n' "${array2[@]}"; rm a.x b.x`,
-		"declare -a array2=([0]=\"grep\" [1]=\"[\" [2]=\"123\" [3]=\"]\" [4]=\"*\")\n<grep>\n<[>\n<123>\n<]>\n<*>\n",
+		"declare -a array2=([0]=\"grep\" [1]=\"[ 123 ]\" [2]=\"*\")\n<grep>\n<[ 123 ]>\n<*>\n",
 	},
 	{
 		`declare -a arr; declare -p arr; arr=(); declare -p arr`,
@@ -1866,7 +1866,7 @@ var runTests = []runTest{
 	},
 	{
 		`declare -A assoc; key='x],b[$(echo uname >&2)'; (( 'assoc[$key]++' )); echo status:$?; declare -p assoc`,
-		"arithmetic syntax error: operand expected (error token is \"'assoc[x\\],b\\[\\$(echo uname >&2)]++' \")\nstatus:1\ndeclare -A assoc\n",
+		"bash: line 1: ((: 'assoc[x\\],b\\[\\$(echo uname >&2)]++' : arithmetic syntax error: operand expected (error token is \"'assoc[x\\],b\\[\\$(echo uname >&2)]++' \")\nstatus:1\ndeclare -A assoc\n",
 	},
 	{
 		`declare -A assoc; key='x],b[$(echo uname >&2)'; (( assoc[$key]++ )); (( assoc["$key"]++ )); (( "assoc[$key]++" )); declare -p assoc`,
@@ -5050,7 +5050,7 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	},
 	{
 		"arr=(a b c); declare -n ref='arr[1]'; echo $ref; ref=X; declare -p arr; echo ${!ref}; echo ${!ref[@]}",
-		"b\ndeclare -a arr=([0]=\"a\" [1]=\"X\" [2]=\"c\")\narr[1]\narr[1]\n",
+		"b\ndeclare -a arr=([0]=\"a\" [1]=\"X\" [2]=\"c\")\narr[1]\n\n",
 	},
 	{
 		"arr=(a b c); declare -n ref='arr[1]'; ref+=X; unset ref; declare -p arr ref",
@@ -5144,8 +5144,8 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	{"readonly foo=bar; readonly bar=foo; export foo bar; echo $bar", "foo\n"},
 	// Assigning to a readonly variable via the export/readonly
 	// builtins fails with status 1 and keeps the old value.
-	{"a='1  *  2'; command command export A=$a; printf \"%s\\n\" \"$A\"", "1  *  2\n"},
-	{"a='1  *  2'; command command readonly A=$a; printf \"%s\\n\" \"$A\"", "1  *  2\n"},
+	{"a='1  *  2'; command command export A=$a; printf \"%s\\n\" \"$A\"", "bash: line 1: export: `*': not a valid identifier\nbash: line 1: export: `2': not a valid identifier\n1\n"},
+	{"a='1  *  2'; command command readonly A=$a; printf \"%s\\n\" \"$A\"", "bash: line 1: readonly: `*': not a valid identifier\nbash: line 1: readonly: `2': not a valid identifier\n1\n"},
 	{"readonly v=a; command export v=foo; echo after: $?; echo $v", "bash: line 1: v: readonly variable\nafter: 1\na\n"},
 	{"readonly v=a; command readonly v=foo; echo after: $?; echo $v", "bash: line 1: v: readonly variable\nafter: 1\na\n"},
 	// POSIX mode implies shift_verbose.
@@ -5185,11 +5185,11 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 		"VAR: readonly variable\nexit status 1 #JUSTERR",
 	},
 	{
-		"set -k; export HOME=/foo/bar; c=7; HOME=/a/b/c echo $HOME c=9; echo $c",
-		"/foo/bar\n7\n",
+		"HOME=/foo/original; set -k; export HOME=/foo/bar >/dev/null; c=7; HOME=/a/b/c echo $HOME c=9; echo $c",
+		"/foo/original\n7\n",
 	},
 	{
-		"set -k; ECHO=; export HOME=/foo/bar; HOME=/a/b/c $ECHO a=$HOME c=9; echo $HOME $c $a",
+		"HOME=/foo/original; set -k; ECHO=; export HOME=/foo/bar >/dev/null; HOME=/a/b/c $ECHO a=$HOME c=9; echo $HOME $c $a",
 		"/a/b/c 9 /a/b/c\n",
 	},
 	{
@@ -5999,7 +5999,7 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	},
 	{
 		"readonly OPTARG && getopts a: opt -a foo; echo status:$?; echo ${OPTARG-unset}",
-		"OPTARG: readonly variable\nstatus:1\nunset\n",
+		"bash: line 1: OPTARG: readonly variable\nstatus:0\nunset\n",
 	},
 	{
 		"getopts abc opt foo -a; echo $opt; echo $OPTIND",

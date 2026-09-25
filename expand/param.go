@@ -1470,6 +1470,7 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 		applyMod := false
 		indirectAtApplied := false
 		sortStrs := false
+		_, _, refArrayElem := nameRefArrayTarget(orig.Str)
 		switch {
 		case pe.Names != 0:
 			if !syntax.ValidName(pe.Param.Value) {
@@ -1477,6 +1478,12 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			}
 			strs = cfg.namesByPrefix(pe.Param.Value)
 			sortStrs = true
+		case orig.Kind == NameRef && pe.Index != nil &&
+			(nodeLit(pe.Index) == "@" || nodeLit(pe.Index) == "*") &&
+			refArrayElem:
+			// A nameref to one array element has no array of indexes of
+			// its own. Bash expands ${!ref[@]} to zero fields here.
+			return "", nil
 		case pe.Exp == nil && pe.Index != nil && vr.Kind == Indexed &&
 			(nodeLit(pe.Index) == "@" || nodeLit(pe.Index) == "*"):
 			if pe.Exp != nil && indirectAtOp(pe.Exp.Op) {

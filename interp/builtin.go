@@ -4245,7 +4245,6 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		if scriptName == "" {
 			scriptName = "bash"
 		}
-		optargAssignFailed := false
 		switch {
 		case opt == '?' && diagnostics && !done:
 			r.errf("%s: illegal option -- %s\n", scriptName, optarg)
@@ -4254,15 +4253,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		default:
 			if optarg != "" {
 				r.setVarString("OPTARG", optarg)
-				if optargRO {
-					optargAssignFailed = true
-				}
 			}
 		}
 		r.setVarString("OPTIND", strconv.FormatInt(int64(r.optState.argidx+1), 10))
-		if optargAssignFailed {
-			exit.code = 1
-		}
+		// Bash reports a readonly OPTARG assignment but getopts still
+		// succeeds when it parsed an option.
 		if nameRefBadTarget {
 			r.errf("%sgetopts: `%s': not a valid identifier\n", r.bashErrPrefix(r.curStmtPos), string(storeOpt))
 		}

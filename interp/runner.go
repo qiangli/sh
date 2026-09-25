@@ -5483,29 +5483,6 @@ func (r *Runner) checkFuncDeclRedirs(ctx context.Context, body *syntax.Stmt) boo
 	return true
 }
 
-func (r *Runner) commandPrefixDeclArgs(args []*syntax.Word) (string, []string, bool) {
-	i := 0
-	for i < len(args) && args[i].Lit() == "command" {
-		i++
-	}
-	if i == 0 || i >= len(args) {
-		return "", nil, false
-	}
-	name := args[i].Lit()
-	if name != "export" && name != "readonly" {
-		return "", nil, false
-	}
-	bargs := make([]string, 0, len(args)-i-1)
-	for _, arg := range args[i+1:] {
-		field := r.literalForAssign(arg)
-		if _, _, ok := splitAssignmentField(field); !ok {
-			return "", nil, false
-		}
-		bargs = append(bargs, field)
-	}
-	return name, bargs, len(bargs) > 0
-}
-
 func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 	if r.stop(ctx) {
 		return
@@ -5830,10 +5807,6 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			return
 		}
 		if r.integerArrayAssignWithArithSuffix(cm, args) {
-			return
-		}
-		if name, bargs, ok := r.commandPrefixDeclArgs(args); ok {
-			r.exit = r.builtin(ctx, cm.Args[0].Pos(), name, bargs)
 			return
 		}
 		r.lastExpandExit = exitStatus{}
@@ -7163,6 +7136,27 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 	case *syntax.DeclClause:
 		if r.fireDebugTrap(ctx, cm) {
 			return
+		}
+		if r.opts[optKeyword] && cm.Variant.Value == "export" && len(cm.Args) > 0 {
+			allAssignments := true
+			for _, as := range cm.Args {
+				if as.Value == nil || as.Index != nil || as.Array != nil {
+					allAssignments = false
+					break
+				}
+			}
+			if allAssignments {
+				// In keyword mode these operands are temporary command
+				// environment assignments, leaving bare `export`. Bash
+				// prints the existing exported variables and leaves their
+				// values unchanged. Expand each RHS for side effects.
+				for _, as := range cm.Args {
+					r.literalForAssign(as.Value)
+				}
+				r.applyLateRedirs(ctx, []string{"export"})
+				r.printDeclareVars([]string{"-x"})
+				return
+			}
 		}
 		local, global := false, false
 		var modes []string

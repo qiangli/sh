@@ -3700,7 +3700,11 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 		values    []string
 		append    bool // [idx]+=value
 	}, len(elems))
+	skipThrough := -1
 	for i, elem := range elems {
+		if i <= skipThrough {
+			continue
+		}
 		if elem.Index != nil {
 			if r.arrayExpandOnceIndexExprErr(elem.Index) {
 				break
@@ -3720,6 +3724,42 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 			elemValues[i].indexExpr = elem.Index
 			elemValues[i].values = []string{r.literalForAssign(elem.Value)}
 			elemValues[i].append = elem.Append
+		} else if elem.Value != nil && len(elem.Value.Parts) == 1 {
+			// Bash keeps an unquoted bracket pattern inside a compound
+			// array assignment as one word even when the pattern contains
+			// blanks: a=( [ 123 ] ) has one element, "[ 123 ]".
+			// The parser exposes the intervening words separately, so
+			// reassemble the source span before pathname expansion.
+			if first, ok := elem.Value.Parts[0].(*syntax.Lit); ok &&
+				strings.HasPrefix(first.Value, "[") && !strings.Contains(first.Value, "]") {
+				for j := i + 1; j < len(elems); j++ {
+					next := elems[j]
+					if next.Index != nil || next.Value == nil || len(next.Value.Parts) != 1 {
+						break
+					}
+					lit, ok := next.Value.Parts[0].(*syntax.Lit)
+					if !ok {
+						break
+					}
+					if strings.Contains(lit.Value, "]") {
+						pattern := r.sourceTextRange(elem.Value.Pos(), next.Value.End(), false)
+						if pattern == "" {
+							parts := make([]string, 0, j-i+1)
+							for _, e := range elems[i : j+1] {
+								parts = append(parts, e.Value.Lit())
+							}
+							pattern = strings.Join(parts, " ")
+						}
+						word := &syntax.Word{Parts: []syntax.WordPart{&syntax.Lit{Value: pattern}}}
+						elemValues[i].values = r.fields(word)
+						skipThrough = j
+						break
+					}
+				}
+			}
+			if skipThrough < i {
+				elemValues[i].values = r.fields(elem.Value)
+			}
 		} else {
 			elemValues[i].values = r.fields(elem.Value)
 		}
