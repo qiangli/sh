@@ -45,6 +45,15 @@ type bashPPPointer struct {
 	unsafeAddress uint64
 }
 
+func (p *bashPPPointer) clone() *bashPPPointer {
+	if p == nil {
+		return nil
+	}
+	out := *p
+	out.path = append([]bashPPPointerStep(nil), p.path...)
+	return &out
+}
+
 // bashPPZeroSizeStorage is real process storage used as the canonical address
 // for standalone zero-sized Go-source objects. The byte is deliberately
 // nonzero-sized: its Go address is stable and never relies on the compiler's
@@ -63,6 +72,30 @@ func (r *Runner) bashPPPointerForStorage(target *bashPPCell, elem syntax.BashPPT
 
 func bashPPPointerMeta(typ syntax.BashPPTypeExpr) *bashPPCollectionMeta {
 	return &bashPPCollectionMeta{kind: "pointer", typ: typ}
+}
+
+func bashPPCanonicalPointerAddress(ptr *bashPPPointer, elem syntax.BashPPTypeExpr) (*bashPPPointer, *bashPPCollectionMeta, error) {
+	if ptr == nil {
+		return nil, nil, errBashPPNilDereference
+	}
+	value, _, _, err := ptr.read()
+	if err != nil {
+		return nil, nil, err
+	}
+	base, ok := value.(*bashPPPointer)
+	if !ok {
+		return nil, nil, fmt.Errorf("BASHPP-EPOINTER-TARGET: dereference result is not a pointer")
+	}
+	if base == nil {
+		return nil, nil, errBashPPNilDereference
+	}
+	out := base.clone()
+	out.elem = elem
+	_, meta, _, err := out.read()
+	if err != nil {
+		return nil, nil, err
+	}
+	return out, meta, nil
 }
 
 func (r *Runner) bashPPPointerType(typ syntax.BashPPTypeExpr) (*syntax.BashPPPointerType, bool) {
@@ -483,8 +516,16 @@ ordinaryAddress:
 			// path later reads the pointer value where struct storage is
 			// expected.
 			if pointer, isPointer := typ.(*syntax.BashPPPointerType); isPointer {
-				ptr.path = append(ptr.path, bashPPPointerStep{deref: true})
-				meta = nil
+				if r.bashPPGoSource {
+					canonical, derefMeta, err := bashPPCanonicalPointerAddress(ptr, pointer.Element)
+					if err != nil {
+						return err
+					}
+					ptr, meta = canonical, derefMeta
+				} else {
+					ptr.path = append(ptr.path, bashPPPointerStep{deref: true})
+					meta = nil
+				}
 				typ = pointer.Element
 			}
 			sel := r.bashPPResolveField(typ, x.Sel.Value)

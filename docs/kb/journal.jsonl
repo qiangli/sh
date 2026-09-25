@@ -41,3 +41,4 @@
 {"op":"add","slug":"treat-imported-interfaces-as-interface-map-keys","id":"01a0d63e-3ee9-7ed4-a5f9-1de4c5640a23","tool":"codex-gpt-5.5-x","host":"dragon","episode":"weave-issue-24","at":"2026-09-25T01:46:38.698907Z"}
 {"op":"add","slug":"materialize-native-slice-handles-before-append-admission","id":"01a0d659-b7ec-70bf-bff8-905dc145640a","tool":"codex-gpt-5.5-b","host":"dragon","episode":"weave-issue-28","at":"2026-09-25T02:16:39.14893Z"}
 {"op":"add","slug":"gnu-bash-confirm-harness-needs-per-case-startup-home","id":"01a0d5e5-d6b5-7b1f-8a24-8f671f05a96d","tool":"codex-gpt-5.5-g","host":"dragon","episode":"weave-issue-7","at":"2026-09-25T00:10:04.854592Z"}
+{"op":"add","slug":"canonicalize-owned-pointer-selector-addresses","id":"01a0d667-9994-728c-8be4-0742bb1402c2","tool":"codex-gpt-5.5-d","host":"dragon","episode":"weave-issue-30","at":"2026-09-25T02:31:48.885143Z"}
