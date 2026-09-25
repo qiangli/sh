@@ -620,7 +620,13 @@ func (r *Runner) bashPPMakeInterfaceValue(expr syntax.BashPPExpr, expected synta
 			return nil, expand.Variable{}, err
 		}
 		if meta == nil || meta.interfaceValue == nil {
-			return nil, expand.Variable{}, fmt.Errorf("BASHPP-EINTERFACE-VALUE: selector is not an interface value")
+			// A concrete field — `var a any = s.F`, `m["k"] = s.F` — is not an
+			// interface value to unwrap; it is boxed below like any other
+			// typed value, its declared type becoming the dynamic type.
+			if !r.bashPPGoSource {
+				return nil, expand.Variable{}, fmt.Errorf("BASHPP-EINTERFACE-VALUE: selector is not an interface value")
+			}
+			return r.bashPPBoxConcreteValue(expr, iface)
 		}
 		source := meta.interfaceValue
 		if source.nilIface {
@@ -633,6 +639,12 @@ func (r *Runner) bashPPMakeInterfaceValue(expr syntax.BashPPExpr, expected synta
 		iv.cell = bashPPCopyInterfaceCell(source.cell)
 		return &iv, iv.cell.vr, nil
 	}
+	return r.bashPPBoxConcreteValue(expr, iface)
+}
+
+// bashPPBoxConcreteValue stores a value that is not itself an interface in
+// iface: the dynamic value is the expression's own cell and its type.
+func (r *Runner) bashPPBoxConcreteValue(expr syntax.BashPPExpr, iface *syntax.BashPPInterfaceType) (*bashPPInterfaceValue, expand.Variable, error) {
 	if iv, vr, handled, err := r.goSourceConvertedInterfaceValue(expr, iface); handled {
 		return iv, vr, err
 	}
@@ -859,6 +871,18 @@ func (r *Runner) bashPPCellForInterfaceExpr(expr syntax.BashPPExpr) (*bashPPCell
 	// A dereference is a typed value read, including aggregate pointees and
 	// unsafe blank views. Reuse the structured cell path so interface boxing
 	// preserves its dynamic type and value copy instead of forcing a scalar.
+	// A field read is a typed value read too: `s.F` boxes with the field's
+	// declared type, and an aggregate field keeps its structure.
+	if _, sel := expr.(*syntax.BashPPSelectorExpr); sel && r.bashPPGoSource {
+		cell, err := r.goSourceValueCell(expr)
+		if err != nil {
+			return nil, nil, err
+		}
+		if cell.vr.Kind != expand.Object && cell.interfaceValue == nil && cell.declType == nil && !cell.pointer {
+			return r.bashPPScalarInterfaceCell(expr)
+		}
+		return r.bashPPInterfaceSourceCell(cell, "field")
+	}
 	if _, deref := expr.(*syntax.BashPPDerefExpr); deref && r.bashPPGoSource {
 		cell, err := r.goSourceValueCell(expr)
 		if err != nil {
