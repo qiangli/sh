@@ -9,7 +9,9 @@ import (
 )
 
 func newBashPPCallbackMailbox() (*bashPPCallbackMailbox, error) {
-	f, err := os.CreateTemp("", "bashpp-callback-mailbox-*")
+	// TMPDIR belongs to the interpreted program. Keep bridge storage outside
+	// its runtime tree even before the helper has mapped and unlinked it.
+	f, err := os.CreateTemp("/tmp", "bashpp-callback-mailbox-*")
 	if err != nil {
 		return nil, err
 	}
