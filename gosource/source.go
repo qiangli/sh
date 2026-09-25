@@ -348,7 +348,7 @@ func Load(sources []Source, options Options) (*Program, error) {
 	// Import aliases are shared: every package's imports are hoisted into
 	// the one file, so an alias minted by any package names that path for all.
 	importAliases := map[string]string{}
-	syntheticImports := map[string]string{}
+	syntheticImports := map[string]syntheticImport{}
 	c.dotImports = map[*ast.File]map[string]bool{}
 	liveImportPaths := liveImports(linked, mapped)
 	var lowered []*loweredPackage
@@ -455,14 +455,21 @@ func Load(sources []Source, options Options) (*Program, error) {
 			paths = append(paths, path)
 		}
 		sort.Strings(paths)
-		group := &syntax.BashPPImport{Site: syntax.StartImport, Class: syntax.ClassR, Kw: &syntax.Lit{Value: "import"}}
 		for _, path := range paths {
-			group.Specs = append(group.Specs, &syntax.BashPPImportSpec{
-				Alias: &syntax.Lit{Value: syntheticImports[path]},
-				Path:  &syntax.DblQuoted{Parts: []syntax.WordPart{&syntax.Lit{Value: path}}},
-			})
+			imp := syntheticImports[path]
+			positions := make([]token.Pos, 0, len(imp.sources))
+			for pos := range imp.sources {
+				positions = append(positions, pos)
+			}
+			sort.Slice(positions, func(i, j int) bool { return positions[i] < positions[j] })
+			for _, pos := range positions {
+				p.File.Stmts = append(p.File.Stmts, c.stmt(&syntax.BashPPImport{
+					Site: syntax.StartImport, Class: syntax.ClassR, Kw: c.lit(pos, "import"),
+					Alias: c.lit(pos, imp.alias),
+					Path:  &syntax.DblQuoted{Left: c.pos(pos), Right: c.pos(pos), Parts: []syntax.WordPart{c.lit(pos, path)}},
+				}))
+			}
 		}
-		p.File.Stmts = append(p.File.Stmts, c.stmt(group))
 	}
 	for _, lp := range lowered {
 		p.File.Stmts = append(p.File.Stmts, lp.imports...)

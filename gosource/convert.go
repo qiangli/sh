@@ -23,7 +23,7 @@ type converter struct {
 	// syntheticImports are packages named only by a checked type which differs
 	// from the source spelling, such as os.FileMode's alias target fs.FileMode.
 	// The generated type must have a matching import in both execution modes.
-	syntheticImports map[string]string
+	syntheticImports map[string]syntheticImport
 	// dotImports are, per file, the paths that file binds by dot import:
 	// their types are spelled bare while that file is being lowered.
 	dotImports  map[*ast.File]map[string]bool
@@ -73,6 +73,15 @@ type converter struct {
 	// gotoTarget; nil until then.
 	gotoTargets       map[types.Object]bool
 	localChannelTypes map[string]bool
+}
+
+// syntheticImport is an import created while spelling a checked type whose
+// package was not written by the source. sources records every input file
+// whose generated Go refers to the synthetic binding. Library lowering emits
+// one Go file per input file, so a synthetic import must retain that ownership.
+type syntheticImport struct {
+	alias   string
+	sources map[token.Pos]bool
 }
 
 type converterBranchScope struct {
@@ -236,6 +245,13 @@ func (c *converter) qualifier(p *types.Package) string {
 	if c.currentFile != nil && c.dotImports[c.currentFile][p.Path()] {
 		return ""
 	}
+	if imp, ok := c.syntheticImports[p.Path()]; ok {
+		if c.currentFile != nil {
+			imp.sources[c.currentFile.FileStart] = true
+			c.syntheticImports[p.Path()] = imp
+		}
+		return imp.alias
+	}
 	if alias := c.importAliases[p.Path()]; alias != "" {
 		return alias
 	}
@@ -245,10 +261,19 @@ func (c *converter) qualifier(p *types.Package) string {
 	// A checked type may expose a package which the source did not import
 	// directly. Give that package a collision-free synthetic binding and let
 	// Load hoist the matching import ahead of all declarations.
-	alias := fmt.Sprintf("%simport_type_%d", c.prefix, len(c.syntheticImports))
-	c.importAliases[p.Path()] = alias
-	c.syntheticImports[p.Path()] = alias
-	return alias
+	imp, ok := c.syntheticImports[p.Path()]
+	if !ok {
+		imp = syntheticImport{
+			alias:   fmt.Sprintf("%simport_type_%d", c.prefix, len(c.syntheticImports)),
+			sources: map[token.Pos]bool{},
+		}
+	}
+	if c.currentFile != nil {
+		imp.sources[c.currentFile.FileStart] = true
+	}
+	c.importAliases[p.Path()] = imp.alias
+	c.syntheticImports[p.Path()] = imp
+	return imp.alias
 }
 
 // typeString spells a checked type for the flat file. types.TypeString can

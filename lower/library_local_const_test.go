@@ -92,6 +92,53 @@ func TestGoSourceLibraryUnusedImportStaysRefused(t *testing.T) {
 	}
 }
 
+// TestGoSourceLibraryImportedSelectorKeepsItsFileImport uses two files that
+// bind distinct packages as path. GoSource hygienically renames the later
+// binding; per-file library emission must retain that exact alias import in
+// the generated file that selects through it.
+func TestGoSourceLibraryImportedSelectorKeepsItsFileImport(t *testing.T) {
+	sources := []gosource.Source{
+		{Name: "base.go", Data: []byte("package fixture\n\nimport path \"path\"\n\nvar Base = path.Base(\"a/b\")\n")},
+		{Name: "clean.go", Data: []byte("package fixture\n\nimport path \"path/filepath\"\n\nvar Clean = path.Clean(\"a/../b\")\n")},
+	}
+	program, err := gosource.Load(sources, gosource.Options{PreserveNativeInit: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := lower.Compile(program.File, lower.Options{Package: program.Package, Library: true, Importer: program.Importer})
+	if err != nil {
+		t.Fatalf("library transpile refused the package: %v", err)
+	}
+	if len(result.Files) != len(sources) {
+		t.Fatalf("emitted %d files, want %d", len(result.Files), len(sources))
+	}
+	var clean string
+	for _, output := range result.Files {
+		if output.Name == "clean.go" {
+			clean = string(output.Source)
+		}
+	}
+	if !strings.Contains(clean, `__gosource_import_1_0 "path/filepath"`) || !strings.Contains(clean, `__gosource_import_1_0.Clean`) {
+		t.Fatalf("generated file lost its renamed selector import:\n%s", clean)
+	}
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example/fixture\n\ngo 1.23\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, output := range result.Files {
+		if err := os.WriteFile(filepath.Join(dir, output.Name), output.Source, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cmd := exec.Command("go", "build", ".")
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GOWORK=off")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("go build refused the generated package: %v\n%s", err, out)
+	}
+}
+
 func TestGoSourceLibraryLocalConstIotaBound(t *testing.T) {
 	data := []byte(`package fixture
 
