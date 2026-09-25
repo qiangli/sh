@@ -130,6 +130,10 @@ type bashPPToolchain struct {
 	moduleDir  string
 	importPath string
 	testMain   bool
+	// reexecPlan is the host-supplied argv prefix which reconstructs this
+	// interpreted Go-source program. A generated launcher appends its child
+	// argv to this prefix; see GoSourceReexecPlan.
+	reexecPlan []string
 	// LinkFlags are the original go command's linker flags for an interpreted
 	// Go-source program. Only fieldtrack's -k target is interpreted here.
 	LinkFlags string
