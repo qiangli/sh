@@ -205,6 +205,11 @@ func (r *Runner) goSourceCallbackInt(ctx context.Context, fn *bashPPFunc, args [
 	if err != nil {
 		return 0, err
 	}
+	return r.goSourceCallbackIntResult(results)
+}
+
+// goSourceCallbackIntResult reads the single int result of a comparison.
+func (r *Runner) goSourceCallbackIntResult(results []*bashPPCell) (int, error) {
 	if len(results) != 1 {
 		return 0, fmt.Errorf("gosource: comparison callback must return one value")
 	}
@@ -287,6 +292,7 @@ func (r *Runner) goSourceSlicesSortFunc(ctx context.Context, req bashPPEvalReque
 	if err != nil {
 		return err
 	}
+	pointerParams := q.Args[1].localRefusal != ""
 	shared, ok := r.goSourceSharedSliceOf(bashPPBridgeValue{Kind: "slice", sliceView: q.sliceTargets[0]})
 	if !ok {
 		return fmt.Errorf("gosource: %s cannot share the original slice storage", name)
@@ -294,6 +300,22 @@ func (r *Runner) goSourceSlicesSortFunc(ctx context.Context, req bashPPEvalReque
 	order := &goSourceSharedOrder{
 		n: len(shared.view),
 		less: func(i, j int) (bool, error) {
+			if pointerParams {
+				// Pointer parameters: Go copies each element — the pointer —
+				// into the comparison, which then shares its pointee with the
+				// slice. Bind exactly that pointer from live storage.
+				params := bashppParams(fn.params())
+				if len(params) != 2 {
+					return false, fmt.Errorf("gosource: %s comparison wants two parameters", name)
+				}
+				cells := []*bashPPCell{shared.elementCell(i, params[0]), shared.elementCell(j, params[1])}
+				results, err := r.goSourceInvokeCallbackCells(ctx, fn, cells, []string{"", ""})
+				if err != nil {
+					return false, err
+				}
+				n, err := r.goSourceCallbackIntResult(results)
+				return n < 0, err
+			}
 			a, err := r.goSourceSharedElement(shared, i)
 			if err != nil {
 				return false, err
@@ -490,4 +512,17 @@ func bashPPCopiedReceiverHasReferences(meta *bashPPCollectionMeta, seen map[*bas
 		}
 	}
 	return false
+}
+
+// elementCell binds element i of the original backing array to a callback
+// parameter as the value Go copies into it: for a pointer element, the pointer
+// itself, sharing its pointee with the slice.
+func (s goSourceSharedSlice) elementCell(i int, param bashPPParam) *bashPPCell {
+	var child *bashPPCollectionMeta
+	if s.meta != nil && i < len(s.meta.sequence) {
+		child = s.meta.sequence[i]
+	}
+	cell := &bashPPCell{declType: param.typ, typeName: param.declared}
+	bashPPStoreCellValue(cell, s.view[i], child)
+	return cell
 }

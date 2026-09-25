@@ -1441,10 +1441,32 @@ func (r *Runner) goSourceComputedPointerField(target syntax.BashPPExpr) bool {
 		}
 		x = paren.X
 	}
+	if call, ok := x.(*syntax.BashPPCall); ok {
+		// f().field and s.StructType().ParamTuple: a call result of pointer
+		// type is dereferenced implicitly, so its field is addressable.
+		return r.goSourcePointerCallResult(call)
+	}
 	assert, ok := x.(*syntax.BashPPTypeAssertExpr)
 	if !ok {
 		return false
 	}
 	_, pointer := r.bashPPPointerType(assert.Assert)
+	return pointer
+}
+
+// goSourcePointerCallResult reports a call whose one checked result is a
+// pointer. Only the front end's checked signature is consulted; the call is
+// not evaluated.
+func (r *Runner) goSourcePointerCallResult(call *syntax.BashPPCall) bool {
+	typ, known := syntax.BashPPTypeExpr(nil), false
+	if len(call.ResultTypes) == 1 {
+		typ, known = call.ResultTypes[0], true
+	} else {
+		typ, known = r.goSourceStaticExprType(call)
+	}
+	if !known || typ == nil {
+		return false
+	}
+	_, pointer := r.bashPPPointerType(typ)
 	return pointer
 }

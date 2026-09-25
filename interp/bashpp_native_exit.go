@@ -50,6 +50,16 @@ func (r *Runner) bashPPNativeExitStatus(err error) bool {
 		refusal = session.callbackRefusal
 		session.mu.Unlock()
 	}
+	// An interpreted body the dependency called back into — a test function
+	// under testing.tRunner — may already have failed with its own
+	// diagnostic; the nonzero exit it unwinds with is that failure, not a
+	// second, silent outcome.
+	if refusal == nil && r.exit.fatalExit {
+		var status ExitStatus
+		if r.exit.err != nil && !errors.As(r.exit.err, &status) && !errors.Is(r.exit.err, errBashPPNativeExited) {
+			refusal = r.exit.err
+		}
+	}
 	r.closeGoSourceBridge()
 	code := uint8(status)
 	if windowsBreak {

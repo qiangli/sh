@@ -91,6 +91,23 @@ func (c *converter) attachEmbedDirectives(file *syntax.File, linked []*converter
 			scan(lc.files)
 		}
 	}
+	// A body-less function of a linked package names its implementation
+	// with //go:linkname; the interpreter needs that target to tell a pull
+	// of its own interpreted code (go/types badlinkname_Checker_infer) from
+	// a native companion symbol.
+	keep = isLinknameDirective
+	for _, lc := range linked {
+		if lc == c {
+			continue
+		}
+		for _, f := range lc.files {
+			c.attachFileDirectives(f, func(name *ast.Ident, groups []*ast.CommentGroup) {
+				if bodylessFunc(f, name) {
+					attach(name, groups)
+				}
+			})
+		}
+	}
 	for _, stmt := range file.Stmts {
 		var name *syntax.Lit
 		switch d := stmt.Cmd.(type) {
@@ -164,4 +181,21 @@ func isDeclDirective(text string) bool {
 	directive, _, _ := strings.Cut(strings.TrimPrefix(text, "//go:"), " ")
 	directive, _, _ = strings.Cut(directive, "\t")
 	return directive != "build" && directive != "generate"
+}
+
+// isLinknameDirective reports whether a comment line is //go:linkname.
+func isLinknameDirective(text string) bool {
+	fields := strings.Fields(strings.TrimPrefix(text, "//"))
+	return len(fields) > 0 && fields[0] == "go:linkname" && strings.HasPrefix(text, "//go:")
+}
+
+// bodylessFunc reports whether name declares a package function of f
+// without a body.
+func bodylessFunc(f *ast.File, name *ast.Ident) bool {
+	for _, decl := range f.Decls {
+		if fn, ok := decl.(*ast.FuncDecl); ok && fn.Name == name {
+			return fn.Recv == nil && fn.Body == nil
+		}
+	}
+	return false
 }

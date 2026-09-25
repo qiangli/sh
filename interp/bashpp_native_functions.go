@@ -20,6 +20,9 @@ func (r *Runner) bashPPBridgeFunction(fn *bashPPFunc) (bashPPBridgeValue, error)
 	callRefusal := ""
 	reflecting := r.goSourceReflectingFunction
 	r.goSourceReflectingFunction = false
+	localOrdering := r.goSourceLocalCallbackArg
+	r.goSourceLocalCallbackArg = false
+	localRefusal := ""
 	for group, fields := range [][]*syntax.BashPPField{fn.params(), fn.results()} {
 		if makeFunc {
 			break
@@ -80,6 +83,15 @@ func (r *Runner) bashPPBridgeFunction(fn *bashPPFunc) (bashPPBridgeValue, error)
 				}
 				continue
 			}
+			// slices.SortFunc is answered in this process over the original
+			// backing array: a pointer element is handed to the comparison as
+			// the very pointer the slice holds (goSourceSlicesSortFunc).
+			if localOrdering && group == 0 {
+				if _, pointer := field.FieldTypeExpr.(*syntax.BashPPPointerType); pointer {
+					localRefusal = refusal
+					continue
+				}
+			}
 			return bashPPBridgeValue{}, fmt.Errorf(refusal)
 		}
 	}
@@ -95,13 +107,13 @@ func (r *Runner) bashPPBridgeFunction(fn *bashPPFunc) (bashPPBridgeValue, error)
 	}
 	for id, existing := range s.functions {
 		if existing == fn {
-			return bashPPBridgeValue{Kind: "callback", Handle: id, Session: s.id, Callbacks: true, copiedResults: copiedResults, callRefusal: callRefusal}, nil
+			return bashPPBridgeValue{Kind: "callback", Handle: id, Session: s.id, Callbacks: true, copiedResults: copiedResults, callRefusal: callRefusal, localRefusal: localRefusal}, nil
 		}
 	}
 	s.functionNext++
 	id := s.functionNext
 	s.functions[id] = fn
-	return bashPPBridgeValue{Kind: "callback", Handle: id, Session: s.id, Callbacks: true, copiedResults: copiedResults, callRefusal: callRefusal}, nil
+	return bashPPBridgeValue{Kind: "callback", Handle: id, Session: s.id, Callbacks: true, copiedResults: copiedResults, callRefusal: callRefusal, localRefusal: localRefusal}, nil
 }
 
 // goSourceReflectValueOfOperand reports the operand of a reflect.ValueOf
@@ -405,6 +417,11 @@ func retainedFunctionCallback(req bashPPEvalRequest, q bashPPBridgeRequest) bool
 		// The scope keeps the resolver and runs it on the first lookup of
 		// the name — a later request of this session (the unified export
 		// data importers register every package-level object this way).
+		return true
+	case "testing.T.Cleanup", "testing.B.Cleanup", "testing.F.Cleanup":
+		// The test keeps the function and runs it when the test and its
+		// subtests finish, inside tRunner — while the request that runs the
+		// tests (testing.Main, T.Run) is still parked serving callbacks.
 		return true
 	case "reflect.MakeFunc":
 		// The made function retains its implementation and raises it on

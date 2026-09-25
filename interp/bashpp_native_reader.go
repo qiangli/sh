@@ -33,6 +33,19 @@ func (r *Runner) bashPPNativeByteAssign(target, rhs syntax.BashPPExpr) bool {
 		fail(err)
 		return true
 	}
+	if !bashPPNativeByteSliceType(base) {
+		// Any other dependency-owned map, slice or array element takes the
+		// assigned value at the element type the dependency declares
+		// (scope.Objects[name] = obj).
+		value, err := r.bashPPBridgeExpr(rhs)
+		if err != nil {
+			fail(err)
+			return true
+		}
+		_, err = r.bashPPNativeAccess(r.ectx, "index-set", base, "", key, value)
+		fail(err)
+		return true
+	}
 	scalar, err := r.bashPPEvalScalarExpr(rhs)
 	if err != nil {
 		fail(err)
@@ -139,4 +152,16 @@ func bashPPNativeDeclImports(decl string, aliases map[string]string) (string, er
 		out.WriteByte('\n')
 	}
 	return out.String(), nil
+}
+
+// bashPPNativeByteSliceType reports whether a dependency-owned indexed base is
+// a byte slice, whose element writes keep the byte conversion of byte-set.
+func bashPPNativeByteSliceType(base bashPPBridgeValue) bool {
+	for _, typ := range []string{base.NativeType, base.Type} {
+		switch typ {
+		case "[]byte", "[]uint8":
+			return true
+		}
+	}
+	return base.NativeType == "" && base.Type == ""
 }

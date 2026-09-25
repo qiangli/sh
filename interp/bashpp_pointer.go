@@ -453,6 +453,15 @@ func (r *Runner) bashPPAddress(expr syntax.BashPPExpr) (result *bashPPPointer, e
 			}
 			x = paren.X
 		}
+		// f().f likewise: the call runs once and the field address continues
+		// from the pointee of its pointer result.
+		if call, called := x.(*syntax.BashPPCall); called && r.goSourcePointerCallResult(call) {
+			base, err := r.bashPPPointerExprValue(call)
+			if err != nil {
+				return nil, err
+			}
+			return r.goSourcePointeeFieldAddress(base, selector.Sel.Value)
+		}
 		if assert, asserted := x.(*syntax.BashPPTypeAssertExpr); asserted && assert.TypeToken == nil {
 			if _, pointer := r.bashPPPointerType(assert.Assert); pointer {
 				base, err := r.bashPPPointerExprValue(assert)

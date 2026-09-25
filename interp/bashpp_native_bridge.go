@@ -65,6 +65,11 @@ type bashPPBridgeValue struct {
 	// is the diagnostic its signature earns: the reflected handle may be
 	// inspected, but Call refuses it. Host-only.
 	callRefusal string
+	// localRefusal, on an original callback handed to an interpreter-answered
+	// ordering helper, is the diagnostic its signature earns anywhere else:
+	// the helper binds its parameters from live storage, but the callback
+	// never crosses to the dependency. Host-only.
+	localRefusal string
 
 	// Callable is derived by the interpreter from authenticated native type or
 	// import metadata; the dependency worker cannot set callback policy itself.

@@ -916,7 +916,7 @@ func (r *Runner) bashPPImport(ctx context.Context, imp *syntax.BashPPImport) {
 				return
 			}
 		} else {
-			name, err = r.bashPPTools.eval.Resolve(ctx, req, path)
+			name, err = r.bashPPTools.eval.Resolve(ctx, r.goSourceImporterRequest(req, imp), path)
 			if err != nil {
 				r.exit.fatal(err)
 				return
@@ -970,4 +970,22 @@ func (r *Runner) shellFallbackImport(ctx context.Context, imp *syntax.BashPPImpo
 	}
 	call.Args = append(call.Args, &syntax.Word{Parts: []syntax.WordPart{imp.Path}})
 	r.cmd(ctx, call)
+}
+
+// goSourceImporterRequest scopes one import's resolution to the identity of
+// the package whose file declares it. A linked package of a package map — the
+// tested package under cmd/go's test main — imports under its own import path,
+// exactly as the front end checked it and as cmd/go applies the internal rule
+// per importing package; only the program package keeps the declared program
+// identity. An external test package (p_test) has p's visibility.
+func (r *Runner) goSourceImporterRequest(req bashPPEvalRequest, imp *syntax.BashPPImport) bashPPEvalRequest {
+	if !r.bashPPGoSource || r.bashPPGoSourceFile == nil || imp == nil || req.ImportPath == "" {
+		return req
+	}
+	source, ok := r.bashPPGoSourceFile.SourceAt(imp.Pos())
+	if !ok || source.PackagePath == "" {
+		return req
+	}
+	req.ImportPath, req.TestMain = strings.TrimSuffix(source.PackagePath, "_test"), false
+	return req
 }

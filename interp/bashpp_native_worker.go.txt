@@ -526,6 +526,17 @@ func access(rv reflect.Value,q request)([]value,string){
   if n<0||n>=rv.Len(){return nil,fmt.Sprintf("index out of range [%d] with length %d",n,rv.Len())}
   if rv.Kind()==reflect.String{return []value{encode(reflect.ValueOf(rv.String()[n]))},""}
   return []value{encode(rv.Index(n))},""
+ case "index-set":
+  // An indexed write through a dependency-owned map or slice stores the
+  // decoded value in that same storage, at the element type it declares.
+  if len(q.Args)!=2{return nil,"index-set requires a key and a value"}
+  if rv.Kind()==reflect.Map{if rv.IsNil(){return nil,"assignment to entry in nil map"};key,err:=decode(q.Args[0],rv.Type().Key());if err!=nil{return nil,err.Error()};element,err:=decode(q.Args[1],rv.Type().Elem());if err!=nil{return nil,err.Error()};rv.SetMapIndex(key,element);return []value{encode(reflect.ValueOf(true))},""}
+  switch rv.Kind(){case reflect.Slice,reflect.Array:default:return nil,"indexed writes are not defined on "+rv.Type().String()}
+  n,err:=strconv.Atoi(q.Args[0].Text);if err!=nil{return nil,"index is not an integer"}
+  if n<0||n>=rv.Len(){return nil,fmt.Sprintf("index out of range [%d] with length %d",n,rv.Len())}
+  target:=rv.Index(n);if !target.CanSet(){return nil,"indexed value is not addressable"}
+  element,err:=decode(q.Args[1],target.Type());if err!=nil{return nil,err.Error()}
+  target.Set(element);return []value{encode(reflect.ValueOf(true))},""
  case "index-pointer":
   if len(q.Args)!=1{return nil,"index-pointer requires one operand"}
   if rv.Kind()!=reflect.Slice{return nil,"index-pointer is not defined on "+rv.Type().String()}
@@ -646,7 +657,7 @@ func dispatch(q request)(reply response){
  }
  fn:=symbols[q.Selector+q.Instance]
  if q.Receiver!=nil {receiver,err:=decode(*q.Receiver,nil);if err!=nil{reply.Error=err.Error();return}
-  switch q.Op {case "deref","len","cap","index","index-pointer","unsafe-slice","slice","field","field-set","member","method-type","receiver_field","byte-set","kind","keys":reply.Values,reply.Error=access(receiver,q);return}
+  switch q.Op {case "deref","len","cap","index","index-pointer","unsafe-slice","slice","field","field-set","member","method-type","receiver_field","byte-set","index-set","kind","keys":reply.Values,reply.Error=access(receiver,q);return}
   if q.Selector==""&&receiver.Kind()==reflect.Func{fn=receiver}else{fn=memberMethod(receiver,q.Selector)}}
  if q.Op=="new" {typ:=resolveType(q.Selector);if typ==nil{reply.Error="unregistered bridge type "+strconv.Quote(q.Selector);return};reply.Values=[]value{encode(reflect.New(typ).Elem())};return}
  if !fn.IsValid(){reply.Error="unknown imported symbol or method: "+q.Selector+q.Instance;return}

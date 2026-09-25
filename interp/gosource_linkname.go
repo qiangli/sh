@@ -145,7 +145,13 @@ func (r *Runner) goSourceTopLevelDecl(d *syntax.BashPPDecl) bool {
 }
 
 func (r *Runner) goSourceDeclLinkname(d *syntax.BashPPDecl) (local, target string, ok bool, err error) {
-	source, present := r.bashPPGoSourceFile.SourceAt(d.Pos())
+	return r.goSourceLinknameIn(d.Pos(), d.Name.Value)
+}
+
+// goSourceLinknameIn finds the two-argument //go:linkname directive naming
+// the declaration name in the source file that holds pos.
+func (r *Runner) goSourceLinknameIn(pos syntax.Pos, name string) (local, target string, ok bool, err error) {
+	source, present := r.bashPPGoSourceFile.SourceAt(pos)
 	if !present {
 		return
 	}
@@ -156,7 +162,7 @@ func (r *Runner) goSourceDeclLinkname(d *syntax.BashPPDecl) (local, target strin
 				continue
 			}
 			fields := strings.Fields(comment.Text)
-			if len(fields) < 2 || fields[0] != "go:linkname" || fields[1] != goSourceDeclaredName(d.Name.Value) {
+			if len(fields) < 2 || fields[0] != "go:linkname" || fields[1] != goSourceDeclaredName(name) {
 				continue
 			}
 			if ok {

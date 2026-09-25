@@ -318,10 +318,16 @@ func (r *Runner) bashPPPrepareNativeCall(ctx context.Context, call *syntax.BashP
 			}
 		}
 	}
-	for _, expr := range call.ArgExprs {
+	localOrdering := false
+	if alias, name, ok := strings.Cut(q.Selector, "."); ok && q.Receiver == nil && r.bashPPImports[alias] == "slices" {
+		localOrdering = name == "SortFunc" || name == "SortStableFunc"
+	}
+	for i, expr := range call.ArgExprs {
 		r.goSourceReflectingFunction = len(call.ArgExprs) == 1 && goSourceReflectValueOfOperand(r.bashPPImports, q, expr)
+		r.goSourceLocalCallbackArg = localOrdering && i == 1
 		value, err := r.bashPPBridgeExpr(expr)
 		r.goSourceReflectingFunction = false
+		r.goSourceLocalCallbackArg = false
 		if err != nil {
 			var positioned *goSourceError
 			if errors.As(err, &positioned) {
@@ -576,6 +582,12 @@ func (r *Runner) bashPPBridgeExpr(expr syntax.BashPPExpr) (bashPPBridgeValue, er
 				return bashPPBridgeValue{}, err
 			}
 			native, ok := value.(*bashPPBridgeValue)
+			if !ok && meta == nil && bashPPPlainScalarElement(value) {
+				// A dependency-defined basic type (go/token.Token) is held in
+				// the interpreter's collection as the scalar it is; it crosses
+				// through the scalar path below with its declared identity.
+				break
+			}
 			if !ok || native == nil || meta == nil {
 				return bashPPBridgeValue{}, fmt.Errorf("gosource: native collection element lost its authenticated handle")
 			}
@@ -725,6 +737,14 @@ func (r *Runner) bashPPBridgeDefinedScalar(value bashPPBridgeValue) (bashPPBridg
 		return value, nil
 	}
 	named := &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.Type}}
+	// An alias names the defined type it denotes (type tkn = Tkn): the value
+	// crosses with that type's identity, whose method set the helper knows.
+	if canonical := r.bashPPCanonicalAssignableType(named); canonical != named {
+		value.Type = r.bashPPBridgeTypeIdentity(canonical)
+		if next, ok := canonical.(*syntax.BashPPNamedType); ok && len(next.TypeArgs) == 0 {
+			named = next
+		}
+	}
 	underlying := bashPPTypeText(r.bashPPUnderlyingType(named))
 	if underlying == value.Type {
 		return value, nil
@@ -1477,4 +1497,14 @@ func (r *Runner) goSourceUnsafeString(call *syntax.BashPPCall, discard bool) (va
 		out[i] = byte(b)
 	}
 	return []bashPPBridgeValue{{Kind: "string", Type: "string", NativeType: "string", Text: string(out), Bytes: out}}, true, nil
+}
+
+// bashPPPlainScalarElement reports whether an interpreter collection element is
+// held as a plain scalar rather than a structured or native value.
+func bashPPPlainScalarElement(value any) bool {
+	switch value.(type) {
+	case string, bool, int, int64, uint64, float64, bashPPScalar, *bashPPScalar:
+		return true
+	}
+	return false
 }

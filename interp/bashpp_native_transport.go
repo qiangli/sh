@@ -20,6 +20,13 @@ func validateLocalTransport(req bashPPEvalRequest, q bashPPBridgeRequest) error 
 	if q.Receiver != nil && q.Receiver.reflectFunction && q.Receiver.callRefusal != "" && (q.Selector == "Call" || q.Selector == "CallSlice") {
 		return fmt.Errorf("%s", q.Receiver.callRefusal)
 	}
+	// reflect.TypeOf reads only the dynamic type of its operand: it neither
+	// retains the value nor invokes any of its methods, so a copied
+	// reference-bearing value with pointer methods crosses as a type witness
+	// (cmd/compile/internal/types TestSizeof: reflect.TypeOf(Func{}).Size()).
+	if bashPPTypeDescriptorResult(req, q) {
+		return nil
+	}
 	alias, name, selected := strings.Cut(q.Selector, ".")
 	nativeWriterFormat := selected && req.Imports[alias] == "fmt" && (name == "Fprint" || name == "Fprintln" || name == "Fprintf")
 	if nativeWriterFormat && !bashPPDependencyOwnedWriter(q.Args) {
@@ -38,6 +45,9 @@ func validateLocalTransport(req bashPPEvalRequest, q bashPPBridgeRequest) error 
 	var inspect func(bashPPBridgeValue, bool) (bool, bool, error)
 	inspect = func(v bashPPBridgeValue, identity bool) (bool, bool, error) {
 		if v.Kind == "callback" {
+			if v.localRefusal != "" {
+				return false, false, fmt.Errorf("%s", v.localRefusal)
+			}
 			if v.copiedResults && !copiedResultsConsumer(req, q) {
 				return false, false, fmt.Errorf("gosource: original callback signature requires value-semantics parameters and supported results")
 			}

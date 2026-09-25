@@ -135,6 +135,17 @@ func (r *Runner) bashPPGoSourceNativeCompanions(sourceDir string) ([]string, []b
 				break
 			}
 		}
+		if linkname == "" {
+			// The directive may precede the declaration without being
+			// attached to it (it follows a doc comment); it names the
+			// declaration within the same source file.
+			if _, target, ok, _ := r.goSourceLinknameIn(decl.Pos(), decl.Name.Value); ok {
+				linkname = target
+			}
+		}
+		if r.goSourceLinknameTargetInterpreted(linkname) {
+			continue
+		}
 		funcs = append(funcs, bashPPNativeFuncDecl{
 			Name:     decl.Name.Value,
 			Params:   bashPPBridgeFieldsTextIn(decl.Params, r.bashPPScopedLocalTypeName),
@@ -200,4 +211,24 @@ func (r *Runner) bashPPNativeEmbedDeclaration(d *syntax.BashPPDecl) bool {
 		r.exit.fatal(&goSourceError{prefix: r.bashErrPrefix(d.Pos()), err: err})
 	}
 	return true
+}
+
+// goSourceLinknameTargetInterpreted reports a //go:linkname target symbol whose
+// package is one of the packages this program interprets.
+func (r *Runner) goSourceLinknameTargetInterpreted(target string) bool {
+	if target == "" || r.bashPPGoSourceFile == nil {
+		return false
+	}
+	slash := strings.LastIndex(target, "/")
+	dot := strings.Index(target[slash+1:], ".")
+	if dot < 0 {
+		return false
+	}
+	pkg := target[:slash+1+dot]
+	for _, source := range r.bashPPGoSourceFile.Sources {
+		if source.PackagePath != "" && source.PackagePath == pkg {
+			return true
+		}
+	}
+	return false
 }
