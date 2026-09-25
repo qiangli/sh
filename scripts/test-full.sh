@@ -87,9 +87,10 @@ record_command() {
 }
 
 list_packages() {
-	local module=$1 directory=$2 pattern=$3 list_log=$4
-	if ! (cd "$directory" && go list -tags full -f '{{.ImportPath}}|{{.Dir}}|{{len .TestGoFiles}}|{{len .XTestGoFiles}}' "$pattern") >"$list_log" 2>&1; then
+	local module=$1 directory=$2 pattern=$3 list_log=$4 list_stderr_log="${4%.log}.stderr.log"
+	if ! (cd "$directory" && go list -tags full -f '{{.ImportPath}}|{{.Dir}}|{{len .TestGoFiles}}|{{len .XTestGoFiles}}' "$pattern") >"$list_log" 2>"$list_stderr_log"; then
 		cat "$list_log" >&2
+		cat "$list_stderr_log" >&2
 		record_command enumerate "$module" - - "$directory" "$list_log" fail go list -tags full -f '{{.ImportPath}}|{{.Dir}}|{{len .TestGoFiles}}|{{len .XTestGoFiles}}' "$pattern"
 		return 1
 	fi
