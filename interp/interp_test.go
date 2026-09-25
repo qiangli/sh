@@ -3064,9 +3064,9 @@ var runTests = []runTest{
 	{"[[ -n $! ]]", "exit status 1"},
 	{"true & [[ -n $! ]]", ""},
 	{"set -u; true & [[ -n $! ]]", ""},
-	{"set -u; true & echo $! & wait", "g1\n"},
-	{"set -u; true & (echo $!) & wait", "g1\n"},
-	{"set -u; true & (wait $!; echo $?) & wait", "bash: line 1: wait: pid g1 is not a child of this shell\n127\n"},
+	{"set -u; true & echo $! & wait", "g1\n #IGNORE S275 decision: background builtins run as goroutines, so $! is a job id (g1), not a kernel PID"},
+	{"set -u; true & (echo $!) & wait", "g1\n #IGNORE S275 decision: background builtins run as goroutines, so $! is a job id (g1), not a kernel PID"},
+	{"set -u; true & (wait $!; echo $?) & wait", "bash: line 1: wait: pid g1 is not a child of this shell\n127\n #IGNORE S275 decision: background builtins run as goroutines, so $! is a job id (g1), not a kernel PID"},
 	{"true & true;  [[ -n $! ]]", ""},
 	{"true & pid=$!; wait $pid", ""},
 	{"false & pid=$!; wait $pid", "exit status 1"},
@@ -5642,7 +5642,7 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	// catch a regression in the dispatcher's default arm.
 	{
 		"newgrp staff",
-		"newgrp: not supported in this shell — group switching is not supported; switch groups in the parent process (e.g. with sudo -g)\nexit status 2 #JUSTERR",
+		"newgrp: not supported in this shell — group switching is not supported; switch groups in the parent process (e.g. with sudo -g)\nexit status 2 #JUSTERR #IGNORE S275 decision: an embedded interpreter must not hand control to the host newgrp, which switches groups and may start a new shell",
 	},
 
 	// coproc: pipes are real, fd numbers are real, and `<&${CO[0]}` /
@@ -5697,7 +5697,7 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	// POSIX 2.11: without job control, an asynchronous list reads from a
 	// /dev/null-like input unless the command supplies an explicit redirect.
 	// This is also Bash's default-mode behavior (VSC-PCTS TP460).
-	{"echo leaked >f; exec <f; cat & wait", ""},
+	{"echo leaked >f; exec <f; cat & wait", " #IGNORE S275 decision: the program is parsed up front, not read from stdin; an async job reads /dev/null (VSC-PCTS TP460)"},
 	{"echo piped | (cat & wait)", "piped\n"},
 	{"for x in 1 2; do { read line; echo $line; } & wait; done <<'EOF'\na\nb\nEOF", "a\nb\n"},
 
@@ -6080,7 +6080,7 @@ var runTestsUnix = []runTest{
 	},
 	{
 		"while kill -s 0 $$; do :; done & kill -s USR1 $!; wait $!; s=$?; [ $s -gt 128 ] && echo signaled",
-		"signaled\n",
+		"signaled\n #IGNORE S275 decision: a goroutine-backed job has no kernel PID, so no numeric termination notice is printed",
 	},
 
 	{
