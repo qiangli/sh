@@ -11,15 +11,9 @@ workdir=${FULL_TEST_WORKDIR:-}
 evidence=${FULL_TEST_EVIDENCE_DIR:-"$root/artifacts/full-test"}
 keep_workdir=0
 
-usage() {
-	echo "usage: $0 [--keep-workdir]" >&2
-}
-
+usage() { echo "usage: $0 [--keep-workdir]" >&2; }
 for arg in "$@"; do
-	case "$arg" in
-		--keep-workdir) keep_workdir=1 ;;
-		*) usage; exit 2 ;;
-	esac
+	case "$arg" in --keep-workdir) keep_workdir=1 ;; *) usage; exit 2 ;; esac
 done
 
 if [ -z "$workdir" ]; then
@@ -31,111 +25,139 @@ else
 fi
 mkdir -p "$evidence"
 
+# Test binaries are disposable, but evidence never belongs in the temp tree.
+# A distinct raw-log directory preserves failures through subsequent runs.
+run_id="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+logs="$evidence/raw-logs/$run_id"
+mkdir -p "$logs"
 cleanup() {
-	if ((remove_workdir && !keep_workdir)); then
-		rm -rf "$workdir"
-	else
-		echo "full-test workdir: $workdir"
-	fi
+	if ((remove_workdir && !keep_workdir)); then rm -rf "$workdir"; else echo "full-test workdir: $workdir"; fi
 }
 trap cleanup EXIT
 
-packages_file=$workdir/packages.tsv
+packages_file=$evidence/packages.tsv
 inventory=$evidence/inventory.tsv
 results=$evidence/results.tsv
+commands=$evidence/run-inventory.tsv
+metadata=$evidence/metadata.tsv
 : >"$packages_file"
 printf 'module\tpackage\tdirectory\ttest_go_files\tx_test_go_files\n' >"$inventory"
 printf 'module\tpackage\tname\tkind\tstatus\n' >"$results"
+printf 'sequence\tphase\tmodule\tpackage\tname\tcwd\tcommand\tlog\tstatus\n' >"$commands"
 
-status=0
-discovered=0
-executed=0
+quote_command() {
+	local arg quoted='' escaped
+	for arg in "$@"; do printf -v escaped '%q' "$arg"; quoted+="${quoted:+ }$escaped"; done
+	printf '%s' "$quoted"
+}
+candidate_sha=$(git -C "$root" rev-parse HEAD 2>/dev/null || printf unknown)
+candidate_dirty=clean
+if ! git -C "$root" diff --quiet || ! git -C "$root" diff --cached --quiet; then candidate_dirty=dirty; fi
+{
+	printf 'key\tvalue\n'
+	printf 'candidate_sha\t%s\n' "$candidate_sha"
+	printf 'candidate_dirty\t%s\n' "$candidate_dirty"
+	printf 'invocation\t%s\n' "$(quote_command "$0" "$@")"
+	printf 'timeout\t%s\n' "$timeout"
+	printf 'host\t%s\n' "$(hostname)"
+	printf 'host_kernel\t%s\n' "$(uname -srm)"
+	printf 'go_version\t%s\n' "$(go version)"
+	printf 'runner_bash\t%s\n' "$BASH_VERSION"
+	printf 'raw_logs\t%s\n' "$logs"
+} >"$metadata"
 
-list_packages() {
-	local module=$1 directory=$2
-	(
-		cd "$directory"
-		go list -tags full -f '{{.ImportPath}}|{{.Dir}}|{{len .TestGoFiles}}|{{len .XTestGoFiles}}' ./...
-	) | while IFS='|' read -r package package_dir test_go_files x_test_go_files; do
-		printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$module" "$directory" "$package" "$package_dir" "$test_go_files" "$x_test_go_files" >>"$packages_file"
-		done
+status=0 discovered=0 executed=0 packages_enumerated=0 packages_compiled=0
+packages_no_test_files=0 compile_failures=0 discovery_failures=0
+top_pass=0 top_fail=0 top_skip=0 sub_pass=0 sub_fail=0 sub_skip=0 command_number=0
+
+record_command() {
+	local phase=$1 module=$2 package=$3 name=$4 cwd=$5 log=$6 result=$7
+	shift 7
+	command_number=$((command_number + 1))
+	printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$command_number" "$phase" "$module" "$package" "$name" "$cwd" "$(quote_command "$@")" "$log" "$result" >>"$commands"
 }
 
-if ! list_packages root "$root"; then
-	echo 'ERROR: could not enumerate root module packages' >&2
-	exit 1
-fi
-if ! list_packages moreinterp "$root/moreinterp"; then
-	echo 'ERROR: could not enumerate moreinterp packages' >&2
-	exit 1
-fi
+list_packages() {
+	local module=$1 directory=$2 pattern=$3 list_log=$4
+	if ! (cd "$directory" && go list -tags full -f '{{.ImportPath}}|{{.Dir}}|{{len .TestGoFiles}}|{{len .XTestGoFiles}}' "$pattern") >"$list_log" 2>&1; then
+		cat "$list_log" >&2
+		record_command enumerate "$module" - - "$directory" "$list_log" fail go list -tags full -f '{{.ImportPath}}|{{.Dir}}|{{len .TestGoFiles}}|{{len .XTestGoFiles}}' "$pattern"
+		return 1
+	fi
+	record_command enumerate "$module" - - "$directory" "$list_log" pass go list -tags full -f '{{.ImportPath}}|{{.Dir}}|{{len .TestGoFiles}}|{{len .XTestGoFiles}}' "$pattern"
+	while IFS='|' read -r package package_dir test_go_files x_test_go_files; do
+		printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$module" "$directory" "$package" "$package_dir" "$test_go_files" "$x_test_go_files" >>"$packages_file"
+	done <"$list_log"
+}
+
+root_pattern=${FULL_TEST_ROOT_PACKAGES:-./...}
+moreinterp_pattern=${FULL_TEST_MOREINTERP_PACKAGES:-./...}
+if ! list_packages root "$root" "$root_pattern" "$logs/root.enumerate.log"; then echo 'ERROR: could not enumerate root module packages' >&2; exit 1; fi
+if [ "${FULL_TEST_SKIP_MOREINTERP:-0}" != 1 ] && ! list_packages moreinterp "$root/moreinterp" "$moreinterp_pattern" "$logs/moreinterp.enumerate.log"; then echo 'ERROR: could not enumerate moreinterp packages' >&2; exit 1; fi
 
 # A sequential package number avoids depending on import paths being safe file
-# names and makes the retained command/log paths easy to correlate with rows.
+# names and makes retained command/log paths easy to correlate with rows.
 number=0
 while IFS=$'\t' read -r module directory package package_dir test_go_files x_test_go_files; do
-	number=$((number + 1))
+	number=$((number + 1)); packages_enumerated=$((packages_enumerated + 1))
 	binary=$workdir/$number.test
-	compile_log=$workdir/$number.compile.log
+	compile_log=$logs/$number.compile.log
 	printf '%s\t%s\t%s\t%s\t%s\n' "$module" "$package" "$package_dir" "$test_go_files" "$x_test_go_files" >>"$inventory"
-
 	if ! (cd "$directory" && go test -tags full -timeout="$timeout" -c -o "$binary" "$package") >"$compile_log" 2>&1; then
 		cat "$compile_log" >&2
+		record_command compile "$module" "$package" - "$directory" "$compile_log" fail go test -tags full -timeout="$timeout" -c -o "$binary" "$package"
 		printf '%s\t%s\t-\tcompile\tfail\n' "$module" "$package" >>"$results"
-		status=1
-		continue
+		compile_failures=$((compile_failures + 1)); status=1; continue
 	fi
-
-	# Packages without test sources are still compiled, as go test would compile
-	# them, but do not produce a runnable test binary.
+	record_command compile "$module" "$package" - "$directory" "$compile_log" pass go test -tags full -timeout="$timeout" -c -o "$binary" "$package"
+	packages_compiled=$((packages_compiled + 1))
 	if ((test_go_files == 0 && x_test_go_files == 0)); then
 		printf '%s\t%s\t-\tpackage\tno-test-files\n' "$module" "$package" >>"$results"
-		continue
+		packages_no_test_files=$((packages_no_test_files + 1)); continue
 	fi
-
-	list_log=$workdir/$number.list.log
+	list_log=$logs/$number.list.log
 	if ! "$binary" -test.list=. >"$list_log" 2>&1; then
 		cat "$list_log" >&2
+		record_command discover "$module" "$package" - "$package_dir" "$list_log" fail "$binary" -test.list=.
 		printf '%s\t%s\t-\tdiscovery\tfail\n' "$module" "$package" >>"$results"
-		status=1
-		continue
+		discovery_failures=$((discovery_failures + 1)); status=1; continue
 	fi
-
+	record_command discover "$module" "$package" - "$package_dir" "$list_log" pass "$binary" -test.list=.
 	while IFS= read -r name; do
-		case "$name" in
-			Test*) kind=test ;;
-			Example*) kind=example ;;
-			Fuzz*) kind=fuzz ;;
-			*) continue ;;
-		esac
+		case "$name" in Test*) kind=test ;; Example*) kind=example ;; Fuzz*) kind=fuzz ;; *) continue ;; esac
 		discovered=$((discovered + 1))
 		printf '%s\t%s\t%s\t%s\tdiscovered\n' "$module" "$package" "$name" "$kind" >>"$results"
-		run_log=$workdir/$number.$discovered.run.log
-		# -test.v records subtests in the retained child log. Use an anchored
-		# selector so a similarly named test cannot accidentally run too.
-		if (cd "$package_dir" && "$binary" -test.timeout="$timeout" -test.v -test.run="^${name}$") >"$run_log" 2>&1; then
-			run_status=pass
-		else
-			run_status=fail
-			status=1
-			cat "$run_log" >&2
-		fi
+		run_log=$logs/$number.$discovered.run.log
+		# The anchored selector keeps one top-level test/example/fuzz seed corpus
+		# per fresh process; -test.v emits explicit subtest outcomes.
+		if (cd "$package_dir" && "$binary" -test.timeout="$timeout" -test.v -test.run="^${name}$") >"$run_log" 2>&1; then run_status=pass; else run_status=fail; status=1; cat "$run_log" >&2; fi
+		record_command run "$module" "$package" "$name" "$package_dir" "$run_log" "$run_status" "$binary" -test.timeout="$timeout" -test.v -test.run="^${name}$"
 		executed=$((executed + 1))
+		# A skipped top-level test exits zero; retain skip rather than calling it pass.
+		observed_top=$(awk -v name="$name" '$1 == "---" && ($2 == "PASS:" || $2 == "FAIL:" || $2 == "SKIP:") && $3 == name { gsub(":", "", $2); print tolower($2); exit }' "$run_log")
+		[ -n "$observed_top" ] && run_status=$observed_top
+		case "$run_status" in pass) top_pass=$((top_pass + 1)) ;; fail) top_fail=$((top_fail + 1)) ;; skip) top_skip=$((top_skip + 1)) ;; esac
 		printf '%s\t%s\t%s\t%s\t%s\n' "$module" "$package" "$name" "$kind" "$run_status" >>"$results"
-		# Top-level selection runs all of its subtests in that same fresh child.
-		# Retain their names as observed coverage without treating them as separate
-		# processes (the release contract is one process per top-level test).
-		while IFS= read -r subtest; do
+		while IFS=$'\t' read -r sub_status subtest; do
 			[ "$subtest" = "$name" ] && continue
-			printf '%s\t%s\t%s\tsubtest\tobserved\n' "$module" "$package" "$subtest" >>"$results"
-		done < <(sed -n 's/^=== RUN   //p' "$run_log")
+			case "$sub_status" in pass) sub_pass=$((sub_pass + 1)) ;; fail) sub_fail=$((sub_fail + 1)) ;; skip) sub_skip=$((sub_skip + 1)) ;; esac
+			printf '%s\t%s\t%s\tsubtest\t%s\n' "$module" "$package" "$subtest" "$sub_status" >>"$results"
+		done < <(awk '$1 == "---" && ($2 == "PASS:" || $2 == "FAIL:" || $2 == "SKIP:") { status=$2; gsub(":", "", status); print tolower(status) "\t" $3 }' "$run_log")
 	done <"$list_log"
 done <"$packages_file"
 
-if ((discovered != executed)); then
-	echo "ERROR: full-tier accounting mismatch: discovered=$discovered executed=$executed" >&2
-	status=1
+if ((packages_enumerated != packages_compiled + compile_failures)); then
+	echo "ERROR: package reconciliation mismatch: enumerated=$packages_enumerated compiled=$packages_compiled compile_failures=$compile_failures" >&2; status=1
 fi
-printf 'full-tier accounting: discovered=%d executed=%d\n' "$discovered" "$executed" | tee -a "$results"
-
+if ((discovered != executed)); then echo "ERROR: full-tier accounting mismatch: discovered=$discovered executed=$executed" >&2; status=1; fi
+{
+	printf 'summary\tpackages_enumerated\t%d\n' "$packages_enumerated"
+	printf 'summary\tpackages_compiled\t%d\n' "$packages_compiled"
+	printf 'summary\tpackages_no_test_files\t%d\n' "$packages_no_test_files"
+	printf 'summary\tcompile_failures\t%d\n' "$compile_failures"
+	printf 'summary\tdiscovery_failures\t%d\n' "$discovery_failures"
+	printf 'summary\ttop_pass\t%d\n' "$top_pass"; printf 'summary\ttop_fail\t%d\n' "$top_fail"; printf 'summary\ttop_skip\t%d\n' "$top_skip"
+	printf 'summary\tsubtest_pass\t%d\n' "$sub_pass"; printf 'summary\tsubtest_fail\t%d\n' "$sub_fail"; printf 'summary\tsubtest_skip\t%d\n' "$sub_skip"
+	printf 'summary\tdiscovered\t%d\n' "$discovered"; printf 'summary\texecuted\t%d\n' "$executed"
+} | tee -a "$results"
 exit "$status"
