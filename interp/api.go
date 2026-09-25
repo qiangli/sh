@@ -2112,15 +2112,7 @@ func Params(args ...string) RunnerOption {
 			}
 			opt := r.posixOptByName(value)
 			if opt == nil {
-				noOpName := value
-				// Map single-letter flags to no-op option names for
-				// accept-and-ignore options (e.g. `set -o b` → notify).
-				if len(value) == 1 {
-					if mapped, ok := noOpSetFlagToName[value[0]]; ok {
-						noOpName = mapped
-					}
-				}
-				if _, ok := noOpSetOptions[noOpName]; ok {
+				if _, ok := noOpSetOptions[value]; ok {
 					// accept-and-ignore: remember the toggle so
 					// subsequent `set -o` listings echo back what
 					// the script asserted, but don't otherwise act
@@ -2128,8 +2120,8 @@ func Params(args ...string) RunnerOption {
 					if r.noOpSetState == nil {
 						r.noOpSetState = make(map[string]bool)
 					}
-					r.noOpSetState[noOpName] = enable
-					if noOpName == "ignoreeof" {
+					r.noOpSetState[value] = enable
+					if value == "ignoreeof" {
 						r.setIgnoreEOFOption(enable)
 					}
 					continue
@@ -2727,11 +2719,6 @@ func (r *Runner) posixOptByName(name string) *bool {
 		if opt.name == name {
 			return &r.opts[i]
 		}
-	}
-	// POSIX allows set -o <name> where name is the single-letter abbreviation
-	// as well as the long option name (e.g. `set -o a` == `set -o allexport`).
-	if len(name) == 1 {
-		return r.posixOptByFlag(name[0])
 	}
 	return nil
 }

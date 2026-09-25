@@ -4100,31 +4100,31 @@ var runTests = []runTest{
 	},
 	{`set - foobar; echo $@; set -; echo $@`, "foobar\nfoobar\n"},
 
-	// set -o with single-letter abbreviations (POSIX conformance).
-	// Turn on with long name, turn off with short name via -o.
-	{`set -o allexport; set +o a; [[ -o allexport ]]`, "exit status 1"},
-	{`set -o allexport; set +o a; VAR=val; echo $VAR`, "val\n"},
-	{`set -o noglob; set +o f; [[ -o noglob ]]`, "exit status 1"},
-	{`set -o noglob; set +o f; echo foo*`, "foo*\n"},
+	// GNU Bash 5.3 rejects single-letter names following -o/+o.
+	// Short flags remain valid as set -a and set +f.
+	{`set -o allexport; set +o a; [[ -o allexport ]]`, "bash: line 1: set: a: invalid option name\n"},
+	{`set -o allexport; set +o a; VAR=val; echo $VAR`, "bash: line 1: set: a: invalid option name\nval\n"},
+	{`set -o noglob; set +o f; [[ -o noglob ]]`, "bash: line 1: set: f: invalid option name\n"},
+	{`set -o noglob; set +o f; echo foo*`, "bash: line 1: set: f: invalid option name\nfoo*\n"},
 	// noexec is the exception to the +o pattern above: once it is on
 	// nothing else is executed, so the `set +o n` meant to turn it back
 	// off never runs. Bash 5.3 prints nothing and exits 0 for both.
 	{`set -o noexec; set +o n; [[ -o noexec ]]`, ""},
 	{`set -o noexec; set +o n; echo executed`, ""},
-	{`set -o nounset; set +o u; [[ -o nounset ]]`, "exit status 1"},
-	{`set -o xtrace; set +o x; [[ -o xtrace ]]`, "+ set +o x\nexit status 1"},
-	{`set -o errexit; set +o e; [[ -o errexit ]]`, "exit status 1"},
+	{`set -o nounset; set +o u; [[ -o nounset ]]`, "bash: line 1: set: u: invalid option name\n"},
+	{`set -o xtrace; set +o x; [[ -o xtrace ]]`, "+ set +o x\nbash: line 1: set: x: invalid option name\n+ [[ -o xtrace ]]\n"},
+	{`set -o errexit; set +o e; [[ -o errexit ]]`, "bash: line 1: set: e: invalid option name\nexit status 2"},
 
-	// Turn on with short name via -o (single-letter abbreviation).
-	{`set -o a; [[ -o allexport ]]`, ""},
-	{`set -o f; [[ -o noglob ]]`, ""},
-	{`set -o n; [[ -o noexec ]]`, ""},
-	{`set -o u; [[ -o nounset ]]`, ""},
-	{`set -o e; [[ -o errexit ]]`, ""},
-	{`set -o C; [[ -o noclobber ]]`, ""},
+	// A short name following -o is invalid.
+	{`set -o a; [[ -o allexport ]]`, "bash: line 1: set: a: invalid option name\nexit status 1"},
+	{`set -o f; [[ -o noglob ]]`, "bash: line 1: set: f: invalid option name\nexit status 1"},
+	{`set -o n; [[ -o noexec ]]`, "bash: line 1: set: n: invalid option name\nexit status 1"},
+	{`set -o u; [[ -o nounset ]]`, "bash: line 1: set: u: invalid option name\nexit status 1"},
+	{`set -o e; [[ -o errexit ]]`, "bash: line 1: set: e: invalid option name\nexit status 1"},
+	{`set -o C; [[ -o noclobber ]]`, "bash: line 1: set: C: invalid option name\nexit status 1"},
 
-	// Turn on then off with short name via -o.
-	{`set -o C; set +o C; [[ -o noclobber ]]`, "exit status 1"},
+	// Both invalid names report errors.
+	{`set -o C; set +o C; [[ -o noclobber ]]`, "bash: line 1: set: C: invalid option name\nbash: line 1: set: C: invalid option name\nexit status 1"},
 
 	// set +/-flag (short flag form) for accept-and-ignore options.
 	{`set -b; [[ $- = *b* ]]`, ""},
@@ -4145,8 +4145,8 @@ var runTests = []runTest{
 	{`set +o notify; [[ $- = *b* ]]`, "exit status 1"},
 	{`set -o verbose; [[ $- = *v* ]]`, ""},
 	{`set +o verbose; [[ $- = *v* ]]`, "exit status 1"},
-	{`set -o b; [[ $- = *b* ]]`, ""},
-	{`set -o b; set +o b; [[ $- = *b* ]]`, "exit status 1"},
+	{`set -o b; [[ $- = *b* ]]`, "bash: line 1: set: b: invalid option name\nexit status 1"},
+	{`set -o b; set +o b; [[ $- = *b* ]]`, "bash: line 1: set: b: invalid option name\nbash: line 1: set: b: invalid option name\nexit status 1"},
 
 	// unset
 	{
@@ -6707,6 +6707,9 @@ func TestRunnerRun(t *testing.T) {
 			// Some builtins like "pushd" can show absolute paths as part of error messages.
 			// Allow a very simple search-and-replace for the equivalent to "$PWD/a".
 			want := strings.ReplaceAll(c.want, "ABS_PATH_A", filepath.Join(tdir, "a"))
+			// GNU Bash's set diagnostics include its stdin script prefix.
+			// This Runner omits it without WithBashCompatErrors.
+			want = strings.ReplaceAll(want, "bash: line 1: set: ", "set: ")
 
 			if i := strings.Index(want, " #"); i >= 0 {
 				want = want[:i]
