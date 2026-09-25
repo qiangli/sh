@@ -87,3 +87,68 @@ The pure recursive-int plan plausibly applies to named recursive scalar roots;
 the deferred scalar comparison request applies to roots with tight native-value polling.
 No credit is claimed for the remaining modes until the Linux replay reports
 them by exact ID.
+
+## Worker lane 2026-09-25: measured corpus and shared costs
+
+Local Darwin/arm64, `GOMAXPROCS=2`, built `bashsharp --source=go <root>`
+(runoutput roots: generator, then its output), stdout to a pipe, one root at
+a time, 60-second local cap. Paired before/after runs are sequential on the
+same host (`8b4eafc1` vs the two commits below).
+
+| root | before (s) | after (s) |
+| --- | --- | --- |
+| atomicload.go | 10.79 | 9.82 |
+| chan/select3.go | 0.92 | 0.94 |
+| fixedbugs/issue16249.go | 44.29 | 38.98 |
+| fixedbugs/issue22781.go | 11.25 | 9.62 |
+| fixedbugs/issue67255.go | 11.84 | 4.99 |
+| fixedbugs/issue80196.go | 8.97 | 8.75 |
+| fixedbugs/issue9604b.go (gen+run) | 8.14 | 7.74 |
+| gcgort.go | 7.86 | 6.24 |
+| typeparam/issue47272.go | 0.97 | 0.95 |
+| typeparam/issue50419.go | 0.86 | 0.80 |
+| abi/fibish.go | 8.10 | 7.60 |
+| fixedbugs/issue80188.go | > 60 | 56.94 |
+| stack.go | > 60 | 58.64 |
+| rangegen.go (gen+run) | > 60 (gen) | 31.73 (15.0 + 16.7) |
+| heapsampling.go | 37.16 (fails) | 16.02 (fails) |
+
+heapsampling fails identically before and after (`want objects in
+[45000: 55000], got [0 0 0]`): the program's allocations are interpreter
+cells, invisible to the dependency helper's runtime.MemProfile. That is a
+semantic gap, not speed. The unpaired "> 60" before values come from one
+sequential pass with the 60-second cap (heapsampling's 37.16 is a separate
+150-second base run).
+
+Every other listed root exceeds the 60-second local cap both before and
+after: 64bit (generator), abi/fibish_closure, abi/uglyfib, chan/nonblock,
+copy, divmod (also > 150 s), issue13169, issue20780b, issue5493, issue5963,
+issue59680, issue78081, issue79186, ken/chan, ken/divconst, ken/modconst.
+
+Shared costs found by CPU profiles of 27 roots (20 s each):
+
+- Host collector churn: at GOGC=100 the evaluator's small live heap was
+  collected ~180 times per second; stop/start-the-world, preemption and
+  span re-commit were about 45% of samples on Darwin. Fixed generally by
+  pacing the host collector during Go-source runs (`00256ac5`). Darwin
+  overstates this (kevent in startTheWorld, madvise in sysUsed), so the
+  Linux gain is expected to be smaller.
+- Builtin argument spelling allocated a fresh printer per evaluation
+  (`3806ee89`).
+- Dependency-bridge round trips dominate ken/divconst, ken/modconst
+  (math/rand per iteration, ~2.4 M calls), ken/chan, chan/nonblock, stack
+  and the channel/goroutine roots: every native channel operation and
+  imported call is one JSON request/response over the helper socket. The
+  helper's own profile is almost entirely write/read syscalls and scheduler
+  wakeups (dispatch itself is negligible); a round trip costs ~40 us here.
+  At that rate these roots cannot meet the bound by evaluator speed-ups; they
+  need fewer round trips (for example interpreter-side channels for
+  interpreter-only element types), which is an architecture change.
+- Pure-evaluation roots (divmod, copy, abi/fibish_closure, abi/uglyfib,
+  64bit, issue13169, issue20780b) are 10x+ over the local 8-second target;
+  their time is spread over boxed cell copies (`bashPPCopyAssignmentCell`,
+  26% of bytes in copy.go), call frames and generic statement dispatch, not
+  a single hot path.
+- `go` statements snapshot the runner and duplicate the cwd and pipe
+  descriptors per goroutine (`dupRunnerDir`/`dupPipeFd`, ~25% of stack.go on
+  Darwin; likely cheaper on Linux).
