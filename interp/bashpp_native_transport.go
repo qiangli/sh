@@ -29,9 +29,6 @@ func validateLocalTransport(req bashPPEvalRequest, q bashPPBridgeRequest) error 
 	}
 	alias, name, selected := strings.Cut(q.Selector, ".")
 	nativeWriterFormat := selected && req.Imports[alias] == "fmt" && (name == "Fprint" || name == "Fprintln" || name == "Fprintf")
-	if nativeWriterFormat && !bashPPDependencyOwnedWriter(q.Args) {
-		return fmt.Errorf("gosource: fmt.%s requires a dependency-owned writer; original Write callbacks are unsupported", name)
-	}
 	local := map[string]bashPPLocalType{}
 	for _, typ := range req.LocalTypes {
 		local[typ.Name] = typ
@@ -180,6 +177,9 @@ func validateLocalTransport(req bashPPEvalRequest, q bashPPBridgeRequest) error 
 	if functionCallbacks && !synchronousFunctionCallback(req, q) && !retainedFunctionCallback(req, q) && !resultOwnedFunctionCallback(req, q) {
 		return fmt.Errorf("gosource: asynchronous or retained original function callbacks are unsupported for %s", q.Selector)
 	}
+	if !functionCallbacks && synchronousOriginalMethodCallback(req, q) {
+		return nil
+	}
 	if !unsafe && (synchronousFunctionCallback(req, q) || retainedFunctionCallback(req, q) || resultOwnedFunctionCallback(req, q)) {
 		return nil
 	}
@@ -220,6 +220,77 @@ func validateLocalTransport(req bashPPEvalRequest, q bashPPBridgeRequest) error 
 		return nil
 	}
 	return fmt.Errorf("gosource: dependency mutation of interpreter-owned references is unsupported for %s", q.Selector)
+}
+
+// synchronousOriginalMethodCallback admits the general method-callback bridge:
+// the dependency may invoke mirrored methods while the request is parked, but
+// it must not be a known storage retainer or in-place mutator. If original
+// slices crossed by copy, prepareNativeSliceBuffers has either attached the
+// post-callback coherence model or left the request to the ordinary refusal.
+func synchronousOriginalMethodCallback(req bashPPEvalRequest, q bashPPBridgeRequest) bool {
+	if q.Op != "call" || !requestHasCallbacks(req, q) {
+		return false
+	}
+	if callbackFunctionHandleInRequest(q) {
+		return false
+	}
+	callable := nativeSliceCallable(req, q)
+	if callable == "" || nativeSliceRetainsStorage(callable) || nativeSliceMutatingIndex(callable) >= 0 || nativeRetainedPointerMutator(callable) {
+		return false
+	}
+	if q.coherence != nil {
+		return true
+	}
+	if len(q.SliceBuffers) > 0 {
+		return false
+	}
+	return !nestedNativeSliceViewInRequest(q)
+}
+
+func callbackFunctionHandleInRequest(q bashPPBridgeRequest) bool {
+	var check func(bashPPBridgeValue) bool
+	check = func(v bashPPBridgeValue) bool {
+		if v.Kind == "handle" && v.Callbacks && v.Function {
+			return true
+		}
+		for _, child := range v.Elements {
+			if check(child) {
+				return true
+			}
+		}
+		for _, child := range v.Fields {
+			if check(child) {
+				return true
+			}
+		}
+		for _, entry := range v.Entries {
+			if check(entry.Key) || check(entry.Value) {
+				return true
+			}
+		}
+		return false
+	}
+	if q.Receiver != nil && check(*q.Receiver) {
+		return true
+	}
+	for _, arg := range q.Args {
+		if check(arg) {
+			return true
+		}
+	}
+	return false
+}
+
+func nestedNativeSliceViewInRequest(q bashPPBridgeRequest) bool {
+	if q.Receiver != nil && (q.Receiver.sliceView != nil || nestedNativeSliceView(*q.Receiver)) {
+		return true
+	}
+	for _, arg := range q.Args {
+		if arg.sliceView != nil || nestedNativeSliceView(arg) {
+			return true
+		}
+	}
+	return false
 }
 
 // reflectedMethodValueOf is the narrow creation edge for synchronous reflected

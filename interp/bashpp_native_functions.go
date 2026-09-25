@@ -479,7 +479,16 @@ func resultOwnedFunctionCallback(req bashPPEvalRequest, q bashPPBridgeRequest) b
 		return false
 	}
 	alias, name, ok := strings.Cut(q.Selector, ".")
-	return ok && req.Imports[alias] == "reflect" && name == "MakeFunc"
+	if !ok {
+		return false
+	}
+	switch req.Imports[alias] {
+	case "reflect":
+		return name == "MakeFunc"
+	case "sync":
+		return name == "OnceFunc" || name == "OnceValue" || name == "OnceValues"
+	}
+	return false
 }
 
 // callbackInertRequest reports a request that carries callback-bearing
