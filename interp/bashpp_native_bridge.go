@@ -426,9 +426,9 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 		return err
 	}
 	binary := file.Name() + ".bin"
-	buildEnv := setEnvString(req.Env, "CGO_ENABLED", "0")
+	buildEnv := setEnvString(req.internalBuildEnv(), "CGO_ENABLED", "0")
 	if len(req.CgoPackages) > 0 {
-		buildEnv = setEnvString(req.Env, "CGO_ENABLED", "1")
+		buildEnv = setEnvString(req.internalBuildEnv(), "CGO_ENABLED", "1")
 	}
 	if len(req.MappedCompanions) > 0 {
 		if err = bashPPOverlayMappedCompanions(ctx, req, file, buildEnv); err != nil {
@@ -464,7 +464,7 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 			paths = append(paths, path)
 		}
 		args := append([]string{"build", "-p", "2", "-overlay=" + file.overlay, "-o", binary}, paths...)
-		build := exec.CommandContext(ctx, req.Go, args...)
+		build := exec.CommandContext(ctx, req.internalBuildGo(), args...)
 		build.Dir, build.Env = bashPPModuleRequest(req).Dir, buildEnv
 		var diagnostics bytes.Buffer
 		build.Stdout, build.Stderr = &diagnostics, &diagnostics
@@ -500,11 +500,11 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 		// key -- and the build would then quietly compile the original
 		// package. Hence both the explicit PWD and the check below.
 		companionEnv := setEnvString(buildEnv, "PWD", file.sourceDir)
-		if err = bashPPCompanionBuildIsolated(ctx, req.Go, file, companionEnv); err != nil {
+		if err = bashPPCompanionBuildIsolated(ctx, req.internalBuildGo(), file, companionEnv); err != nil {
 			cleanup()
 			return err
 		}
-		build := exec.CommandContext(ctx, req.Go, "build", "-p", "2", "-overlay="+file.overlay, "-o", binary, ".")
+		build := exec.CommandContext(ctx, req.internalBuildGo(), "build", "-p", "2", "-overlay="+file.overlay, "-o", binary, ".")
 		build.Dir, build.Env = file.sourceDir, companionEnv
 		var diagnostics bytes.Buffer
 		build.Stdout, build.Stderr = &diagnostics, &diagnostics
@@ -513,7 +513,7 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 			return fmt.Errorf("gosource: build dependency bridge: %w: %s", err, diagnostics.String())
 		}
 	} else if len(req.MappedCompanions) > 0 {
-		build := exec.CommandContext(ctx, req.Go, "build", "-p", "2", "-overlay="+file.overlay, "-o", binary, file.buildPath)
+		build := exec.CommandContext(ctx, req.internalBuildGo(), "build", "-p", "2", "-overlay="+file.overlay, "-o", binary, file.buildPath)
 		build.Dir, build.Env = file.sourceDir, setEnvString(buildEnv, "PWD", file.sourceDir)
 		var diagnostics bytes.Buffer
 		build.Stdout, build.Stderr = &diagnostics, &diagnostics
@@ -524,7 +524,7 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 	} else if policy == bashPPScratchSourceRoot {
 		// go:embed patterns resolve against the worker's logical location;
 		// only cmd/go's overlay gives the worker one inside the source root.
-		build := exec.CommandContext(ctx, req.Go, "build", "-p", "2", "-overlay="+file.overlay, "-o", binary, file.buildPath)
+		build := exec.CommandContext(ctx, req.internalBuildGo(), "build", "-p", "2", "-overlay="+file.overlay, "-o", binary, file.buildPath)
 		build.Dir, build.Env = bashPPModuleRequest(req).Dir, buildEnv
 		var diagnostics bytes.Buffer
 		build.Stdout, build.Stderr = &diagnostics, &diagnostics
@@ -532,7 +532,7 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 			cleanup()
 			return fmt.Errorf("gosource: build dependency bridge: %w: %s", err, diagnostics.String())
 		}
-	} else if err = bashPPBuildWorkerImportcfg(ctx, req.Go, bashPPModuleRequest(req).Dir, buildEnv, filepath.Dir(file.Name()), file.Name(), binary); err != nil {
+	} else if err = bashPPBuildWorkerImportcfg(ctx, req.internalBuildGo(), bashPPModuleRequest(req).Dir, buildEnv, filepath.Dir(file.Name()), file.Name(), binary); err != nil {
 		// The importcfg route: the worker's imports were decided at the
 		// check (identity-keyed, D8); cmd/go's directory rule does not
 		// re-decide them. See bashpp_sprint165_runtime2_worker_build.go.
@@ -1039,8 +1039,8 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 	// Import package export data through the same reviewed SDK and module context.
 	// go doc -json is not an API and is deliberately not used.
 	lookup := func(path string) (io.ReadCloser, error) {
-		cmd := exec.CommandContext(ctx, req.Go, "list", "-export", "-f", "{{.Export}}", path)
-		cmd.Dir, cmd.Env = req.Dir, req.Env
+		cmd := exec.CommandContext(ctx, req.internalBuildGo(), "list", "-export", "-f", "{{.Export}}", path)
+		cmd.Dir, cmd.Env = req.Dir, req.internalBuildEnv()
 		out, err := cmd.Output()
 		if err != nil {
 			return nil, fmt.Errorf("gosource: export %s: %w", path, err)
@@ -1527,11 +1527,11 @@ func bashPPNativeSyntheticTypeImports(ctx context.Context, req bashPPEvalRequest
 }
 
 func bashPPNativeResolveTypeImport(ctx context.Context, req bashPPEvalRequest, name string) (string, error) {
-	if req.Go == "" {
+	if req.internalBuildGo() == "" {
 		return "", fmt.Errorf("gosource: generated type %s needs a package import but no Go toolchain is configured", name)
 	}
-	cmd := exec.CommandContext(ctx, req.Go, "list", "-f", "{{.Name}}\n{{.ImportPath}}", name)
-	cmd.Dir, cmd.Env = req.Dir, req.Env
+	cmd := exec.CommandContext(ctx, req.internalBuildGo(), "list", "-f", "{{.Name}}\n{{.ImportPath}}", name)
+	cmd.Dir, cmd.Env = req.Dir, req.internalBuildEnv()
 	out, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("gosource: resolve generated type import %s: %w", name, err)
@@ -1722,8 +1722,8 @@ func (r *Runner) bashPPBridgeRegisterScalarTypes(ctx context.Context, req bashPP
 	}
 	req = bashPPModuleRequest(req)
 	lookup := func(path string) (io.ReadCloser, error) {
-		cmd := exec.CommandContext(ctx, req.Go, "list", "-export", "-f", "{{.Export}}", path)
-		cmd.Dir, cmd.Env = req.Dir, req.Env
+		cmd := exec.CommandContext(ctx, req.internalBuildGo(), "list", "-export", "-f", "{{.Export}}", path)
+		cmd.Dir, cmd.Env = req.Dir, req.internalBuildEnv()
 		out, err := cmd.Output()
 		if err != nil {
 			return nil, err

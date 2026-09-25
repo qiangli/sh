@@ -48,3 +48,5 @@
 {"op":"add","slug":"resolve-imported-package-pointer-targets-in-the-native-bridge","id":"01a0d9d3-1075-70c7-9c8c-6d0898bd94b4","tool":"codex-gpt-5.5-h","host":"dragon","episode":"weave-issue-8","at":"2026-09-25T18:28:03.318118Z"}
 {"op":"add","slug":"interpreted-self-exec-requires-a-replayable-source-plan","id":"01a0d9f6-90e4-7e40-93c7-0a5096efe5b4","tool":"codex-gpt5.6-sol-k","host":"dragon","episode":"weave-issue-11","at":"2026-09-25T19:06:49.95821Z"}
 {"op":"add","slug":"synthesize-imports-for-generated-helper-type-spellings","id":"01a0da0c-b857-77d3-b728-57c5c9387e50","tool":"codex-gpt-5.5-m","host":"dragon","episode":"weave-issue-13","at":"2026-09-25T19:31:01.848691Z"}
+{"op":"note-add","slug":"isolate-interpreted-self-reexec-from-replacement-goroot-tools","id":"01a0da29-3775-7791-8e16-c097a66fa557","tool":"codex-gpt5.6-sol-n","host":"dragon","episode":"weave-issue-14","at":"2026-09-25T20:02:09.39886Z"}
+{"op":"update","slug":"isolate-interpreted-self-reexec-from-replacement-goroot-tools","id":"01a0da29-3775-7791-8e16-c097a66fa557","tool":"codex-gpt5.6-sol-n","host":"dragon","episode":"weave-issue-14","at":"2026-09-25T20:02:23.416916Z"}

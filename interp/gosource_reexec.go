@@ -25,8 +25,12 @@ import (
 // every source, mapped package, identity, test-main fact, and companion input,
 // and end the plan with its program-argument separator. This package neither
 // discovers inputs nor falls back to executing a native version of the
-// interpreted program. Without this option, os.Executable retains its former
-// dependency-bridge behavior.
+// interpreted program. The launcher preserves the child's GOROOT and other
+// program environment, but pins the private BASHPP_GO selector to the
+// authenticated SDK used to build interpreter helpers. Thus a test may replace
+// a tool in its GOROOT without making the replaying front end compile itself.
+// Without this option, os.Executable retains its former dependency-bridge
+// behavior.
 func GoSourceReexecPlan(plan ...string) RunnerOption {
 	copyPlan := append([]string(nil), plan...)
 	return func(r *Runner) error {
@@ -89,18 +93,24 @@ func (s *bashPPNativeSession) goSourceReexecLauncher(ctx context.Context, req ba
 	for _, arg := range plan {
 		quoted = append(quoted, strconv.Quote(arg))
 	}
+	quotedBuildGo := strconv.Quote(req.internalBuildGo())
 	source := `package main
 import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 )
 func main() {
 	plan := []string{` + strings.Join(quoted, ",") + `}
 	args := append(append([]string(nil), plan[1:]...), os.Args[1:]...)
 	cmd := exec.Command(plan[0], args...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	cmd.Env = os.Environ()
+	for _, entry := range os.Environ() {
+		name, _, _ := strings.Cut(entry, "=")
+		if !strings.EqualFold(name, "BASHPP_GO") { cmd.Env = append(cmd.Env, entry) }
+	}
+	cmd.Env = append(cmd.Env, "BASHPP_GO=" + ` + quotedBuildGo + `)
 	err := cmd.Run()
 	if err == nil { return }
 	if exit, ok := err.(*exec.ExitError); ok { os.Exit(exit.ExitCode()) }
@@ -116,9 +126,9 @@ func main() {
 	if executableSuffix := goSourceExecutableSuffix(); executableSuffix != "" {
 		launcher += executableSuffix
 	}
-	cmd := exec.CommandContext(ctx, req.Go, "build", "-p", "2", "-o", launcher, sourcePath)
+	cmd := exec.CommandContext(ctx, req.internalBuildGo(), "build", "-p", "2", "-o", launcher, sourcePath)
 	cmd.Dir = s.reexecDir
-	cmd.Env = setEnvString(req.Env, "CGO_ENABLED", "0")
+	cmd.Env = setEnvString(req.internalBuildEnv(), "CGO_ENABLED", "0")
 	var diagnostics bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &diagnostics, &diagnostics
 	if err := cmd.Run(); err != nil {

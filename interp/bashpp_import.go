@@ -30,7 +30,14 @@ import (
 )
 
 type bashPPEvalRequest struct {
-	Go         string
+	Go string
+	// BuildGo and BuildEnv are the isolated toolchain used only for helpers
+	// generated or inspected by the interpreter. Go and Env retain the
+	// interpreted program's selected toolchain identity and process semantics,
+	// while an in-place tool replacement in that GOROOT must not compile the
+	// helper which implements the interpreted program.
+	BuildGo    string
+	BuildEnv   []string
 	Dir        string
 	Env        []string
 	Stdin      io.Reader
@@ -94,6 +101,20 @@ type bashPPEvalRequest struct {
 	TestMain   bool
 }
 
+func (req bashPPEvalRequest) internalBuildGo() string {
+	if req.BuildGo != "" {
+		return req.BuildGo
+	}
+	return req.Go
+}
+
+func (req bashPPEvalRequest) internalBuildEnv() []string {
+	if req.BuildEnv != nil {
+		return req.BuildEnv
+	}
+	return req.Env
+}
+
 // GoSourceLinkFlags supplies the original go command's -ldflags value.
 // It is inert unless GOEXPERIMENT contains fieldtrack and the flags name
 // a fieldtrack -k target.
@@ -115,13 +136,16 @@ type bashPPValuesEvaluator interface {
 // first on PATH. Tests may inject the exact evaluator and identity under
 // review without exposing an evaluator API to embedders.
 type bashPPToolchain struct {
-	nativeTypes   map[string]types.Type // immutable authenticated export metadata
-	goBinary      string
-	goRoot        string
-	goVersion     string
-	eval          bashPPEvaluator
-	bridge        *bashPPNativeSession
-	callbackDepth int
+	nativeTypes    map[string]types.Type // immutable authenticated export metadata
+	goBinary       string
+	goRoot         string
+	goVersion      string
+	buildGoBinary  string
+	buildGoRoot    string
+	buildGoVersion string
+	eval           bashPPEvaluator
+	bridge         *bashPPNativeSession
+	callbackDepth  int
 	// routedDepth counts callbacks this runner serves on a routed request;
 	// requests they raise are routed too (routedCallbackRequest).
 	routedDepth  int
@@ -190,8 +214,8 @@ func (nativeBashPPEvaluator) Resolve(ctx context.Context, req bashPPEvalRequest,
 	if err != nil {
 		return "", err
 	}
-	cmd := exec.CommandContext(ctx, req.Go, "list", "-json", target)
-	cmd.Dir, cmd.Env = req.Dir, req.Env
+	cmd := exec.CommandContext(ctx, req.internalBuildGo(), "list", "-json", target)
+	cmd.Dir, cmd.Env = req.Dir, req.internalBuildEnv()
 	var out bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, req.Stderr
 	if err := cmd.Run(); err != nil {
@@ -427,7 +451,7 @@ func (nativeBashPPEvaluator) Call(ctx context.Context, req bashPPEvalRequest) er
 	if err := format.Node(&src, token.NewFileSet(), file); err != nil {
 		return fmt.Errorf("bash++: construct selector call: %w", err)
 	}
-	f, err := bashPPImportTempSource(req.Dir, "bashpp-*.go", req.Env, bashPPScratchSourceTree)
+	f, err := bashPPImportTempSource(req.Dir, "bashpp-*.go", req.internalBuildEnv(), bashPPScratchSourceTree)
 	if err != nil {
 		return err
 	}
@@ -444,8 +468,8 @@ func (nativeBashPPEvaluator) Call(ctx context.Context, req bashPPEvalRequest) er
 	if runtime.GOOS == "windows" {
 		bin += ".exe"
 	}
-	build := exec.CommandContext(ctx, req.Go, "build", "-overlay="+f.overlay, "-o", bin, f.buildPath)
-	build.Dir, build.Env = req.Dir, req.Env
+	build := exec.CommandContext(ctx, req.internalBuildGo(), "build", "-overlay="+f.overlay, "-o", bin, f.buildPath)
+	build.Dir, build.Env = req.Dir, req.internalBuildEnv()
 	build.Stdout, build.Stderr = req.Stdout, req.Stderr
 	if err := build.Run(); err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -517,7 +541,7 @@ func (nativeBashPPEvaluator) Values(ctx context.Context, req bashPPEvalRequest) 
 	if err != nil {
 		return nil, fmt.Errorf("bash++: construct value call: %w", err)
 	}
-	f, err := bashPPImportTempSource(req.Dir, "bashpp-values-*.go", req.Env, bashPPScratchSourceTree)
+	f, err := bashPPImportTempSource(req.Dir, "bashpp-values-*.go", req.internalBuildEnv(), bashPPScratchSourceTree)
 	if err != nil {
 		return nil, err
 	}
@@ -534,8 +558,8 @@ func (nativeBashPPEvaluator) Values(ctx context.Context, req bashPPEvalRequest) 
 	if runtime.GOOS == "windows" {
 		bin += ".exe"
 	}
-	build := exec.CommandContext(ctx, req.Go, "build", "-overlay="+f.overlay, "-o", bin, f.buildPath)
-	build.Dir, build.Env, build.Stdout, build.Stderr = req.Dir, req.Env, req.Stdout, req.Stderr
+	build := exec.CommandContext(ctx, req.internalBuildGo(), "build", "-overlay="+f.overlay, "-o", bin, f.buildPath)
+	build.Dir, build.Env, build.Stdout, build.Stderr = req.Dir, req.internalBuildEnv(), req.Stdout, req.Stderr
 	if err := build.Run(); err != nil {
 		return nil, err
 	}
@@ -571,9 +595,36 @@ func (r *Runner) bashPPEvalRequest() (bashPPEvalRequest, error) {
 		r.bashPPTools.goRoot = identity.Root
 		r.bashPPTools.goVersion = identity.Version
 	}
+	if r.bashPPTools.buildGoBinary == "" {
+		// Default to the selected toolchain. When the authenticated bootstrap
+		// has the same language/tool ABI, prefer its independent SDK tree for
+		// sh-owned generated artifacts. Test binaries are allowed to replace a
+		// tool in their GOROOT; inheriting that replacement here can otherwise
+		// make a helper build recursively re-enter the interpreted program.
+		r.bashPPTools.buildGoBinary = r.bashPPTools.goBinary
+		r.bashPPTools.buildGoRoot = r.bashPPTools.goRoot
+		r.bashPPTools.buildGoVersion = r.bashPPTools.goVersion
+		if r.bashPPTools.goVersion != "" {
+			identity, err := bashPPGoModuleIdentity()
+			if err != nil {
+				identity, err = bashPPReviewedGoIdentity()
+			}
+			if err == nil && identity.Version == r.bashPPTools.goVersion &&
+				identity.Root != r.bashPPTools.goRoot {
+				r.bashPPTools.buildGoBinary = identity.Binary
+				r.bashPPTools.buildGoRoot = identity.Root
+				r.bashPPTools.buildGoVersion = identity.Version
+			}
+		}
+	}
 	if r.bashPPTools.goRoot != "" {
 		env = setEnvString(env, "GOROOT", r.bashPPTools.goRoot)
 		env = setEnvString(env, "GOTOOLCHAIN", r.bashPPTools.goVersion)
+	}
+	buildEnv := append([]string(nil), env...)
+	if r.bashPPTools.buildGoRoot != "" {
+		buildEnv = setEnvString(buildEnv, "GOROOT", r.bashPPTools.buildGoRoot)
+		buildEnv = setEnvString(buildEnv, "GOTOOLCHAIN", r.bashPPTools.buildGoVersion)
 	}
 	if r.bashPPGoSource && r.bashPPTools.bridge == nil {
 		// The dependency helper materialises the original local types but
@@ -615,7 +666,7 @@ func (r *Runner) bashPPEvalRequest() (bashPPEvalRequest, error) {
 	if err != nil {
 		return bashPPEvalRequest{}, err
 	}
-	return bashPPEvalRequest{CallbackOwner: r, CallbackDepth: r.bashPPTools.callbackDepth, PanicOnFault: r.bashPPTools.panicOnFault, LocalTypes: r.bashPPLocalTypeDescriptors(), Instances: r.bashPPImportedInstances(), GenericTypes: r.bashPPGenericBridgeTypes(), RuntimeEnv: runtimeEnv, ModuleDir: moduleDir, ImportPath: importPath, TestMain: testMain, Argv: append([]string{r.filename}, r.Params...), Bridge: r.bashPPTools.bridge, Go: r.bashPPTools.goBinary, Dir: r.Dir, Env: env, Stdin: r.stdin,
+	return bashPPEvalRequest{CallbackOwner: r, CallbackDepth: r.bashPPTools.callbackDepth, PanicOnFault: r.bashPPTools.panicOnFault, LocalTypes: r.bashPPLocalTypeDescriptors(), Instances: r.bashPPImportedInstances(), GenericTypes: r.bashPPGenericBridgeTypes(), RuntimeEnv: runtimeEnv, ModuleDir: moduleDir, ImportPath: importPath, TestMain: testMain, Argv: append([]string{r.filename}, r.Params...), Bridge: r.bashPPTools.bridge, Go: r.bashPPTools.goBinary, BuildGo: r.bashPPTools.buildGoBinary, BuildEnv: buildEnv, Dir: r.Dir, Env: env, Stdin: r.stdin,
 		Stdout: r.bashPPWriter(r.stdout), Stderr: r.bashPPWriter(r.stderr), Imports: r.bashPPImports, SourceDir: sourceDir, SourceFile: sourceFile, EmbedDecls: embedDecls, CompanionFiles: companionFiles, NativeFuncs: nativeFuncs, MappedCompanions: mappedCompanions, CompanionTrampolines: trampolines, CompanionUnmappedFrames: unmappedFrames, RootFiles: r.bashPPGoSourceRootFiles(), CgoPackages: r.bashPPGoSourceCgoPackages()}, nil
 }
 
@@ -717,6 +768,12 @@ func bashPPGoIdentity() (bashPPGoIdentityInfo, error) {
 		}
 		return bashPPInjectedGoIdentity(argv[0])
 	}
+	return bashPPReviewedGoIdentity()
+}
+
+// bashPPReviewedGoIdentity resolves and authenticates the standalone bootstrap
+// SDK without consulting BASHPP_GO or the embedder's resolver.
+func bashPPReviewedGoIdentity() (bashPPGoIdentityInfo, error) {
 	name := "go"
 	if runtime.GOOS == "windows" {
 		name += ".exe"
@@ -852,6 +909,18 @@ func bashPPGoBootstrap(name string) (root, binary string, err error) {
 		return root, binary, err
 	}
 
+	identity, err := bashPPGoModuleIdentity()
+	if err != nil {
+		return "", "", err
+	}
+	return identity.Root, identity.Binary, nil
+}
+
+// bashPPGoModuleIdentity returns the reviewed Go toolchain module directly,
+// independently of runtime.GOROOT and the process GOROOT. The latter is
+// intentionally mutable program state and may name a test GOROOT whose tools
+// have been replaced in place.
+func bashPPGoModuleIdentity() (bashPPGoIdentityInfo, error) {
 	modCache := os.Getenv("GOMODCACHE")
 	if modCache == "" {
 		if goPath := os.Getenv("GOPATH"); goPath != "" {
@@ -866,33 +935,37 @@ func bashPPGoBootstrap(name string) (root, binary string, err error) {
 	if modCache == "" {
 		home, homeErr := os.UserHomeDir()
 		if homeErr != nil {
-			return "", "", homeErr
+			return bashPPGoIdentityInfo{}, homeErr
 		}
 		modCache = filepath.Join(home, "go", "pkg", "mod")
 	}
 	if !filepath.IsAbs(modCache) {
-		return "", "", fmt.Errorf("module cache path %q is not absolute", modCache)
+		return bashPPGoIdentityInfo{}, fmt.Errorf("module cache path %q is not absolute", modCache)
 	}
-	root = filepath.Join(modCache, "golang.org",
+	root := filepath.Join(modCache, "golang.org",
 		"toolchain@v0.0.1-go1.27.1."+runtime.GOOS+"-"+runtime.GOARCH)
-	binary, err = filepath.EvalSymlinks(filepath.Join(root, "bin", name))
+	name := "go"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	binary, err := filepath.EvalSymlinks(filepath.Join(root, "bin", name))
 	if err != nil {
-		return "", "", err
+		return bashPPGoIdentityInfo{}, err
 	}
 	binary, err = filepath.Abs(binary)
 	if err != nil {
-		return "", "", err
+		return bashPPGoIdentityInfo{}, err
 	}
 	digest, err := bashPPGoDigest(binary)
 	if err != nil {
-		return "", "", err
+		return bashPPGoIdentityInfo{}, err
 	}
 	identity := bashPPGoIdentityInfo{Version: "go1.27.1", GOOS: runtime.GOOS, GOARCH: runtime.GOARCH,
 		Root: root, Binary: binary, SHA256: digest}
 	if err := validateBashPPGoIdentity(identity, bashPPGoReviews); err != nil {
-		return "", "", err
+		return bashPPGoIdentityInfo{}, err
 	}
-	return root, binary, nil
+	return identity, nil
 }
 
 func bashPPGoDigest(path string) (string, error) {

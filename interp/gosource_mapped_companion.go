@@ -79,7 +79,7 @@ func bashPPOverlayMappedCompanions(ctx context.Context, req bashPPEvalRequest, f
 }
 
 func bashPPMappedCompanionBuildIsolated(ctx context.Context, req bashPPEvalRequest, file *bashPPImportSource, env []string, pkg bashPPMappedCompanion, generated string) error {
-	list := exec.CommandContext(ctx, req.Go, "list", "-overlay="+file.overlay, "-f", "{{range .GoFiles}}go:{{.}}\n{{end}}{{range .SFiles}}s:{{.}}\n{{end}}", pkg.Path)
+	list := exec.CommandContext(ctx, req.internalBuildGo(), "list", "-overlay="+file.overlay, "-f", "{{range .GoFiles}}go:{{.}}\n{{end}}{{range .SFiles}}s:{{.}}\n{{end}}", pkg.Path)
 	list.Dir, list.Env = file.sourceDir, setEnvString(env, "PWD", file.sourceDir)
 	var out, diagnostics bytes.Buffer
 	list.Stdout, list.Stderr = &out, &diagnostics
