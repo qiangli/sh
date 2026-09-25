@@ -188,22 +188,46 @@ func (r *Runner) goSourceSharedOrdering(ctx context.Context, req bashPPEvalReque
 		}
 		return goSourceSharedOrderResult(name, order)
 	case "sort.Slice", "sort.SliceStable", "sort.SliceIsSorted":
-		if len(q.Args) != 2 || q.Args[1].Kind != "callback" {
+		if len(q.Args) != 2 {
 			return nil, false, nil
 		}
 		shared, ok := r.goSourceSharedSliceOf(q.Args[0])
 		if !ok {
 			return nil, false, nil
 		}
-		fn, err := goSourceCallbackFunc(req, q.Args[1])
-		if err != nil {
-			return nil, true, err
+		var less func(i, j int) (bool, error)
+		switch comparator := q.Args[1]; {
+		case comparator.Kind == "callback":
+			fn, err := goSourceCallbackFunc(req, comparator)
+			if err != nil {
+				return nil, true, err
+			}
+			less = func(i, j int) (bool, error) {
+				return r.goSourceCallbackBool(ctx, fn, []bashPPBridgeValue{goSourceSharedIndex(i), goSourceSharedIndex(j)})
+			}
+		case req.Bridge != nil && req.Bridge.madeFunc(comparator) && bashPPMadeFuncOwner(req):
+			// reflect.MakeFunc's Interface result is a dependency-owned callable
+			// whose body still re-enters an original comparison closure. Invoke it
+			// synchronously while sort works over the original backing array.
+			less = func(i, j int) (bool, error) {
+				values, err := req.Bridge.request(ctx, req, bashPPBridgeRequest{
+					Op: "call", Receiver: &comparator,
+					Args: []bashPPBridgeValue{goSourceSharedIndex(i), goSourceSharedIndex(j)},
+				})
+				if err != nil {
+					return false, err
+				}
+				if len(values) != 1 || values[0].Kind != "bool" {
+					return false, fmt.Errorf("gosource: reflected sort comparison must return bool")
+				}
+				return values[0].Text == "true", nil
+			}
+		default:
+			return nil, false, nil
 		}
 		order := &goSourceSharedOrder{
-			n: len(shared.view),
-			less: func(i, j int) (bool, error) {
-				return r.goSourceCallbackBool(ctx, fn, []bashPPBridgeValue{goSourceSharedIndex(i), goSourceSharedIndex(j)})
-			},
+			n:    len(shared.view),
+			less: less,
 			swap: shared.swap,
 		}
 		switch name {
