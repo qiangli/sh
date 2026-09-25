@@ -244,6 +244,9 @@ type bashPPNativeSession struct {
 	processCancellation error // protected by mu; command context requested kill
 	closeOnce           sync.Once
 	cleanup             func()
+	reexecMu            sync.Mutex
+	reexecDir           string
+	reexecLauncher      string
 	stopSignals         func()
 	drains              []*bashPPNativeOutputDrain
 	imports             string
@@ -310,6 +313,9 @@ func (s *bashPPNativeSession) closeCanceled(cause error) {
 		}
 		if s.cleanup != nil {
 			s.cleanup()
+		}
+		if s.reexecDir != "" {
+			_ = os.RemoveAll(s.reexecDir)
 		}
 	})
 }

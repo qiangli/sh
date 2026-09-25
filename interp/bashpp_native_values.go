@@ -141,6 +141,9 @@ func (r *Runner) bashPPBridgeCall(ctx context.Context, call *syntax.BashPPCall) 
 	if values, claimed, err := r.goSourceFinalizerCall(ctx, call); claimed {
 		return values, err
 	}
+	if values, claimed, err := r.goSourceExecutableCall(ctx, call); claimed {
+		return values, err
+	}
 	q, err := r.bashPPPrepareNativeCall(ctx, call)
 	if err != nil {
 		return nil, err
