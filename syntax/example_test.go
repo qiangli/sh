@@ -164,6 +164,7 @@ func ExampleDebugPrint() {
 	// .  GoSource: false
 	// .  Sources: []syntax.SourceFile (len = 0) {}
 	// .  CgoPackages: []syntax.CgoPackage (len = 0) {}
+	// .  GoPackageCompanions: []syntax.GoPackageCompanion (len = 0) {}
 	// .  Stmts: []*syntax.Stmt (len = 1) {
 	// .  .  0: *syntax.Stmt {
 	// .  .  .  Comments: []syntax.Comment (len = 0) {}

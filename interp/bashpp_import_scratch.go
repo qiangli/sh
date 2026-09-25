@@ -26,8 +26,20 @@ type bashPPImportSource struct {
 // keeps its own virtual path in that directory, so a build of the directory
 // compiles the generated file and none of the original bodies.
 func (s *bashPPImportSource) overlayRoot(stubs map[string]string) error {
-	if s.work == "" || s.sourceDir == "" {
+	return s.overlayPackage(s.sourceDir, stubs)
+}
+
+func (s *bashPPImportSource) overlayPackage(sourceDir string, stubs map[string]string) error {
+	if s.work == "" || sourceDir == "" {
 		return fmt.Errorf("bash++: helper overlay has no scratch root")
+	}
+	sourceDir, err := filepath.Abs(sourceDir)
+	if err != nil {
+		return err
+	}
+	sourceDir, err = filepath.EvalSymlinks(sourceDir)
+	if err != nil {
+		return err
 	}
 	names := make([]string, 0, len(stubs))
 	for path := range stubs {
@@ -41,8 +53,25 @@ func (s *bashPPImportSource) overlayRoot(stubs map[string]string) error {
 		}
 		// Keys are read by cmd/go after it resolves its own directory through
 		// symlinks; the enumerated path need not have been resolved at all.
-		s.replace[filepath.Join(s.sourceDir, filepath.Base(path))] = stub
+		s.replace[filepath.Join(sourceDir, filepath.Base(path))] = stub
 	}
+	return s.writeOverlay()
+}
+
+func (s *bashPPImportSource) replacePackageSource(path, name, source string) error {
+	path, err := filepath.Abs(path)
+	if err != nil {
+		return err
+	}
+	parent, err := filepath.EvalSymlinks(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	physical := filepath.Join(s.work, name)
+	if err := os.WriteFile(physical, []byte(source), 0600); err != nil {
+		return err
+	}
+	s.replace[filepath.Join(parent, filepath.Base(path))] = physical
 	return s.writeOverlay()
 }
 

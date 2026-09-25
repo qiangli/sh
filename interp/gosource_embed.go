@@ -23,14 +23,23 @@ type bashPPEmbedDecl struct {
 }
 
 type bashPPNativeFuncDecl struct {
-	Name    string
-	Params  string
-	Results string
+	Name string
+	// RuntimeName is the flattened interpreter binding. It is empty when the
+	// declaration belongs to the program package and Name is already exact.
+	RuntimeName string
+	Params      string
+	Results     string
 	// Linkname is the linker target of a two-argument //go:linkname on this
 	// bodyless declaration. The dependency helper must repeat the directive:
 	// a bare declaration creates a reference to a local object which does not
 	// exist, rather than the alias the original package declared.
 	Linkname string
+}
+
+type bashPPMappedCompanion struct {
+	Path, Name, SourceDir, Hook string
+	SourceFiles, Files          []string
+	Funcs                       []bashPPNativeFuncDecl
 }
 
 const bashPPEmbedSymbolPrefix = "\x00gosource.embed."
@@ -127,6 +136,9 @@ func (r *Runner) bashPPGoSourceNativeCompanions(sourceDir string) ([]string, []b
 		if !ok || decl.Body != nil || decl.Receiver != nil || decl.Name == nil || len(decl.TypeParams) > 0 {
 			continue
 		}
+		if source, ok := r.bashPPGoSourceFile.SourceAt(decl.Pos()); ok && source.PackagePath != "" {
+			continue
+		}
 		linkname := ""
 		for _, comment := range stmt.Comments {
 			fields := strings.Fields(comment.Text)
@@ -179,6 +191,49 @@ func (r *Runner) bashPPGoSourceNativeCompanions(sourceDir string) ([]string, []b
 		return files, funcs, nil, nil, err
 	}
 	return files, funcs, trampolines, unmapped, nil
+}
+
+// bashPPGoSourceMappedCompanions turns the loader's authenticated package
+// metadata into build declarations. Companion paths are never discovered
+// here: the caller selected them before loading the package map.
+func (r *Runner) bashPPGoSourceMappedCompanions() ([]bashPPMappedCompanion, error) {
+	if !r.bashPPGoSource || r.bashPPGoSourceFile == nil {
+		return nil, nil
+	}
+	var out []bashPPMappedCompanion
+	for _, meta := range r.bashPPGoSourceFile.GoPackageCompanions {
+		if meta.Path == "" || meta.Name == "" || meta.SourceDir == "" || meta.Hook == "" || len(meta.Files) == 0 {
+			return nil, fmt.Errorf("gosource: mapped package %q companion metadata is incomplete", meta.Path)
+		}
+		mapped := bashPPMappedCompanion{
+			Path: meta.Path, Name: meta.Name, SourceDir: meta.SourceDir, Hook: meta.Hook,
+			SourceFiles: append([]string(nil), meta.SourceFiles...), Files: append([]string(nil), meta.Files...),
+		}
+		symbols := make(map[string]string, len(meta.Symbols))
+		for _, symbol := range meta.Symbols {
+			symbols[symbol.RuntimeName] = symbol.Name
+		}
+		for _, stmt := range r.bashPPGoSourceFile.Stmts {
+			decl, ok := stmt.Cmd.(*syntax.BashPPFuncDecl)
+			if !ok || decl.Body != nil || decl.Receiver != nil || decl.Name == nil || len(decl.TypeParams) > 0 {
+				continue
+			}
+			original := symbols[decl.Name.Value]
+			if original == "" {
+				continue
+			}
+			mapped.Funcs = append(mapped.Funcs, bashPPNativeFuncDecl{
+				Name: original, RuntimeName: decl.Name.Value,
+				Params:  bashPPBridgeFieldsTextIn(decl.Params, r.bashPPScopedLocalTypeName),
+				Results: bashPPBridgeFieldsTextIn(decl.Results, r.bashPPScopedLocalTypeName),
+			})
+		}
+		if len(mapped.Funcs) == 0 {
+			return nil, fmt.Errorf("gosource: mapped package %q companions select no body-less declarations", meta.Path)
+		}
+		out = append(out, mapped)
+	}
+	return out, nil
 }
 
 func (r *Runner) bashPPNativeEmbedDeclaration(d *syntax.BashPPDecl) bool {

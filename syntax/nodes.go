@@ -33,9 +33,28 @@ type File struct {
 	// lets its C selectors be bound by the native dependency worker without
 	// merging package-local preambles.
 	CgoPackages []CgoPackage
+	// GoPackageCompanions describes explicitly selected non-Go companions for
+	// flattened dependency packages. Unlike Sources, this is executable host
+	// metadata: the runtime builds the named files in their original package
+	// directory while overlaying every original Go body away.
+	GoPackageCompanions []GoPackageCompanion
 
 	Stmts []*Stmt
 	Last  []Comment
+}
+
+// GoPackageCompanion retains the original identity of one flattened package
+// whose selected host files provide bodies for body-less Go declarations.
+type GoPackageCompanion struct {
+	Path, Name, SourceDir, Hook string
+	SourceFiles, Files          []string
+	Symbols                     []GoPackageCompanionSymbol
+}
+
+// GoPackageCompanionSymbol maps the name the original package declared to the
+// collision-free name by which the flattened interpreter addresses it.
+type GoPackageCompanionSymbol struct {
+	Name, RuntimeName string
 }
 
 // CgoPackage is the authenticated, package-scoped import "C" surface retained
