@@ -99,6 +99,73 @@ func TestBashPPCompanionOverlayIncomplete(t *testing.T) {
 	}
 }
 
+// Sprint: #281; Story: #811; Story-ID: aa5c046bb543
+//
+// A dependency bridge with many mapped assembly companions must not pay one
+// cmd/go startup per package before the interpreted tests can begin. The
+// exact generated-helper and assembly-selection checks are batched into one
+// `go list` invocation.
+func TestBashPPMappedCompanionIsolationListsOnce(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("focused fake go command uses a POSIX shell script")
+	}
+	dir := t.TempDir()
+	p1 := writeMappedCompanionPackage(t, dir, "p1")
+	p2 := writeMappedCompanionPackage(t, dir, "p2")
+	counter := filepath.Join(dir, "go-list-count")
+	argvLog := filepath.Join(dir, "go-list-argv")
+	goTool := filepath.Join(dir, "fake-go")
+	script := "#!/bin/sh\n" +
+		"printf 'invoked\\n' >> " + shellQuote(counter) + "\n" +
+		"printf '%s\\n' \"$@\" > " + shellQuote(argvLog) + "\n" +
+		"cat <<'EOF'\n" +
+		"example.com/p1\n" +
+		"go:a.go\n" +
+		"s:asm.s\n" +
+		"\n" +
+		"--bashpp-mapped-companion--\n" +
+		"example.com/p2\n" +
+		"go:a.go\n" +
+		"s:asm.s\n" +
+		"\n" +
+		"--bashpp-mapped-companion--\n" +
+		"EOF\n"
+	if err := os.WriteFile(goTool, []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	file := &bashPPImportSource{
+		sourceDir: p1,
+		overlay:   filepath.Join(dir, "overlay.json"),
+		replace: map[string]string{
+			filepath.Join(p1, "a.go"): filepath.Join(dir, "stub-p1.go"),
+			filepath.Join(p2, "a.go"): filepath.Join(dir, "stub-p2.go"),
+		},
+	}
+	checks := []bashPPMappedCompanionCheck{
+		{pkg: bashPPMappedCompanion{Path: "example.com/p1", SourceDir: p1, Files: []string{filepath.Join(p1, "asm.s")}}, generated: "a.go"},
+		{pkg: bashPPMappedCompanion{Path: "example.com/p2", SourceDir: p2, Files: []string{filepath.Join(p2, "asm.s")}}, generated: "a.go"},
+	}
+	req := bashPPEvalRequest{BuildGo: goTool, BuildEnv: os.Environ()}
+	if err := bashPPMappedCompanionBuildIsolated(t.Context(), req, file, os.Environ(), checks); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(counter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(string(data), "\n"); got != 1 {
+		t.Fatalf("go list invocations = %d, want 1; log:\n%s", got, data)
+	}
+	argv, err := os.ReadFile(argvLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := string(argv)
+	if !strings.Contains(log, "example.com/p1") || !strings.Contains(log, "example.com/p2") {
+		t.Fatalf("go list did not receive both packages: %s", log)
+	}
+}
+
 // The helper source carries its own language version, so the module it is
 // physically compiled inside cannot lower it.
 func TestBashPPNativeWorkerLanguageVersion(t *testing.T) {
@@ -122,4 +189,23 @@ func stubKeys(stubs map[string]string) []string {
 		out = append(out, filepath.Base(path))
 	}
 	return out
+}
+
+func writeMappedCompanionPackage(t *testing.T, root, name string) string {
+	t.Helper()
+	dir := filepath.Join(root, name)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "a.go"), []byte("package "+name+"\n\nfunc Asm() int\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "asm.s"), []byte("TEXT Asm(SB), NOSPLIT, $0-8\nRET\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }

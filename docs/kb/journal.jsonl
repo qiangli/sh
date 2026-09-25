@@ -53,3 +53,4 @@
 {"op":"add","slug":"bridge-function-typed-collection-elements-as-callbacks","id":"01a0da43-cdc2-7cfc-a6a0-1c1cf9ba43b4","tool":"codex-gpt-5.5-o","host":"dragon","episode":"weave-issue-15","at":"2026-09-25T20:31:11.812245Z"}
 {"op":"add","slug":"materialize-reassigned-native-slice-values-before-range","id":"01a0da63-587a-702e-aa05-86953e6968c8","tool":"claude-sonnet5-q","host":"dragon","episode":"weave-issue-17","at":"2026-09-25T21:05:38.939322Z"}
 {"op":"add","slug":"keep-primitive-fmt-writes-to-local-writers-in-the-interpreter","id":"01a0da76-ca1d-7979-8594-2e1b72661b56","tool":"codex-gpt-5.5-s","host":"dragon","episode":"weave-issue-19","at":"2026-09-25T21:26:53.216177Z"}
+{"op":"add","slug":"batch-mapped-companion-validation-before-bridge-build","id":"01a0da85-3b03-713c-bc48-fd96acdab611","tool":"codex-gpt-5.5-w","host":"dragon","episode":"weave-issue-23","at":"2026-09-25T21:42:39.620618Z"}
