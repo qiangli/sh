@@ -36,6 +36,10 @@ type bashPPPointer struct {
 	// struct view presented by a following typed-pointer conversion.
 	unsafeSource syntax.BashPPTypeExpr
 	unsafeView   syntax.BashPPTypeExpr
+	// unsafeRefusal is the validation failure of a typed-pointer conversion
+	// of an unsafe.Pointer whose target is no supported view: the pointer
+	// exists, but no access through it can be represented.
+	unsafeRefusal error
 	// unsafeOffset is a residual byte offset left by unsafe.Add outside the
 	// element grid of the span; forged/unsafeAddress name an opaque address
 	// converted from an integer. Neither may be dereferenced; see
@@ -185,9 +189,18 @@ func (r *Runner) bashPPPointerConversion(expr syntax.BashPPExpr) (*bashPPPointer
 		return nil, spelled, true, err
 	}
 	retyped := *ptr
+	retyped.unsafeRefusal = nil
 	if ptr.unsafeSource != nil && bashPPTypeText(ptr.unsafeSource) != bashPPTypeText(target.Element) {
 		if err := r.goSourceUnsafeBlankView(ptr.unsafeSource, target.Element); err == nil {
 			retyped.unsafeView = target.Element
+		} else if r.bashPPGoSource {
+			// Go permits the conversion itself; only an access through the
+			// result reinterprets bytes. The retyped pointer still names the
+			// source storage (so it is compared, stored and converted back
+			// exactly as Go does), and every read or write through it is
+			// refused with this validation's diagnostic.
+			retyped.unsafeView = nil
+			retyped.unsafeRefusal = err
 		} else {
 			return nil, target, true, err
 		}

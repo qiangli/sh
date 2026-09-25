@@ -3,7 +3,6 @@
 package interp_test
 
 import (
-	"runtime"
 	"strings"
 	"testing"
 )
@@ -116,13 +115,10 @@ func main() {
 		if q[0] != 1 || q[3] != 4 { panic("bad typed slice") }
 	}
 }`
+		// The header pointer is only stored, never read: the conversion is
+		// legal on every architecture, and only an access through it would
+		// need the layout (see gosource_s270_g4_view_test.go).
 		out, stderr, err := runGoSource(t, "s270-g4-issue8004", src)
-		if runtime.GOARCH != "amd64" {
-			if err == nil || !strings.Contains(stderr, "BASHPP-EUNSAFE-LAYOUT") {
-				t.Fatalf("unsupported layout: err=%v stderr=%q", err, stderr)
-			}
-			return
-		}
 		if err != nil || out != "" || stderr != "" {
 			t.Fatalf("err=%v out=%q stderr=%q", err, out, stderr)
 		}

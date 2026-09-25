@@ -835,6 +835,9 @@ func (r *Runner) bashPPWriteBridgePointer(ptr *bashPPPointer, value bashPPBridge
 	if ptr != nil && ptr.unsafeView != nil {
 		return fmt.Errorf("BASHPP-EUNSAFE-WRITE: writes through reinterpreted blank views are unsupported")
 	}
+	if err := goSourceUnsafeDerefCheck(ptr); err != nil {
+		return err
+	}
 	if ptr == nil {
 		return errBashPPNilDereference
 	}

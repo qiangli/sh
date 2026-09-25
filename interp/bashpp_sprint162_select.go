@@ -45,6 +45,11 @@ func (r *Runner) bashPPSelectReceiveAssign(assign *syntax.BashPPAssign, received
 	if ptr == nil || ptr.target == nil {
 		return
 	}
+	if err := goSourceUnsafeDerefCheck(ptr); err != nil {
+		r.errf("%v\n", err)
+		r.exit.code = 2
+		return
+	}
 	if ptr.unsafeView != nil {
 		r.errf("BASHPP-EUNSAFE-WRITE: writes through reinterpreted blank views are unsupported\n")
 		r.exit.code = 2
