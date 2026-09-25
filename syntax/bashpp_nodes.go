@@ -280,6 +280,7 @@ type BashPPConstSpec struct {
 	Eq           Pos
 	Init         []*Word
 	InitExpr     BashPPExpr
+	ImplicitInit bool
 	Iota         uint32
 }
 

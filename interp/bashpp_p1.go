@@ -1181,7 +1181,7 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 				return
 			}
 			name := d.Lhs[0].Value
-			vr, ok := r.bashPPGoSourceCollectionCarrier(value, meta)
+			vr, ok := r.bashPPGoSourceObjectCarrier(value, meta)
 			if !ok {
 				vr = expand.NewObject(value)
 			}

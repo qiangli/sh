@@ -828,7 +828,7 @@ func (c *converter) constGroup(g *ast.GenDecl) *s.BashPPConstGroup {
 			// of a multi-name spec (`abit, amask = 1<<iota, 1<<iota-1`)
 			// shares one value; the flattened per-name position must not
 			// advance it.
-			spec := &s.BashPPConstSpec{Name: c.ident(name), Iota: uint32(specIndex)}
+			spec := &s.BashPPConstSpec{Name: c.ident(name), ImplicitInit: len(v.Values) == 0, Iota: uint32(specIndex)}
 			if v.Type != nil {
 				spec.DeclType = c.lit(v.Type.Pos(), c.text(v.Type))
 				spec.DeclTypeExpr = c.typ(v.Type)

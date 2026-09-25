@@ -524,7 +524,7 @@ func (e *emitter) constGroup(n *syntax.BashPPConstGroup) (string, error) {
 			end++
 		}
 		run := n.Specs[start:end]
-		explicit := run[0].InitExpr != nil || len(run[0].Init) > 0
+		explicit := !run[0].ImplicitInit && (run[0].InitExpr != nil || len(run[0].Init) > 0)
 		names := make([]string, 0, len(run))
 		values := make([]string, 0, len(run))
 		runType := ""
