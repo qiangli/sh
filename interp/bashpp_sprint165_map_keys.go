@@ -118,7 +118,20 @@ func (r *Runner) bashPPSprint165MapKey(value any, meta *bashPPCollectionMeta, ty
 			}
 			value = decoded
 		}
-		switch x.Name.Value {
+		kind := x.Name.Value
+		if !bashPPBuiltinType(kind) {
+			if base, ok := r.goSourceImportedScalarUnderlying(kind); ok {
+				// A dependency-owned defined type resolves no further in the
+				// interpreter registry; its basic underlying kind comes from
+				// the import's export metadata. Its identity is the one the
+				// dynamic-type path spells (import path, not per-file alias),
+				// so a delete or lookup through this branch hashes the same
+				// key an interface-boxed store of the same value produced.
+				kind = base
+				typeName = r.goSourceDynamicTypeIdentity(typ)
+			}
+		}
+		switch kind {
 		case "string":
 			text, ok := value.(string)
 			if !ok {
@@ -141,7 +154,7 @@ func (r *Runner) bashPPSprint165MapKey(value any, meta *bashPPCollectionMeta, ty
 			if !ok {
 				return bashPPMapKey{}, false, fmt.Errorf("BASHPP-ECOLLECTION-KEY: %T is not %s", value, typeName)
 			}
-			if x.Name.Value == "float32" {
+			if kind == "float32" {
 				floating = float64(float32(floating))
 			}
 			if math.IsNaN(floating) {
@@ -169,7 +182,7 @@ func (r *Runner) bashPPSprint165MapKey(value any, meta *bashPPCollectionMeta, ty
 			default:
 				return bashPPMapKey{}, false, fmt.Errorf("BASHPP-ECOLLECTION-KEY: %T is not %s", value, typeName)
 			}
-			if x.Name.Value == "complex64" {
+			if kind == "complex64" {
 				complexValue = complex128(complex64(complexValue))
 			}
 			if math.IsNaN(real(complexValue)) || math.IsNaN(imag(complexValue)) {
@@ -185,7 +198,7 @@ func (r *Runner) bashPPSprint165MapKey(value any, meta *bashPPCollectionMeta, ty
 			encoded := strconv.FormatUint(math.Float64bits(realPart), 16) + "/" + strconv.FormatUint(math.Float64bits(imagPart), 16)
 			return bashPPMapKey{typ: typeName, value: "c" + encoded}, false, nil
 		default:
-			if bashPPIntegerType(x.Name.Value) {
+			if bashPPIntegerType(kind) {
 				return bashPPMapKey{typ: typeName, value: "i" + fmt.Sprint(value)}, false, nil
 			}
 		}

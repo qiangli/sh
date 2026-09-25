@@ -6,6 +6,7 @@ import (
 	"go/constant"
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
+	"strconv"
 	"strings"
 )
 
@@ -239,6 +240,14 @@ func (r *Runner) goSourceDynamicTypeIdentity(typ syntax.BashPPTypeExpr) string {
 		}
 		if name == "rune" {
 			return "int32"
+		}
+		// A dependency-qualified name is the same Go type under every
+		// per-file alias its import binds, so its identity is spelled by the
+		// import path rather than by the alias of whichever file wrote it.
+		if qualifier, member, cut := strings.Cut(name, "."); cut {
+			if path := r.bashPPImports[qualifier]; path != "" {
+				name = strconv.Quote(path) + "." + member
+			}
 		}
 		if len(t.TypeArgs) > 0 {
 			args := make([]string, len(t.TypeArgs))

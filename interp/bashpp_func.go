@@ -1114,7 +1114,15 @@ func (r *Runner) bashPPComparableType(typ syntax.BashPPTypeExpr, seen map[string
 		name := x.Name.Value
 		decl, found := r.bashPPTypes[name]
 		if !found {
-			return bashPPBuiltinType(name)
+			if bashPPBuiltinType(name) {
+				return true
+			}
+			// A dependency-owned defined type has no interpreter declaration;
+			// its identity lives in the import's export metadata. One with a
+			// basic underlying type is comparable, and it is exactly the shape
+			// bashPPSprint165MapKey can hash by that underlying kind.
+			_, imported := r.goSourceImportedScalarUnderlying(name)
+			return imported
 		}
 		if seen[bashPPTypeText(x)] || decl.typeExpr == nil {
 			return false
