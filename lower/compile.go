@@ -684,6 +684,16 @@ func prepareCgoCheckerFile(file *ast.File) {
 	if file == nil || file.Scope == nil {
 		return
 	}
+	importsC := false
+	for _, spec := range file.Imports {
+		if spec.Path != nil && spec.Path.Value == `"C"` {
+			importsC = true
+			break
+		}
+	}
+	if !importsC {
+		return
+	}
 	object := file.Scope.Lookup("C")
 	if object == nil || object.Kind == ast.Pkg {
 		return
