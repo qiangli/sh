@@ -176,10 +176,10 @@ func validateLocalTransport(req bashPPEvalRequest, q bashPPBridgeRequest) error 
 	if !unsafe && !requestHasCallbacks(req, q) {
 		return nil
 	}
-	// A made function is served by the retained-callback protocol, which has
-	// no route back to a concurrent task (bashPPMadeFuncOwner): only its
-	// session's own runner may call it or view it through Interface.
-	madeByOtherRunner := q.Receiver != nil && req.Bridge.madeFunc(*q.Receiver) && !bashPPMadeFuncOwner(req)
+	// A made function is served by the retained-callback protocol. Its
+	// creating runner owns the original implementation's lexical cells, so a
+	// different task cannot call it or view it through Interface.
+	madeByOtherRunner := q.Receiver != nil && req.Bridge.madeFunc(*q.Receiver) && !req.Bridge.madeFuncOwnedBy(*q.Receiver, req.CallbackOwner)
 	if !unsafe && !functionCallbacks && !madeByOtherRunner && q.Receiver != nil && q.Receiver.Kind == "handle" && q.Receiver.Callbacks {
 		// The dependency already owns the retained function; calling it (or
 		// converting its reflect.Value back with Interface) hands over no
@@ -540,6 +540,13 @@ func synchronousErrorsAsType(req bashPPEvalRequest, q bashPPBridgeRequest) bool 
 // callback: the dependency may raise that one at any later moment, and the
 // request parked at that moment is the only frame able to run it.
 func requestCallbackCapable(req bashPPEvalRequest, q bashPPBridgeRequest) bool {
+	// A native select only transfers channel values; it cannot invoke a
+	// retained original callback. Holding the callback gate while it blocks
+	// would prevent the task whose callback sends to that channel from
+	// entering its request and wake the receiver.
+	if q.Op == "channel-select" && !requestHasCallbacks(req, q) {
+		return false
+	}
 	if requestHasCallbacks(req, q) && !callbackInertRequest(req, q) {
 		return true
 	}

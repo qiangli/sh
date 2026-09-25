@@ -155,20 +155,22 @@ func (s *bashPPNativeSession) rememberMadeFunc(req bashPPEvalRequest, q bashPPBr
 		return
 	}
 	made := false
+	owner := req.CallbackOwner
 	if q.Receiver == nil {
 		alias, name, ok := strings.Cut(q.Selector, ".")
 		made = ok && name == "MakeFunc" && req.Imports[alias] == "reflect" && requestHasCallbacks(req, q)
 	} else {
 		made = q.Selector == "Interface" && len(q.Args) == 0 && s.madeFunc(*q.Receiver)
+		owner = s.madeFuncOwner(*q.Receiver)
 	}
 	if !made {
 		return
 	}
 	s.mu.Lock()
 	if s.madeFuncs == nil {
-		s.madeFuncs = map[uint64]bool{}
+		s.madeFuncs = map[uint64]*Runner{}
 	}
-	s.madeFuncs[v.Handle] = true
+	s.madeFuncs[v.Handle] = owner
 	s.mu.Unlock()
 }
 
@@ -178,20 +180,35 @@ func (s *bashPPNativeSession) madeFunc(v bashPPBridgeValue) bool {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	_, ok := s.madeFuncs[v.Handle]
+	return ok
+}
+
+func (s *bashPPNativeSession) madeFuncOwner(v bashPPBridgeValue) *Runner {
+	if s == nil || v.Kind != "handle" || v.Session != s.id {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.madeFuncs[v.Handle]
 }
 
-// bashPPMadeFuncOwner reports a request from a runner that may register or
-// run a made function. A concurrent task (a go statement's runner) may not:
-// the retained-callback protocol has no route from a task's request back to
-// that task, so it would lose the session connection instead of refusing.
+// A retained implementation is served only by the runner which created it.
+// That runner owns the callback's lexical cells and can park its request to
+// execute the original body. Another task's request cannot borrow that frame.
+func (s *bashPPNativeSession) madeFuncOwnedBy(v bashPPBridgeValue, owner *Runner) bool {
+	return owner != nil && s.madeFuncOwner(v) == owner
+}
+
+// bashPPMadeFuncOwner reports a request with a callback runner. Its identity
+// is checked against each made handle before using that handle.
 func bashPPMadeFuncOwner(req bashPPEvalRequest) bool {
-	return req.CallbackOwner != nil && !req.CallbackOwner.bashPPGoTask
+	return req.CallbackOwner != nil
 }
 
 // bashPPMadeFuncUse reports one of the two admitted uses of a made function.
 func bashPPMadeFuncUse(req bashPPEvalRequest, q bashPPBridgeRequest) bool {
-	if q.Op != "call" || q.Receiver == nil || !bashPPMadeFuncOwner(req) || !req.Bridge.madeFunc(*q.Receiver) {
+	if q.Op != "call" || q.Receiver == nil || !req.Bridge.madeFuncOwnedBy(*q.Receiver, req.CallbackOwner) {
 		return false
 	}
 	switch q.Selector {

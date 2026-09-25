@@ -209,7 +209,7 @@ type bashPPNativeSession struct {
 	// madeFuncs are the handles of functions reflect.MakeFunc built over an
 	// original implementation, and of their Interface() views; see
 	// bashPPMadeFuncUse.
-	madeFuncs           map[uint64]bool
+	madeFuncs           map[uint64]*Runner
 	origins             map[uint64]*bashPPPointer
 	originIndex         map[bashPPOriginKey]uint64 // protected by mu; see bashPPTransportOrigin
 	originIndexed       int                        // len(origins) the index covers

@@ -205,7 +205,7 @@ func (r *Runner) goSourceSharedOrdering(ctx context.Context, req bashPPEvalReque
 			less = func(i, j int) (bool, error) {
 				return r.goSourceCallbackBool(ctx, fn, []bashPPBridgeValue{goSourceSharedIndex(i), goSourceSharedIndex(j)})
 			}
-		case req.Bridge != nil && req.Bridge.madeFunc(comparator) && bashPPMadeFuncOwner(req):
+		case req.Bridge != nil && req.Bridge.madeFuncOwnedBy(comparator, req.CallbackOwner):
 			// reflect.MakeFunc's Interface result is a dependency-owned callable
 			// whose body still re-enters an original comparison closure. Invoke it
 			// synchronously while sort works over the original backing array.
