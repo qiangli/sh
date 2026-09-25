@@ -195,13 +195,16 @@ func EncodeSpecialMode(path string, windows bool) string {
 
 // EncodeShellRelativeMode converts a relative pathname from the shell's
 // POSIX spelling. A backslash in such an operand is a filename character,
-// not a Windows path separator. Keep native absolute paths on the existing
-// EncodeSpecialMode path, where backslashes delimit components.
+// not a Windows path separator (Unix convention). NTFS cannot store it, so
+// it is handed to Windows as '|', a character Windows refuses in a name:
+// the lookup fails as not found and nothing is ever created. Native
+// absolute paths stay on [EncodeSpecialMode], where backslashes delimit
+// components.
 func EncodeShellRelativeMode(path string, windows bool) string {
 	if !windows {
 		return path
 	}
-	return EncodeSpecialMode(strings.ReplaceAll(path, `\`, "\uf05c"), true)
+	return strings.ReplaceAll(EncodeSpecialMode(path, true), `\`, "|")
 }
 
 // DecodeSpecialMode reverses [EncodeSpecialMode]: every rune in

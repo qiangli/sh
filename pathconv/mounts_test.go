@@ -7,6 +7,7 @@ import (
 	"errors"
 	"reflect"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -342,24 +343,36 @@ func TestSpecialCharsRoundTrip(t *testing.T) {
 	}
 }
 
+// A backslash in a relative shell operand is a filename character (Unix
+// convention, operator decision 2026-09-24). NTFS cannot store it, so it
+// reaches Windows as '|', a name Windows refuses (ERROR_INVALID_NAME, which
+// the shell reports as "No such file or directory"). It is never mapped to
+// U+F05C, so no such file is ever created or found.
 func TestShellRelativeBackslashIsFilenameCharacter(t *testing.T) {
 	got := EncodeShellRelativeMode(`a\*b`, true)
-	want := "a\uf05c\uf02ab"
+	want := "a|\uf02ab"
 	if got != want {
 		t.Fatalf("EncodeShellRelativeMode = %q, want %q", got, want)
 	}
-	if back := DecodeSpecialMode(got, true); back != `a\*b` {
-		t.Fatalf("DecodeSpecialMode = %q", back)
+	if strings.ContainsRune(got, '\uf05c') {
+		t.Fatalf("EncodeShellRelativeMode mapped the backslash to U+F05C: %q", got)
 	}
-	if got := JoinAbsMode(`C:\work`, `a\*b`, true); got != "C:\\work\\a\uf05c\uf02ab" {
+	if got := JoinAbsMode(`C:\work`, `a\*b`, true); got != "C:\\work\\a|\uf02ab" {
 		t.Fatalf("JoinAbsMode = %q", got)
 	}
 	m := NewMounts(`C:\root`, nil, `C:\Temp`)
-	if got := ToOSMountsMode(m, `C:\work`, `/tmp/a\*b`, true); got != "C:\\Temp\\a\uf05c\uf02ab" {
+	if got := ToOSMountsMode(m, `C:\work`, `/tmp/a\*b`, true); got != "C:\\Temp\\a|\uf02ab" {
 		t.Fatalf("ToOSMountsMode /tmp = %q", got)
 	}
-	if got := ToOSMountsMode(m, `C:\work`, `/dir/a\*b`, true); got != "C:\\root\\dir\\a\uf05c\uf02ab" {
+	if got := ToOSMountsMode(m, `C:\work`, `/dir/a\*b`, true); got != "C:\\root\\dir\\a|\uf02ab" {
 		t.Fatalf("ToOSMountsMode mounted = %q", got)
+	}
+	// Drive-absolute native spellings keep '\' as the separator.
+	if got := ToOSMountsMode(m, `C:\work`, `C:\tools\x.py`, true); got != `C:\tools\x.py` {
+		t.Fatalf("ToOSMountsMode native drive path = %q", got)
+	}
+	if got := EncodeShellRelativeMode(`a\b`, false); got != `a\b` {
+		t.Fatalf("EncodeShellRelativeMode posix = %q", got)
 	}
 }
 

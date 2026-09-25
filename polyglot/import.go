@@ -85,6 +85,11 @@ func PythonFileImportPath(sourceDir, module string, windows bool) (string, error
 		return "", fmt.Errorf("polyglot: Python file import %q must name a .py source", module)
 	}
 	resolved := pathconv.JoinAbsMode(sourceDir, module, windows)
+	if windows && strings.Contains(resolved, "|") {
+		// A backslash in a relative operand is a filename character that
+		// NTFS cannot store (pathconv spells it '|'): no such file exists.
+		return "", fmt.Errorf("polyglot: No such file or directory: '%s'", strings.ReplaceAll(resolved, "|", `\`))
+	}
 	if windows && runtime.GOOS != "windows" {
 		// Testing Windows spelling off-host: filepath.Clean would treat `\`
 		// as a filename byte, so clean the drive-relative part as a slash

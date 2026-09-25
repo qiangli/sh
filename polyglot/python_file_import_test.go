@@ -132,9 +132,6 @@ func TestPythonFileImportPathResolution(t *testing.T) {
 		{"/c/tools/x.py", `C:\proj`, `C:\tools\x.py`, true},
 		{"/mnt/c/tools/x.py", `C:\proj`, `C:\tools\x.py`, true},
 		{"./tools/x.py", `C:\proj`, `C:\proj\tools\x.py`, true},
-		// A backslash in a relative shell operand is a filename character,
-		// not a separator (pathconv 27ef173e, Sprint 253).
-		{`tools\x.py`, `C:\proj`, "C:\\proj\\tools\uf05cx.py", true},
 		{"../x.PY", `C:\proj\sub`, `C:\proj\x.PY`, true},
 	}
 	for _, c := range cases {
@@ -150,6 +147,14 @@ func TestPythonFileImportPathResolution(t *testing.T) {
 		if got != c.want {
 			t.Errorf("%q in %q (windows=%t) = %q, want %q", c.module, c.sourceDir, c.windows, got, c.want)
 		}
+	}
+	// A backslash in a relative operand is a filename character (Unix
+	// convention). NTFS cannot store it, so on Windows the import is not
+	// found, and the error names the resolved path as the script spelled it.
+	if _, err := PythonFileImportPath(`C:\proj`, `tools\x.py`, true); err == nil ||
+		!strings.Contains(err.Error(), "No such file or directory") ||
+		!strings.Contains(err.Error(), `C:\proj\tools\x.py`) || strings.ContainsAny(err.Error(), "|\uf05c") {
+		t.Errorf(`tools\x.py on Windows: error = %v, want not found naming C:\proj\tools\x.py`, err)
 	}
 	for _, bad := range []string{"./spam.eggs", "./tools/x", "tools/x.txt"} {
 		if _, err := PythonFileImportPath("/proj", bad, false); err == nil || !strings.Contains(err.Error(), ".py source") {
