@@ -596,6 +596,12 @@ func (r *Runner) bashPPBridgeExpr(expr syntax.BashPPExpr) (bashPPBridgeValue, er
 				// through the scalar path below with its declared identity.
 				break
 			}
+			if !ok && meta != nil && meta.kind == "pointer" {
+				ptr, isPointer := value.(*bashPPPointer)
+				if value == nil || isPointer {
+					return r.bashPPBridgePointerValue(ptr)
+				}
+			}
 			if !ok || native == nil || meta == nil {
 				return bashPPBridgeValue{}, fmt.Errorf("gosource: native collection element lost its authenticated handle")
 			}
@@ -632,6 +638,9 @@ func (r *Runner) bashPPBridgeExpr(expr syntax.BashPPExpr) (bashPPBridgeValue, er
 	case *syntax.BashPPAddressExpr:
 		if lit, ok := x.X.(*syntax.BashPPCompositeLit); ok && r.bashPPNativeType(lit.LitType) {
 			return r.bashPPNativeComposite(lit, true)
+		}
+		if r.goSourceNativeAddressable(x.X) {
+			return r.goSourceNativeAddress(x.X)
 		}
 		// An indexed element of a dependency-owned slice is addressable in
 		// that dependency. Preserve that address instead of trying to build an

@@ -341,6 +341,9 @@ func (r *Runner) bashPPPointerExprValue(expr syntax.BashPPExpr) (ptr *bashPPPoin
 	case *syntax.BashPPIdent:
 		cell := r.bashPPScope.lookup(x.Name.Value)
 		if cell == nil || !cell.pointer {
+			if native := r.goSourceNativePointerCell(x.Name.Value); native != nil {
+				return nil, &bashPPNativePointerValueError{value: native}
+			}
 			return nil, fmt.Errorf("BASHPP-EPOINTER-TARGET: %s is not a pointer", x.Name.Value)
 		}
 		if cell.pointerValue == nil {
@@ -400,6 +403,13 @@ func (r *Runner) bashPPAddress(expr syntax.BashPPExpr) (result *bashPPPointer, e
 			break
 		}
 		expr = paren.X
+	}
+	if r.goSourceNativeAddressable(expr) {
+		native, err := r.goSourceNativeAddress(expr)
+		if err != nil {
+			return nil, err
+		}
+		return nil, &bashPPNativePointerValueError{value: &native}
 	}
 	if deref, ok := expr.(*syntax.BashPPDerefExpr); ok {
 		ptr, err := r.bashPPPointerExprValue(deref.X)
@@ -1063,6 +1073,13 @@ func (r *Runner) bashPPDerefAssign(target *syntax.BashPPDerefExpr, rhs syntax.Ba
 		err = r.goSourceRuntimeFault(errBashPPNilDereference)
 	}
 	if err != nil {
+		if handled, nativeErr := r.goSourceNativePointeeAssign(err, rhs); handled {
+			if nativeErr != nil && !errors.Is(nativeErr, errBashPPScalarInterrupted) {
+				r.errf("%v\n", nativeErr)
+				r.exit.code = 2
+			}
+			return
+		}
 		if !errors.Is(err, errBashPPScalarInterrupted) {
 			r.errf("%v\n", err)
 			r.exit.code = 2

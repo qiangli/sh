@@ -486,6 +486,25 @@ func access(rv reflect.Value,q request)([]value,string){
   field.Set(decoded)
   return []value{encode(reflect.ValueOf(true))},""
  }
+ if q.Op=="deref-set" {
+  if len(q.Args)!=1{return nil,"pointee writes require one value"}
+  if rv.Kind()!=reflect.Pointer{return nil,"pointee writes require a pointer"}
+  if rv.IsNil(){return nil,"runtime error: invalid memory address or nil pointer dereference"}
+  target:=rv.Elem()
+  if !target.CanSet(){return nil,"pointee is not addressable"}
+  decoded,err:=decode(q.Args[0],target.Type());if err!=nil{return nil,err.Error()}
+  target.Set(decoded)
+  return []value{encode(reflect.ValueOf(true))},""
+ }
+ if q.Op=="field-pointer" {
+  for rv.Kind()==reflect.Pointer {if rv.IsNil(){return nil,"runtime error: invalid memory address or nil pointer dereference"};rv=rv.Elem()}
+  if rv.Kind()!=reflect.Struct{return nil,"native field address requires a struct"}
+  field:=rv.FieldByName(q.Selector)
+  if !field.IsValid(){return nil,"unknown exported member "+q.Selector+" of "+rv.Type().String()}
+  if !field.CanInterface(){return nil,"unexported field "+q.Selector}
+  if !field.CanAddr(){return nil,"field "+q.Selector+" is not addressable"}
+  return []value{encode(field.Addr())},""
+ }
  if q.Op=="field"||q.Op=="member"||q.Op=="receiver_field" {
   original:=rv
   for rv.Kind()==reflect.Pointer {if rv.IsNil(){if q.Op=="member" {if method:=memberMethod(original,q.Selector);method.IsValid(){return []value{encode(method)},""}};return nil,"runtime error: invalid memory address or nil pointer dereference"};rv=rv.Elem()}
@@ -498,7 +517,7 @@ func access(rv reflect.Value,q request)([]value,string){
   if q.Op=="member" {if method:=memberMethod(original,q.Selector);method.IsValid(){return []value{encode(method)},""}}
   return nil,"unknown exported member "+q.Selector+" of "+original.Type().String()
  }
- for rv.Kind()==reflect.Pointer&&rv.Type().Elem().Kind()==reflect.Array {if rv.IsNil(){return nil,"index through nil pointer"};rv=rv.Elem()}
+ for q.Op!="deref"&&rv.Kind()==reflect.Pointer&&rv.Type().Elem().Kind()==reflect.Array {if rv.IsNil(){return nil,"index through nil pointer"};rv=rv.Elem()}
  switch q.Op {
  case "kind":
   // The original program's `range` needs to know whether it is iterating keys
@@ -539,7 +558,8 @@ func access(rv reflect.Value,q request)([]value,string){
   target.Set(element);return []value{encode(reflect.ValueOf(true))},""
  case "index-pointer":
   if len(q.Args)!=1{return nil,"index-pointer requires one operand"}
-  if rv.Kind()!=reflect.Slice{return nil,"index-pointer is not defined on "+rv.Type().String()}
+  for rv.Kind()==reflect.Pointer {if rv.IsNil(){return nil,"runtime error: invalid memory address or nil pointer dereference"};rv=rv.Elem()}
+  switch rv.Kind(){case reflect.Slice:case reflect.Array:if !rv.CanAddr(){return nil,"indexed value is not addressable"};default:return nil,"index-pointer is not defined on "+rv.Type().String()}
   n,err:=strconv.Atoi(q.Args[0].Text);if err!=nil{return nil,"index is not an integer"}
   if n<0||n>=rv.Len(){return nil,fmt.Sprintf("index out of range [%d] with length %d",n,rv.Len())}
   element:=rv.Index(n);if !element.CanAddr(){return nil,"indexed value is not addressable"}
@@ -650,6 +670,7 @@ func dispatch(q request)(reply response){
  if q.Op=="assignable" {if len(q.Args)!=1{reply.Error="assignability requires one value";return};typ:=resolveType(q.Selector);if typ==nil{reply.Error="unregistered bridge type "+strconv.Quote(q.Selector);return};v,err:=decode(q.Args[0],nil);if err!=nil{reply.Error=err.Error();return};result:=encode(reflect.ValueOf(v.IsValid()&&v.Type().AssignableTo(typ)));if typ.Kind()==reflect.Interface{result.Interface=q.Selector};reply.Values=[]value{result};return}
  if q.Op=="type" {typ:=resolveType(q.Selector);if typ==nil{reply.Error="unregistered bridge type "+strconv.Quote(q.Selector);return};reply.Values=[]value{encode(reflect.ValueOf(typeID(typ)))};return}
  if q.Op=="construct"||q.Op=="address" {if len(q.Args)!=1{reply.Error="construction requires one literal";return};typ:=resolveType(q.Selector);if typ==nil{reply.Error="unregistered bridge type "+strconv.Quote(q.Selector);return};v,err:=decode(q.Args[0],typ);if err!=nil{reply.Error=err.Error();return};if q.Op=="address"{ptr:=reflect.New(typ);ptr.Elem().Set(v);v=ptr};reply.Values=[]value{encode(v)};return}
+ if q.Op=="var-pointer" {slot:=symbols[q.Selector];if !slot.IsValid(){reply.Error="unknown imported variable: "+q.Selector;return};if !slot.CanAddr(){reply.Error="imported symbol is not addressable: "+q.Selector;return};reply.Values=[]value{encode(slot.Addr())};return}
  if q.Op=="var-set" {if len(q.Args)!=1{reply.Error="native variable writes require one value";return};slot:=symbols[q.Selector];if !slot.IsValid()||!slot.CanSet(){reply.Error="unknown or read-only imported variable: "+q.Selector;return};v,err:=decode(q.Args[0],slot.Type());if err!=nil{reply.Error=err.Error();return};slot.Set(v);return}
  if q.Op=="call"&&len(companionUnmappedFrames)>0&&collectionForcing[q.Selector] {
   if refusal:=companionSeal(q.Selector);refusal!=""{reply.Error=refusal;return}
@@ -657,7 +678,7 @@ func dispatch(q request)(reply response){
  }
  fn:=symbols[q.Selector+q.Instance]
  if q.Receiver!=nil {receiver,err:=decode(*q.Receiver,nil);if err!=nil{reply.Error=err.Error();return}
-  switch q.Op {case "deref","len","cap","index","index-pointer","unsafe-slice","slice","field","field-set","member","method-type","receiver_field","byte-set","index-set","kind","keys":reply.Values,reply.Error=access(receiver,q);return}
+  switch q.Op {case "deref","deref-set","len","cap","index","index-pointer","unsafe-slice","slice","field","field-set","field-pointer","member","method-type","receiver_field","byte-set","index-set","kind","keys":reply.Values,reply.Error=access(receiver,q);return}
   if q.Selector==""&&receiver.Kind()==reflect.Func{fn=receiver}else{fn=memberMethod(receiver,q.Selector)}}
  if q.Op=="new" {typ:=resolveType(q.Selector);if typ==nil{reply.Error="unregistered bridge type "+strconv.Quote(q.Selector);return};reply.Values=[]value{encode(reflect.New(typ).Elem())};return}
  if !fn.IsValid(){reply.Error="unknown imported symbol or method: "+q.Selector+q.Instance;return}

@@ -34,7 +34,7 @@ func (r *Runner) bashPPNativeExpr(expr syntax.BashPPExpr) bool {
 		if lit, ok := x.X.(*syntax.BashPPCompositeLit); ok {
 			return r.bashPPNativeType(lit.LitType)
 		}
-		return false
+		return r.goSourceNativeAddressable(x.X)
 	case *syntax.BashPPDerefExpr:
 		return r.bashPPNativeExpr(x.X)
 	case *syntax.BashPPParenExpr:

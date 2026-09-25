@@ -433,7 +433,7 @@ func (r *Runner) bashPPEvalTypedValue(expr syntax.BashPPExpr, expected syntax.Ba
 			// *template.Template — is stored as its native handle, the same
 			// way a native-typed expression would have been above.
 			var native *bashPPNativePointerValueError
-			if errors.As(err, &native) && r.bashPPNativeType(expected) {
+			if errors.As(err, &native) && (r.bashPPNativeType(expected) || r.goSourceNativeAddressExpr(expr)) {
 				return r.goSourceNativeAssignedValue(*native.value, expected)
 			}
 			// A nil pointer the dependency minted — reflect.New(...).Elem()
@@ -712,6 +712,9 @@ func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (value any, meta *bashPP
 	case *syntax.BashPPDerefExpr:
 		ptr, err := r.bashPPPointerExprValue(x.X)
 		if err != nil {
+			if value, handled, nativeErr := r.goSourceNativePointee(err); handled {
+				return value, nil, nativeErr
+			}
 			return nil, nil, err
 		}
 		if ptr == nil {
