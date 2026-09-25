@@ -1137,13 +1137,14 @@ func (l *bashPPLocalTypeSet) source(typ syntax.BashPPTypeExpr, depth int) (strin
 			// element type, so promotion and the promoted method set are the
 			// dependency's own Go semantics rather than an imitation.
 			if field.Embedded {
-				// An embedded instantiated generic type stays refused: the
-				// helper would embed it under its generated name while the
-				// interpreter transports the storage under the promoted
-				// original name, and the two would not address the same
-				// field. (Sprint 153's recorded refusal; the instantiation
-				// itself is materialised, see instanceRef.)
-				if l.embeddedInstantiation(field.FieldTypeExpr) {
+				// An embedded instantiation of a public generic is spelled
+				// X[Arg], so the helper field is X and matches the promoted
+				// name the interpreter transports. Any other instantiated
+				// generic stays refused: the helper would embed it under its
+				// generated name while the interpreter transports the storage
+				// under the promoted original name, and the two would not
+				// address the same field (Sprint 153's recorded refusal).
+				if l.embeddedInstantiation(field.FieldTypeExpr) && !l.embeddedPublic(field.FieldTypeExpr) {
 					return "", false
 				}
 				element, ok := l.source(field.FieldTypeExpr, depth+1)

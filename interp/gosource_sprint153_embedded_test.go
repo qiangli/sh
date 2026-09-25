@@ -20,10 +20,7 @@ func TestGoSourceBridgeEmbeddedTransport(t *testing.T) {
 	differSprint153(t, "embedded-transport")
 }
 
-// TestGoSourceBridgeEmbeddedRefusal proves the remaining class is refused,
-// not hung: embedding an instantiated generic spelling stays outside the
-// materialised set and the enclosing type keeps the unregistered refusal.
-func TestGoSourceBridgeEmbeddedRefusal(t *testing.T) {
-	refuseSprint153(t, "embedded-transport", "generic_embedded_refused.go.txt",
-		`unregistered bridge type "W"`)
-}
+// The former TestGoSourceBridgeEmbeddedRefusal reproducer (a struct embedding
+// G[int]) is materialised since 0841fde8 made package-level generics public:
+// it now runs under TestGoSourceBridgeEmbeddedTransport as
+// generic_embedded.go and is compared with the native Go oracle.
