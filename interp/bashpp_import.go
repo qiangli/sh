@@ -80,6 +80,7 @@ type bashPPEvalRequest struct {
 	// Instances registers the instantiations of imported generic functions
 	// the program reaches; see bashpp_sprint171_imported_instances.go.
 	Instances     []bashPPImportedInstance
+	GenericTypes  []string
 	CallbackOwner *Runner
 	CallbackDepth int
 	// ImportPath is the program's declared identity (the compiler's -p,
@@ -599,8 +600,61 @@ func (r *Runner) bashPPEvalRequest() (bashPPEvalRequest, error) {
 	if err != nil {
 		return bashPPEvalRequest{}, err
 	}
-	return bashPPEvalRequest{CallbackOwner: r, CallbackDepth: r.bashPPTools.callbackDepth, PanicOnFault: r.bashPPTools.panicOnFault, LocalTypes: r.bashPPLocalTypeDescriptors(), Instances: r.bashPPImportedInstances(), RuntimeEnv: runtimeEnv, ModuleDir: moduleDir, ImportPath: importPath, TestMain: testMain, Argv: append([]string{r.filename}, r.Params...), Bridge: r.bashPPTools.bridge, Go: r.bashPPTools.goBinary, Dir: r.Dir, Env: env, Stdin: r.stdin,
+	return bashPPEvalRequest{CallbackOwner: r, CallbackDepth: r.bashPPTools.callbackDepth, PanicOnFault: r.bashPPTools.panicOnFault, LocalTypes: r.bashPPLocalTypeDescriptors(), Instances: r.bashPPImportedInstances(), GenericTypes: r.bashPPGenericBridgeTypes(), RuntimeEnv: runtimeEnv, ModuleDir: moduleDir, ImportPath: importPath, TestMain: testMain, Argv: append([]string{r.filename}, r.Params...), Bridge: r.bashPPTools.bridge, Go: r.bashPPTools.goBinary, Dir: r.Dir, Env: env, Stdin: r.stdin,
 		Stdout: r.bashPPWriter(r.stdout), Stderr: r.bashPPWriter(r.stderr), Imports: r.bashPPImports, SourceDir: sourceDir, SourceFile: sourceFile, EmbedDecls: embedDecls, CompanionFiles: companionFiles, NativeFuncs: nativeFuncs, CompanionTrampolines: trampolines, CompanionUnmappedFrames: unmappedFrames, RootFiles: r.bashPPGoSourceRootFiles(), CgoPackages: r.bashPPGoSourceCgoPackages()}, nil
+}
+
+func (r *Runner) bashPPGenericBridgeTypes() []string {
+	if r.bashPPGoSourceFile == nil {
+		return nil
+	}
+	typeParams := map[string]bool{}
+	syntax.Walk(r.bashPPGoSourceFile, func(n syntax.Node) bool {
+		if param, ok := n.(*syntax.BashPPTypeParam); ok {
+			for _, name := range param.Names {
+				typeParams[name.Value] = true
+			}
+		}
+		return true
+	})
+	seen := map[string]bool{}
+	var out []string
+	syntax.Walk(r.bashPPGoSourceFile, func(n syntax.Node) bool {
+		named, ok := n.(*syntax.BashPPNamedType)
+		if !ok || len(named.TypeArgs) == 0 || bashPPTypeExprMentionsNames(named, typeParams) {
+			return true
+		}
+		text := r.bashPPBridgeTypeIdentity(named)
+		if !seen[text] {
+			seen[text] = true
+			out = append(out, text)
+		}
+		return true
+	})
+	sort.Strings(out)
+	return out
+}
+
+func bashPPTypeExprMentionsNames(typ syntax.BashPPTypeExpr, names map[string]bool) bool {
+	if len(names) == 0 {
+		return false
+	}
+	found := false
+	syntax.Walk(typ, func(n syntax.Node) bool {
+		if found {
+			return false
+		}
+		switch x := n.(type) {
+		case *syntax.BashPPTypeParamType:
+			found = true
+		case *syntax.BashPPNamedType:
+			if len(x.TypeArgs) == 0 && names[x.Name.Value] {
+				found = true
+			}
+		}
+		return !found
+	})
+	return found
 }
 
 func (r *Runner) bashPPGoSourceCgoPackages() []syntax.CgoPackage {
