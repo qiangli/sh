@@ -20,6 +20,7 @@ import (
 	"io"
 	"os"
 	"sync"
+	"sync/atomic"
 )
 
 type bashPPNativeOutputDrain struct {
@@ -27,6 +28,13 @@ type bashPPNativeOutputDrain struct {
 	write    *os.File
 	sink     io.Writer
 	sentinel []byte
+	// workerSentinel is written by the dependency before its control reply.
+	// Its sequence is independent from sentinel, which the host still uses to
+	// order callback output while the dependency call is in flight.
+	workerSentinel []byte
+	workerMask     uint8
+	workerReached  atomic.Uint64
+	workerNotify   chan struct{}
 	// mu serializes barriers so at most one sentinel is in flight.
 	mu        sync.Mutex
 	reached   chan struct{} // one token per consumed sentinel
@@ -35,6 +43,10 @@ type bashPPNativeOutputDrain struct {
 }
 
 func newBashPPNativeOutputDrain(sink io.Writer) (*bashPPNativeOutputDrain, error) {
+	return newBashPPNativeOutputDrainWithWorker(sink, nil)
+}
+
+func newBashPPNativeOutputDrainWithWorker(sink io.Writer, workerSentinel []byte, workerMask ...uint8) (*bashPPNativeOutputDrain, error) {
 	r, w, err := os.Pipe()
 	if err != nil {
 		return nil, err
@@ -45,9 +57,16 @@ func newBashPPNativeOutputDrain(sink io.Writer) (*bashPPNativeOutputDrain, error
 		w.Close()
 		return nil, err
 	}
+	mask := uint8(1)
+	if len(workerMask) > 0 {
+		mask = workerMask[0]
+	}
 	d := &bashPPNativeOutputDrain{
 		read: r, write: w, sink: sink, sentinel: sentinel,
-		reached: make(chan struct{}, 1), finished: make(chan struct{}),
+		workerSentinel: append([]byte(nil), workerSentinel...),
+		workerMask:     mask,
+		workerNotify:   make(chan struct{}, 1),
+		reached:        make(chan struct{}, 1), finished: make(chan struct{}),
 	}
 	go d.copy()
 	return d, nil
@@ -66,22 +85,37 @@ func (d *bashPPNativeOutputDrain) copy() {
 		if n > 0 {
 			held = append(held, buf[:n]...)
 			for {
-				i := bytes.Index(held, d.sentinel)
+				i, worker := d.nextSentinel(held)
 				if i < 0 {
 					break
 				}
 				if !d.flush(held[:i]) {
 					return
 				}
-				held = append(held[:0], held[i+len(d.sentinel):]...)
-				select {
-				case d.reached <- struct{}{}:
-				default:
+				marker := d.sentinel
+				if worker {
+					marker = d.workerSentinel
+				}
+				held = append(held[:0], held[i+len(marker):]...)
+				if worker {
+					d.workerReached.Add(1)
+					select {
+					case d.workerNotify <- struct{}{}:
+					default:
+					}
+				} else {
+					select {
+					case d.reached <- struct{}{}:
+					default:
+					}
 				}
 			}
 			keep := 0
-			for k := min(len(d.sentinel)-1, len(held)); k > 0; k-- {
-				if bytes.Equal(held[len(held)-k:], d.sentinel[:k]) {
+			maxMarker := max(len(d.sentinel), len(d.workerSentinel))
+			for k := min(maxMarker-1, len(held)); k > 0; k-- {
+				tail := held[len(held)-k:]
+				if k <= len(d.sentinel) && bytes.Equal(tail, d.sentinel[:k]) ||
+					k <= len(d.workerSentinel) && bytes.Equal(tail, d.workerSentinel[:k]) {
 					keep = k
 					break
 				}
@@ -96,6 +130,18 @@ func (d *bashPPNativeOutputDrain) copy() {
 			return
 		}
 	}
+}
+
+func (d *bashPPNativeOutputDrain) nextSentinel(data []byte) (int, bool) {
+	host := bytes.Index(data, d.sentinel)
+	worker := -1
+	if len(d.workerSentinel) > 0 {
+		worker = bytes.Index(data, d.workerSentinel)
+	}
+	if worker >= 0 && (host < 0 || worker < host) {
+		return worker, true
+	}
+	return host, false
 }
 
 func (d *bashPPNativeOutputDrain) flush(data []byte) bool {
@@ -125,6 +171,16 @@ func (d *bashPPNativeOutputDrain) barrier() {
 	}
 }
 
+func (d *bashPPNativeOutputDrain) awaitWorker(sequence uint64) {
+	for d.workerReached.Load() < sequence {
+		select {
+		case <-d.workerNotify:
+		case <-d.finished:
+			return
+		}
+	}
+}
+
 // closeWrite retires the host's write end. Once the child is gone too, the
 // copier sees EOF, flushes what remains and finishes.
 func (d *bashPPNativeOutputDrain) closeWrite() {
@@ -134,6 +190,25 @@ func (d *bashPPNativeOutputDrain) closeWrite() {
 func (s *bashPPNativeSession) drainOutputs() {
 	for _, drain := range s.drains {
 		drain.barrier()
+	}
+}
+
+func (s *bashPPNativeSession) awaitOutputBarriers(reply bashPPBridgeResponse) {
+	for _, drain := range s.drains {
+		var sequence uint64
+		switch drain.workerMask {
+		case 1:
+			sequence = reply.OutputBarrierStdout
+		case 2:
+			sequence = reply.OutputBarrierStderr
+		}
+		if sequence > 0 {
+			drain.awaitWorker(sequence)
+		} else {
+			// A dependency can close or replace its own descriptor. Its marker
+			// then cannot be written, so retain the host-written fallback.
+			drain.barrier()
+		}
 	}
 }
 

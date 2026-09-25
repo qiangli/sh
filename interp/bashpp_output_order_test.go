@@ -75,6 +75,22 @@ func main() {
 	}
 }
 
+// The fast worker-side marker cannot be written after the interpreted program
+// closes a dependency descriptor. The host-held write end remains available as
+// the ordering fallback, so the bridge reply and later local output cannot hang.
+func TestGoSourceOutputBarrierAfterNativeClose(t *testing.T) {
+	got := runOrderedInterpreter(t, "close-stdout.go", `package main
+import "os"
+func main() {
+	os.Stdout.Close()
+	println("local-after-close")
+}`)
+	want := orderedOutput{combined: "local-after-close\n"}
+	if got != want {
+		t.Fatalf("output after native close: got %+v want %+v", got, want)
+	}
+}
+
 type orderedOutput struct {
 	combined string
 	status   int

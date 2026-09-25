@@ -179,6 +179,12 @@ type bashPPBridgeResponse struct {
 	Error    string              `json:"error,omitempty"`
 	// Parent names the routed request whose dispatch raised this callback.
 	Parent uint64 `json:"parent,omitempty"`
+	// OutputBarrierStdout and OutputBarrierStderr are per-stream worker-side
+	// marker sequences written before this reply. A zero sequence for a
+	// drained stream means the marker write failed and requires the
+	// host-written fallback barrier.
+	OutputBarrierStdout uint64 `json:"output_barrier_stdout,omitempty"`
+	OutputBarrierStderr uint64 `json:"output_barrier_stderr,omitempty"`
 }
 
 func bashPPNativeSelectDefaultReply(q bashPPBridgeRequest, reply bashPPBridgeResponse) bool {
@@ -373,6 +379,8 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 	}
 	auth := hex.EncodeToString(secret)
 	s.id = auth[:16]
+	stdoutMarker := []byte(auth + "-stdout")
+	stderrMarker := []byte(auth + "-stderr")
 	mailbox, mailboxErr := newBashPPCallbackMailbox()
 	if mailboxErr == nil {
 		s.mu.Lock()
@@ -398,6 +406,23 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 	source = strings.Replace(source, "//CALLBACKMAILBOXIMPORTS", mailboxImports, 1)
 	source = strings.Replace(source, "//CALLBACKMAILBOX", mailboxSource, 1)
 	source = strings.Replace(source, "//CONNECTION", "const bridgeNetwork = "+strconv.Quote(bridgeNetwork)+"\nconst bridgeAddress = "+strconv.Quote(listener.Addr().String())+"\nconst bridgeAuth = "+strconv.Quote(auth)+"\nconst callbackMailboxPath = "+strconv.Quote(mailboxPath), 1)
+	stdoutDrain := req.Stdout != nil
+	if _, isFile := req.Stdout.(*os.File); isFile {
+		stdoutDrain = false
+	}
+	stderrDrain := req.Stderr != nil
+	if _, isFile := req.Stderr.(*os.File); isFile {
+		stderrDrain = false
+	}
+	sharedDrain := stdoutDrain && stderrDrain && bashPPSameWriter(req.Stderr, req.Stdout)
+	var barrierWrites strings.Builder
+	if stdoutDrain {
+		fmt.Fprintf(&barrierWrites, "if _, err := bppOS.Stdout.Write([]byte(%q)); err == nil { outputBarrierStdoutSequence++; answer.OutputBarrierStdout = outputBarrierStdoutSequence }\n", stdoutMarker)
+	}
+	if stderrDrain && !sharedDrain {
+		fmt.Fprintf(&barrierWrites, "if _, err := bppOS.Stderr.Write([]byte(%q)); err == nil { outputBarrierStderrSequence++; answer.OutputBarrierStderr = outputBarrierStderrSequence }\n", stderrMarker)
+	}
+	source = strings.Replace(source, "//OUTPUTBARRIER", barrierWrites.String(), 1)
 	scratchEnv := req.RuntimeEnv
 	if scratchEnv == nil {
 		scratchEnv = req.Env
@@ -554,8 +579,8 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 	// so each answered request can drain its output before the interpreter's
 	// next direct write; see bashpp_native_output.go. One writer given for both
 	// streams shares one pipe, exactly as os/exec would share one descriptor.
-	if _, isFile := req.Stdout.(*os.File); !isFile && req.Stdout != nil {
-		drain, err := newBashPPNativeOutputDrain(req.Stdout)
+	if stdoutDrain {
+		drain, err := newBashPPNativeOutputDrainWithWorker(req.Stdout, stdoutMarker, 1)
 		if err != nil {
 			cleanup()
 			return err
@@ -563,11 +588,11 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 		s.drains = append(s.drains, drain)
 		cmd.Stdout = drain.write
 	}
-	if _, isFile := req.Stderr.(*os.File); !isFile && req.Stderr != nil {
-		if bashPPSameWriter(req.Stderr, req.Stdout) {
+	if stderrDrain {
+		if sharedDrain {
 			cmd.Stderr = cmd.Stdout
 		} else {
-			drain, err := newBashPPNativeOutputDrain(req.Stderr)
+			drain, err := newBashPPNativeOutputDrainWithWorker(req.Stderr, stderrMarker, 2)
 			if err != nil {
 				s.closeDrains()
 				cleanup()
@@ -918,7 +943,7 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 			// output, so these replies need no pipe barrier. This matters in
 			// polling loops with short sleeps.
 			if !bashPPNativeNoOutputReply(req, q, reply) {
-				s.drainOutputs()
+				s.awaitOutputBarriers(reply)
 			}
 			// A written-back element may nest native values this session
 			// still owns — a reflect.Type inside a reflect.StructField, a

@@ -57,3 +57,4 @@
 {"op":"add","slug":"synchronize-copied-slices-for-bounded-callbacks","id":"01a0da9b-966b-7af8-8ef4-2a2568b7d39a","tool":"codex-gpt-5.5-a","host":"dragon","episode":"weave-issue-27","at":"2026-09-25T22:07:04.813293Z"}
 {"op":"update","slug":"isolate-interpreted-self-reexec-from-replacement-goroot-tools","id":"01a0da29-3775-7791-8e16-c097a66fa557","tool":"codex-gpt5.6-sol-d","host":"dragon","episode":"weave-issue-30","at":"2026-09-25T22:24:49.23241Z"}
 {"op":"update","slug":"isolate-interpreted-self-reexec-from-replacement-goroot-tools","id":"01a0da29-3775-7791-8e16-c097a66fa557","tool":"codex-gpt5.6-sol-d","host":"dragon","episode":"weave-issue-30","at":"2026-09-25T22:25:05.157199Z"}
+{"op":"add","slug":"sequence-worker-output-barriers-per-stream","id":"01a0daac-695b-7bbf-b7dd-74539169c0f4","tool":"codex-gpt-5.5-e","host":"dragon","episode":"weave-issue-31","at":"2026-09-25T22:25:27.389155Z"}

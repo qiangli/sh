@@ -93,3 +93,23 @@ func BenchmarkSprint153File(b *testing.B) {
 	}
 	benchGoSource(b, path, string(source))
 }
+
+// Sprint: #281; Story: #809; Story-ID: fac7e14af4a8
+//
+// BenchmarkGoSourceNativeCallHotpath isolates the repeated imported-call shape
+// used by interpreted packages which inspect native data one element at a time.
+// Keep the call generic: the benchmark is a bridge cost lock, not a corpus-root
+// reproduction.
+func BenchmarkGoSourceNativeCallHotpath(b *testing.B) {
+	const calls = 10_000
+	const source = `package main
+import "strings"
+func main() {
+	for i := 0; i < 10000; i++ {
+		if !strings.HasPrefix("dwarf", "d") { panic("unreachable") }
+	}
+}
+`
+	b.ReportMetric(calls, "calls/op")
+	benchGoSource(b, "native-call-hotpath.go", source)
+}

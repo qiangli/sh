@@ -112,3 +112,78 @@ func TestGoSourceLazyCallbackOutputBarrier(t *testing.T) {
 		t.Fatal("callback output wrapper was not restored")
 	}
 }
+
+// Sprint: #281; Story: #809; Story-ID: fac7e14af4a8
+//
+// Ordinary dependency replies carry a worker-written marker. Multiple replies
+// may reach the copier before their request goroutines resume, so acknowledgments
+// are sequence-based rather than a lossy one-token notification.
+func TestGoSourceWorkerOutputBarrierSequence(t *testing.T) {
+	var output bytes.Buffer
+	marker := []byte("worker-output-marker")
+	drain, err := newBashPPNativeOutputDrainWithWorker(&output, marker, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer drain.closeWrite()
+
+	for i := 0; i < 3; i++ {
+		if _, err := drain.write.Write(append([]byte("native\n"), marker...)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	drain.awaitWorker(3)
+	if _, err := output.WriteString("local\n"); err != nil {
+		t.Fatal(err)
+	}
+	drain.closeWrite()
+	<-drain.finished
+
+	if got, want := output.String(), "native\nnative\nnative\nlocal\n"; got != want {
+		t.Fatalf("worker barriers leaked or reordered output: got %q want %q", got, want)
+	}
+}
+
+// Sprint: #281; Story: #809; Story-ID: fac7e14af4a8
+//
+// A failed worker marker on one reply must not consume a global sequence number
+// that a later successful marker on the same stream can never reach. Per-stream
+// sequences count only successful markers for that stream.
+func TestGoSourceWorkerOutputBarrierFailedMarkerThenSuccess(t *testing.T) {
+	var output bytes.Buffer
+	marker := []byte("worker-output-marker")
+	drain, err := newBashPPNativeOutputDrainWithWorker(&output, marker, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer drain.closeWrite()
+	session := &bashPPNativeSession{drains: []*bashPPNativeOutputDrain{drain}}
+
+	if _, err := drain.write.Write([]byte("first\n")); err != nil {
+		t.Fatal(err)
+	}
+	session.awaitOutputBarriers(bashPPBridgeResponse{})
+
+	if _, err := drain.write.Write(append([]byte("second\n"), marker...)); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		session.awaitOutputBarriers(bashPPBridgeResponse{OutputBarrierStdout: 1})
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("awaiting later successful worker marker blocked behind failed marker sequence")
+	}
+	if _, err := output.WriteString("local\n"); err != nil {
+		t.Fatal(err)
+	}
+	drain.closeWrite()
+	<-drain.finished
+
+	if got, want := output.String(), "first\nsecond\nlocal\n"; got != want {
+		t.Fatalf("failed-marker fallback reordered output: got %q want %q", got, want)
+	}
+}
