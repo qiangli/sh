@@ -38,3 +38,4 @@
 {"op":"add","slug":"place-overlay-only-cgo-helpers-in-an-existing-logical-directory","id":"01a0caa9-8764-7e34-9451-05bfc996efef","tool":"codex-gpt5.6-sol-w213-e","host":"dragon","episode":"weave-issue-213","at":"2026-09-22T19:48:23.014608Z"}
 {"op":"add","slug":"carry-unsafe-integer-addresses-as-opaque-not-owned-storage","id":"01a0d616-06da-72bb-9c8c-529ec6849ae8","tool":"codex-gpt-5.5-r","host":"dragon","episode":"weave-issue-18","at":"2026-09-25T01:02:42.907115Z"}
 {"op":"add","slug":"keep-pure-scalar-recursion-off-the-boxed-gosource-frame-path","id":"01a0d62b-1300-7a60-93be-02bcf2dbf870","tool":"codex-gpt5.6-sol-s","host":"dragon","episode":"weave-issue-19","at":"2026-09-25T01:25:42.273538Z"}
+{"op":"add","slug":"treat-imported-interfaces-as-interface-map-keys","id":"01a0d63e-3ee9-7ed4-a5f9-1de4c5640a23","tool":"codex-gpt-5.5-x","host":"dragon","episode":"weave-issue-24","at":"2026-09-25T01:46:38.698907Z"}

@@ -1319,6 +1319,9 @@ func (r *Runner) bashPPMapKeyType(typ syntax.BashPPTypeExpr) bool {
 	if len(r.bashPPTypeParamArgs) > 0 {
 		typ = bashPPSubstituteType(typ, r.bashPPTypeParamArgs)
 	}
+	if _, ok := r.bashPPInterfaceType(typ); ok {
+		return true
+	}
 	if _, ok := r.bashPPUnderlyingType(typ).(*syntax.BashPPChanType); ok {
 		return true
 	}
