@@ -155,7 +155,7 @@ func (r *Runner) bashPPPointerConversion(expr syntax.BashPPExpr) (*bashPPPointer
 	if ptr.unsafeSource != nil && bashPPTypeText(ptr.unsafeSource) != bashPPTypeText(target.Element) {
 		if err := r.goSourceUnsafeBlankView(ptr.unsafeSource, target.Element); err == nil {
 			retyped.unsafeView = target.Element
-		} else if r.goSourceUnsafeBlankTarget(target.Element) {
+		} else {
 			return nil, target, true, err
 		}
 	}

@@ -38,19 +38,6 @@ func (r *Runner) goSourceUnsafeBlankView(source, target syntax.BashPPTypeExpr) e
 	return nil
 }
 
-func (r *Runner) goSourceUnsafeBlankTarget(target syntax.BashPPTypeExpr) bool {
-	fields, _, ok := r.bashPPStructFields(target)
-	if !ok {
-		return false
-	}
-	for _, field := range bashPPFlatFields(fields) {
-		if field.name != "_" {
-			return false
-		}
-	}
-	return true
-}
-
 func bashPPUnsafeBlankZero(typ syntax.BashPPTypeExpr) (any, *bashPPCollectionMeta) {
 	return map[string]any{}, &bashPPCollectionMeta{kind: "struct", typ: typ, mapping: map[string]*bashPPCollectionMeta{}}
 }
