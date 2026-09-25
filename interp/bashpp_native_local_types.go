@@ -213,16 +213,14 @@ func (r *Runner) bashPPBuildLocalTypeDescriptorsWithout(withdrawn map[string]boo
 	// fields are identical. A package-level declaration keeps the plain
 	// name; each function-local declaration is registered under its own
 	// identity and a reference is spelled by the declaration it resolves
-	// to (bashpp_s243_scoped_local_types.go). A generic reused name still
-	// escapes through neither spelling.
+	// to (bashpp_s243_scoped_local_types.go). A generic reused name is
+	// scoped the same way unless it is declared in a generic function.
 	scopedDecls, packageLevel := bashPPScopedLocalDecls(r.bashPPGoSourceFile, ambiguous)
 	scopedNames := map[string]string{}
 	for key := range scopedDecls {
 		scopedNames[key] = bashPPScopedLocalName(key)
 		if d := scopedDecls[key].decl; len(d.TypeParams) > 0 {
-			if !ambiguous[d.Name.Value] {
-				generics[scopedNames[key]] = d
-			}
+			generics[scopedNames[key]] = d
 		}
 	}
 	for name := range ambiguous {
@@ -441,7 +439,10 @@ func (r *Runner) bashPPBuildLocalTypeDescriptorsWithout(withdrawn map[string]boo
 		named := instantiations[wire]
 		base := generics[named.Name.Value]
 		if base == nil {
-			if scoped, ok := resolveScoped(named); ok {
+			// A scoped generic's public identity is its plain spelling
+			// (bashPPTypeText), which is gc's only when every type argument
+			// spells as reflect does; any other instantiation stays refused.
+			if scoped, ok := resolveScoped(named); ok && bashPPPredeclaredTypeArgs(named) {
 				base = generics[scoped]
 			}
 		}
@@ -495,7 +496,12 @@ func (r *Runner) bashPPBuildLocalTypeDescriptorsWithout(withdrawn map[string]boo
 		identity := base.GoTypeIdentity
 		if identity != nil {
 			public := *identity
-			public.Name = bashPPTypeText(named)
+			// gc separates type arguments with a bare comma.
+			args := make([]string, len(named.TypeArgs))
+			for i, arg := range named.TypeArgs {
+				args[i] = bashPPTypeText(arg.ArgType)
+			}
+			public.Name = named.Name.Value + "[" + strings.Join(args, ",") + "]"
 			identity = &public
 		}
 		// An instantiated generic alias has the identity of its substituted

@@ -55,7 +55,11 @@ func bashPPScopedLocalName(key string) string {
 // bashPPScopedLocalDecls collects, per reused name, the function-local
 // declarations that can be registered under their own identity, and
 // reports which reused names keep a single package-level declaration
-// under the plain name. A generic or blank declaration is not scoped.
+// under the plain name. A blank declaration is not scoped. Nor is a
+// generic declaration inside a generic function or method: gc makes it a
+// distinct type per instantiation of the enclosing function, spelled with
+// that function's type arguments (`main.T[int;int]`), and one lexical
+// identity cannot be that type.
 func bashPPScopedLocalDecls(file *syntax.File, ambiguous map[string]bool) (scoped map[string]bashPPScopedLocalDecl, packageLevel map[string]*syntax.BashPPDecl) {
 	scoped = map[string]bashPPScopedLocalDecl{}
 	packageLevel = map[string]*syntax.BashPPDecl{}
@@ -63,9 +67,20 @@ func bashPPScopedLocalDecls(file *syntax.File, ambiguous map[string]bool) (scope
 		return scoped, packageLevel
 	}
 	top := map[*syntax.BashPPDecl]bool{}
+	inGeneric := map[*syntax.BashPPDecl]bool{}
 	for _, stmt := range file.Stmts {
-		if d, ok := stmt.Cmd.(*syntax.BashPPDecl); ok {
+		switch d := stmt.Cmd.(type) {
+		case *syntax.BashPPDecl:
 			top[d] = true
+		case *syntax.BashPPFuncDecl:
+			if len(d.TypeParams) > 0 || (d.Receiver != nil && len(d.Receiver.TypeParams) > 0) {
+				syntax.Walk(d, func(node syntax.Node) bool {
+					if local, ok := node.(*syntax.BashPPDecl); ok {
+						inGeneric[local] = true
+					}
+					return true
+				})
+			}
 		}
 	}
 	syntax.Walk(file, func(node syntax.Node) bool {
@@ -79,6 +94,9 @@ func bashPPScopedLocalDecls(file *syntax.File, ambiguous map[string]bool) (scope
 		}
 		if top[d] {
 			packageLevel[name] = d
+			return true
+		}
+		if len(d.TypeParams) > 0 && inGeneric[d] {
 			return true
 		}
 		pos := d.Pos()
@@ -110,4 +128,40 @@ func (r *Runner) bashPPScopedLocalTypeName(named *syntax.BashPPNamedType) (strin
 	}
 	name, ok := cache.scoped[bashPPScopedLocalKey(named.Name.Value, scope)]
 	return name, ok
+}
+
+// bashPPPredeclaredTypeArgs reports whether every type argument of named
+// is built only from predeclared types whose Go spelling reflect prints
+// unchanged, so the plain instantiation text is the public type name.
+// `rune`, `byte` and `any` are excluded: reflect spells them `int32`,
+// `uint8` and `interface {}`.
+func bashPPPredeclaredTypeArgs(named *syntax.BashPPNamedType) bool {
+	var plain func(syntax.BashPPTypeExpr) bool
+	plain = func(typ syntax.BashPPTypeExpr) bool {
+		switch t := typ.(type) {
+		case *syntax.BashPPNamedType:
+			if t.Name == nil || len(t.TypeArgs) > 0 {
+				return false
+			}
+			switch t.Name.Value {
+			case "rune", "byte", "any":
+				return false
+			}
+			return bashPPLocalScalarTypes[t.Name.Value]
+		case *syntax.BashPPPointerType:
+			return plain(t.Element)
+		case *syntax.BashPPCollectionType:
+			if t.Kind == "map" && !plain(t.Key) {
+				return false
+			}
+			return t.Kind != "inferred-array" && plain(t.Element)
+		}
+		return false
+	}
+	for _, arg := range named.TypeArgs {
+		if arg == nil || !plain(arg.ArgType) {
+			return false
+		}
+	}
+	return len(named.TypeArgs) > 0
 }
