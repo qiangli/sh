@@ -3,6 +3,8 @@ package interp
 import (
 	"fmt"
 	"strings"
+
+	"mvdan.cc/sh/v3/syntax"
 )
 
 // validateLocalTransport refuses dependency mutation of interpreter-owned
@@ -525,6 +527,12 @@ func requestHasCallbacks(req bashPPEvalRequest, q bashPPBridgeRequest) bool {
 		// a value carrying its mirrored method is still seen as a callback.
 		if typ.WireType != "" {
 			local[typ.WireType] = true
+			// The helper spells type arguments without separator spaces, while
+			// WireType preserves the source spelling. Match both forms so a
+			// generic method callback keeps its owning request parked.
+			if parsed := syntax.BashPPTypeExprFromText(typ.WireType); parsed != nil {
+				local[bashPPBridgeTypeText(parsed)] = true
+			}
 		}
 	}
 	var check func(bashPPBridgeValue) bool
