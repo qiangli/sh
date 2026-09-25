@@ -432,6 +432,15 @@ func (r *Runner) bashPPRangeCollection(ctx context.Context, rng *syntax.BashPPRa
 	if meta == nil {
 		return false
 	}
+	// A "native" kind means the value is still a lazy dependency-owned handle
+	// (see bashPPBridgeContents) rather than interpreter-owned storage this
+	// path knows how to walk — for example a reassigned `lines = strings.
+	// Split(...)` result kept lazy for identity. Fall through to the native
+	// range path in bashPPRangeScalar, which reads each element back through
+	// the handle instead of claiming the range and iterating zero elements.
+	if meta.kind == "native" {
+		return false
+	}
 	return r.bashPPRangeCollectionValue(ctx, rng, value, meta)
 }
 

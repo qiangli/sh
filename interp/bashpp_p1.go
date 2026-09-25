@@ -1756,9 +1756,29 @@ func (r *Runner) bashPPValidateReusedShortValue(target, candidate *bashPPCell) e
 	}
 	if r.bashPPGoSource && candidate.vr.Kind == expand.Object {
 		if native, ok := candidate.vr.Obj.(*bashPPBridgeValue); ok && native != nil {
-			value, meta, err := r.goSourceNativeAssignedValue(*native, target.declType)
+			// A genuinely dependency-owned target (a native/imported type, or an
+			// interface an imported type may satisfy) keeps the value a lazy
+			// reference, exactly as every other goSourceNativeAssignedValue call
+			// site requires. Reassigning into an ordinary Go-representable
+			// target — `var lines []string; lines = strings.Split(...)` — must
+			// materialize the same way a fresh `:=` declaration or a struct
+			// field assignment already would: bashPPBridgeContents builds real
+			// interpreter-owned storage (value plus a properly kinded meta),
+			// so `range` and other collection ops see actual elements instead
+			// of a meta whose kind matches no case and iterates zero times.
+			if r.bashPPNativeType(target.declType) {
+				value, meta, err := r.goSourceNativeAssignedValue(*native, target.declType)
+				if err != nil {
+					return err
+				}
+				candidate.vr.Obj = value
+				candidate.valueMeta = meta
+				candidate.declType = target.declType
+				return nil
+			}
+			value, meta, err := r.bashPPBridgeContents(*native, target.declType)
 			if err != nil {
-				return err
+				return fmt.Errorf("BASHPP-EASSIGN-MISMATCH: %v", err)
 			}
 			candidate.vr.Obj = value
 			candidate.valueMeta = meta
