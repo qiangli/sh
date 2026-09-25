@@ -2252,6 +2252,7 @@ func (r *Runner) printFuncDecl(name string, body *syntax.Stmt) {
 			body += ";"
 		}
 		rendered := bashDeclareFmt(body, isLast)
+		rendered = restoreFuncArithIndent(rendered, r.sourceTextRange(st.Pos(), st.End(), false))
 		r.out(rendered)
 		r.out("\n")
 		// bash 5.3 inserts a blank line between two top-level
@@ -2284,6 +2285,38 @@ func (r *Runner) printFuncDecl(name string, body *syntax.Stmt) {
 	} else {
 		r.out("}\n")
 	}
+}
+
+// Bash's function printer preserves the source indentation inside a multiline
+// arithmetic expansion, even while reindenting the surrounding function.
+func restoreFuncArithIndent(rendered, source string) string {
+	if !strings.Contains(source, "$((\n") {
+		return rendered
+	}
+	lines := strings.Split(rendered, "\n")
+	original := strings.Split(source, "\n")
+	startSource, startRendered := -1, -1
+	for i, line := range original {
+		if strings.HasSuffix(strings.TrimSpace(line), "$((") {
+			startSource = i
+		}
+	}
+	for i, line := range lines {
+		if strings.HasSuffix(strings.TrimSpace(line), "$((") {
+			startRendered = i
+		}
+	}
+	if startSource < 0 || startRendered < 0 {
+		return rendered
+	}
+	for i, j := startSource+1, startRendered+1; i < len(original) && j < len(lines); i, j = i+1, j+1 {
+		indent := original[i][:len(original[i])-len(strings.TrimLeft(original[i], " \t"))]
+		lines[j] = indent + strings.TrimLeft(lines[j], " \t")
+		if strings.TrimSpace(original[i]) == "))" {
+			break
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 // formatRedirect renders a single redirect node as text. Walks the

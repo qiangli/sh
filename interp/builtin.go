@@ -2178,7 +2178,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				}
 				continue
 			}
-			matches := r.typeMatches(arg, skipFuncs, r.writeEnv)
+			matches := r.typeMatches(arg, skipFuncs, r.writeEnv, showAll)
 			// -p: only print path if no non-file match exists.
 			if mode == "-p" {
 				var pathMatch string
@@ -3301,7 +3301,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 						continue
 					}
 				}
-				ms := r.typeMatches(arg, false, lookupEnv)
+				ms := r.typeMatches(arg, false, lookupEnv, false)
 				if len(ms) == 0 {
 					r.errf(r.bashErrPrefix(pos)+"command: %s: not found\n", arg)
 					continue
@@ -3360,11 +3360,12 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 	case "dirs":
 		// `dirs +N` / `dirs -N` selects a single entry. `-v` adds
 		// "index<TAB>dir" line-per-entry. `-p` is line-per-entry.
-		// `-l` reserved (resolve ~ to HOME) — we emit the raw
-		// paths either way. Without flags or index, print the
+		// `-l` prints absolute paths instead of abbreviating HOME.
+		// Without flags or index, print the
 		// whole stack top-first on one line.
 		vertical := false
 		perLine := false
+		long := false
 		idx := -1
 		idxSign := byte(0)
 		for _, a := range args {
@@ -3380,7 +3381,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				r.dirStack = append(r.dirStack[:0], r.logicalDir())
 				return exit
 			case a == "-l":
-				// no-op; we don't shorten paths.
+				long = true
 			case strings.HasPrefix(a, "+") || strings.HasPrefix(a, "-"):
 				n, err := strconv.Atoi(a[1:])
 				if err != nil {
@@ -3402,6 +3403,12 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 		topFirst := make([]string, len(r.dirStack))
 		for i, d := range r.dirStack {
+			if !long {
+				home := r.envGet("HOME")
+				if home != "" && (d == home || strings.HasPrefix(d, home+"/")) {
+					d = "~" + strings.TrimPrefix(d, home)
+				}
+			}
 			topFirst[len(r.dirStack)-1-i] = d
 		}
 		if idx >= 0 {
@@ -3429,11 +3436,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			}
 			break
 		}
-		for i, dir := range slices.Backward(r.dirStack) {
-			r.outf("%s", dir)
+		for i, dir := range topFirst {
 			if i > 0 {
 				r.out(" ")
 			}
+			r.outf("%s", dir)
 		}
 		r.out("\n")
 	case "pushd":
@@ -7267,7 +7274,7 @@ func (r *Runner) completeBuiltin(pos syntax.Pos, args []string) exitStatus {
 // typeMatches returns all resolutions of arg, in bash priority order.
 // skipFuncs corresponds to `type -f` (suppress function matches);
 // alias matches are only included when [optExpandAliases] is set.
-func (r *Runner) typeMatches(arg string, skipFuncs bool, env expand.Environ) []typeMatch {
+func (r *Runner) typeMatches(arg string, skipFuncs bool, env expand.Environ, allPaths bool) []typeMatch {
 	var ms []typeMatch
 	if isKeyword(arg) {
 		ms = append(ms, typeMatch{
@@ -7321,12 +7328,29 @@ func (r *Runner) typeMatches(arg string, skipFuncs bool, env expand.Environ) []t
 			desc: fmt.Sprintf("%s is hashed (%s)", arg, entry.path),
 			path: entry.path,
 		})
-	} else if path, err := LookPathDir(r.Dir, env, arg); err == nil {
-		ms = append(ms, typeMatch{
-			kind: "file",
-			desc: fmt.Sprintf("%s is %s", arg, path),
-			path: path,
-		})
+	} else {
+		paths := []string{env.Get("PATH").String()}
+		if allPaths && !lookPathHasPath(arg, runtime.GOOS == "windows") {
+			paths = splitLookPath(paths[0], runtime.GOOS == "windows")
+			if len(paths) == 0 {
+				paths = []string{""}
+			}
+		}
+		for _, pathList := range paths {
+			lookup := expand.FuncEnviron(func(name string) string {
+				if name == "PATH" {
+					return pathList
+				}
+				return env.Get(name).String()
+			})
+			if path, err := LookPathDir(r.Dir, lookup, arg); err == nil {
+				ms = append(ms, typeMatch{
+					kind: "file",
+					desc: fmt.Sprintf("%s is %s", arg, path),
+					path: path,
+				})
+			}
+		}
 	}
 	return ms
 }
@@ -8262,7 +8286,11 @@ func (r *Runner) printSignalList(posix bool) {
 		}
 		entries = append(entries, signalListEntry{Num: num, Name: e.Name})
 	}
-	r.outf("%s", formatSignalList(entries, posix))
+	if runtime.GOOS != "windows" && !posix {
+		r.outf("%s", formatSignalListTabs(entries))
+	} else {
+		r.outf("%s", formatSignalList(entries, posix))
+	}
 }
 
 func signalByNamePosix(name string, posix bool) (killSig, bool) {

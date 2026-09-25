@@ -1818,6 +1818,9 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 				c = 's'
 				fallthrough
 			case 's', 'b', 'd', 'i', 'u', 'o', 'x', 'X', 'f', 'F', 'e', 'E', 'g', 'G':
+				if precisionOverflow && c == 's' && runtime.GOOS == "linux" {
+					return 0, fmt.Errorf("printf: Value too large for defined data type")
+				}
 				// Bash ignores the `0` flag for string conversions
 				// (%s/%b): `%06s` space-pads, not zero-pads, and never
 				// pads before a leading `-`. Strip it so Go's fmt does

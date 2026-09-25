@@ -109,3 +109,23 @@ func formatSignalList(entries []signalListEntry, posix bool) string {
 	}
 	return sb.String()
 }
+
+// formatSignalListTabs is the GNU Bash Unix layout. Unlike the Windows
+// signal listing, cells are separated by tabs with no trailing padding.
+func formatSignalListTabs(entries []signalListEntry) string {
+	var sb strings.Builder
+	for i, e := range entries {
+		if i > 0 {
+			if i%5 == 0 {
+				sb.WriteByte('\n')
+			} else {
+				sb.WriteByte('\t')
+			}
+		}
+		fmt.Fprintf(&sb, "%2d) SIG%s", e.Num, e.Name)
+	}
+	if len(entries) > 0 {
+		sb.WriteByte('\n')
+	}
+	return sb.String()
+}

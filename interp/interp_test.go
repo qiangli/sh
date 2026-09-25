@@ -3031,7 +3031,7 @@ var runTests = []runTest{
 	{"kill -l SIGTERM", "15\n"},
 	{"kill -l 15", "TERM\n"},
 	{"kill -l 129", "HUP\n"},
-	{"kill -l | head -1", " 1) SIGHUP        2) SIGINT        3) SIGQUIT       4) SIGILL        5) SIGTRAP      \n"},
+	{"kill -l | head -1", killListFirstLine()},
 	{"diff <(kill -l) <(trap -l)", ""},
 	{"kill -l KILL INT", "9\n2\n"},
 	{"set -o posix; set -- $(kill -l); echo \"$1 $2 $3 $4 $5\"; kill -SIGTERM 999999; echo rc=$?", "HUP INT QUIT ILL TRAP\nbash: line 1: kill: SIGTERM: invalid signal specification\nrc=1\n"},
@@ -4445,7 +4445,7 @@ swap32_posix()
 		))
 	done
 }
-type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local arg;\n    for arg in \"$@\";\n    do\n        echo $((\n                        ($arg & 4278190080) >> 24 |\n                        ($arg & 16711680) >> 8 |\n                        ($arg & 65280) << 8 |\n                        ($arg & 255) << 24\n                ));\n    done\n}\n"},
+type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local arg;\n    for arg in \"$@\";\n    do\n        echo $((\n\t\t\t($arg & 4278190080) >> 24 |\n\t\t\t($arg & 16711680) >> 8 |\n\t\t\t($arg & 65280) << 8 |\n\t\t\t($arg & 255) << 24\n\t\t));\n    done\n}\n"},
 
 	// type -f: skip function lookup, fall through to builtin/file.
 	{"echo(){ :; }; type -t echo", "function\n"},
@@ -6615,6 +6615,13 @@ var runTests64bit = []runTest{
 }
 
 func init() {
+	if runtime.GOOS == "linux" {
+		runTests[226].want = "bash: line 1: printf: Value too large for defined data type\nexit status 1"
+		runTests[717].want = "exit status 1"
+	}
+	if runtime.GOOS != "windows" {
+		runTests[1403].want = typeEchoKinds(os.Getenv("PATH"))
+	}
 	if runtime.GOOS == "windows" {
 		runTests = append(runTests, runTestsWindows...)
 	} else { // Unix-y
@@ -6629,7 +6636,28 @@ func init() {
 		runTest{`set -o posix; set -o a; echo after`, "bash: line 1: set: a: invalid option name\nexit status 2"},
 		runTest{`set -o posix; set +o f; echo after`, "bash: line 1: set: f: invalid option name\nexit status 2"},
 		runTest{`set -a; set +f; [[ -o allexport ]] && [[ ! -o noglob ]]`, ""},
+		runTest{`HOME=$PWD; [[ $(dirs) == '~' && $(dirs -l) == "$PWD" ]]`, ""},
 	)
+}
+
+func killListFirstLine() string {
+	if runtime.GOOS == "windows" {
+		return " 1) SIGHUP        2) SIGINT        3) SIGQUIT       4) SIGILL        5) SIGTRAP      \n"
+	}
+	return " 1) SIGHUP\t 2) SIGINT\t 3) SIGQUIT\t 4) SIGILL\t 5) SIGTRAP\n"
+}
+
+func typeEchoKinds(pathList string) string {
+	result := "builtin\n"
+	for _, dir := range filepath.SplitList(pathList) {
+		if dir == "" || !filepath.IsAbs(dir) {
+			continue
+		}
+		if info, err := os.Stat(filepath.Join(dir, "echo")); err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0111 != 0 {
+			result += "file\n"
+		}
+	}
+	return result
 }
 
 // ln -s: wine doesn't implement symlinks; see https://bugs.winehq.org/show_bug.cgi?id=44948
@@ -6702,20 +6730,24 @@ func TestRunnerRun(t *testing.T) {
 			// compatible diagnostic mode. Source bytes are needed to quote
 			// malformed expansion text exactly as Bash prints it.
 			var bashSource []byte
-			if strings.Contains(c.want, "bash: line 1: ") ||
+			if strings.Contains(c.in, "swap32_posix") ||
+				strings.Contains(c.want, "bash: line 1: ") ||
 				strings.Contains(c.want, "bad substitution") ||
 				strings.Contains(c.want, "assignment requires lvalue") {
 				bashSource = []byte(c.in)
 			}
-			r, err := interp.New(interp.Dir(tdir), interp.StdIO(nil, &cb, &cb),
+			opts := []interp.RunnerOption{interp.Dir(tdir), interp.StdIO(nil, &cb, &cb),
 				interp.StandardInput(true),
 				interp.WithBashCompatErrors(strings.Contains(c.want, "bash: line 1: ")),
 				interp.WithBashSource(bashSource),
-				// TODO: why does this make some tests hang?
-				// interp.Env(expand.ListEnviron(append(os.Environ(),
-				// 	"foo_NULL_BAR=foo\x00bar")...)),
 				interp.ExecHandlers(testExecHandler),
-			)
+			}
+			if runtime.GOOS == "linux" && c.in == runTests[717].in {
+				// The GNU comparator starts this case with HOME=$PWD.
+				// `dirs` abbreviates that path to ~ in the subshell.
+				opts = append(opts, interp.Env(expand.ListEnviron(append(os.Environ(), "HOME="+tdir)...)))
+			}
+			r, err := interp.New(opts...)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -8186,6 +8218,14 @@ func TestRunnerRunConfirm(t *testing.T) {
 					t.Fatal(err)
 				}
 				want = strings.ReplaceAll(want, "ABS_PATH_D", filepath.Join(physicalDir, "d"))
+			}
+			if i == 1403 {
+				for _, entry := range cmd.Env {
+					if pathList, ok := strings.CutPrefix(entry, "PATH="); ok {
+						want = typeEchoKinds(pathList)
+						break
+					}
+				}
 			}
 			if got != want {
 				t.Fatalf("wrong bash output in %q:\nwant: %q\ngot:  %q",
