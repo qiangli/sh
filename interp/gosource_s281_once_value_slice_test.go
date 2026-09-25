@@ -33,6 +33,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"mvdan.cc/sh/v3/gosource"
 )
 
 func TestS281OnceValueValueSliceResult(t *testing.T) {
@@ -128,5 +130,45 @@ func main(){s:=bufio.NewScanner(strings.NewReader(""));s.Split(func(b []byte,e b
 	}
 	if strings.Contains(got, "callback-ran") {
 		t.Fatalf("unsupported body executed: %q", got)
+	}
+}
+
+func TestS281TestingRunSynchronizesCopiedSliceCallback(t *testing.T) {
+	driver := s249Source("_testmain.go", `package main
+
+import (
+	"fmt"
+	"os"
+	"testing"
+	"testing/internal/testdeps"
+)
+
+type row struct {
+	name string
+	data []int
+}
+
+func TestCopiedSliceRow(t *testing.T) {
+	rows := []row{{"first", []int{1, 2}}, {"second", []int{4, 5}}}
+	for _, tt := range rows {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.data[0] += len(tt.data)
+			fmt.Println(tt.name, tt.data[0], rows[0].data[0], rows[1].data[0])
+		})
+	}
+	fmt.Println("after", rows[0].data[0], rows[1].data[0])
+}
+
+var tests = []testing.InternalTest{{"TestCopiedSliceRow", TestCopiedSliceRow}}
+
+func main() {
+	m := testing.MainStart(testdeps.TestDeps{}, tests, nil, nil, nil)
+	os.Exit(m.Run())
+}
+`)
+	got, err := runS249PackageTestMain(t, []gosource.Source{driver}, nil)
+	const want = "first 3 3 4\nsecond 6 3 6\nafter 3 6\nPASS\n"
+	if err != nil || got.stdout != want || got.stderr != "" || got.status != 0 {
+		t.Fatalf("run=%v outcome=%+v", err, got)
 	}
 }

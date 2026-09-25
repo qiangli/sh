@@ -310,6 +310,18 @@ func prepareNativeSliceBuffers(req bashPPEvalRequest, q *bashPPBridgeRequest) er
 				return nil
 			}
 		}
+		// A reviewed synchronous function-callback consumer (for example
+		// testing.T.Run) may keep the callback until the request's parked
+		// goroutine runs it, but the request does not return until that body is
+		// done. Synchronize every direct copied slice before and after each
+		// callback, so the dependency's temporary copy and the interpreter's
+		// backing array behave as one logical store for the bounded call.
+		if synchronousFunctionCallback(req, *q) && hasDirectSlice {
+			if err := prepareNativeSliceReconcile(req, q); err == nil {
+				q.sliceCallbackSync = true
+				return nil
+			}
+		}
 		// A read-only emitter reaching a formatting callback is admitted when
 		// every argument's live storage can be re-read: each callback is then
 		// followed by a coherence check against the dependency's copy
