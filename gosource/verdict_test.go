@@ -125,6 +125,62 @@ func TestCheckAfterSyntaxErrors(t *testing.T) {
 	}
 }
 
+// TestGoTypesParserDiagnostics keeps the go/types check_test runner's parser
+// coordinates separate from gc's. The runner parses these forms with
+// go/parser before go/types; types2 instead gets the gc syntax verdict.
+func TestGoTypesParserDiagnostics(t *testing.T) {
+	for _, tc := range []struct {
+		name, source, want string
+	}{
+		{
+			name:   "receiver",
+			source: "package p\n\ntype T struct{}\nfunc ( /* method has no receiver */ ) _() {}\n",
+			want:   "receiver.go:4:6: method has no receiver",
+		},
+		{
+			name:   "slice",
+			source: "package p\nfunc f(a []int) {\n\t_ = a[: : ]\n}\n",
+			want:   "slice.go:3:8: middle index required in 3-index slice",
+		},
+		{
+			name:   "for-post",
+			source: "package p\nfunc f() {\n\tfor i := 0; i < 10; j := 0 {}\n}\n",
+			want:   "for-post.go:3:22: cannot declare in post statement",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := gosource.Load([]gosource.Source{{Name: tc.name + ".go", Data: []byte(tc.source)}}, gosource.Options{
+				CheckAfterSyntaxErrors: true,
+			})
+			if err == nil {
+				t.Fatal("invalid source accepted by the default gc verdict")
+			}
+			defaultList, ok := err.(gosource.ErrorList)
+			if !ok || len(defaultList) == 0 {
+				t.Fatalf("default diagnostics = %T %[1]v, want gc parser row", err)
+			}
+			if got := defaultList[0].Error(); got == tc.want {
+				t.Fatalf("default parser coordinate = %q, want a distinct gc coordinate", got)
+			}
+
+			_, err = gosource.Load([]gosource.Source{{Name: tc.name + ".go", Data: []byte(tc.source)}}, gosource.Options{
+				CheckAfterSyntaxErrors:   true,
+				GoTypesParserDiagnostics: true,
+			})
+			if err == nil {
+				t.Fatal("invalid source accepted")
+			}
+			list, ok := err.(gosource.ErrorList)
+			if !ok || len(list) == 0 {
+				t.Fatalf("diagnostics = %T %[1]v, want positioned parser row", err)
+			}
+			if got := list[0].Error(); got != tc.want {
+				t.Fatalf("parser position = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestSyntaxVerdictClasses covers one out-of-corpus reproducer per failure
 // class from gosource/testdata/sprint154/parser/FINDINGS.md. Each case
 // asserts the exact gc diagnostic (message, line, col — column is 1-based

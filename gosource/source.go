@@ -93,6 +93,12 @@ type Options struct {
 	// after a non-empty gc syntax verdict, retaining only gc's syntax errors
 	// before the checker's diagnostics.
 	CheckAfterSyntaxErrors bool
+	// GoTypesParserDiagnostics reports parser diagnostics at go/parser's
+	// positions. It is a runner fact for the upstream go/types check_test
+	// harness: that runner collects its parser's errors before it calls the
+	// checker, whereas the types2 runner collects gc's parser errors. It is
+	// deliberately opt-in so ordinary checks retain the gc syntax verdict.
+	GoTypesParserDiagnostics bool
 	// Packages are explicitly supplied dependency packages, type-checked in
 	// the given order before the program and registered under their Path.
 	// They are the policy-free half of Go's import model — an in-memory
@@ -182,13 +188,16 @@ func Load(sources []Source, options Options) (*Program, error) {
 	// gc still type-checks, and so does Load, on go/parser's recovered AST
 	// while retaining gc's diagnostics instead of go/parser's. Checker-test
 	// policy may continue the same way after a syntax error too.
-	syntaxErrors, gcFiles := syntaxVerdict(sources, checkerOptions{checkerBranchErrors: options.CheckerBranchErrors, checkAfterSyntaxErrors: options.CheckAfterSyntaxErrors})
-	if len(syntaxErrors) > 0 && !options.CheckAfterSyntaxErrors && !checksAfterSyntaxVerdict(syntaxErrors) {
-		return nil, syntaxErrors
-	}
 	checker, err := checkerOptionsFor(sources, options)
 	if err != nil {
 		return nil, err
+	}
+	syntaxErrors, gcFiles := syntaxVerdict(sources, checker)
+	if options.GoTypesParserDiagnostics {
+		syntaxErrors = goParserSyntaxVerdict(sources)
+	}
+	if len(syntaxErrors) > 0 && !options.CheckAfterSyntaxErrors && !checksAfterSyntaxVerdict(syntaxErrors) {
+		return nil, syntaxErrors
 	}
 	importsC := sourcesImportC(sources)
 	for _, spec := range options.Packages {
@@ -712,12 +721,13 @@ func shadowedBuiltinTypes(pkg *types.Package) map[string]bool {
 // explicit packages. Test builtins are the exception to per-Load isolation:
 // the go/types API installs them process-wide, irreversibly.
 type checkerOptions struct {
-	goVersion              string
-	fakeImportC            bool
-	testBuiltins           bool
-	checkerBranchErrors    bool
-	checkAfterSyntaxErrors bool
-	errorLimit             int
+	goVersion                string
+	fakeImportC              bool
+	testBuiltins             bool
+	checkerBranchErrors      bool
+	checkAfterSyntaxErrors   bool
+	goTypesParserDiagnostics bool
+	errorLimit               int
 }
 
 // gcStderr reports whether the diagnostics are gc's stderr for the sources:
@@ -733,11 +743,12 @@ var definePredeclaredTestFuncs sync.Once
 
 func checkerOptionsFor(sources []Source, options Options) (checkerOptions, error) {
 	out := checkerOptions{
-		goVersion:              options.GoVersion,
-		fakeImportC:            options.FakeImportC,
-		testBuiltins:           options.TestBuiltins,
-		checkerBranchErrors:    options.CheckerBranchErrors,
-		checkAfterSyntaxErrors: options.CheckAfterSyntaxErrors,
+		goVersion:                options.GoVersion,
+		fakeImportC:              options.FakeImportC,
+		testBuiltins:             options.TestBuiltins,
+		checkerBranchErrors:      options.CheckerBranchErrors,
+		checkAfterSyntaxErrors:   options.CheckAfterSyntaxErrors,
+		goTypesParserDiagnostics: options.GoTypesParserDiagnostics,
 	}
 	// The Go checker corpus places flag-compatible configuration on the first
 	// source line (for example "// -lang=go1.13"). Testdir errorcheck recipes

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"go/ast"
+	"go/parser"
 	"go/scanner"
 	"go/token"
 	"go/types"
@@ -121,6 +122,20 @@ func syntaxVerdict(sources []Source, checker checkerOptions) (ErrorList, []*gcsy
 	return out, files
 }
 
+// goParserSyntaxVerdict is the parser half of the upstream go/types
+// check_test runner. Unlike gc, that runner reports go/parser's recovery
+// positions before invoking go/types; callers opt into it with the explicit
+// GoTypesParserDiagnostics runner fact.
+func goParserSyntaxVerdict(sources []Source) ErrorList {
+	fset := token.NewFileSet()
+	var out ErrorList
+	for _, source := range sources {
+		_, err := parseGoFile(fset, source.Name, source.Data, parser.ParseComments|parser.AllErrors)
+		out = appendDiagnostics(out, err)
+	}
+	return out
+}
+
 // checksAfterSyntaxVerdict reports whether gc type-checks the files after a
 // non-empty syntax verdict. gc counts only diagnostics that begin with
 // "syntax error" (base.SyntaxErrors, cmd/compile/internal/base/print.go)
@@ -174,22 +189,23 @@ func checksAfterSyntaxVerdict(verdict ErrorList) bool {
 // of x") as separate errors that follow their primary; they stay with it:
 // dropped with it, and never compared or sorted on their own.
 type checkerDiagnostics struct {
-	list        ErrorList
-	dropped     int
-	anchors     map[token.Pos]bool
-	postDecls   map[token.Pos]bool
-	gcStderr    bool
-	fset        *token.FileSet
-	files       []*ast.File
-	info        *types.Info
-	goVersion   string
-	lastLine    token.Position
-	lastMsg     string
-	lastDropped bool
+	list                     ErrorList
+	dropped                  int
+	anchors                  map[token.Pos]bool
+	postDecls                map[token.Pos]bool
+	goTypesParserDiagnostics bool
+	gcStderr                 bool
+	fset                     *token.FileSet
+	files                    []*ast.File
+	info                     *types.Info
+	goVersion                string
+	lastLine                 token.Position
+	lastMsg                  string
+	lastDropped              bool
 }
 
 func newCheckerDiagnostics(fset *token.FileSet, files []*ast.File, info *types.Info, checker checkerOptions) *checkerDiagnostics {
-	d := &checkerDiagnostics{gcStderr: checker.gcStderr(), fset: fset, files: files, info: info, goVersion: checker.goVersion, postDecls: map[token.Pos]bool{}}
+	d := &checkerDiagnostics{gcStderr: checker.gcStderr(), fset: fset, files: files, info: info, goVersion: checker.goVersion, goTypesParserDiagnostics: checker.goTypesParserDiagnostics, postDecls: map[token.Pos]bool{}}
 	if !checker.checkerBranchErrors {
 		d.anchors = map[token.Pos]bool{}
 	}
@@ -230,7 +246,7 @@ func (d *checkerDiagnostics) report(err error) {
 		return
 	}
 	d.lastDropped = false
-	if ok && (d.anchors[e.Pos] || e.Soft && d.postDecls[e.Pos]) {
+	if ok && (d.anchors[e.Pos] || (!d.goTypesParserDiagnostics && e.Soft && d.postDecls[e.Pos])) {
 		d.dropped++
 		d.lastDropped = true
 		return
