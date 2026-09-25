@@ -184,7 +184,7 @@ func (nativeBashPPEvaluator) Resolve(ctx context.Context, req bashPPEvalRequest,
 	if err := json.Unmarshal(out.Bytes(), &info); err != nil {
 		return "", fmt.Errorf("go list %q: %w", path, err)
 	}
-	if info.Standard && !syntax.BashPPStdlibImportAllowed(path) && !bashPPIdentityAdmitsInternal(req, path) {
+	if info.Standard && !syntax.BashPPStdlibImportAllowed(path) && !bashPPIdentityAdmitsInternal(req, path) && !bashPPReviewedCompilerImport(req, path) {
 		return "", fmt.Errorf("bash++ import %q: package is not in the reviewed Go standard library", path)
 	}
 	if !syntax.BashPPValidIdent(info.Name) {
@@ -231,11 +231,42 @@ func bashPPIdentityAdmitsInternal(req bashPPEvalRequest, path string) bool {
 	return syntax.BashPPInternalImportVisible(req.ImportPath, path, req.TestMain)
 }
 
+// bashPPReviewedCompilerImport is the deliberately tiny reviewed exception for
+// the Go 1.27.1 compiler package roots exercised on the G1 Linux leaf. Both
+// paths are standard packages owned by the pinned SDK's src/cmd tree, but are
+// intentionally absent from the public standard-library inventory:
+//
+//   - cmd/compile imports its host architecture package; and
+//   - cmd/compile/internal/base reaches the cmd-vendored telemetry counter.
+//
+// A test-root identity is accepted only when the backend has asserted the
+// test-main fact. This does not admit cmd/* generally, other architectures,
+// other vendored telemetry packages, or a sibling command tree.
+func bashPPReviewedCompilerImport(req bashPPEvalRequest, path string) bool {
+	compiler := req.ImportPath == "cmd/compile" || strings.HasPrefix(req.ImportPath, "cmd/compile/")
+	if !compiler && !(req.TestMain && req.ImportPath == "cmd/compile.test") {
+		return false
+	}
+	switch path {
+	case "cmd/compile/internal/amd64", "cmd/vendor/golang.org/x/telemetry/counter":
+		return true
+	}
+	return false
+}
+
 // validateBashPPImportVisibilityFor applies the request's declared identity
 // to internal-package visibility (cmd/go's identity rule) and the directory
 // rule to everything else — traversal, vendor and, for a request without an
 // identity, internal packages as before.
 func validateBashPPImportVisibilityFor(req bashPPEvalRequest, packageDir, importPath string) error {
+	// The exact reviewed compiler exceptions have no source directory below
+	// req.Dir: test units are checked from a scratch tree. Their ownership was
+	// decided above from the declared compiler identity and exact pinned path,
+	// so applying the directory vendor rule here would incorrectly reject the
+	// cmd-vendored dependency.
+	if bashPPReviewedCompilerImport(req, importPath) {
+		return nil
+	}
 	if req.ImportPath == "" {
 		return validateBashPPImportVisibility(req.Dir, packageDir, importPath)
 	}

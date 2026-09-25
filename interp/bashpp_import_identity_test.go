@@ -49,6 +49,12 @@ func TestBashPPResolveIdentityAdmitsInternalStdlib(t *testing.T) {
 		{"nothing wider: a non-internal unreviewed path", "cmd/compile/internal/foo", false, "cmd/internal/objabi", "objabi", ""},
 		{"nothing wider: a sibling command tree", "cmd/compile/internal/foo", false, "cmd/link/internal/ld", "", "reviewed Go standard library"},
 		{"nothing wider: another command's internal tree", "cmd/compile/internal/foo", false, "cmd/go/internal/base", "", "reviewed Go standard library"},
+		{"reviewed compiler root architecture import", "cmd/compile.test", true, "cmd/compile/internal/amd64", "amd64", ""},
+		{"reviewed compiler package vendored telemetry", "cmd/compile/internal/base.test", true, "cmd/vendor/golang.org/x/telemetry/counter", "counter", ""},
+		{"compiler test suffix without asserted fact", "cmd/compile.test", false, "cmd/compile/internal/amd64", "", "reviewed Go standard library"},
+		{"sibling command cannot use compiler architecture", "cmd/link.test", true, "cmd/compile/internal/amd64", "", "reviewed Go standard library"},
+		{"compiler cannot use sibling architecture", "cmd/compile.test", true, "cmd/compile/internal/arm64", "", "reviewed Go standard library"},
+		{"compiler cannot use sibling vendored telemetry", "cmd/compile/internal/base.test", true, "cmd/vendor/golang.org/x/telemetry/counter/countertest", "", "reviewed Go standard library"},
 		{"reviewed packages need no identity", "", false, "strings", "strings", ""},
 		{"reviewed packages are unaffected by an identity", "example.com/app", false, "strings", "strings", ""},
 	}

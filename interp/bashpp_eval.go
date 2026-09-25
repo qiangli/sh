@@ -245,7 +245,7 @@ func (e *policyBashPPEvaluator) Resolve(ctx context.Context, req bashPPEvalReque
 	// Sprint 165 D8: an INTERNAL standard-library package outside the
 	// reviewed inventory is admitted for a declared identity that cmd/go's
 	// rule admits it for (bashPPIdentityAdmitsInternal); nothing else moves.
-	if capability == capUnreviewedStdlib && bashPPIdentityAdmitsInternal(req, path) {
+	if capability == capUnreviewedStdlib && (bashPPIdentityAdmitsInternal(req, path) || bashPPReviewedCompilerImport(req, path)) {
 		capability = capReviewedStdlib
 	}
 	if bashPPPolicyFor(capability) != policyToolchain {
