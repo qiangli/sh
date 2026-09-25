@@ -1095,7 +1095,8 @@ func (r *Runner) lookupVarUnhosted(name string) expand.Variable {
 		}
 	case "BASH_ARGC":
 		vr.Kind = expand.Indexed
-		if len(r.callStack) > 0 {
+		extdebug, _ := r.bashOptByName("extdebug")
+		if extdebug != nil && *extdebug && len(r.callStack) > 0 {
 			counts := make([]string, len(r.callStack))
 			for i := range r.callStack {
 				f := r.callStack[len(r.callStack)-1-i]
@@ -1105,7 +1106,8 @@ func (r *Runner) lookupVarUnhosted(name string) expand.Variable {
 		}
 	case "BASH_ARGV":
 		vr.Kind = expand.Indexed
-		if len(r.callStack) > 0 {
+		extdebug, _ := r.bashOptByName("extdebug")
+		if extdebug != nil && *extdebug && len(r.callStack) > 0 {
 			var argv []string
 			for i := len(r.callStack) - 1; i >= 0; i-- {
 				args := r.callStack[i].args

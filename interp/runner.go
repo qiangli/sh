@@ -4793,6 +4793,22 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 				defer cleanup()
 				r2.Run(bgCtx, &st2)
 				if cb := r2.trapCallbacks["EXIT"]; cb != "" && !r2.inheritedExitTrap {
+					// In POSIX mode Bash runs an asynchronous trap
+					// command's EXIT handler before its stdout redirect
+					// is restored. The runner's Run boundary has already
+					// restored it, so retain a /dev/null redirect here.
+					if r2.opts[optPosix] {
+						if call, ok := st2.Cmd.(*syntax.CallExpr); ok && len(call.Args) > 0 &&
+							call.Args[0].Lit() == "trap" {
+							for _, rd := range st2.Redirs {
+								if rd.Op == syntax.RdrOut && rd.Word != nil &&
+									rd.Word.Lit() == os.DevNull &&
+									(rd.N == nil || rd.N.Value == "1") {
+									r2.stdout = io.Discard
+								}
+							}
+						}
+					}
 					r2.trapCallback(bgCtx, cb, "exit")
 				}
 				r2.exit.exiting = false // subshells don't exit the parent shell

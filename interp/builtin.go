@@ -1606,7 +1606,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			} else if rest, ok := strings.CutPrefix(arg, "g"); ok {
 				bg = r.resolveJobArg(arg)
 				if bg == nil {
-					return failf(1, "wait: pid %s is not a child of this shell\n", "g"+rest)
+					return failf(127, "wait: pid %s is not a child of this shell\n", "g"+rest)
 				}
 			} else {
 				// bash only treats an argument as a PID when it begins
@@ -2111,6 +2111,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			// disown the current (most recent) job.
 			if jobs := r.realJobs(); len(jobs) > 0 {
 				r.removeJob(jobs[len(jobs)-1])
+			} else {
+				r.errf("%sdisown: current: no such job\n", r.bashErrPrefix(pos))
+				exit.code = 1
 			}
 		default:
 			var remove []*bgProc
