@@ -3318,6 +3318,9 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 				r.expandErr(fmt.Errorf("%s: line %d: %s: %s",
 					prefix, as.Value.Pos().Line(), s, err))
 				r.exit.code = 1
+				if r.bashCompatErrors && !r.interactiveShell {
+					r.exit.exiting = true
+				}
 			}
 			rhs, err := arithEval(s)
 			if err != nil {

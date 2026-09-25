@@ -1242,8 +1242,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			exit.exiting = true
 			return exit
 		default:
-			r.breakEnclosing = 1
-			return failf(2, "%s: too many arguments\n", name)
+			// Bash exits a non-interactive script on a malformed break or
+			// continue invocation, even outside POSIX mode.
+			exit = failf(2, "%s: too many arguments\n", name)
+			exit.exiting = !r.interactiveShell
+			return exit
 		}
 	case "pwd":
 		evalSymlinks := false

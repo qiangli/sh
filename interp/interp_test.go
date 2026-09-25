@@ -835,7 +835,7 @@ var runTests = []runTest{
 	},
 	{
 		"for i in a b c; do echo $i; continue 1 2 3; done; echo --",
-		"a\ncontinue: too many arguments\n--\n",
+		"a\nbash: line 1: continue: too many arguments\nexit status 2",
 	},
 	{
 		"echo pipestatus ${PIPESTATUS[@]}\nfalse\necho pipestatus ${PIPESTATUS[@]}\nexit 55 | (exit 44)\necho pipestatus ${PIPESTATUS[@]}\ntrue\necho pipestatus ${PIPESTATUS[@]}",
@@ -1239,7 +1239,9 @@ var runTests = []runTest{
 			"x=outer outer; printf 'after=%s\\n' \"$x\"",
 		"inside=inner\nafter=inner\n",
 	},
-	{"f() { echo bad; } 3>/dev/null/abc && f; echo status:$?", "open /dev/null/abc: not a directory\nstatus:1\n"},
+	// ENOTDIR text comes from the OS locale; this spelling is GNU Bash 5.3
+	// with the confirm harness's C.UTF-8 locale on macOS and Linux.
+	{"f() { echo bad; } 3>/dev/null/abc && f; echo status:$?", "bash: line 1: /dev/null/abc: Not a directory\nstatus:1\n"},
 	{"f() { echo hi; } >out; echo def:$?; f; echo after; printf 'file:'; cat out", "def:0\nafter\nfile:hi\n"},
 	{`f() { local v=x; unset v; declare -p v; }; v=g; f; v=t f`, "declare -- v\ndeclare -x v\n"},
 	{`a=bcde; f1() { a=3 readonly a; echo f1:$a; }; a=7 f1; echo "global:$a"; set -o posix; a=7 f1; echo "global:$a"`, "f1:3\nglobal:bcde\nf1:3\nglobal:3\n"},
@@ -1669,11 +1671,11 @@ var runTests = []runTest{
 	},
 	{
 		`declare -A A; for k in ']' '*' '@'; do declare A[$k]=X; done; declare -p A`,
-		"declare: `A[]]=X': not a valid identifier\ndeclare -A A=([\"*\"]=\"X\" [\"@\"]=\"X\" )\n",
+		"bash: line 1: declare: `A[]]=X': not a valid identifier\ndeclare -A A=([\"*\"]=\"X\" [\"@\"]=\"X\" )\n",
 	},
 	{
 		`declare -A A; for k in ']' '*' '@'; do declare "A[$k]=X"; done; declare -p A`,
-		"declare: `A[]]=X': not a valid identifier\ndeclare -A A=([\"*\"]=\"X\" [\"@\"]=\"X\" )\n",
+		"bash: line 1: declare: `A[]]=X': not a valid identifier\ndeclare -A A=([\"*\"]=\"X\" [\"@\"]=\"X\" )\n",
 	},
 	{
 		`declare -A A; declare A["foo[bar]"]=X; echo ${!A[@]} ${A["foo[bar]"]}`,
@@ -1912,19 +1914,19 @@ var runTests = []runTest{
 	},
 	{
 		`command readonly invalid-name; echo status:$?`,
-		"readonly: invalid name \"invalid-name\"\nstatus:1\n",
+		"bash: line 1: readonly: `invalid-name': not a valid identifier\nstatus:1\n",
 	},
 	{
 		`command export invalid-name; echo status:$?`,
-		"export: invalid name \"invalid-name\"\nstatus:1\n",
+		"bash: line 1: export: `invalid-name': not a valid identifier\nstatus:1\n",
 	},
 	{
 		`command readonly non-identifier invalid+ident; echo status:$?`,
-		"readonly: invalid name \"non-identifier\"\nreadonly: invalid name \"invalid+ident\"\nstatus:1\n",
+		"bash: line 1: readonly: `non-identifier': not a valid identifier\nbash: line 1: readonly: `invalid+ident': not a valid identifier\nstatus:1\n",
 	},
 	{
 		`command export non-identifier invalid+ident; echo status:$?`,
-		"export: invalid name \"non-identifier\"\nexport: invalid name \"invalid+ident\"\nstatus:1\n",
+		"bash: line 1: export: `non-identifier': not a valid identifier\nbash: line 1: export: `invalid+ident': not a valid identifier\nstatus:1\n",
 	},
 	{
 		`export e=1; declare -p e`,
@@ -2843,7 +2845,7 @@ var runTests = []runTest{
 	},
 	{
 		"echo foo >a; set -C; echo bar >a; cat a",
-		"a: cannot overwrite existing file\nfoo\n",
+		"bash: line 1: a: cannot overwrite existing file\nfoo\n",
 	},
 	{
 		"echo foo >a; set -C; echo bar >| a; cat a",
@@ -3032,7 +3034,7 @@ var runTests = []runTest{
 	{"kill -l | head -1", " 1) SIGHUP        2) SIGINT        3) SIGQUIT       4) SIGILL        5) SIGTRAP      \n"},
 	{"diff <(kill -l) <(trap -l)", ""},
 	{"kill -l KILL INT", "9\n2\n"},
-	{"set -o posix; set -- $(kill -l); echo \"$1 $2 $3 $4 $5\"; kill -SIGTERM 999999; echo rc=$?", "HUP INT QUIT ILL TRAP\nkill: SIGTERM: invalid signal specification\nrc=1\n"},
+	{"set -o posix; set -- $(kill -l); echo \"$1 $2 $3 $4 $5\"; kill -SIGTERM 999999; echo rc=$?", "HUP INT QUIT ILL TRAP\nbash: line 1: kill: SIGTERM: invalid signal specification\nrc=1\n"},
 
 	// setsid / nohup — usage / lookup errors. Real-subprocess delivery is
 	// covered in builtin_proc_test.go (unix-only).
@@ -3597,14 +3599,14 @@ var runTests = []runTest{
 	// A genuinely-unset element still errors, set array or not.
 	{"set -u; a[0]=x; echo \"${a[5]}\"; echo after", "a[5]: unbound variable\nexit status 1 #JUSTERR"},
 	{"set -u; declare -A m; m[k]=v; echo \"${m[no]}\"; echo after", "m[no]: unbound variable\nexit status 1 #JUSTERR"},
-	{"a=b b=a; echo $((a + 7)); echo after", "b: expression recursion level exceeded (error token is \"b\")\nafter\n"},
-	{"x=4+; declare -i x; x+=7 y=4; echo x=$x y=$y", "bash: line 1: 4+: 1:2: `+` must be followed by an expression\nx=4+ y=\n"},
-	{"x=8; echo $((--x++)); echo after", "++: assignment requires lvalue (error token is \"++ \")\nafter\n"},
-	{"HOME=/usr/homes/chet; echo \"${HOME:`echo }`}\"; echo after", "arithmetic syntax error: operand expected (error token is \"}\")\nafter\n"},
-	{"foo=1; echo $(( 'foo' )); echo after", "arithmetic syntax error: operand expected (error token is \"'foo' \")\nafter\n"},
-	{"set -- a b c d op; echo ${!#}; v=bad-var; echo ${!v}; echo after", "op\nbad-var: invalid variable name\nafter\n"},
+	{"a=b b=a; echo $((a + 7)); echo after", "bash: line 1: b: expression recursion level exceeded (error token is \"b\")\nexit status 1"},
+	{"x=4+; declare -i x; x+=7 y=4; echo x=$x y=$y", "bash: line 1: 4+: arithmetic syntax error: operand expected (error token is \"+\")\nexit status 1"},
+	{"x=8; echo $((--x++)); echo after", "bash: line 1: --x++: ++: assignment requires lvalue (error token is \"++\")\nexit status 1"},
+	{"HOME=/usr/homes/chet; echo \"${HOME:`echo }`}\"; echo after", "bash: line 1: HOME: }: arithmetic syntax error: operand expected (error token is \"}\")\nexit status 1"},
+	{"foo=1; echo $(( 'foo' )); echo after", "bash: line 1: 'foo' : arithmetic syntax error: operand expected (error token is \"'foo' \")\nexit status 1"},
+	{"set -- a b c d op; echo ${!#}; v=bad-var; echo ${!v}; echo after", "op\nbash: line 1: bad-var: invalid variable name\nexit status 1"},
 	{"set -- a 'b c' d; foo=@; printf '<%s>\\n' ${!foo}; printf 'Q<%s>\\n' \"${!foo}\"", "<a>\n<b>\n<c>\n<d>\nQ<a>\nQ<b c>\nQ<d>\n"},
-	{"set -- a b c d e; echo ${6=arg6}; echo after", "$6: cannot assign in this way\nafter\n"},
+	{"set -- a b c d e; echo ${6=arg6}; echo after", "bash: line 1: $6: cannot assign in this way\nexit status 1"},
 	// `${#OP}` with an operand is the special parameter `$#` followed by
 	// an expansion operator, not a malformed length operator: `=` leaves
 	// the (always-set) count untouched, `+` substitutes the alternate, and
@@ -3624,24 +3626,24 @@ var runTests = []runTest{
 	{"a[0]= a[1]=x; printf '<%s>\\n' ${a[@]:+y}", "<y>\n"},
 	{"set -- '' ''; echo \"<${*:-X}>\"", "<X>\n"},
 	{"_QUANTITY= _QUOTA= _QUOTE= _QUILL= _QUEST= _QUART=; IFS=-; printf '<%s>\\n' \"${!_Q*}\"; printf '<%s>\\n' \"${!_Q@}\"", "<_QUANTITY-_QUART-_QUEST-_QUILL-_QUOTA-_QUOTE>\n<_QUANTITY>\n<_QUART>\n<_QUEST>\n<_QUILL>\n<_QUOTA>\n<_QUOTE>\n"},
-	{"_Q=1; echo \"${!_Q* }\"; echo after", "bad substitution\nafter\n"},
-	{"set -- a b; echo ${!1*}; echo ${!@*}; echo after", "bad substitution\nbad substitution\nafter\n"},
-	// A non-fatal bad substitution fails the command with $? = 1.
-	{"echo ${#+} second; echo after: $?", "bad substitution\nafter: 1\n"},
+	{"_Q=1; echo \"${!_Q* }\"; echo after", "bash: line 1: ${!_Q* }: bad substitution\nexit status 1"},
+	{"set -- a b; echo ${!1*}; echo ${!@*}; echo after", "bash: line 1: ${!1*}: bad substitution\nexit status 1"},
+	// An invalid substitution terminates a non-interactive Bash script.
+	{"echo ${#+} second; echo after: $?", "bash: line 1: ${#+}: bad substitution\nexit status 1"},
 	// Malformed expansions which bash accepts at parse time and
 	// rejects at expansion time.
-	{"echo ${x!y} second; echo after: $?", "bad substitution\nafter: 1\n"},
-	{"echo ${#foo%} second; echo after: $?", "bad substitution\nafter: 1\n"},
+	{"echo ${x!y} second; echo after: $?", "bash: line 1: ${x!y}: bad substitution\nexit status 1"},
+	{"echo ${#foo%} second; echo after: $?", "bash: line 1: ${#foo%}: bad substitution\nexit status 1"},
 	// Bash does not support zsh-style nested ${...}/$(...); it parses
 	// them at face value and rejects them at expansion time.
-	{`c=""; echo ${c//${$(($#-1))}/x/}; echo after: $?`, "bad substitution\nafter: 1\n"},
-	{"echo ${$(cmd)} second; echo after: $?", "bad substitution\nafter: 1\n"},
-	// Indirection through an unset variable: fatal when bare (covered
-	// above), non-fatal with $? = 1 when a default-style op follows.
-	{"echo ${!var:-unset}; echo after: $?", "var: invalid indirect expansion\nafter: 1\n"},
-	{"echo ${!var+set}; echo after: $?", "var: invalid indirect expansion\nafter: 1\n"},
-	// An invalid indirection target name fails with $? = 1.
-	{"x=-3; echo ${!x}; echo after: $?", "-3: invalid variable name\nafter: 1\n"},
+	{`c=""; echo ${c//${$(($#-1))}/x/}; echo after: $?`, "bash: line 1: ${$(($#-1))}: bad substitution\nexit status 1"},
+	{"echo ${$(cmd)} second; echo after: $?", "bash: line 1: ${$(cmd)}: bad substitution\nexit status 1"},
+	// Indirection through an unset variable terminates a non-interactive
+	// Bash script, including when a default-style operator follows.
+	{"echo ${!var:-unset}; echo after: $?", "bash: line 1: var: invalid indirect expansion\nexit status 1"},
+	{"echo ${!var+set}; echo after: $?", "bash: line 1: var: invalid indirect expansion\nexit status 1"},
+	// An invalid indirection target name terminates the script.
+	{"x=-3; echo ${!x}; echo after: $?", "bash: line 1: -3: invalid variable name\nexit status 1"},
 	// A blank (whitespace-only) subscript evaluates as index 0 for
 	// indexed arrays and misses every associative array key.
 	{"b[0]=4; echo ${b[   ]}; echo after: $?", "4\nafter: 0\n"},
@@ -3782,7 +3784,7 @@ var runTests = []runTest{
 	},
 	{
 		"let; echo $?",
-		"let: expression expected\n1\n",
+		"bash: line 1: let: expression expected\n1\n",
 	},
 	{
 		"let 3==4",
@@ -3806,7 +3808,7 @@ var runTests = []runTest{
 	},
 	{
 		"a=b b=a; echo $(($a))",
-		"a: expression recursion level exceeded (error token is \"a\")\n",
+		"bash: line 1: a: expression recursion level exceeded (error token is \"a\")\nexit status 1",
 	},
 	{
 		"let x=3; let 3/0; ((3/0)); echo $((x/y)); let x/=0",
@@ -4231,11 +4233,11 @@ var runTests = []runTest{
 	},
 	{
 		`(set -o posix; for invalid-name in a; do echo body; done; echo after); echo outer:$?`,
-		"`invalid-name': not a valid identifier\nouter:2\n",
+		"bash: line 1: `invalid-name': not a valid identifier\nouter:2\n",
 	},
 	{
 		`bad_select() { select $1 in a b c; do echo $REPLY; done; }; bad_select "a b"; echo status:$?`,
-		"`$1': not a valid identifier\nstatus:1\n",
+		"bash: line 1: `$1': not a valid identifier\nstatus:1\n",
 	},
 	{
 		`opts=(foo bar baz); select opt in ${opts[@]}; do echo "Selected $opt"; break; done <<< 99`,
@@ -5144,11 +5146,11 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	// builtins fails with status 1 and keeps the old value.
 	{"a='1  *  2'; command command export A=$a; printf \"%s\\n\" \"$A\"", "1  *  2\n"},
 	{"a='1  *  2'; command command readonly A=$a; printf \"%s\\n\" \"$A\"", "1  *  2\n"},
-	{"readonly v=a; command export v=foo; echo after: $?; echo $v", "v: readonly variable\nafter: 1\na\n"},
-	{"readonly v=a; command readonly v=foo; echo after: $?; echo $v", "v: readonly variable\nafter: 1\na\n"},
+	{"readonly v=a; command export v=foo; echo after: $?; echo $v", "bash: line 1: v: readonly variable\nafter: 1\na\n"},
+	{"readonly v=a; command readonly v=foo; echo after: $?; echo $v", "bash: line 1: v: readonly variable\nafter: 1\na\n"},
 	// POSIX mode implies shift_verbose.
-	{"set -o posix; command shift 2; echo after: $?", "shift: 2: shift count out of range\nafter: 1\n"},
-	{"set -o posix; command shift; echo after: $?", "shift: shift count out of range\nafter: 1\n"},
+	{"set -o posix; command shift 2; echo after: $?", "bash: line 1: shift: 2: shift count out of range\nafter: 1\n"},
+	{"set -o posix; command shift; echo after: $?", "bash: line 1: shift: shift count out of range\nafter: 1\n"},
 	{"readonly -p | grep '^declare -r SHELLOPTS='", "declare -r SHELLOPTS=\"braceexpand:hashall:interactive-comments\"\n"},
 	{
 		"a=b; a=c; echo $a; readonly a; a=d",
@@ -5160,7 +5162,7 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	},
 	{
 		"VAR=4; readonly VAR; VAR=7 :; echo $VAR",
-		"VAR: readonly variable\n4\n",
+		"bash: line 1: VAR: readonly variable\n4\n",
 	},
 	{
 		"set -o posix; VAR=4; readonly VAR; VAR=7 :; echo after",
@@ -5176,7 +5178,7 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	},
 	{
 		"VAR=4; readonly VAR; VAR=7 echo ok; echo status:$?",
-		"VAR: readonly variable\nok\nstatus:0\n",
+		"bash: line 1: VAR: readonly variable\nok\nstatus:0\n",
 	},
 	{
 		"set -o posix; VAR=4; readonly VAR; VAR=7 echo ok; echo after",
@@ -5196,7 +5198,7 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	},
 	{
 		"f() { test -v 'var[0]'; echo $?; }; var[0]=X f",
-		"`var[0]': not a valid identifier\n1\n",
+		"bash: line 1: `var[0]': not a valid identifier\n1\n",
 	},
 	{
 		"f() { local -i a; a+=3; echo $a; }; a=4 b=7 f; echo after: ${a-unset}",
@@ -5707,7 +5709,7 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	{"umask 022; umask u+w=r+x; umask -S", "u=rx,g=rx,o=rx\n"},
 	{"umask 022; umask g+u,o+rwx-u; umask -S", "u=rwx,g=rwx,o=\n"},
 	{"umask 022; umask +xwr; umask -S", "u=rwx,g=rwx,o=rwx\n"},
-	{"umask 999", "umask: 999: octal number out of range\nexit status 1"},
+	{"umask 999", "bash: line 1: umask: 999: octal number out of range\nexit status 1"},
 	{"umask -i", "umask: -i: invalid option\numask: usage: umask [-p] [-S] [mode]\nexit status 2 #JUSTERR"},
 	{"umask 022; umask --; umask", "0022\n0022\n"},
 
@@ -6621,6 +6623,13 @@ func init() {
 	if bits.UintSize == 64 {
 		runTests = append(runTests, runTests64bit...)
 	}
+	// GNU Bash 5.3 treats an invalid -o/+o name as a fatal special
+	// builtin error in non-interactive POSIX mode. Flag forms stay valid.
+	runTests = append(runTests,
+		runTest{`set -o posix; set -o a; echo after`, "bash: line 1: set: a: invalid option name\nexit status 2"},
+		runTest{`set -o posix; set +o f; echo after`, "bash: line 1: set: f: invalid option name\nexit status 2"},
+		runTest{`set -a; set +f; [[ -o allexport ]] && [[ ! -o noglob ]]`, ""},
+	)
 }
 
 // ln -s: wine doesn't implement symlinks; see https://bugs.winehq.org/show_bug.cgi?id=44948
@@ -6689,7 +6698,17 @@ func TestRunnerRun(t *testing.T) {
 
 			tdir := t.TempDir()
 			var cb concBuffer
+			// Oracle cases with a Bash stdin prefix exercise the runner's
+			// compatible diagnostic mode. Source bytes are needed to quote
+			// malformed expansion text exactly as Bash prints it.
+			var bashSource []byte
+			if strings.Contains(c.want, "bad substitution") ||
+				strings.Contains(c.want, "assignment requires lvalue") {
+				bashSource = []byte(c.in)
+			}
 			r, err := interp.New(interp.Dir(tdir), interp.StdIO(nil, &cb, &cb),
+				interp.WithBashCompatErrors(strings.Contains(c.want, "bash: line 1: ")),
+				interp.WithBashSource(bashSource),
 				// TODO: why does this make some tests hang?
 				// interp.Env(expand.ListEnviron(append(os.Environ(),
 				// 	"foo_NULL_BAR=foo\x00bar")...)),
@@ -6707,9 +6726,6 @@ func TestRunnerRun(t *testing.T) {
 			// Some builtins like "pushd" can show absolute paths as part of error messages.
 			// Allow a very simple search-and-replace for the equivalent to "$PWD/a".
 			want := strings.ReplaceAll(c.want, "ABS_PATH_A", filepath.Join(tdir, "a"))
-			// GNU Bash's set diagnostics include its stdin script prefix.
-			// This Runner omits it without WithBashCompatErrors.
-			want = strings.ReplaceAll(want, "bash: line 1: set: ", "set: ")
 
 			if i := strings.Index(want, " #"); i >= 0 {
 				want = want[:i]

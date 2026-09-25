@@ -547,17 +547,20 @@ func (r *Runner) expandErr(err error) {
 		}
 		return
 	case errors.As(err, &badSubst):
-		// Bash fails the expansion with $? = 1 and keeps running;
-		// POSIX mode makes it fatal (errors6.sub, run 2).
+		// In a non-interactive Bash script, malformed parameter expansion
+		// stops the shell after reporting the offending expression.
 		r.exit.code = 1
 		r.lastExpandExit = exitStatus{code: 1}
-		if r.opts[optPosix] {
+		if r.opts[optPosix] || (r.bashCompatErrors && !r.interactiveShell) {
 			r.exit.exiting = true
 		}
 		return
 	case strings.Contains(errMsg, "bad substitution"):
 		r.exit.code = 1
 		r.lastExpandExit = exitStatus{code: 1}
+		if r.bashCompatErrors && !r.interactiveShell {
+			r.exit.exiting = true
+		}
 		return
 	case strings.Contains(errMsg, "cannot assign in this way"):
 		// Bash: assigning to a positional or special parameter via
@@ -576,11 +579,14 @@ func (r *Runner) expandErr(err error) {
 		return
 	case strings.Contains(errMsg, "invalid variable name"),
 		strings.Contains(errMsg, "not a valid identifier"):
-		// errors6.sub lines 40-56 and nameref default-assignment to an
-		// empty-target nameref (`${r=}`, `${r:=/}`): bash prints the
-		// diagnostic, sets $? = 1, and keeps running (even in POSIX mode).
+		// An invalid indirection target in a non-interactive Bash script
+		// terminates the shell after the diagnostic. The library's legacy
+		// error mode retains its previous continuation behavior.
 		r.exit.code = 1
 		r.lastExpandExit = exitStatus{code: 1}
+		if r.bashCompatErrors && !r.interactiveShell {
+			r.exit.exiting = true
+		}
 		return
 	case strings.Contains(errMsg, "no match: "):
 		r.exit.code = 1
@@ -596,9 +602,13 @@ func (r *Runner) expandErr(err error) {
 		return
 	case errors.As(err, &indirErr):
 		if indirErr.NonFatal {
-			// `${!var:-def}` with var unset: $? = 1, keep running.
+			// `${!var:-def}` with var unset fails the expansion. A
+			// non-interactive Bash script exits after this error.
 			r.exit.code = 1
 			r.lastExpandExit = exitStatus{code: 1}
+			if r.bashCompatErrors && !r.interactiveShell {
+				r.exit.exiting = true
+			}
 			return
 		}
 		// Bare `${!var}` with var unset is fatal in bash.
@@ -998,6 +1008,11 @@ func (r *Runner) bashArithmError(expr syntax.ArithmExpr, err error, command bool
 	}
 	if strings.Contains(bashMsg, "expression recursion level exceeded") {
 		return fmt.Errorf("%s%s", r.bashErrPrefix(r.curStmtPos), bashMsg)
+	}
+	if !command && strings.Contains(bashMsg, "assignment requires lvalue") {
+		// Bash omits the parser's trailing token space for an invalid
+		// increment in an arithmetic expansion such as $((--x++)).
+		bashMsg = strings.ReplaceAll(bashMsg, `error token is "++ "`, `error token is "++"`)
 	}
 	if strings.Contains(bashMsg, "not a valid identifier") {
 		if command {
@@ -5789,6 +5804,19 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		args = r.bashPPRewriteCommandArgs(args)
 		fields, expandErr := expand.Fields(r.ecfg, args...)
 		r.expandErr(expandErr)
+		if expandErr != nil && r.bashCompatErrors && !r.interactiveShell {
+			var arithErr *expand.ArithmError
+			if errors.As(expandErr, &arithErr) &&
+				(arithErr.Standalone || strings.Contains(expandErr.Error(), "arithmetic syntax error")) {
+				// Bash terminates a non-interactive script after an
+				// arithmetic expansion error in a command word.
+				r.exit.code = 1
+				r.exit.exiting = true
+			}
+		}
+		if r.exit.exiting {
+			return
+		}
 		if r.bashPPChanBoundary {
 			for _, field := range fields {
 				if r.bashPPHasRuntimeHandle(field) {
