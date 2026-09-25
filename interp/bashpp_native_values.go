@@ -88,21 +88,31 @@ func (r *Runner) bashPPGoSourceNativeFunc(name string) bool {
 	if !r.bashPPGoSource || r.bashPPGoSourceFile == nil {
 		return false
 	}
+	if r.bashPPNativeFuncNames == nil || r.bashPPNativeFuncNamesFile != r.bashPPGoSourceFile {
+		r.bashPPNativeFuncNames = r.bashPPBuildNativeFuncNames()
+		r.bashPPNativeFuncNamesFile = r.bashPPGoSourceFile
+	}
+	return r.bashPPNativeFuncNames[name]
+}
+
+// bashPPBuildNativeFuncNames collects, once per source file, the unqualified
+// names that bashPPGoSourceNativeFunc recognizes. The names derive only from
+// the file's static declarations and the mapped-package metadata, so the set
+// is stable for the life of a given bashPPGoSourceFile. The returned map is
+// never nil, so a program with no companions still caches the empty answer.
+func (r *Runner) bashPPBuildNativeFuncNames() map[string]bool {
+	names := make(map[string]bool)
 	_, funcs, _, _, _ := r.bashPPGoSourceNativeCompanions(r.bashPPGoSourceSourceDir())
 	for _, fn := range funcs {
-		if fn.Name == name {
-			return true
-		}
+		names[fn.Name] = true
 	}
 	mapped, _ := r.bashPPGoSourceMappedCompanions()
 	for _, pkg := range mapped {
 		for _, fn := range pkg.Funcs {
-			if fn.RuntimeName == name {
-				return true
-			}
+			names[fn.RuntimeName] = true
 		}
 	}
-	return false
+	return names
 }
 func (r *Runner) bashPPBridgeCall(ctx context.Context, call *syntax.BashPPCall) ([]bashPPBridgeValue, error) {
 	// A reflected method value of an original receiver runs here; see

@@ -195,6 +195,27 @@ type Runner struct {
 	// They persist with the session and are cloned for subshell isolation.
 	bashPPTypes   map[string]bashPPType
 	bashPPMethods map[string]map[string]*bashPPFunc
+	// bashPPSelectionCache memoizes breadth-first Go selector resolution
+	// ([Runner.bashPPResolveSelectionIn]). The lookup is a pure function of
+	// the runner's static type and method tables and the selector inputs, but
+	// it reallocates edge slices, ancestor maps and struct-field views on
+	// every field or method access — the dominant cost of an interpreted
+	// struct-heavy program. The cache is deliberately NOT copied into a
+	// subshell or Reset clone: those rebuild bashPPMethods into fresh
+	// *bashPPFunc objects, so a shared entry would hand back a stale method,
+	// and a nil map is lazily rebuilt against the clone's own tables. It is
+	// only ever touched by its owning Runner's goroutine.
+	bashPPSelectionCache map[bashPPSelectionCacheKey]bashPPSelection
+	// bashPPNativeFuncNames memoizes the set of unqualified names that resolve
+	// to a native (bodyless) companion function or a mapped-companion runtime
+	// symbol for bashPPNativeFuncNamesFile. bashPPBridgeHandles consults it to
+	// classify every single-identifier call; recomputing it rescanned every
+	// program statement — and could os.ReadDir the source directory — on each
+	// such call, a per-call cost that grows with program size. It is keyed by
+	// the source File so it self-invalidates when Run swaps bashPPGoSourceFile,
+	// and is not copied into a subshell or Reset clone (a nil set is rebuilt).
+	bashPPNativeFuncNames     map[string]bool
+	bashPPNativeFuncNamesFile *syntax.File
 	// bashPPTypeParamArgs binds the type parameter names of the generic
 	// function or method whose body is executing RIGHT NOW to their type
 	// arguments. It is frame-scoped rather than stacked: entering any frame

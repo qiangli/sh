@@ -181,15 +181,51 @@ func (r *Runner) bashPPResolveSelection(root syntax.BashPPTypeExpr, name string,
 	return r.bashPPResolveSelectionIn(root, name, methods, addressable, pkg)
 }
 
-// bashPPResolveSelectionIn is bashPPResolveSelection for a selector spelled
-// in a given linked package ("" is the program's own). An unexported method
-// name is an identifier of its package: when the shallowest depth holds
+// bashPPSelectionCacheKey identifies one memoized selector resolution. Every
+// concrete [syntax.BashPPTypeExpr] is a pointer type, so the interface value is
+// comparable and keys on the resolved type node's identity — the same node
+// always denotes the same type (a function-local type shadowing a name is a
+// distinct node, so distinct types never collide under a shared spelling).
+type bashPPSelectionCacheKey struct {
+	root        syntax.BashPPTypeExpr
+	name        string
+	pkg         string
+	methods     bool
+	addressable bool
+}
+
+// bashPPResolveSelectionIn memoizes bashPPResolveSelectionUncached. Resolution
+// reallocates edge slices, ancestor maps and struct-field views on every call
+// and its result depends only on the static type/method tables and these
+// inputs, so it is cached per Runner. A nil root cannot be keyed (its dynamic
+// type is unknown) and is resolved directly. The cached bashPPSelection is
+// treated read-only by every caller (edge slices are copied before any
+// prepend and only sub-ranged for reads), so sharing the value is safe.
+func (r *Runner) bashPPResolveSelectionIn(root syntax.BashPPTypeExpr, name string, methods, addressable bool, pkg string) bashPPSelection {
+	if root != nil {
+		key := bashPPSelectionCacheKey{root: root, name: name, pkg: pkg, methods: methods, addressable: addressable}
+		if sel, ok := r.bashPPSelectionCache[key]; ok {
+			return sel
+		}
+		sel := r.bashPPResolveSelectionUncached(root, name, methods, addressable, pkg)
+		if r.bashPPSelectionCache == nil {
+			r.bashPPSelectionCache = make(map[bashPPSelectionCacheKey]bashPPSelection)
+		}
+		r.bashPPSelectionCache[key] = sel
+		return sel
+	}
+	return r.bashPPResolveSelectionUncached(root, name, methods, addressable, pkg)
+}
+
+// bashPPResolveSelectionUncached is bashPPResolveSelection for a selector
+// spelled in a given linked package ("" is the program's own). An unexported
+// method name is an identifier of its package: when the shallowest depth holds
 // that name from several packages — `struct{ localT; lib.T }` where both
 // declare `m()` — only the selecting package's method is the one named,
 // and the others do not make the selector ambiguous. If that depth only has
 // other packages' private methods, lookup continues: those are different
 // identifiers and cannot shadow the requested package's deeper method.
-func (r *Runner) bashPPResolveSelectionIn(root syntax.BashPPTypeExpr, name string, methods, addressable bool, pkg string) bashPPSelection {
+func (r *Runner) bashPPResolveSelectionUncached(root syntax.BashPPTypeExpr, name string, methods, addressable bool, pkg string) bashPPSelection {
 	rootPointer := false
 	if pointer, ok := root.(*syntax.BashPPPointerType); ok {
 		rootPointer, root = true, pointer.Element
