@@ -348,11 +348,13 @@ func Load(sources []Source, options Options) (*Program, error) {
 	// Import aliases are shared: every package's imports are hoisted into
 	// the one file, so an alias minted by any package names that path for all.
 	importAliases := map[string]string{}
+	syntheticImports := map[string]string{}
 	c.dotImports = map[*ast.File]map[string]bool{}
 	liveImportPaths := liveImports(linked, mapped)
 	var lowered []*loweredPackage
 	for pi, lc := range linked {
 		lc.importAliases = importAliases
+		lc.syntheticImports = syntheticImports
 		lc.dotImports = map[*ast.File]map[string]bool{}
 		lc.resolveImport = imp.resolve
 		if lc != c {
@@ -447,6 +449,21 @@ func Load(sources []Source, options Options) (*Program, error) {
 	p.File.CgoPackages = cgoPackages(linked)
 	// Imports first: the interpreter starts the native dependency bridge once,
 	// at the first statement that is not an import.
+	if len(syntheticImports) > 0 {
+		paths := make([]string, 0, len(syntheticImports))
+		for path := range syntheticImports {
+			paths = append(paths, path)
+		}
+		sort.Strings(paths)
+		group := &syntax.BashPPImport{Site: syntax.StartImport, Class: syntax.ClassR, Kw: &syntax.Lit{Value: "import"}}
+		for _, path := range paths {
+			group.Specs = append(group.Specs, &syntax.BashPPImportSpec{
+				Alias: &syntax.Lit{Value: syntheticImports[path]},
+				Path:  &syntax.DblQuoted{Parts: []syntax.WordPart{&syntax.Lit{Value: path}}},
+			})
+		}
+		p.File.Stmts = append(p.File.Stmts, c.stmt(group))
+	}
 	for _, lp := range lowered {
 		p.File.Stmts = append(p.File.Stmts, lp.imports...)
 	}

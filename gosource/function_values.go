@@ -19,7 +19,10 @@ func (c *converter) functionValueType(expr ast.Expr) *syntax.BashPPFuncType {
 	}
 	// A named function type (notably iter.Seq[T]) prints as its name. The
 	// interpreter needs its callable shape, so retain the underlying signature.
+	previousImports := c.suppressSyntheticImport
+	c.suppressSyntheticImport = true
 	text := c.typeString(typeSignature)
+	c.suppressSyntheticImport = previousImports
 	parsed, err := parser.ParseExpr(text)
 	if err != nil {
 		c.fail(expr, "function value type")
@@ -42,6 +45,9 @@ func (c *converter) callResultTypes(call *ast.CallExpr) []syntax.BashPPTypeExpr 
 		return nil
 	}
 	results := make([]syntax.BashPPTypeExpr, signature.Results().Len())
+	previousImports := c.suppressSyntheticImport
+	c.suppressSyntheticImport = true
+	defer func() { c.suppressSyntheticImport = previousImports }()
 	for i := range results {
 		results[i] = c.checkedType(signature.Results().At(i).Type(), call, "call result type")
 	}

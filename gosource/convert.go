@@ -20,6 +20,10 @@ import (
 type converter struct {
 	packagePath   string
 	importAliases map[string]string
+	// syntheticImports are packages named only by a checked type which differs
+	// from the source spelling, such as os.FileMode's alias target fs.FileMode.
+	// The generated type must have a matching import in both execution modes.
+	syntheticImports map[string]string
 	// dotImports are, per file, the paths that file binds by dot import:
 	// their types are spelled bare while that file is being lowered.
 	dotImports  map[*ast.File]map[string]bool
@@ -59,11 +63,12 @@ type converter struct {
 	constSpecs map[*types.Const]constSpec
 	// shiftOperand is the constant left operand of a non-constant shift
 	// about to be converted; its contextual type is always spelled.
-	shiftOperand    ast.Expr
-	rawConstantExpr bool
-	err             error
-	branchScopes    []converterBranchScope
-	statementLabel  string
+	shiftOperand            ast.Expr
+	rawConstantExpr         bool
+	suppressSyntheticImport bool
+	err                     error
+	branchScopes            []converterBranchScope
+	statementLabel          string
 	// gotoTargets holds the labels a goto names, built on first use by
 	// gotoTarget; nil until then.
 	gotoTargets       map[types.Object]bool
@@ -234,7 +239,16 @@ func (c *converter) qualifier(p *types.Package) string {
 	if alias := c.importAliases[p.Path()]; alias != "" {
 		return alias
 	}
-	return p.Name()
+	if c.suppressSyntheticImport {
+		return p.Name()
+	}
+	// A checked type may expose a package which the source did not import
+	// directly. Give that package a collision-free synthetic binding and let
+	// Load hoist the matching import ahead of all declarations.
+	alias := fmt.Sprintf("%simport_type_%d", c.prefix, len(c.syntheticImports))
+	c.importAliases[p.Path()] = alias
+	c.syntheticImports[p.Path()] = alias
+	return alias
 }
 
 // typeString spells a checked type for the flat file. types.TypeString can
@@ -758,10 +772,12 @@ func (c *converter) valueDecl(g *ast.GenDecl, v *ast.ValueSpec, n *ast.Ident, in
 		if len(v.Values) == len(v.Names) && index < len(v.Values) &&
 			c.usesImportedPackage(v.Values[index]) && !c.usesIota(v.Values[index]) {
 			out.Init = []*s.Word{c.word(v.Values[index])}
-			saved := c.rawConstantExpr
-			c.rawConstantExpr = true
-			out.InitExpr = c.expr(v.Values[index])
-			c.rawConstantExpr = saved
+			if obj, ok := c.info.Defs[n].(*types.Const); ok {
+				// Keep the source expression for compiled output, but carry the
+				// checker's exact value to the interpreter. An imported named
+				// constant is not a dependency runtime read.
+				out.InitExpr = c.constantValueExpr(n.Pos(), obj.Val())
+			}
 			return out
 		}
 		if obj, ok := c.info.Defs[n].(*types.Const); ok {
@@ -788,6 +804,13 @@ func (c *converter) valueDecl(g *ast.GenDecl, v *ast.ValueSpec, n *ast.Ident, in
 		}
 		out.Init = []*s.Word{c.word(v.Values[index])}
 		out.InitExpr = c.expr(v.Values[index])
+		if c.usesImportedPackage(v.Values[index]) {
+			if tv := c.info.Types[v.Values[index]]; tv.Value != nil {
+				// The written initializer is retained above for native lowering;
+				// interpreted initialization consumes the exact checked constant.
+				out.InitExpr = c.constantValueExpr(n.Pos(), tv.Value)
+			}
+		}
 	}
 	return out
 }
@@ -831,7 +854,8 @@ func (c *converter) constGroup(g *ast.GenDecl) *s.BashPPConstGroup {
 			// written expression for compiled output and import accounting.
 			if obj, ok := c.info.Defs[name].(*types.Const); ok {
 				if len(v.Values) == len(v.Names) && i < len(v.Values) &&
-					c.constAsWritten(v, i) && !c.constHasForwardReference(v.Values[i], name.Pos()) {
+					c.constAsWritten(v, i) && !c.usesImportedPackage(v.Values[i]) &&
+					!c.constHasForwardReference(v.Values[i], name.Pos()) {
 					spec.InitExpr = c.expr(v.Values[i])
 				} else {
 					spec.InitExpr = c.constantValueExpr(name.Pos(), obj.Val())
@@ -1388,6 +1412,13 @@ func (c *converter) call(x *ast.CallExpr) *s.BashPPCall {
 		// its receiver. genericFuncValue builds precisely that forwarding
 		// closure from the checker's instantiated signature.
 		out.FuncLit, _ = c.genericFuncValue(x.Fun).(*s.BashPPFuncLit)
+	} else if closure, receiver, ok := c.computedImportedMethodCall(x); ok {
+		// Bind the computed receiver as the forwarding closure's first
+		// argument. Go evaluates it once, before the written arguments.
+		out.FuncLit = closure
+		out.Args = append(out.Args, c.word(receiver))
+		out.ArgExprs = append(out.ArgExprs, c.expr(receiver))
+		out.ExclusiveSliceArgs = append([]bool{false}, out.ExclusiveSliceArgs...)
 	} else if simple(x.Fun) {
 		c.callee(out, x.Fun)
 	} else {
@@ -1407,6 +1438,61 @@ func (c *converter) call(x *ast.CallExpr) *s.BashPPCall {
 		out.ArgExprs = append(out.ArgExprs, c.expr(a))
 	}
 	return out
+}
+
+// computedImportedMethodCall lowers a method selected from a computed value
+// of an imported named type through a typed forwarding closure. The closure
+// receives the already-evaluated receiver, preventing classification and
+// invocation from re-running expressions such as xs[index()].Pos().
+func (c *converter) computedImportedMethodCall(call *ast.CallExpr) (*s.BashPPFuncLit, ast.Expr, bool) {
+	selector, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
+	if !ok {
+		return nil, nil, false
+	}
+	selection := c.info.Selections[selector]
+	if selection == nil || selection.Kind() != types.MethodVal {
+		return nil, nil, false
+	}
+	receiverType := selection.Recv()
+	if pointer, ok := receiverType.(*types.Pointer); ok {
+		receiverType = pointer.Elem()
+	}
+	named, ok := types.Unalias(receiverType).(*types.Named)
+	if !ok || !c.bridgedType(named) {
+		return nil, nil, false
+	}
+	// A plain name or selector chain is already read once by the normal call
+	// carrier. This handoff is only needed when evaluating the receiver has
+	// observable work of its own.
+	var simpleReceiver func(ast.Expr) bool
+	simpleReceiver = func(expr ast.Expr) bool {
+		switch x := ast.Unparen(expr).(type) {
+		case *ast.Ident:
+			return true
+		case *ast.SelectorExpr:
+			return simpleReceiver(x.X)
+		}
+		return false
+	}
+	if simpleReceiver(selector.X) {
+		return nil, nil, false
+	}
+	if _, indexed := ast.Unparen(selector.X).(*ast.IndexExpr); !indexed {
+		return nil, nil, false
+	}
+	signature, _ := c.checkedType(c.info.TypeOf(call.Fun), call.Fun, "computed imported method type").(*s.BashPPFuncType)
+	receiver := c.checkedType(c.info.TypeOf(selector.X), selector.X, "computed imported method receiver type")
+	if signature == nil || receiver == nil {
+		return nil, nil, false
+	}
+	copySignature := *signature
+	copySignature.Params = append([]*s.BashPPField{{FieldType: c.lit(selector.X.Pos(), c.typeString(c.info.TypeOf(selector.X))), FieldTypeExpr: receiver}}, signature.Params...)
+	closure, _ := c.forwardingClosure(call.Fun, &copySignature, func(inner *s.BashPPCall, args []*s.Lit) {
+		inner.Fun = []*s.Lit{args[0], c.ident(selector.Sel)}
+		inner.Args = inner.Args[1:]
+		inner.ArgExprs = inner.ArgExprs[1:]
+	}).(*s.BashPPFuncLit)
+	return closure, selector.X, true
 }
 
 // exclusiveSliceArgs proves the narrow ownership shape used by generated

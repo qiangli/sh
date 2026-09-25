@@ -1250,10 +1250,12 @@ func (e *emitter) command(c syntax.Command) (string, error) {
 		}
 		init := ""
 		var err error
-		if e.goSource && n.Kw.Value == "const" && len(n.Init) > 0 {
+		_, foldedVarConstant := n.InitExpr.(*syntax.BashPPBasicLit)
+		if e.goSource && len(n.Init) > 0 && (n.Kw.Value == "const" || n.Kw.Value == "var" && foldedVarConstant) {
 			// Init is the written Go initializer carrier; InitExpr may hold a
 			// checker-derived value for interpretation. Compiled native Go must
-			// keep the source expression and let gc evaluate it.
+			// keep the source expression and let gc evaluate it; that distinction
+			// also matters for vars initialized by imported named constants.
 			init, err = e.wordSequence(n.Init)
 		} else if n.InitExpr != nil {
 			init, err = e.expr(n.InitExpr)

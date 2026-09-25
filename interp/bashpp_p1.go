@@ -492,13 +492,19 @@ func (r *Runner) bashPPTypedScalarDeclValue(d *syntax.BashPPDecl) (expand.Variab
 	}
 	shape := r.bashPPUnderlyingType(d.DeclTypeExpr)
 	named, ok := shape.(*syntax.BashPPNamedType)
-	if !ok || !bashPPBuiltinType(named.Name.Value) || named.Name.Value == "error" {
+	base := ""
+	if ok {
+		base = named.Name.Value
+	}
+	if r.bashPPGoSource && (!ok || !bashPPBuiltinType(base)) {
+		base, ok = r.goSourceImportedScalarUnderlying(bashPPTypeText(d.DeclTypeExpr))
+	}
+	if !ok || !bashPPBuiltinType(base) || base == "error" {
 		if d.Site == syntax.StartConst {
 			return expand.Variable{}, true, fmt.Errorf("BASHPP-ECONST-TYPE: const initializer has unsupported type %s", bashPPTypeText(d.DeclTypeExpr))
 		}
 		return expand.Variable{}, false, nil
 	}
-	base := named.Name.Value
 	if !r.bashPPGoSource && (base == "complex64" || base == "complex128") {
 		return expand.Variable{}, true, fmt.Errorf("BASHPP-ECOMPLEX-UNSUPPORTED: complex constants are not supported by the Bash++ scalar carrier")
 	}
@@ -530,7 +536,9 @@ func (r *Runner) bashPPTypedScalarDeclValue(d *syntax.BashPPDecl) (expand.Variab
 	}
 	if value.typ != "" {
 		actual, _ := bashPPScalarNamedType(value.typ)
-		if !r.bashPPTypeAssignable(actual, d.DeclTypeExpr) {
+		if value.typ != bashPPTypeText(d.DeclTypeExpr) &&
+			!r.goSourceNativeTypeIdentical(actual, d.DeclTypeExpr) &&
+			!r.bashPPTypeAssignable(actual, d.DeclTypeExpr) {
 			return expand.Variable{}, true, fmt.Errorf("BASHPP-EASSIGN-TYPE: cannot use %s as %s in declaration", value.typ, bashPPTypeText(d.DeclTypeExpr))
 		}
 	} else if !bashPPUntypedScalarAssignable(base, value.value) {
@@ -848,10 +856,17 @@ func (r *Runner) bashPPConvertNamedScalar(name string, target syntax.BashPPTypeE
 		return bashPPScalar{}, fmt.Errorf("BASHPP-EUNSAFE-ADDRESS: uintptr %s is not an interpreter-owned live pointer; refusing conversion to %s", x.value, name)
 	}
 	shape, ok := r.bashPPUnderlyingType(named).(*syntax.BashPPNamedType)
-	if !ok || shape == named || !bashPPBuiltinType(shape.Name.Value) {
+	base := ""
+	if ok && shape != named {
+		base = shape.Name.Value
+	}
+	if r.bashPPGoSource && !bashPPBuiltinType(base) {
+		base, ok = r.goSourceImportedScalarUnderlying(name)
+	}
+	if !ok || !bashPPBuiltinType(base) {
 		return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-CONVERT: cannot convert %s to %s", x.value.Kind(), name)
 	}
-	converted, err := r.bashPPConvertScalar(shape.Name.Value, x)
+	converted, err := r.bashPPConvertScalar(base, x)
 	if err != nil {
 		return bashPPScalar{}, err
 	}

@@ -2,11 +2,39 @@ package interp
 
 // Sprint: #118; Story: #67; Story-ID: 83b5cdc6fca6
 import (
+	"go/types"
 	"strings"
 
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
 )
+
+// goSourceImportedScalarUnderlying resolves an imported defined scalar from
+// the export metadata installed with its import. Package constants and
+// contextual conversions can be prepared before the general type registry is
+// visible to declaration evaluation, so this lookup is deliberately keyed by
+// the authenticated go/types identity rather than by display text alone.
+func (r *Runner) goSourceImportedScalarUnderlying(name string) (string, bool) {
+	bare := strings.TrimLeft(name, "*")
+	dot := strings.LastIndex(bare, ".")
+	if dot < 0 {
+		return "", false
+	}
+	qualifier, typeName := bare[:dot], bare[dot+1:]
+	path := r.bashPPImports[qualifier]
+	if path == "" {
+		path = qualifier
+	}
+	typ := r.bashPPTools.nativeTypes[path+"."+typeName]
+	if typ == nil {
+		return "", false
+	}
+	basic, ok := types.Unalias(typ).Underlying().(*types.Basic)
+	if !ok || basic.Info()&(types.IsBoolean|types.IsInteger|types.IsFloat|types.IsComplex|types.IsString) == 0 {
+		return "", false
+	}
+	return basic.Name(), true
+}
 
 // goSourceNativeScalarReceiver reports whether expr names a plain interpreter
 // scalar that still stands for a dependency-owned defined type, and so carries
