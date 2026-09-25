@@ -6372,7 +6372,7 @@ always print a decimal point for %e, %E, %f, %F, %g and %G; do not remove traili
 		`set -x; var=42; (( $var )); null=; (( $null )); set +x`,
 		`+ var=42
 + ((  42  ))
-
++ null=
 + ((    ))
 + set +x
 `,

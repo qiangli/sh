@@ -6155,6 +6155,10 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 						panic(err)
 					}
 					trace.stringf("%s%s%s", name, op, quoted)
+				} else {
+					// An empty assignment (`null=`) traces as
+					// `+ null=`, as GNU Bash prints it.
+					trace.stringf("%s%s", name, op)
 				}
 				trace.newLineFlush()
 			}
