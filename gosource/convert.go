@@ -591,7 +591,7 @@ func (c *converter) typ(e ast.Expr) s.BashPPTypeExpr {
 		o := &s.BashPPCollectionType{Start: c.pos(x.Pos()), Lbrack: c.pos(x.Lbrack), Rbrack: c.pos(x.Elt.Pos() - 1), Element: c.typ(x.Elt), Kind: "slice"}
 		if x.Len != nil {
 			o.Kind = "array"
-			o.Length = c.lit(x.Len.Pos(), c.text(x.Len))
+			o.Length = c.lit(x.Len.Pos(), c.arrayLengthText(x.Len))
 			if _, ok := x.Len.(*ast.Ellipsis); ok {
 				o.Kind = "inferred-array"
 			}
@@ -706,6 +706,9 @@ func (c *converter) function(f *ast.FuncDecl) *s.BashPPFuncDecl {
 			t = ptr.X
 		}
 		named, ok := c.typ(t).(*s.BashPPNamedType)
+		if target := c.receiverAliasTarget(t); ok && target != nil {
+			named = &s.BashPPNamedType{Name: target}
+		}
 		if !ok {
 			c.fail(t, fmt.Sprintf("method receiver type %T", t))
 			recv.RecvType = c.lit(t.Pos(), c.text(t))
@@ -911,9 +914,15 @@ func (c *converter) constGroup(g *ast.GenDecl) *s.BashPPConstGroup {
 				spec.DeclType = c.lit(v.Type.Pos(), c.text(v.Type))
 				spec.DeclTypeExpr = c.typ(v.Type)
 			} else if obj, ok := c.info.Defs[name].(*types.Const); ok {
-				if _, named := obj.Type().(*types.Named); named {
-					if typeExpr := c.checkedType(obj.Type(), name, "inferred constant type"); typeExpr != nil {
-						spec.DeclType = c.lit(name.Pos(), c.typeString(obj.Type()))
+				// An implicit repetition of `_ token = iota` with token an
+				// alias of a defined type has that defined type.
+				typ := obj.Type()
+				if named, ok := types.Unalias(typ).(*types.Named); ok {
+					typ = named
+				}
+				if _, named := typ.(*types.Named); named {
+					if typeExpr := c.checkedType(typ, name, "inferred constant type"); typeExpr != nil {
+						spec.DeclType = c.lit(name.Pos(), c.typeString(typ))
 						spec.DeclTypeExpr = typeExpr
 					}
 				}
@@ -2428,4 +2437,51 @@ func (c *converter) headerToken(from, to token.Pos, want token.Token, ordinal in
 		}
 	}
 	return s.Pos{}
+}
+
+// receiverAliasTarget spells the defined type a method receiver names through
+// a non-generic alias. Go admits `type token = Token; func (t token) M()` and
+// the method belongs to Token; the lowered declaration names Token itself.
+func (c *converter) receiverAliasTarget(t ast.Expr) *s.Lit {
+	id, ok := t.(*ast.Ident)
+	if !ok {
+		return nil
+	}
+	tn, ok := c.info.ObjectOf(id).(*types.TypeName)
+	if !ok || !tn.IsAlias() {
+		return nil
+	}
+	named, ok := types.Unalias(tn.Type()).(*types.Named)
+	if !ok || named.TypeArgs().Len() > 0 || named.TypeParams().Len() > 0 || named.Obj().Pkg() != tn.Pkg() {
+		return nil
+	}
+	v := named.Obj().Name()
+	if rename := c.renames[named.Obj()]; rename != "" {
+		v = rename
+	} else if rename := c.checkerNames[v]; rename != "" {
+		v = rename
+	}
+	out := c.lit(id.Pos(), v)
+	out.ValueEnd = c.pos(id.End())
+	return out
+}
+
+// arrayLengthText spells an array length. A length that names a constant of
+// another package (`[ir.OEND][]bool`, `[utf8.UTFMax]byte`) is spelled as the
+// integer the checker computed: the dependency's constant is not a value the
+// evaluator can read while it lays out a type, and the type is the same one.
+func (c *converter) arrayLengthText(n ast.Expr) string {
+	qualified := false
+	ast.Inspect(n, func(node ast.Node) bool {
+		if _, ok := node.(*ast.SelectorExpr); ok {
+			qualified = true
+		}
+		return !qualified
+	})
+	if qualified {
+		if tv, ok := c.info.Types[n]; ok && tv.Value != nil && tv.Value.Kind() == constant.Int {
+			return tv.Value.ExactString()
+		}
+	}
+	return c.text(n)
 }

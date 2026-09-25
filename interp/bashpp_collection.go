@@ -347,13 +347,18 @@ func (r *Runner) bashPPTypeAssignable(actual, expected syntax.BashPPTypeExpr) bo
 	if bashPPTypeText(actual) == bashPPTypeText(expected) {
 		return true
 	}
+	if r.goSourceImportTypesIdentical(actual, expected) {
+		return true
+	}
 	_, actualNamed := actual.(*syntax.BashPPNamedType)
 	_, expectedNamed := expected.(*syntax.BashPPNamedType)
 	if actualNamed && expectedNamed {
 		return false
 	}
-	return bashPPTypeText(r.bashPPResolvedArrayLengths(r.bashPPUnderlyingType(actual))) ==
-		bashPPTypeText(r.bashPPResolvedArrayLengths(r.bashPPUnderlyingType(expected)))
+	actualUnder := r.bashPPResolvedArrayLengths(r.bashPPUnderlyingType(actual))
+	expectedUnder := r.bashPPResolvedArrayLengths(r.bashPPUnderlyingType(expected))
+	return bashPPTypeText(actualUnder) == bashPPTypeText(expectedUnder) ||
+		r.goSourceImportTypesIdentical(actualUnder, expectedUnder)
 }
 
 // bashPPInferredArrayAssignable reports whether an inferred-length array
@@ -377,8 +382,9 @@ func (r *Runner) bashPPInferredArrayAssignable(meta *bashPPCollectionMeta, expec
 	if err != nil || n != len(meta.sequence) {
 		return false
 	}
-	return bashPPTypeText(r.bashPPResolvedArrayLengths(actual.Element)) ==
-		bashPPTypeText(r.bashPPResolvedArrayLengths(array.Element))
+	actualElement, expectedElement := r.bashPPResolvedArrayLengths(actual.Element), r.bashPPResolvedArrayLengths(array.Element)
+	return bashPPTypeText(actualElement) == bashPPTypeText(expectedElement) ||
+		r.goSourceImportTypesIdentical(actualElement, expectedElement)
 }
 
 // bashPPResolvedArrayLengths spells every array length in typ as its resolved
@@ -543,7 +549,8 @@ func (r *Runner) bashPPEvalCollection(lit *syntax.BashPPCompositeLit, expected s
 	if expected != nil && lit.LitType != nil {
 		if actualCollection := collection; actualCollection.Kind == "inferred-array" {
 			if expectedCollection, ok := r.bashPPUnderlyingType(expected).(*syntax.BashPPCollectionType); ok && expectedCollection.Kind == "array" &&
-				bashPPTypeText(actualCollection.Element) == bashPPTypeText(expectedCollection.Element) {
+				(bashPPTypeText(actualCollection.Element) == bashPPTypeText(expectedCollection.Element) ||
+					r.goSourceImportTypesIdentical(actualCollection.Element, expectedCollection.Element)) {
 				inferredToArray = true
 			}
 		}
@@ -903,6 +910,18 @@ func (r *Runner) bashPPEvalElement(expr syntax.BashPPExpr, expected syntax.BashP
 		}
 	}
 
+	// A call stored where an interface belongs is an interface conversion of
+	// its result — `[]Expr{p.expr()}`, `[]Expr{x, mk()}` — exactly as the same
+	// call assigned to an interface variable is; reading its result cell as a
+	// bare collection value would drop the box around a pointer result.
+	if _, call := expr.(*syntax.BashPPCall); call {
+		if handled, err := r.goSourceInterfaceElement(expr, expected); handled {
+			if err != nil {
+				return nil, nil, err
+			}
+			return r.bashPPEvalTypedValue(expr, expected)
+		}
+	}
 	if value, meta, handled, err := r.goSourceCollectionCallValue(expr, expected); handled {
 		if err != nil {
 			return nil, nil, err

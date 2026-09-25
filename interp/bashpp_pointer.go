@@ -431,22 +431,7 @@ func (r *Runner) bashPPAddress(expr syntax.BashPPExpr) (result *bashPPPointer, e
 				return nil, readErr
 			}
 			if base, pointerElement := parent.(*bashPPPointer); pointerElement {
-				if base == nil {
-					return nil, errBashPPNilDereference
-				}
-				sel := r.bashPPResolveField(base.elem, selector.Sel.Value)
-				if sel.ambiguous || len(sel.edges) == 0 {
-					return nil, bashPPSelectionError(base.elem, selector.Sel.Value, sel)
-				}
-				ptr := &bashPPPointer{target: base.target, path: append([]bashPPPointerStep(nil), base.path...)}
-				for i, edge := range sel.edges {
-					ptr.path = append(ptr.path, bashPPPointerStep{field: edge.name})
-					if edge.pointer && i+1 < len(sel.edges) {
-						ptr.path = append(ptr.path, bashPPPointerStep{deref: true})
-					}
-				}
-				ptr.elem = sel.fieldType
-				return ptr, nil
+				return r.goSourcePointeeFieldAddress(base, selector.Sel.Value)
 			}
 			// The index has already run. A missing or unsupported pointer
 			// carrier must not fall through and evaluate it a second time.
@@ -454,6 +439,28 @@ func (r *Runner) bashPPAddress(expr syntax.BashPPExpr) (result *bashPPPointer, e
 				return nil, errBashPPNilDereference
 			}
 			return nil, fmt.Errorf("BASHPP-EPOINTER-TARGET: indexed value has no interpreter pointer storage")
+		}
+	}
+
+	// x.(*T).f is addressable through the asserted pointer: the assertion
+	// runs once and the field address continues from its pointee.
+	if selector, ok := expr.(*syntax.BashPPSelectorExpr); ok && r.bashPPGoSource {
+		x := selector.X
+		for {
+			paren, parenthesised := x.(*syntax.BashPPParenExpr)
+			if !parenthesised {
+				break
+			}
+			x = paren.X
+		}
+		if assert, asserted := x.(*syntax.BashPPTypeAssertExpr); asserted && assert.TypeToken == nil {
+			if _, pointer := r.bashPPPointerType(assert.Assert); pointer {
+				base, err := r.bashPPPointerExprValue(assert)
+				if err != nil {
+					return nil, err
+				}
+				return r.goSourcePointeeFieldAddress(base, selector.Sel.Value)
+			}
 		}
 	}
 
@@ -1136,4 +1143,25 @@ func (p *bashPPPointer) readParent() (any, *bashPPCollectionMeta, syntax.BashPPT
 	copy := *p
 	copy.path = p.path[:len(p.path)-1]
 	return copy.read()
+}
+
+// goSourcePointeeFieldAddress is the address of field name selected through
+// the pointer base: Go's implicit dereference of a pointer operand.
+func (r *Runner) goSourcePointeeFieldAddress(base *bashPPPointer, name string) (*bashPPPointer, error) {
+	if base == nil {
+		return nil, errBashPPNilDereference
+	}
+	sel := r.bashPPResolveField(base.elem, name)
+	if sel.ambiguous || len(sel.edges) == 0 {
+		return nil, bashPPSelectionError(base.elem, name, sel)
+	}
+	ptr := &bashPPPointer{target: base.target, path: append([]bashPPPointerStep(nil), base.path...)}
+	for i, edge := range sel.edges {
+		ptr.path = append(ptr.path, bashPPPointerStep{field: edge.name})
+		if edge.pointer && i+1 < len(sel.edges) {
+			ptr.path = append(ptr.path, bashPPPointerStep{deref: true})
+		}
+	}
+	ptr.elem = sel.fieldType
+	return ptr, nil
 }

@@ -398,6 +398,12 @@ func (r *Runner) bashPPEmbeddedReceiver(rootCell *bashPPCell, sel bashPPSelectio
 		cell.typeName = owner
 	}
 	bashPPStoreCellValue(cell, value, meta)
+	if _, pointerType := cell.declType.(*syntax.BashPPPointerType); cell.pointer && !pointerType && cell.declType != nil {
+		// The path ended at a pointer field (x.p.M() with p *T): the receiver
+		// is that pointer, so it has to carry the pointer type — the method
+		// body may store or return it where a *T is required.
+		cell.declType = &syntax.BashPPPointerType{Element: cell.declType}
+	}
 	if cell.vr.Kind == expand.Object && cell.object == nil {
 		cell.object = rootCell.object
 	}

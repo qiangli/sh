@@ -401,6 +401,11 @@ func retainedFunctionCallback(req bashPPEvalRequest, q bashPPBridgeRequest) bool
 	case "net/http.HandleFunc", "net/http.Handle",
 		"net/http.ServeMux.HandleFunc", "net/http.ServeMux.Handle":
 		return true
+	case "cmd/compile/internal/types2.Scope.InsertLazy":
+		// The scope keeps the resolver and runs it on the first lookup of
+		// the name — a later request of this session (the unified export
+		// data importers register every package-level object this way).
+		return true
 	case "reflect.MakeFunc":
 		// The made function retains its implementation and raises it on
 		// every call of the result — a bare handle call that parks here.

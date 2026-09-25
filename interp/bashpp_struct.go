@@ -990,7 +990,7 @@ func (r *Runner) bashPPStructuredAssign(target, rhs syntax.BashPPExpr) {
 	}
 	root, ok := bashPPCollectionRoot(target)
 	cell := r.bashPPScope.lookup(root)
-	if ok && cell != nil && cell.pointer {
+	if ok && cell != nil && cell.pointer || r.goSourceComputedPointerField(target) {
 		if index, indexed := target.(*syntax.BashPPIndexExpr); indexed && r.bashPPGoSource {
 			// A fault met at the target — a write into a nil map — is the
 			// panic it always is; anything else is the diagnostic.
@@ -1416,4 +1416,30 @@ func (r *Runner) bashPPRepresentableScalar(scalar bashPPScalar, expected syntax.
 		scalar.value = integer
 	}
 	return scalar
+}
+
+// goSourceComputedPointerField reports a field assignment whose operand is a
+// computed pointer rather than a variable: `t.extra.(*Tuple).first = v`. Go
+// makes the field addressable through the implicit dereference, so the write
+// goes through the address of the selected field exactly as it does for a
+// pointer variable.
+func (r *Runner) goSourceComputedPointerField(target syntax.BashPPExpr) bool {
+	selector, ok := target.(*syntax.BashPPSelectorExpr)
+	if !ok || !r.bashPPGoSource {
+		return false
+	}
+	x := selector.X
+	for {
+		paren, parenthesised := x.(*syntax.BashPPParenExpr)
+		if !parenthesised {
+			break
+		}
+		x = paren.X
+	}
+	assert, ok := x.(*syntax.BashPPTypeAssertExpr)
+	if !ok {
+		return false
+	}
+	_, pointer := r.bashPPPointerType(assert.Assert)
+	return pointer
 }
