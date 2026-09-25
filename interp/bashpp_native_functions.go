@@ -63,6 +63,18 @@ func (r *Runner) bashPPBridgeFunction(fn *bashPPFunc) (bashPPBridgeValue, error)
 				copiedResults = copiedResults || group == 1
 				continue
 			}
+			// A result-only counterpart of the rule above: a slice built from
+			// pure value-semantics elements (scalars, or structs/arrays of
+			// them) is rebuilt from copied element values on reply, exactly as
+			// a handle slice is rebuilt from copied element handles. A
+			// parameter keeps the copied-slice refusal below: unlike a handle
+			// slice, whose elements alias the dependency's own storage, a
+			// value slice's backing array is the interpreter's, and a copy of
+			// it can silently drop writes an async or retained callback makes.
+			if group == 1 && r.bashPPCallbackValueSlice(field.FieldTypeExpr) {
+				copiedResults = true
+				continue
+			}
 			// Interface parameters and results can carry nil, native handles, or
 			// interpreter-owned dynamic values through the existing interface
 			// side channel without flattening them to strings.
@@ -464,6 +476,20 @@ func (r *Runner) bashPPNativeHandleSlice(typ syntax.BashPPTypeExpr) bool {
 		return false
 	}
 	return r.bashPPCallbackNativeType(shape.Element)
+}
+
+// bashPPCallbackValueSlice reports a slice whose elements have pure Go value
+// semantics — scalars, or structs/arrays built only from such types (see
+// bashPPCallbackValueType). Each element is copied by Go itself wherever it is
+// read out of the slice, so the whole slice can be rebuilt from copied element
+// values on reply, exactly as bashPPNativeHandleSlice rebuilds one from copied
+// element handles.
+func (r *Runner) bashPPCallbackValueSlice(typ syntax.BashPPTypeExpr) bool {
+	shape, ok := r.bashPPUnderlyingType(typ).(*syntax.BashPPCollectionType)
+	if !ok || shape.Kind != "slice" {
+		return false
+	}
+	return r.bashPPCallbackValueType(shape.Element)
 }
 
 // resultOwnedFunctionCallback reports a dependency constructor that keeps an
