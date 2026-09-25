@@ -81,7 +81,10 @@ func (s *bashPPNativeSession) callbackAnswer(ctx context.Context, owner *Runner,
 	answer := bashPPBridgeRequest{ID: q.ID, Op: "callback-reply"}
 	if owner == nil || q.Receiver == nil {
 		answer.Error = "gosource: callback has no original owner or receiver"
-	} else if coherence != nil && bashPPNativeProtocolCallback(q) {
+	} else if coherence != nil && bashPPNativeProtocolCallback(q) && q.Receiver.Origin == 0 {
+		// A value receiver has no live pointee to reconcile. A pointer with
+		// an authenticated origin can run: coherence checks the live slices
+		// and pointees after its callback, before fmt reads another copy.
 		err := errGoSourceCopiedSliceCallback
 		answer.Error = err.Error()
 		if !owner.exit.exiting {
