@@ -10,6 +10,7 @@ import (
 	"go/constant"
 	"strconv"
 	"strings"
+	"sync"
 
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
@@ -29,9 +30,22 @@ type bashPPPathPart struct {
 	text  string
 }
 
+// bashPPWordSourcePrinters reuses printers for bashPPWordSource: the text of a
+// Go builtin argument is spelled on every evaluation, and a fresh printer
+// allocates its 4 KiB buffer each time. Print resets all printer state.
+var bashPPWordSourcePrinters = sync.Pool{New: func() any { return syntax.NewPrinter() }}
+
 func bashPPWordSource(w *syntax.Word) string {
+	// A lone literal prints as itself unless the tab writer would act on it.
+	if w != nil && len(w.Parts) == 1 {
+		if lit, ok := w.Parts[0].(*syntax.Lit); ok && !strings.ContainsAny(lit.Value, "\t\n\v\f\r\xff") {
+			return lit.Value
+		}
+	}
 	var b strings.Builder
-	_ = syntax.NewPrinter().Print(&b, w)
+	p := bashPPWordSourcePrinters.Get().(*syntax.Printer)
+	_ = p.Print(&b, w)
+	bashPPWordSourcePrinters.Put(p)
 	return b.String()
 }
 
