@@ -133,7 +133,7 @@ let i=(2 + 3)
 	}
 }
 
-var hasBash53 bool
+var gnuBash53 string
 
 // isFuzzWorker reports whether this process is a `go test -fuzz` worker. The
 // fuzz coordinator re-executes the test binary AFTER TestMain has exported
@@ -532,7 +532,7 @@ printf 'REDIRECTED_FG_STATUS=%s\n' "$?"
 
 	internal.TestMainSetup()
 
-	hasBash53 = checkBash()
+	gnuBash53 = findGNUBash53()
 
 	wd, err := os.Getwd()
 	if err != nil {
@@ -592,12 +592,21 @@ func runJobControlTestShell(src string) {
 	}
 }
 
-func checkBash() bool {
-	out, err := exec.Command("bash", "-c", "echo -n $BASH_VERSION").Output()
-	if err != nil {
-		return false
+func findGNUBash53() string {
+	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
+		for _, name := range []string{"bash", "bash.exe"} {
+			path := filepath.Join(dir, name)
+			out, err := exec.Command(path, "--version").CombinedOutput()
+			if err != nil {
+				continue
+			}
+			version := string(out)
+			if strings.Contains(version, "GNU bash, version 5.3") && !strings.Contains(version, "bashy") {
+				return path
+			}
+		}
 	}
-	return strings.HasPrefix(string(out), "5.3")
+	return ""
 }
 
 // concBuffer wraps a [bytes.Buffer] in a mutex so that concurrent writes
@@ -8080,11 +8089,11 @@ func TestRunnerRunConfirm(t *testing.T) {
 	if testing.Short() {
 		t.Skip("calling bash is slow")
 	}
-	if !hasBash53 {
+	if gnuBash53 == "" {
 		if requireShells {
-			t.Fatal("bash 5.3 required to run")
+			t.Fatal("GNU bash 5.3 required to run")
 		} else {
-			t.Skip("bash 5.3 required to run")
+			t.Skip("GNU bash 5.3 required to run")
 		}
 	}
 	t.Parallel()
@@ -8094,18 +8103,24 @@ func TestRunnerRunConfirm(t *testing.T) {
 		// case-sensitive, which isn't how Windows works.
 		t.Skip("bash on Windows emulates Unix-y behavior")
 	}
-	for _, c := range runTests {
-		t.Run("", func(t *testing.T) {
+	t.Logf("GNU bash 5.3 comparator: %s (%s)", gnuBash53, strings.TrimSpace(bashVersion(gnuBash53)))
+	for i, c := range runTests {
+		t.Run(fmt.Sprintf("%04d", i), func(t *testing.T) {
 			if strings.Contains(c.want, " #IGNORE") {
 				return
 			}
 			skipIfUnsupported(t, c.in)
 			t.Parallel()
 			tdir := t.TempDir()
+			if strings.Contains(c.in, "strmatch.so") {
+				buildStrmatchLoadable(t, tdir)
+			}
 			ctx, cancel := context.WithTimeout(context.Background(), runnerRunTimeout)
 			defer cancel()
-			cmd := exec.CommandContext(ctx, "bash")
+			cmd := exec.CommandContext(ctx, gnuBash53)
+			cmd.Args[0] = "bash"
 			cmd.Dir = tdir
+			cmd.Env = bashConfirmEnv(tdir)
 			cmd.Stdin = strings.NewReader(c.in)
 			out, err := cmd.CombinedOutput()
 			if strings.Contains(c.want, " #JUSTERR") {
@@ -8128,6 +8143,105 @@ func TestRunnerRunConfirm(t *testing.T) {
 		})
 	}
 }
+
+func bashConfirmEnv(tdir string) []string {
+	path := strings.Join([]string{"/bin", "/usr/bin", "/usr/sbin", "/sbin", "/opt/homebrew/bin", "/usr/local/bin"}, string(os.PathListSeparator))
+	env := []string{
+		"HOME=/h",
+		"PATH=" + path,
+		"SHELL=" + gnuBash53,
+		"LANG=C.UTF-8",
+		"LC_ALL=C.UTF-8",
+		"BASH_ENV=",
+		"ENV=",
+		"ENV_PROG=env",
+		"PATH_PROG=sh",
+		"GO_TEST_DIR=" + os.Getenv("GO_TEST_DIR"),
+		"GOSH_PROG=" + os.Getenv("GOSH_PROG"),
+		"INTERP_GLOBAL=value",
+		"MULTILINE_INTERP_GLOBAL=\nwith\nnewlines\n\n",
+	}
+	if runtime.GOOS == "windows" {
+		env = append(env, "mixedCase_INTERP_GLOBAL=value")
+	} else {
+		env = append(env, "MIXEDCASE_INTERP_GLOBAL=value")
+	}
+	return env
+}
+
+func bashVersion(path string) string {
+	out, err := exec.Command(path, "--version").CombinedOutput()
+	if err != nil {
+		return err.Error()
+	}
+	line, _, _ := strings.Cut(string(out), "\n")
+	return line
+}
+
+func buildStrmatchLoadable(t *testing.T, dir string) {
+	t.Helper()
+	header := filepath.Join(filepath.Dir(filepath.Dir(gnuBash53)), "include", "bash", "builtins", "loadables.h")
+	if _, err := os.Stat(header); err != nil {
+		if requireShells {
+			t.Fatalf("GNU bash loadable headers required for strmatch.so: %v", err)
+		}
+		t.Skipf("GNU bash loadable headers required for strmatch.so: %v", err)
+	}
+	src := filepath.Join(dir, "strmatch.c")
+	if err := os.WriteFile(src, []byte(strmatchLoadableSource), 0o666); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("cc",
+		"-I"+filepath.Join(filepath.Dir(filepath.Dir(gnuBash53)), "include", "bash"),
+		"-I"+filepath.Join(filepath.Dir(filepath.Dir(gnuBash53)), "include", "bash", "include"),
+		"-dynamiclib",
+		"-undefined", "dynamic_lookup",
+		"-o", filepath.Join(dir, "strmatch.so"),
+		src,
+	)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		if requireShells {
+			t.Fatalf("building strmatch.so: %v\n%s", err, out)
+		}
+		t.Skipf("building strmatch.so: %v\n%s", err, out)
+	}
+}
+
+const strmatchLoadableSource = `
+#include <fnmatch.h>
+#include <stddef.h>
+#include <string.h>
+#include "builtins/loadables.h"
+
+static char *strmatch_doc[] = {
+	"strmatch STRING PATTERN",
+	"Return success if PATTERN matches STRING using pathname glob rules.",
+	(char *)NULL
+};
+
+int strmatch_builtin(WORD_LIST *list) {
+	char *str, *pat;
+	if (list == 0 || list->word == 0 || list->next == 0 || list->next->word == 0) {
+		builtin_usage();
+		return EX_USAGE;
+	}
+	str = list->word->word;
+	pat = list->next->word->word;
+	if (strcmp(str, pat) == 0) {
+		return EXECUTION_SUCCESS;
+	}
+	return fnmatch(pat, str, FNM_PATHNAME) == 0 ? EXECUTION_SUCCESS : EXECUTION_FAILURE;
+}
+
+struct builtin strmatch_struct = {
+	"strmatch",
+	strmatch_builtin,
+	BUILTIN_ENABLED,
+	strmatch_doc,
+	"strmatch STRING PATTERN",
+	0
+};
+`
 
 func TestRunnerOpts(t *testing.T) {
 	t.Parallel()
