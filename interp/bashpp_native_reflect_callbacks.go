@@ -223,6 +223,16 @@ func routedCallbackRequest(req bashPPEvalRequest, q bashPPBridgeRequest) bool {
 	if owner.bashPPTools.routedDepth > 0 {
 		return requestCallbackCapable(req, q)
 	}
+	// A task or subshell created by an original callback owns a cloned Runner. Its
+	// synchronous callbacks must return to its own parked request: borrowing
+	// the outer Runner would race its interpreter state, while waiting for the
+	// shared callback gate can deadlock when the outer callback joins the child.
+	// The helper's authenticated request route provides that ownership. Keep an
+	// unparented retained callback on the shared gate; it has no route parent and
+	// still belongs to the serialized outer callback owner.
+	if owner.bashPPTools.callbackDescendant {
+		return requestCallbackCapable(req, q)
+	}
 	return q.Op == "call" && q.Selector == "" && q.Receiver != nil && q.Receiver.Function && req.Bridge.madeFuncCallable(*q.Receiver, owner)
 }
 

@@ -14,6 +14,10 @@ func TestBashPPCallbackReturnMarkerCloneBoundary(t *testing.T) {
 		bashPPGoSource:            true,
 		bashPPFuncActive:          1,
 		bashPPCallbackReturnDepth: 1,
+		bashPPTools: bashPPToolchain{
+			callbackDepth: 1,
+			routedDepth:   1,
+		},
 	}
 	child := parent.subshell(false)
 	defer child.closeDirFile()
@@ -24,6 +28,12 @@ func TestBashPPCallbackReturnMarkerCloneBoundary(t *testing.T) {
 	child.bashPPFuncActive = parent.bashPPCallbackReturnDepth
 	if child.bashPPCallbackReturnDepth != 0 {
 		t.Fatalf("callback return marker leaked into child helper: got depth %d", child.bashPPCallbackReturnDepth)
+	}
+	if child.bashPPTools.callbackDepth != 0 || child.bashPPTools.routedDepth != 0 {
+		t.Fatalf("callback invocation depth leaked into child: callback=%d routed=%d", child.bashPPTools.callbackDepth, child.bashPPTools.routedDepth)
+	}
+	if !child.bashPPTools.callbackDescendant {
+		t.Fatal("child lost callback descendant routing provenance")
 	}
 	if parent.bashPPCallbackReturnDepth != 1 {
 		t.Fatalf("child clone changed parent callback marker: got depth %d", parent.bashPPCallbackReturnDepth)

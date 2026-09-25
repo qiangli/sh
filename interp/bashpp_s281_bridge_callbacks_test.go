@@ -84,6 +84,52 @@ func main() {
 }`, nil, "")
 }
 
+func TestS281CallbackDescendantTaskReentry(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		body string
+		main string
+	}{
+		{
+			name: "outer callback waits for task",
+			body: `
+func (outer) String() string {
+	result := make(chan string, 1)
+	go func() { result <- fmt.Sprint(inner(7)) }()
+	return <-result
+}`,
+			main: `func main() { fmt.Println(outer(0)) }`,
+		},
+		{
+			name: "task outlives outer callback",
+			body: `
+var start = make(chan bool)
+var result = make(chan string, 1)
+func (outer) String() string {
+	go func() {
+		<-start
+		result <- fmt.Sprint(inner(7))
+	}()
+	return "outer"
+}`,
+			main: `func main() {
+	fmt.Println(outer(0))
+	start <- true
+	fmt.Println(<-result)
+}`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			differGoSource(t, `package main
+import "fmt"
+type inner int
+type outer int
+func (i inner) String() string { return fmt.Sprint("inner", int(i)) }
+`+test.body+"\n"+test.main, nil, "")
+		})
+	}
+}
+
 func TestS281GenericBridgeTypeRegistration(t *testing.T) {
 	differGoSource(t, `package main
 import (

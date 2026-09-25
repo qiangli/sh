@@ -146,6 +146,11 @@ type bashPPToolchain struct {
 	eval           bashPPEvaluator
 	bridge         *bashPPNativeSession
 	callbackDepth  int
+	// callbackDescendant marks a cloned Runner created while an original
+	// callback was active. It is lineage, not callback-stack depth: callback-
+	// capable requests from this Runner use their authenticated request route
+	// instead of borrowing or waiting for the outer Runner's callback frame.
+	callbackDescendant bool
 	// routedDepth counts callbacks this runner serves on a routed request;
 	// requests they raise are routed too (routedCallbackRequest).
 	routedDepth  int

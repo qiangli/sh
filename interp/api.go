@@ -3939,6 +3939,13 @@ func (r *Runner) subshell(background bool) *Runner {
 		ulimitOverride: maps.Clone(r.ulimitOverride),
 	}
 	r2.writeEnv = newOverlayEnviron(r.writeEnv, background)
+	// Callback stack depth is invocation state and cannot cross a Runner clone.
+	// Preserve only the fact that the child descends from an active callback;
+	// its callback-capable dependency requests are routed by request identity,
+	// so the child never borrows or waits for the outer Runner's callback frame.
+	r2.bashPPTools.callbackDescendant = r.bashPPTools.callbackDescendant || r.bashPPTools.callbackDepth > 0
+	r2.bashPPTools.callbackDepth = 0
+	r2.bashPPTools.routedDepth = 0
 	// A shell copy is a process boundary, even though this interpreter models
 	// it with a goroutine. Channel handles are deliberately not serializable.
 	r2.bashPPConcurrent = r.bashPPConcurrent
