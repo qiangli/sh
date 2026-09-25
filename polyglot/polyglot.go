@@ -155,6 +155,11 @@ func aggregateSource(language string, blocks []Block) string {
 type Python struct {
 	Command     string
 	Environment *EnvironmentPlan
+	// Cwd, when set, answers the caller's directory at call time. The worker
+	// starts in the environment root (where the project resolves); each call
+	// then runs in the caller's directory, so relative paths inside a fence
+	// mean what they mean to the shell line that called it.
+	Cwd func() string
 }
 
 func (p Python) executable() string {
@@ -1069,6 +1074,13 @@ func (m *Module) handleRequest(ctx context.Context, handle *Handle, request map[
 
 func (m *Module) request(ctx context.Context, request map[string]any, annotation any) (CallResult, error) {
 	id, _ := request["id"].(uint64)
+	if py, ok := m.runtime.(Python); ok && py.Cwd != nil {
+		if op, _ := request["op"].(string); op != "job_join" && op != "job_leave" {
+			if dir := py.Cwd(); dir != "" {
+				request["cwd"] = dir
+			}
+		}
+	}
 	var response workerResponse
 	if err := m.exchangeContext(ctx, request, &response); err != nil {
 		m.kill()
@@ -1775,6 +1787,7 @@ for line in sys.stdin:
     busy=True
     try:
         op=req['op']
+        if req.get('cwd'): os.chdir(req['cwd'])
         if op=='job_join' or op=='job_leave':
             if hasattr(os,'setpgid'):
                 os.setpgid(0,int(req.get('pgid',0)))

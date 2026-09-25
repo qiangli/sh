@@ -33,15 +33,57 @@ func TestBashPPPythonUsesSourceEnvironmentPlan(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stdout, stderr strings.Builder
-	runner, err := interp.New(interp.Lang(syntax.LangBashPP), interp.Dir(t.TempDir()), interp.StdIO(nil, &stdout, &stderr))
+	// The runtime comes from the source's environment; the call runs in the
+	// shell's directory, like any other command on that line.
+	caller := t.TempDir()
+	runner, err := interp.New(interp.Lang(syntax.LangBashPP), interp.Dir(caller), interp.StdIO(nil, &stdout, &stderr))
 	if err != nil {
 		t.Fatal(err)
 	}
-	canonicalRoot, err := filepath.EvalSymlinks(root)
+	canonicalCaller, err := filepath.EvalSymlinks(caller)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := runner.Run(t.Context(), file); err != nil || stderr.Len() != 0 || stdout.String() != "yes:"+canonicalRoot+"\n" {
+	if err := runner.Run(t.Context(), file); err != nil || stderr.Len() != 0 || stdout.String() != "yes:"+canonicalCaller+"\n" {
+		t.Fatalf("stdout=%q stderr=%q err=%v", stdout.String(), stderr.String(), err)
+	}
+}
+
+// A Python fence call runs in the calling shell's current directory, not the
+// project root its environment was discovered from: relative paths inside
+// the fence follow a cd, the way they would for any command (todo 7ebb8f28).
+func TestBashPPPythonCallFollowsShellCwd(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 unavailable")
+	}
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sub := filepath.Join(root, "a", "b")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, "data.txt"), []byte("here\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	name := filepath.Join(sub, "program.bsh")
+	source := "~~~py as p\ndef read(path: str) -> str:\n    return open(path).read().strip()\ndef cwd() -> str:\n    import os\n    return os.getcwd()\n~~~\n" +
+		"v := p.read(data.txt)\necho \"$v\"\ncd ..\nc := p.cwd()\necho \"$c\"\n"
+	file, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(source), name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr strings.Builder
+	runner, err := interp.New(interp.Lang(syntax.LangBashPP), interp.Dir(sub), interp.StdIO(nil, &stdout, &stderr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, err := filepath.EvalSymlinks(filepath.Join(root, "a"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.Run(t.Context(), file); err != nil || stderr.Len() != 0 || stdout.String() != "here\n"+parent+"\n" {
 		t.Fatalf("stdout=%q stderr=%q err=%v", stdout.String(), stderr.String(), err)
 	}
 }

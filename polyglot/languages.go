@@ -186,7 +186,7 @@ func loweredRuntime(typ string) func(prefix, environment string) string {
 
 func init() {
 	RegisterLanguage(Language{Canonical: "python", Aliases: []string{"py"}, NeedsEnvironment: true,
-		NewRuntime:     func(cfg RuntimeConfig) LanguageRuntime { return Python{Environment: cfg.Environment} },
+		NewRuntime:     func(cfg RuntimeConfig) LanguageRuntime { return Python{Environment: cfg.Environment, Cwd: cfg.Cwd} },
 		LoweredRuntime: loweredRuntime("Python")})
 	RegisterLanguage(Language{Canonical: "typescript", Aliases: []string{"ts"}, NeedsEnvironment: true,
 		NewRuntime:     func(cfg RuntimeConfig) LanguageRuntime { return TypeScript{Environment: cfg.Environment} },
