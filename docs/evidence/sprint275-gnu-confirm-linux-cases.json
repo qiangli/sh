@@ -1,0 +1,1084 @@
+{
+  "schema": "sprint275-gnu-confirm-linux-cases-v1",
+  "candidate": "05201184",
+  "comparator": "GNU Bash 5.3.0 x86_64-pc-linux-gnu",
+  "cases": [
+    {
+      "id": 21,
+      "kind": "wanted bash to error in",
+      "input": "\"exit --\"",
+      "want": null,
+      "got": null,
+      "preliminary_group": "GNU returned success / no bash diagnostic",
+      "decision": "open"
+    },
+    {
+      "id": 113,
+      "kind": "wrong bash output in",
+      "input": "\"for i in a b c; do echo $i; continue 1 2 3; done; echo --\"",
+      "want": "\"a\\ncontinue: too many arguments\\n--\\n\"",
+      "got": "\"a\\nbash: line 1: continue: too many arguments\\nexit status 2\"",
+      "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
+      "decision": "open"
+    },
+    {
+      "id": 191,
+      "kind": "wrong bash output in",
+      "input": "\"f(){ :; }; runner-state funcs | grep -q '\\\"funcs\\\":\\\\[.*\\\"f\\\"' && echo ok\"",
+      "want": "\"ok\\n\"",
+      "got": "\"bash: line 1: runner-state: command not found\\nexit status 1\"",
+      "preliminary_group": "Harness-only command absent from GNU Bash",
+      "decision": "open"
+    },
+    {
+      "id": 226,
+      "kind": "wrong bash output in",
+      "input": "\"printf '%.9223372036854775825s\\\\n' XY\"",
+      "want": "\"XY\\n\"",
+      "got": "\"bash: line 1: printf: Value too large for defined data type\\nexit status 1\"",
+      "preliminary_group": "Formatting / libc output",
+      "decision": "open"
+    },
+    {
+      "id": 239,
+      "kind": "wrong bash output in",
+      "input": "\"printf '\\\\x'\"",
+      "want": "\"printf: missing hex digit for \\\\x\\n\\\\xexit status 1\"",
+      "got": "\"bash: line 1: printf: missing hex digit for \\\\x\\n\\\\x\"",
+      "preliminary_group": "Formatting/platform output differences",
+      "decision": "open"
+    },
+    {
+      "id": 335,
+      "kind": "wrong bash output in",
+      "input": "\"v=hello; echo ${v:1:-2}\"",
+      "want": "\"ell\\n\"",
+      "got": "\"el\\n\"",
+      "preliminary_group": "Arithmetic / parameter semantics still genuinely differ from Bash 5.3",
+      "decision": "open"
+    },
+    {
+      "id": 382,
+      "kind": "wrong bash output in",
+      "input": "\"f() { echo bad; } 3>/dev/null/abc && f; echo status:$?\"",
+      "want": "\"open /dev/null/abc: not a directory\\nstatus:1\\n\"",
+      "got": "\"bash: line 1: /dev/null/abc: Not a directory\\nstatus:1\\n\"",
+      "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
+      "decision": "open"
+    },
+    {
+      "id": 489,
+      "kind": "wrong bash output in",
+      "input": "\"A=(ab 'cd ef' '' gh); echo \\\"${A@A}\\\"\"",
+      "want": "\"declare -a A=([0]=\\\"ab\\\" [1]=\\\"cd ef\\\" [2]=\\\"\\\" [3]=\\\"gh\\\")\\n\"",
+      "got": "\"declare -a A='ab'\\n\"",
+      "preliminary_group": "Arithmetic / parameter semantics still genuinely differ from Bash 5.3",
+      "decision": "open"
+    },
+    {
+      "id": 513,
+      "kind": "wrong bash output in",
+      "input": "\"declare -A A; for k in ']' '*' '@'; do declare A[$k]=X; done; declare -p A\"",
+      "want": "\"declare: `A[]]=X': not a valid identifier\\ndeclare -A A=([\\\"*\\\"]=\\\"X\\\" [\\\"@\\\"]=\\\"X\\\" )\\n\"",
+      "got": "\"bash: line 1: declare: `A[]]=X': not a valid identifier\\ndeclare -A A=([\\\"*\\\"]=\\\"X\\\" [\\\"@\\\"]=\\\"X\\\" )\\n\"",
+      "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
+      "decision": "open"
+    },
+    {
+      "id": 514,
+      "kind": "wrong bash output in",
+      "input": "\"declare -A A; for k in ']' '*' '@'; do declare \\\"A[$k]=X\\\"; done; declare -p A\"",
+      "want": "\"declare: `A[]]=X': not a valid identifier\\ndeclare -A A=([\\\"*\\\"]=\\\"X\\\" [\\\"@\\\"]=\\\"X\\\" )\\n\"",
+      "got": "\"bash: line 1: declare: `A[]]=X': not a valid identifier\\ndeclare -A A=([\\\"*\\\"]=\\\"X\\\" [\\\"@\\\"]=\\\"X\\\" )\\n\"",
+      "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
+      "decision": "open"
+    },
+    {
+      "id": 525,
+      "kind": "wrong bash output in",
+      "input": "\"declare -A A; A[']']=x; test -v 'A[]]' && echo yes\"",
+      "want": "\"yes\\n\"",
+      "got": "\"exit status 1\"",
+      "preliminary_group": "Arithmetic / parameter semantics still genuinely differ from Bash 5.3",
+      "decision": "open"
+    },
+    {
+      "id": 539,
+      "kind": "wanted bash to error in",
+      "input": "\"array=(1 2 3); iref='array[@]'; declare -n nref=$iref; echo $nref; unset array[@]; declare -p array; unset array[@]; declare -p array\"",
+      "want": null,
+      "got": null,
+      "preliminary_group": "GNU returned success / no bash diagnostic",
+      "decision": "open"
+    },
+    {
+      "id": 554,
+      "kind": "wrong bash output in",
+      "input": "\">a.x >b.x; array2=(grep [ 123 ] \\\\*); declare -p array2; printf '<%s>\\\\n' \\\"${array2[@]}\\\"; rm a.x b.x\"",
+      "want": "\"declare -a array2=([0]=\\\"grep\\\" [1]=\\\"[\\\" [2]=\\\"123\\\" [3]=\\\"]\\\" [4]=\\\"*\\\")\\n<grep>\\n<[>\\n<123>\\n<]>\\n<*>\\n\"",
+      "got": "\"declare -a array2=([0]=\\\"grep\\\" [1]=\\\"[ 123 ]\\\" [2]=\\\"*\\\")\\n<grep>\\n<[ 123 ]>\\n<*>\\n\"",
+      "preliminary_group": "Array / nameref / assignment-word behavior differences",
+      "decision": "open"
+    },
+    {
+      "id": 560,
+      "kind": "wrong bash output in",
+      "input": "\"declare -A assoc; key=abc; (( 'assoc[$key]++' )); declare -p assoc\"",
+      "want": "\"declare -A assoc=([abc]=\\\"1\\\" )\\n\"",
+      "got": "\"bash: line 1: ((: 'assoc[abc]++' : arithmetic syntax error: operand expected (error token is \\\"'assoc[abc]++' \\\")\\ndeclare -A assoc\\n\"",
+      "preliminary_group": "Arithmetic / parameter semantics still genuinely differ from Bash 5.3",
+      "decision": "open"
+    },
+    {
+      "id": 561,
+      "kind": "wrong bash output in",
+      "input": "\"declare -A assoc; key='x],b[$(echo uname >&2)'; (( 'assoc[$key]++' )); echo status:$?; declare -p assoc\"",
+      "want": "\"arithmetic syntax error: operand expected (error token is \\\"'assoc[x\\\\],b\\\\[\\\\$(echo uname >&2)]++' \\\")\\nstatus:1\\ndeclare -A assoc\\n\"",
+      "got": "\"bash: line 1: ((: 'assoc[x\\\\],b\\\\[\\\\$(echo uname >&2)]++' : arithmetic syntax error: operand expected (error token is \\\"'assoc[x\\\\],b\\\\[\\\\$(echo uname >&2)]++' \\\")\\nstatus:1\\ndeclare -A assoc\\n\"",
+      "preliminary_group": "Array / nameref / assignment-word behavior differences",
+      "decision": "open"
+    },
+    {
+      "id": 565,
+      "kind": "wrong bash output in",
+      "input": "\"arr=(x); readonly arr; set -o posix; readonly -a\"",
+      "want": "\"readonly -a arr=([0]=\\\"x\\\")\\n\"",
+      "got": "\"readonly -a BASH_VERSINFO=([0]=\\\"5\\\" [1]=\\\"3\\\" [2]=\\\"0\\\" [3]=\\\"1\\\" [4]=\\\"release\\\" [5]=\\\"x86_64-pc-linux-gnu\\\")\\nreadonly -a arr=([0]=\\\"x\\\")\\n\"",
+      "preliminary_group": "Unclassified output difference",
+      "decision": "open"
+    },
+    {
+      "id": 573,
+      "kind": "wrong bash output in",
+      "input": "\"command readonly invalid-name; echo status:$?\"",
+      "want": "\"readonly: invalid name \\\"invalid-name\\\"\\nstatus:1\\n\"",
+      "got": "\"bash: line 1: readonly: `invalid-name': not a valid identifier\\nstatus:1\\n\"",
+      "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
+      "decision": "open"
+    },
+    {
+      "id": 574,
+      "kind": "wrong bash output in",
+      "input": "\"command export invalid-name; echo status:$?\"",
+      "want": "\"export: invalid name \\\"invalid-name\\\"\\nstatus:1\\n\"",
+      "got": "\"bash: line 1: export: `invalid-name': not a valid identifier\\nstatus:1\\n\"",
+      "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
+      "decision": "open"
+    },
+    {
+      "id": 575,
+      "kind": "wrong bash output in",
+      "input": "\"command readonly non-identifier invalid+ident; echo status:$?\"",
+      "want": "\"readonly: invalid name \\\"non-identifier\\\"\\nreadonly: invalid name \\\"invalid+ident\\\"\\nstatus:1\\n\"",
+      "got": "\"bash: line 1: readonly: `non-identifier': not a valid identifier\\nbash: line 1: readonly: `invalid+ident': not a valid identifier\\nstatus:1\\n\"",
+      "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
+      "decision": "open"
+    },
+    {
+      "id": 576,
+      "kind": "wrong bash output in",
+      "input": "\"command export non-identifier invalid+ident; echo status:$?\"",
+      "want": "\"export: invalid name \\\"non-identifier\\\"\\nexport: invalid name \\\"invalid+ident\\\"\\nstatus:1\\n\"",
+      "got": "\"bash: line 1: export: `non-identifier': not a valid identifier\\nbash: line 1: export: `invalid+ident': not a valid identifier\\nstatus:1\\n\"",
+      "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
+      "decision": "open"
+    },
+    {
+      "id": 674,
+      "kind": "wrong bash output in",
+      "input": "\"old=\\\"$PWD\\\"; mkdir d; CDPATH=.; cd d; [[ \\\"$PWD\\\" = \\\"$old/d\\\" ]]; echo path:$?\"",
+      "want": "\"path:0\\n\"",
+      "got": "\"/tmp/TestRunnerRunConfirm#6742167120590/001/d\\npath:0\\n\"",
+      "preliminary_group": "Formatting/platform output differences",
+      "decision": "open"
+    },
+    {
+      "id": 823,
+      "kind": "wrong bash output in",
+      "input": "\"echo foo >a; set -C; echo bar >a; cat a\"",
+      "want": "\"a: cannot overwrite existing file\\nfoo\\n\"",
+      "got": "\"bash: line 1: a: cannot overwrite existing file\\nfoo\\n\"",
+      "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
+      "decision": "open"
+    },
+    {
+      "id": 863,
+      "kind": "wrong bash output in",
+      "input": "\"disown\"",
+      "want": "\"\"",
+      "got": "\"bash: line 1: disown: current: no such job\\nexit status 1\"",
+      "preliminary_group": "Job control, signal, background, or process-environment model differences",
+      "decision": "open"
+    },
+    {
+      "id": 866,
+      "kind": "wrong bash output in",
+      "input": "\"disown 12345\"",
+      "want": "\"\"",
+      "got": "\"bash: line 1: disown: 12345: no such job\\nexit status 1\"",
+      "preliminary_group": "Job control, signal, background, or process-environment model differences",
+      "decision": "open"
+    },
+    {
+      "id": 867,
+      "kind": "wrong bash output in",
+      "input": "\"disown %1\"",
+      "want": "\"\"",
+      "got": "\"bash: line 1: disown: %1: no such job\\nexit status 1\"",
+      "preliminary_group": "Job control, signal, background, or process-environment model differences",
+      "decision": "open"
+    },
+    {
+      "id": 885,
+      "kind": "wrong bash output in",
+      "input": "\"kill -l | head -1\"",
+      "want": "\" 1) SIGHUP        2) SIGINT        3) SIGQUIT       4) SIGILL        5) SIGTRAP      \\n\"",
+      "got": "\" 1) SIGHUP\\t 2) SIGINT\\t 3) SIGQUIT\\t 4) SIGILL\\t 5) SIGTRAP\\n\"",
+      "preliminary_group": "Formatting/platform output differences",
+      "decision": "open"
+    },
+    {
+      "id": 888,
+      "kind": "wrong bash output in",
+      "input": "\"set -o posix; set -- $(kill -l); echo \\\"$1 $2 $3 $4 $5\\\"; kill -SIGTERM 999999; echo rc=$?\"",
+      "want": "\"HUP INT QUIT ILL TRAP\\nkill: SIGTERM: invalid signal specification\\nrc=1\\n\"",
+      "got": "\"HUP INT QUIT ILL TRAP\\nbash: line 1: kill: SIGTERM: invalid signal specification\\nrc=1\\n\"",
+      "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
+      "decision": "open"
+    },
+    {
+      "id": 905,
+      "kind": "wrong bash output in",
+      "input": "\"set -u; true & echo $! & wait\"",
+      "want": "\"g1\\n\"",
+      "got": "\"642713\\n\"",
+      "preliminary_group": "Job control, signal, background, or process-environment model differences",
+      "decision": "open"
+    },
+    {
+      "id": 906,
+      "kind": "wrong bash output in",
+      "input": "\"set -u; true & (echo $!) & wait\"",
+      "want": "\"g1\\n\"",
+      "got": "\"642710\\n\"",
+      "preliminary_group": "Job control, signal, background, or process-environment model differences",
+      "decision": "open"
+    },
+    {
+      "id": 907,
+      "kind": "wrong bash output in",
+      "input": "\"set -u; true & (wait $!; echo $?) & wait\"",
+      "want": "\"wait: pid g1 is not a child of this shell\\n1\\n\"",
+      "got": "\"bash: line 1: wait: pid 642707 is not a child of this shell\\n127\\n\"",
+      "preliminary_group": "Job control, signal, background, or process-environment model differences",
+      "decision": "open"
+    },
+    {
+      "id": 914,
+      "kind": "wrong bash output in",
+      "input": "\"set -o posix; trap 'echo foo' EXIT >/dev/null & wait $!\"",
+      "want": "\"foo\\n\"",
+      "got": "\"\"",
+      "preliminary_group": "Job control, signal, background, or process-environment model differences",
+      "decision": "open"
+    },
+    {
+      "id": 1076,
+      "kind": "wrong bash output in",
+      "input": "\"A='3 + 5'; echo $((4 ? : $A)); echo after\"",
+      "want": "\"expression expected\\nafter\\n\"",
+      "got": "\"bash: line 1: 4 ? : 3 + 5: expression expected (error token is \\\": 3 + 5\\\")\\nexit status 1\"",
+      "preliminary_group": "Arithmetic / parameter semantics still genuinely differ from Bash 5.3",
+      "decision": "open"
+    },
+    {
+      "id": 1077,
+      "kind": "wrong bash output in",
+      "input": "\"echo $((1 ? 20)); echo after\"",
+      "want": "\"`:' expected for conditional expression\\nafter\\n\"",
+      "got": "\"bash: line 1: 1 ? 20: `:' expected for conditional expression (error token is \\\"20\\\")\\nexit status 1\"",
+      "preliminary_group": "Arithmetic / parameter semantics still genuinely differ from Bash 5.3",
+      "decision": "open"
+    },
+    {
+      "id": 1078,
+      "kind": "wrong bash output in",
+      "input": "\"echo $((4 ? 20 :)); echo after\"",
+      "want": "\"expression expected\\nafter\\n\"",
+      "got": "\"bash: line 1: 4 ? 20 :: expression expected (error token is \\\":\\\")\\nexit status 1\"",
+      "preliminary_group": "Arithmetic / parameter semantics still genuinely differ from Bash 5.3",
+      "decision": "open"
+    },
+    {
+      "id": 1079,
+      "kind": "wrong bash output in",
+      "input": "\"echo $((2**-1)); echo after\"",
+      "want": "\"exponent less than 0\\nafter\\n\"",
+      "got": "\"bash: line 1: 2**-1: exponent less than 0 (error token is \\\"1\\\")\\nexit status 1\"",
+      "preliminary_group": "Arithmetic / parameter semantics still genuinely differ from Bash 5.3",
+      "decision": "open"
+    },
+    {
+      "id": 1080,
+      "kind": "wrong bash output in",
+      "input": "\"A='4 + '; echo $(((4 + A) + 4)); echo after\"",
+      "want": "\"arithmetic syntax error: operand expected (error token is \\\"+ \\\")\\nafter\\n\"",
+      "got": "\"bash: line 1: 4 + : arithmetic syntax error: operand expected (error token is \\\"+ \\\")\\nexit status 1\"",
+      "preliminary_group": "Arithmetic / parameter semantics still genuinely differ from Bash 5.3",
+      "decision": "open"
+    },
+    {
+      "id": 1082,
+      "kind": "wrong bash output in",
+      "input": "\"((++)); echo $?\"",
+      "want": "\"arithmetic syntax error: operand expected (error token is \\\"+ \\\")\\n1\\n\"",
+      "got": "\"bash: line 1: ((: ++: arithmetic syntax error: operand expected (error token is \\\"+\\\")\\n1\\n\"",
+      "preliminary_group": "Arithmetic / parameter semantics still genuinely differ from Bash 5.3",
+      "decision": "open"
+    },
+    {
+      "id": 1085,
+      "kind": "wrong bash output in",
+      "input": "\"readonly xx=5; echo $((xx=5)); echo $?\"",
+      "want": "\"xx: readonly variable\\n1\\n\"",
+      "got": "\"bash: line 1: xx: readonly variable\\nexit status 1\"",
+      "preliminary_group": "Arithmetic / parameter semantics still genuinely differ from Bash 5.3",
+      "decision": "open"
+    },
+    {
+      "id": 1105,
+      "kind": "wrong bash output in",
+      "input": "\"a=b b=a; echo $((a + 7)); echo after\"",
+      "want": "\"b: expression recursion level exceeded (error token is \\\"b\\\")\\nafter\\n\"",
+      "got": "\"bash: line 1: b: expression recursion level exceeded (error token is \\\"b\\\")\\nexit status 1\"",
+      "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
+      "decision": "open"
+    },
+    {
+      "id": 1106,
+      "kind": "wrong bash output in",
+      "input": "\"x=4+; declare -i x; x+=7 y=4; echo x=$x y=$y\"",
+      "want": "\"bash: line 1: 4+: 1:2: `+` must be followed by an expression\\nx=4+ y=\\n\"",
+      "got": "\"bash: line 1: 4+: arithmetic syntax error: operand expected (error token is \\\"+\\\")\\nexit status 1\"",
+      "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
+      "decision": "open"
+    },
+    {
+      "id": 1107,
+      "kind": "wrong bash output in",
+      "input": "\"x=8; echo $((--x++)); echo after\"",
+      "want": "\"++: assignment requires lvalue (error token is \\\"++ \\\")\\nafter\\n\"",
+      "got": "\"bash: line 1: --x++: ++: assignment requires lvalue (error token is \\\"++\\\")\\nexit status 1\"",
+      "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
+      "decision": "open"
+    },
+    {
+      "id": 1108,
+      "kind": "wrong bash output in",
+      "input": "\"HOME=/usr/homes/chet; echo \\\"${HOME:`echo }`}\\\"; echo after\"",
+      "want": "\"arithmetic syntax error: operand expected (error token is \\\"}\\\")\\nafter\\n\"",
+      "got": "\"bash: line 1: HOME: }: arithmetic syntax error: operand expected (error token is \\\"}\\\")\\nexit status 1\"",
+      "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
+      "decision": "open"
+    },
+    {
+      "id": 1109,
+      "kind": "wrong bash output in",
+      "input": "\"foo=1; echo $(( 'foo' )); echo after\"",
+      "want": "\"arithmetic syntax error: operand expected (error token is \\\"'foo' \\\")\\nafter\\n\"",
+      "got": "\"bash: line 1: 'foo' : arithmetic syntax error: operand expected (error token is \\\"'foo' \\\")\\nexit status 1\"",
+      "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
+      "decision": "open"
+    },
+    {
+      "id": 1110,
+      "kind": "wrong bash output in",
+      "input": "\"set -- a b c d op; echo ${!#}; v=bad-var; echo ${!v}; echo after\"",
+      "want": "\"op\\nbad-var: invalid variable name\\nafter\\n\"",
+      "got": "\"op\\nbash: line 1: bad-var: invalid variable name\\nexit status 1\"",
+      "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
+      "decision": "open"
+    },
+    {
+      "id": 1112,
+      "kind": "wrong bash output in",
+      "input": "\"set -- a b c d e; echo ${6=arg6}; echo after\"",
+      "want": "\"$6: cannot assign in this way\\nafter\\n\"",
+      "got": "\"bash: line 1: $6: cannot assign in this way\\nexit status 1\"",
+      "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
+      "decision": "open"
+    },
+    {
+      "id": 1126,
+      "kind": "wrong bash output in",
+      "input": "\"set -- '' ''; echo \\\"<${*:-X}>\\\"\"",
+      "want": "\"<X>\\n\"",
+      "got": "\"< >\\n\"",
+      "preliminary_group": "Arithmetic / parameter semantics still genuinely differ from Bash 5.3",
+      "decision": "open"
+    },
+    {
+      "id": 1128,
+      "kind": "wrong bash output in",
+      "input": "\"_Q=1; echo \\\"${!_Q* }\\\"; echo after\"",
+      "want": "\"bad substitution\\nafter\\n\"",
+      "got": "\"bash: line 1: ${!_Q* }: bad substitution\\nexit status 1\"",
+      "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
+      "decision": "open"
+    },
+    {
+      "id": 1129,
+      "kind": "wrong bash output in",
+      "input": "\"set -- a b; echo ${!1*}; echo ${!@*}; echo after\"",
+      "want": "\"bad substitution\\nbad substitution\\nafter\\n\"",
+      "got": "\"bash: line 1: ${!1*}: bad substitution\\nexit status 1\"",
+      "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
+      "decision": "open"
+    },
+    {
+      "id": 1130,
+      "kind": "wrong bash output in",
+      "input": "\"echo ${#+} second; echo after: $?\"",
+      "want": "\"bad substitution\\nafter: 1\\n\"",
+      "got": "\"bash: line 1: ${#+}: bad substitution\\nexit status 1\"",
+      "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
+      "decision": "open"
+    },
+    {
+      "id": 1131,
+      "kind": "wrong bash output in",
+      "input": "\"echo ${x!y} second; echo after: $?\"",
+      "want": "\"bad substitution\\nafter: 1\\n\"",
+      "got": "\"bash: line 1: ${x!y}: bad substitution\\nexit status 1\"",
+      "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
+      "decision": "open"
+    },
+    {
+      "id": 1132,
+      "kind": "wrong bash output in",
+      "input": "\"echo ${#foo%} second; echo after: $?\"",
+      "want": "\"bad substitution\\nafter: 1\\n\"",
+      "got": "\"bash: line 1: ${#foo%}: bad substitution\\nexit status 1\"",
+      "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
+      "decision": "open"
+    },
+    {
+      "id": 1133,
+      "kind": "wrong bash output in",
+      "input": "\"c=\\\"\\\"; echo ${c//${$(($#-1))}/x/}; echo after: $?\"",
+      "want": "\"bad substitution\\nafter: 1\\n\"",
+      "got": "\"bash: line 1: ${$(($#-1))}: bad substitution\\nexit status 1\"",
+      "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
+      "decision": "open"
+    },
+    {
+      "id": 1134,
+      "kind": "wrong bash output in",
+      "input": "\"echo ${$(cmd)} second; echo after: $?\"",
+      "want": "\"bad substitution\\nafter: 1\\n\"",
+      "got": "\"bash: line 1: ${$(cmd)}: bad substitution\\nexit status 1\"",
+      "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
+      "decision": "open"
+    },
+    {
+      "id": 1135,
+      "kind": "wrong bash output in",
+      "input": "\"echo ${!var:-unset}; echo after: $?\"",
+      "want": "\"var: invalid indirect expansion\\nafter: 1\\n\"",
+      "got": "\"bash: line 1: var: invalid indirect expansion\\nexit status 1\"",
+      "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
+      "decision": "open"
+    },
+    {
+      "id": 1136,
+      "kind": "wrong bash output in",
+      "input": "\"echo ${!var+set}; echo after: $?\"",
+      "want": "\"var: invalid indirect expansion\\nafter: 1\\n\"",
+      "got": "\"bash: line 1: var: invalid indirect expansion\\nexit status 1\"",
+      "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
+      "decision": "open"
+    },
+    {
+      "id": 1137,
+      "kind": "wrong bash output in",
+      "input": "\"x=-3; echo ${!x}; echo after: $?\"",
+      "want": "\"-3: invalid variable name\\nafter: 1\\n\"",
+      "got": "\"bash: line 1: -3: invalid variable name\\nexit status 1\"",
+      "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
+      "decision": "open"
+    },
+    {
+      "id": 1147,
+      "kind": "wrong bash output in",
+      "input": "\"a=10; echo $((0 ? a : a+=5)); echo $a\"",
+      "want": "\"attempted assignment to non-variable\\n10\\n\"",
+      "got": "\"bash: line 1: 0 ? a : a+=5: attempted assignment to non-variable (error token is \\\"+=5\\\")\\nexit status 1\"",
+      "preliminary_group": "Arithmetic / parameter semantics still genuinely differ from Bash 5.3",
+      "decision": "open"
+    },
+    {
+      "id": 1148,
+      "kind": "wrong bash output in",
+      "input": "\"a=10; echo $((1 ? a*=2 : a+=5)); echo $a\"",
+      "want": "\"attempted assignment to non-variable\\n10\\n\"",
+      "got": "\"bash: line 1: 1 ? a*=2 : a+=5: attempted assignment to non-variable (error token is \\\"+=5\\\")\\nexit status 1\"",
+      "preliminary_group": "Arithmetic / parameter semantics still genuinely differ from Bash 5.3",
+      "decision": "open"
+    },
+    {
+      "id": 1179,
+      "kind": "wrong bash output in",
+      "input": "\"let; echo $?\"",
+      "want": "\"let: expression expected\\n1\\n\"",
+      "got": "\"bash: line 1: let: expression expected\\n1\\n\"",
+      "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
+      "decision": "open"
+    },
+    {
+      "id": 1185,
+      "kind": "wrong bash output in",
+      "input": "\"a=b b=a; echo $(($a))\"",
+      "want": "\"a: expression recursion level exceeded (error token is \\\"a\\\")\\n\"",
+      "got": "\"bash: line 1: a: expression recursion level exceeded (error token is \\\"a\\\")\\nexit status 1\"",
+      "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
+      "decision": "open"
+    },
+    {
+      "id": 1195,
+      "kind": "wrong bash output in",
+      "input": "\"PS3='> '; select x in a b c; do echo body; done </dev/null; echo end=$?\"",
+      "want": "\"1) a\\n2) b\\n3) c\\n> end=1\\n\"",
+      "got": "\"1) a\\n2) b\\n3) c\\n> \\nend=1\\n\"",
+      "preliminary_group": "Formatting/platform output differences",
+      "decision": "open"
+    },
+    {
+      "id": 1261,
+      "kind": "wrong bash output in",
+      "input": "\"set -o allexport; set +o a; [[ -o allexport ]]\"",
+      "want": "\"exit status 1\"",
+      "got": "\"bash: line 1: set: a: invalid option name\\n\"",
+      "preliminary_group": "Option-name shorthand expectations not accepted by GNU Bash `set -o/+o`",
+      "decision": "open"
+    },
+    {
+      "id": 1262,
+      "kind": "wrong bash output in",
+      "input": "\"set -o allexport; set +o a; VAR=val; echo $VAR\"",
+      "want": "\"val\\n\"",
+      "got": "\"bash: line 1: set: a: invalid option name\\nval\\n\"",
+      "preliminary_group": "Option-name shorthand expectations not accepted by GNU Bash `set -o/+o`",
+      "decision": "open"
+    },
+    {
+      "id": 1263,
+      "kind": "wrong bash output in",
+      "input": "\"set -o noglob; set +o f; [[ -o noglob ]]\"",
+      "want": "\"exit status 1\"",
+      "got": "\"bash: line 1: set: f: invalid option name\\n\"",
+      "preliminary_group": "Option-name shorthand expectations not accepted by GNU Bash `set -o/+o`",
+      "decision": "open"
+    },
+    {
+      "id": 1264,
+      "kind": "wrong bash output in",
+      "input": "\"set -o noglob; set +o f; echo foo*\"",
+      "want": "\"foo*\\n\"",
+      "got": "\"bash: line 1: set: f: invalid option name\\nfoo*\\n\"",
+      "preliminary_group": "Option-name shorthand expectations not accepted by GNU Bash `set -o/+o`",
+      "decision": "open"
+    },
+    {
+      "id": 1267,
+      "kind": "wrong bash output in",
+      "input": "\"set -o nounset; set +o u; [[ -o nounset ]]\"",
+      "want": "\"exit status 1\"",
+      "got": "\"bash: line 1: set: u: invalid option name\\n\"",
+      "preliminary_group": "Option-name shorthand expectations not accepted by GNU Bash `set -o/+o`",
+      "decision": "open"
+    },
+    {
+      "id": 1268,
+      "kind": "wrong bash output in",
+      "input": "\"set -o xtrace; set +o x; [[ -o xtrace ]]\"",
+      "want": "\"+ set +o x\\nexit status 1\"",
+      "got": "\"+ set +o x\\nbash: line 1: set: x: invalid option name\\n+ [[ -o xtrace ]]\\n\"",
+      "preliminary_group": "Option-name shorthand expectations not accepted by GNU Bash `set -o/+o`",
+      "decision": "open"
+    },
+    {
+      "id": 1269,
+      "kind": "wrong bash output in",
+      "input": "\"set -o errexit; set +o e; [[ -o errexit ]]\"",
+      "want": "\"exit status 1\"",
+      "got": "\"bash: line 1: set: e: invalid option name\\nexit status 2\"",
+      "preliminary_group": "Option-name shorthand expectations not accepted by GNU Bash `set -o/+o`",
+      "decision": "open"
+    },
+    {
+      "id": 1270,
+      "kind": "wrong bash output in",
+      "input": "\"set -o a; [[ -o allexport ]]\"",
+      "want": "\"\"",
+      "got": "\"bash: line 1: set: a: invalid option name\\nexit status 1\"",
+      "preliminary_group": "Option-name shorthand expectations not accepted by GNU Bash `set -o/+o`",
+      "decision": "open"
+    },
+    {
+      "id": 1271,
+      "kind": "wrong bash output in",
+      "input": "\"set -o f; [[ -o noglob ]]\"",
+      "want": "\"\"",
+      "got": "\"bash: line 1: set: f: invalid option name\\nexit status 1\"",
+      "preliminary_group": "Option-name shorthand expectations not accepted by GNU Bash `set -o/+o`",
+      "decision": "open"
+    },
+    {
+      "id": 1272,
+      "kind": "wrong bash output in",
+      "input": "\"set -o n; [[ -o noexec ]]\"",
+      "want": "\"\"",
+      "got": "\"bash: line 1: set: n: invalid option name\\nexit status 1\"",
+      "preliminary_group": "Option-name shorthand expectations not accepted by GNU Bash `set -o/+o`",
+      "decision": "open"
+    },
+    {
+      "id": 1273,
+      "kind": "wrong bash output in",
+      "input": "\"set -o u; [[ -o nounset ]]\"",
+      "want": "\"\"",
+      "got": "\"bash: line 1: set: u: invalid option name\\nexit status 1\"",
+      "preliminary_group": "Option-name shorthand expectations not accepted by GNU Bash `set -o/+o`",
+      "decision": "open"
+    },
+    {
+      "id": 1274,
+      "kind": "wrong bash output in",
+      "input": "\"set -o e; [[ -o errexit ]]\"",
+      "want": "\"\"",
+      "got": "\"bash: line 1: set: e: invalid option name\\nexit status 1\"",
+      "preliminary_group": "Option-name shorthand expectations not accepted by GNU Bash `set -o/+o`",
+      "decision": "open"
+    },
+    {
+      "id": 1275,
+      "kind": "wrong bash output in",
+      "input": "\"set -o C; [[ -o noclobber ]]\"",
+      "want": "\"\"",
+      "got": "\"bash: line 1: set: C: invalid option name\\nexit status 1\"",
+      "preliminary_group": "Option-name shorthand expectations not accepted by GNU Bash `set -o/+o`",
+      "decision": "open"
+    },
+    {
+      "id": 1276,
+      "kind": "wrong bash output in",
+      "input": "\"set -o C; set +o C; [[ -o noclobber ]]\"",
+      "want": "\"exit status 1\"",
+      "got": "\"bash: line 1: set: C: invalid option name\\nbash: line 1: set: C: invalid option name\\nexit status 1\"",
+      "preliminary_group": "Option-name shorthand expectations not accepted by GNU Bash `set -o/+o`",
+      "decision": "open"
+    },
+    {
+      "id": 1290,
+      "kind": "wrong bash output in",
+      "input": "\"set -o b; [[ $- = *b* ]]\"",
+      "want": "\"\"",
+      "got": "\"bash: line 1: set: b: invalid option name\\nexit status 1\"",
+      "preliminary_group": "Option-name shorthand expectations not accepted by GNU Bash `set -o/+o`",
+      "decision": "open"
+    },
+    {
+      "id": 1291,
+      "kind": "wrong bash output in",
+      "input": "\"set -o b; set +o b; [[ $- = *b* ]]\"",
+      "want": "\"exit status 1\"",
+      "got": "\"bash: line 1: set: b: invalid option name\\nbash: line 1: set: b: invalid option name\\nexit status 1\"",
+      "preliminary_group": "Option-name shorthand expectations not accepted by GNU Bash `set -o/+o`",
+      "decision": "open"
+    },
+    {
+      "id": 1297,
+      "kind": "wanted bash to error in",
+      "input": "\"unset '1bad' '2bad'\"",
+      "want": null,
+      "got": null,
+      "preliminary_group": "GNU returned success / no bash diagnostic",
+      "decision": "open"
+    },
+    {
+      "id": 1312,
+      "kind": "wrong bash output in",
+      "input": "\"(set -o posix; for invalid-name in a; do echo body; done; echo after); echo outer:$?\"",
+      "want": "\"`invalid-name': not a valid identifier\\nouter:2\\n\"",
+      "got": "\"bash: line 1: `invalid-name': not a valid identifier\\nouter:2\\n\"",
+      "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
+      "decision": "open"
+    },
+    {
+      "id": 1313,
+      "kind": "wrong bash output in",
+      "input": "\"bad_select() { select $1 in a b c; do echo $REPLY; done; }; bad_select \\\"a b\\\"; echo status:$?\"",
+      "want": "\"`$1': not a valid identifier\\nstatus:1\\n\"",
+      "got": "\"bash: line 1: `$1': not a valid identifier\\nstatus:1\\n\"",
+      "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
+      "decision": "open"
+    },
+    {
+      "id": 1403,
+      "kind": "wrong bash output in",
+      "input": "\"type -a -t echo\"",
+      "want": "\"builtin\\nfile\\n\"",
+      "got": "\"builtin\\nfile\\nfile\\n\"",
+      "preliminary_group": "Unclassified output difference",
+      "decision": "open"
+    },
+    {
+      "id": 1407,
+      "kind": "wrong bash output in",
+      "input": "\"set -o posix\\nswap32_posix()\\n{\\n\\tlocal arg\\n\\tfor arg in \\\"$@\\\"; do\\n\\t\\techo $((\\n\\t\\t\\t($arg & 4278190080) >> 24 |\\n\\t\\t\\t($arg & 16711680) >> 8 |\\n\\t\\t\\t($arg & 65280) << 8 |\\n\\t\\t\\t($arg & 255) << 24\\n\\t\\t))\\n\\tdone\\n}\\ntype swap32_posix\"",
+      "want": "\"swap32_posix is a function\\nswap32_posix () \\n{ \\n    local arg;\\n    for arg in \\\"$@\\\";\\n    do\\n        echo $((\\n                        ($arg & 4278190080) >> 24 |\\n                        ($arg & 16711680) >> 8 |\\n                        ($arg & 65280) << 8 |\\n                        ($arg & 255) << 24\\n                ));\\n    done\\n}\\n\"",
+      "got": "\"swap32_posix is a function\\nswap32_posix () \\n{ \\n    local arg;\\n    for arg in \\\"$@\\\";\\n    do\\n        echo $((\\n\\t\\t\\t($arg & 4278190080) >> 24 |\\n\\t\\t\\t($arg & 16711680) >> 8 |\\n\\t\\t\\t($arg & 65280) << 8 |\\n\\t\\t\\t($arg & 255) << 24\\n\\t\\t));\\n    done\\n}\\n\"",
+      "preliminary_group": "Formatting/platform output differences",
+      "decision": "open"
+    },
+    {
+      "id": 1429,
+      "kind": "wrong bash output in",
+      "input": "\"f(){ caller 0; }; f\"",
+      "want": "\"1 main \\n\"",
+      "got": "\"exit status 1\"",
+      "preliminary_group": "Unclassified output difference",
+      "decision": "open"
+    },
+    {
+      "id": 1430,
+      "kind": "wrong bash output in",
+      "input": "\"g(){ caller 0; caller 1; }; f(){ g; }; f\"",
+      "want": "\"1 f \\n1 main \\n\"",
+      "got": "\"1 f bash\\nexit status 1\"",
+      "preliminary_group": "Unclassified output difference",
+      "decision": "open"
+    },
+    {
+      "id": 1454,
+      "kind": "wrong bash output in",
+      "input": "\"f1() { f2 y 2; }; f2() { f3 z 3; }; f3() { printf '<%s>\\\\n' \\\"${BASH_ARGV[@]}\\\"; printf 'argc:%s\\\\n' \\\"${BASH_ARGC[@]}\\\"; }; f1 x 1\"",
+      "want": "\"<3>\\n<z>\\n<2>\\n<y>\\n<1>\\n<x>\\nargc:2\\nargc:2\\nargc:2\\n\"",
+      "got": "\"<>\\nargc:\\n\"",
+      "preliminary_group": "Job control, signal, background, or process-environment model differences",
+      "decision": "open"
+    },
+    {
+      "id": 1527,
+      "kind": "wrong bash output in",
+      "input": "\"a=(['x']=b); echo ${a['y']}\"",
+      "want": "\"b\\n\"",
+      "got": "\"bash: line 1: 'y': arithmetic syntax error: operand expected (error token is \\\"'y'\\\")\\nexit status 1\"",
+      "preliminary_group": "Arithmetic / parameter semantics still genuinely differ from Bash 5.3",
+      "decision": "open"
+    },
+    {
+      "id": 1594,
+      "kind": "wrong bash output in",
+      "input": "\"before=$-; f() { local -; set -u; local -p; }; f; echo \\\"$before|$-\\\"\"",
+      "want": "\"local -\\nhB|hB\\n\"",
+      "got": "\"local -\\nhBs|hBs\\n\"",
+      "preliminary_group": "Job control, signal, background, or process-environment model differences",
+      "decision": "open"
+    },
+    {
+      "id": 1615,
+      "kind": "wrong bash output in",
+      "input": "\"arr=(a b c); declare -n ref='arr[1]'; echo $ref; ref=X; declare -p arr; echo ${!ref}; echo ${!ref[@]}\"",
+      "want": "\"b\\ndeclare -a arr=([0]=\\\"a\\\" [1]=\\\"X\\\" [2]=\\\"c\\\")\\narr[1]\\narr[1]\\n\"",
+      "got": "\"b\\ndeclare -a arr=([0]=\\\"a\\\" [1]=\\\"X\\\" [2]=\\\"c\\\")\\narr[1]\\n\\n\"",
+      "preliminary_group": "Array / nameref / assignment-word behavior differences",
+      "decision": "open"
+    },
+    {
+      "id": 1641,
+      "kind": "wrong bash output in",
+      "input": "\"a='1  *  2'; command command export A=$a; printf \\\"%s\\\\n\\\" \\\"$A\\\"\"",
+      "want": "\"1  *  2\\n\"",
+      "got": "\"bash: line 1: export: `*': not a valid identifier\\nbash: line 1: export: `2': not a valid identifier\\n1\\n\"",
+      "preliminary_group": "Array / nameref / assignment-word behavior differences",
+      "decision": "open"
+    },
+    {
+      "id": 1642,
+      "kind": "wrong bash output in",
+      "input": "\"a='1  *  2'; command command readonly A=$a; printf \\\"%s\\\\n\\\" \\\"$A\\\"\"",
+      "want": "\"1  *  2\\n\"",
+      "got": "\"bash: line 1: readonly: `*': not a valid identifier\\nbash: line 1: readonly: `2': not a valid identifier\\n1\\n\"",
+      "preliminary_group": "Array / nameref / assignment-word behavior differences",
+      "decision": "open"
+    },
+    {
+      "id": 1643,
+      "kind": "wrong bash output in",
+      "input": "\"readonly v=a; command export v=foo; echo after: $?; echo $v\"",
+      "want": "\"v: readonly variable\\nafter: 1\\na\\n\"",
+      "got": "\"bash: line 1: v: readonly variable\\nafter: 1\\na\\n\"",
+      "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
+      "decision": "open"
+    },
+    {
+      "id": 1644,
+      "kind": "wrong bash output in",
+      "input": "\"readonly v=a; command readonly v=foo; echo after: $?; echo $v\"",
+      "want": "\"v: readonly variable\\nafter: 1\\na\\n\"",
+      "got": "\"bash: line 1: v: readonly variable\\nafter: 1\\na\\n\"",
+      "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
+      "decision": "open"
+    },
+    {
+      "id": 1645,
+      "kind": "wrong bash output in",
+      "input": "\"set -o posix; command shift 2; echo after: $?\"",
+      "want": "\"shift: 2: shift count out of range\\nafter: 1\\n\"",
+      "got": "\"bash: line 1: shift: 2: shift count out of range\\nafter: 1\\n\"",
+      "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
+      "decision": "open"
+    },
+    {
+      "id": 1646,
+      "kind": "wrong bash output in",
+      "input": "\"set -o posix; command shift; echo after: $?\"",
+      "want": "\"shift: shift count out of range\\nafter: 1\\n\"",
+      "got": "\"bash: line 1: shift: shift count out of range\\nafter: 1\\n\"",
+      "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
+      "decision": "open"
+    },
+    {
+      "id": 1650,
+      "kind": "wrong bash output in",
+      "input": "\"VAR=4; readonly VAR; VAR=7 :; echo $VAR\"",
+      "want": "\"VAR: readonly variable\\n4\\n\"",
+      "got": "\"bash: line 1: VAR: readonly variable\\n4\\n\"",
+      "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
+      "decision": "open"
+    },
+    {
+      "id": 1654,
+      "kind": "wrong bash output in",
+      "input": "\"VAR=4; readonly VAR; VAR=7 echo ok; echo status:$?\"",
+      "want": "\"VAR: readonly variable\\nok\\nstatus:0\\n\"",
+      "got": "\"bash: line 1: VAR: readonly variable\\nok\\nstatus:0\\n\"",
+      "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
+      "decision": "open"
+    },
+    {
+      "id": 1656,
+      "kind": "wrong bash output in",
+      "input": "\"set -k; export HOME=/foo/bar; c=7; HOME=/a/b/c echo $HOME c=9; echo $c\"",
+      "want": "\"/foo/bar\\n7\\n\"",
+      "got": "\"declare -x DBUS_SESSION_BUS_ADDRESS=\\\"unix:path=/run/user/0/bus\\\"\\ndeclare -x ENV_PROG=\\\"env\\\"\\ndeclare -x FULL_TEST_EVIDENCE_DIR=\\\"/srv/sprint275/evidence/052-full\\\"\\ndeclare -x GOFLAGS=\\\"-tags=netgo,full\\\"\\ndeclare -x GOSH_PROG=\\\"/tmp/sh-full-test.7sfoGb/11.test\\\"\\ndeclare -x GO_TEST_DIR=\\\"/srv/sprint275/candidate-sh/interp\\\"\\ndeclare -x HOME=\\\"/root\\\"\\ndeclare -x INTERP_GLOBAL=\\\"value\\\"\\ndeclare -x LANG=\\\"C.UTF-8\\\"\\ndeclare -x LANGUAGE=\\\"C.UTF-8\\\"\\ndeclare -x LC_ALL=\\\"C.UTF-8\\\"\\ndeclare -x LC_CTYPE=\\\"C.UTF-8\\\"\\ndeclare -x LOGNAME=\\\"root\\\"\\ndeclare -x MAKEFLAGS=\\\"\\\"\\ndeclare -x MAKELEVEL=\\\"1\\\"\\ndeclare -x MFLAGS=\\\"\\\"\\ndeclare -x MIXEDCASE_INTERP_GLOBAL=\\\"value\\\"\\ndeclare -x MULTILINE_INTERP_GLOBAL=$'\\\\nwith\\\\nnewlines\\\\n\\\\n'\\ndeclare -x OLDPWD=\\\"/srv/sprint275/candidate-sh\\\"\\ndeclare -x PATH=\\\"/tmp/interp-bin-300619884:/srv/sprint275/gnu-bash-5.3/bin:/srv/sprint269/authenticated-sdk/bin:/usr/bin:/bin\\\"\\ndeclare -x PATH_PROG=\\\"sh\\\"\\ndeclare -x PWD=\\\"/tmp/TestRunnerRunConfirm#16561455211207/001\\\"\\ndeclare -x REQUIRE_SHELLS=\\\"1\\\"\\ndeclare -x SHELL=\\\"/bin/bash\\\"\\ndeclare -x SHLVL=\\\"2\\\"\\ndeclare -x SSH_CLIENT=\\\"76.103.216.225 54007 22\\\"\\ndeclare -x SSH_CONNECTION=\\\"76.103.216.225 54007 167.71.133.144 22\\\"\\ndeclare -x USER=\\\"root\\\"\\ndeclare -x XDG_RUNTIME_DIR=\\\"/run/user/0\\\"\\ndeclare -x XDG_SESSION_CLASS=\\\"user\\\"\\ndeclare -x XDG_SESSION_ID=\\\"458\\\"\\ndeclare -x XDG_SESSION_TYPE=\\\"tty\\\"\\n/root\\n7\\n\"",
+      "preliminary_group": "Array / nameref / assignment-word behavior differences",
+      "decision": "open"
+    },
+    {
+      "id": 1657,
+      "kind": "wrong bash output in",
+      "input": "\"set -k; ECHO=; export HOME=/foo/bar; HOME=/a/b/c $ECHO a=$HOME c=9; echo $HOME $c $a\"",
+      "want": "\"/a/b/c 9 /a/b/c\\n\"",
+      "got": "\"declare -x DBUS_SESSION_BUS_ADDRESS=\\\"unix:path=/run/user/0/bus\\\"\\ndeclare -x ENV_PROG=\\\"env\\\"\\ndeclare -x FULL_TEST_EVIDENCE_DIR=\\\"/srv/sprint275/evidence/052-full\\\"\\ndeclare -x GOFLAGS=\\\"-tags=netgo,full\\\"\\ndeclare -x GOSH_PROG=\\\"/tmp/sh-full-test.7sfoGb/11.test\\\"\\ndeclare -x GO_TEST_DIR=\\\"/srv/sprint275/candidate-sh/interp\\\"\\ndeclare -x HOME=\\\"/root\\\"\\ndeclare -x INTERP_GLOBAL=\\\"value\\\"\\ndeclare -x LANG=\\\"C.UTF-8\\\"\\ndeclare -x LANGUAGE=\\\"C.UTF-8\\\"\\ndeclare -x LC_ALL=\\\"C.UTF-8\\\"\\ndeclare -x LC_CTYPE=\\\"C.UTF-8\\\"\\ndeclare -x LOGNAME=\\\"root\\\"\\ndeclare -x MAKEFLAGS=\\\"\\\"\\ndeclare -x MAKELEVEL=\\\"1\\\"\\ndeclare -x MFLAGS=\\\"\\\"\\ndeclare -x MIXEDCASE_INTERP_GLOBAL=\\\"value\\\"\\ndeclare -x MULTILINE_INTERP_GLOBAL=$'\\\\nwith\\\\nnewlines\\\\n\\\\n'\\ndeclare -x OLDPWD=\\\"/srv/sprint275/candidate-sh\\\"\\ndeclare -x PATH=\\\"/tmp/interp-bin-300619884:/srv/sprint275/gnu-bash-5.3/bin:/srv/sprint269/authenticated-sdk/bin:/usr/bin:/bin\\\"\\ndeclare -x PATH_PROG=\\\"sh\\\"\\ndeclare -x PWD=\\\"/tmp/TestRunnerRunConfirm#16572544257321/001\\\"\\ndeclare -x REQUIRE_SHELLS=\\\"1\\\"\\ndeclare -x SHELL=\\\"/bin/bash\\\"\\ndeclare -x SHLVL=\\\"2\\\"\\ndeclare -x SSH_CLIENT=\\\"76.103.216.225 54007 22\\\"\\ndeclare -x SSH_CONNECTION=\\\"76.103.216.225 54007 167.71.133.144 22\\\"\\ndeclare -x USER=\\\"root\\\"\\ndeclare -x XDG_RUNTIME_DIR=\\\"/run/user/0\\\"\\ndeclare -x XDG_SESSION_CLASS=\\\"user\\\"\\ndeclare -x XDG_SESSION_ID=\\\"458\\\"\\ndeclare -x XDG_SESSION_TYPE=\\\"tty\\\"\\n/a/b/c 9 /a/b/c\\n\"",
+      "preliminary_group": "Array / nameref / assignment-word behavior differences",
+      "decision": "open"
+    },
+    {
+      "id": 1659,
+      "kind": "wrong bash output in",
+      "input": "\"f() { test -v 'var[0]'; echo $?; }; var[0]=X f\"",
+      "want": "\"`var[0]': not a valid identifier\\n1\\n\"",
+      "got": "\"bash: line 1: `var[0]': not a valid identifier\\n1\\n\"",
+      "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
+      "decision": "open"
+    },
+    {
+      "id": 1713,
+      "kind": "wrong bash output in",
+      "input": "\"shopt -s extglob; shopt -u globskipdots; touch .a .foo a.log; echo .*; echo @(.*); echo .?; echo @(.?); echo '---'; echo *(.)\"",
+      "want": "\". .. .a .foo\\n. .. .a .foo\\n.. .a\\n.. .a\\n---\\n*(.)\\n\"",
+      "got": "\"bash: line 1: syntax error near unexpected token `('\\nbash: line 1: `shopt -s extglob; shopt -u globskipdots; touch .a .foo a.log; echo .*; echo @(.*); echo .?; echo @(.?); echo '---'; echo *(.)'\\nexit status 2\"",
+      "preliminary_group": "Loadable/extglob/parser-timing mismatch",
+      "decision": "open"
+    },
+    {
+      "id": 1716,
+      "kind": "wrong bash output in",
+      "input": "\"enable -f ./strmatch.so strmatch; strmatch 'ab[/]ef' 'ab[/]ef'; echo $?; strmatch 'ab/ef' 'ab[/]ef'; echo $?\"",
+      "want": "\"0\\n1\\n\"",
+      "got": "\"bash: line 1: enable: cannot open shared object ./strmatch.so: ./strmatch.so: cannot open shared object file: No such file or directory\\nbash: line 1: strmatch: command not found\\n127\\nbash: line 1: strmatch: command not found\\n127\\n\"",
+      "preliminary_group": "GNU loadable / build environment",
+      "decision": "open"
+    },
+    {
+      "id": 1791,
+      "kind": "wanted bash to error in",
+      "input": "\"newgrp staff\"",
+      "want": null,
+      "got": null,
+      "preliminary_group": "GNU returned success / no bash diagnostic",
+      "decision": "open"
+    },
+    {
+      "id": 1808,
+      "kind": "wrong bash output in",
+      "input": "\"(exit 7) & fg; echo after=$?\"",
+      "want": "\"fg: no job control\\nafter=1\\n\"",
+      "got": "\"bash: line 1: fg: no job control\\nafter=1\\n\"",
+      "preliminary_group": "Job control, signal, background, or process-environment model differences",
+      "decision": "open"
+    },
+    {
+      "id": 1809,
+      "kind": "wrong bash output in",
+      "input": "\"echo leaked >f; exec <f; cat & wait\"",
+      "want": "\"\"",
+      "got": "\"bash: line 2: leaked: command not found\\nexit status 127\"",
+      "preliminary_group": "Job control, signal, background, or process-environment model differences",
+      "decision": "open"
+    },
+    {
+      "id": 1818,
+      "kind": "wrong bash output in",
+      "input": "\"umask 999\"",
+      "want": "\"umask: 999: octal number out of range\\nexit status 1\"",
+      "got": "\"bash: line 1: umask: 999: octal number out of range\\nexit status 1\"",
+      "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
+      "decision": "open"
+    },
+    {
+      "id": 1866,
+      "kind": "wrong bash output in",
+      "input": "\"a=4; read -t 0.000001 a <<< abcde; status=$?; echo ${a:-unset} $status\"",
+      "want": "\"abcde 0\\n\"",
+      "got": "\"unset 142\\n\"",
+      "preliminary_group": "Timing-sensitive read behavior",
+      "decision": "open"
+    },
+    {
+      "id": 1867,
+      "kind": "wrong bash output in",
+      "input": "\"a=4; read -t 0.000001 a <<<abcde; status=$?; echo ${a:-unset} $status\"",
+      "want": "\"abcde 0\\n\"",
+      "got": "\"unset 142\\n\"",
+      "preliminary_group": "Timing-sensitive read behavior",
+      "decision": "open"
+    },
+    {
+      "id": 1887,
+      "kind": "wrong bash output in",
+      "input": "\"readonly OPTARG && getopts a: opt -a foo; echo status:$?; echo ${OPTARG-unset}\"",
+      "want": "\"OPTARG: readonly variable\\nstatus:1\\nunset\\n\"",
+      "got": "\"bash: line 1: OPTARG: readonly variable\\nstatus:0\\nunset\\n\"",
+      "preliminary_group": "Array / nameref / assignment-word behavior differences",
+      "decision": "open"
+    },
+    {
+      "id": 1907,
+      "kind": "wrong bash output in",
+      "input": "\"while kill -s 0 $$; do :; done & kill -s USR1 $!; wait $!; s=$?; [ $s -gt 128 ] && echo signaled\"",
+      "want": "\"signaled\\n\"",
+      "got": "\"bash: line 1: 640793 User defined signal 1      while kill -s 0 $$; do\\n    :;\\ndone\\nsignaled\\n\"",
+      "preliminary_group": "Job control, signal, background, or process-environment model differences",
+      "decision": "open"
+    },
+    {
+      "id": 1908,
+      "kind": "wrong bash output in",
+      "input": "\"mkdir d1 d2; echo 'echo ERROR' >d1/s; echo 'echo OK' >d2/s; chmod a=wx d1/s; chmod a=r d2/s; PATH=$PWD/d1:$PWD/d2:$PATH; . s\"",
+      "want": "\"OK\\n\"",
+      "got": "\"ERROR\\n\"",
+      "preliminary_group": "Linux permissions / process environment",
+      "decision": "open"
+    },
+    {
+      "id": 1912,
+      "kind": "wanted bash to error in",
+      "input": "\"exec -a foo\"",
+      "want": null,
+      "got": null,
+      "preliminary_group": "GNU returned success / no bash diagnostic",
+      "decision": "open"
+    },
+    {
+      "id": 1915,
+      "kind": "wrong bash output in",
+      "input": "\"enable -f ./strmatch.so strmatch; enable -d strmatch\"",
+      "want": "\"\"",
+      "got": "\"bash: line 1: enable: cannot open shared object ./strmatch.so: ./strmatch.so: cannot open shared object file: No such file or directory\\nbash: line 1: enable: strmatch: not a shell builtin\\nexit status 1\"",
+      "preliminary_group": "GNU loadable / build environment",
+      "decision": "open"
+    },
+    {
+      "id": 1936,
+      "kind": "wanted bash to error in",
+      "input": "\"mkdir a; chmod 0000 a; cd a\"",
+      "want": null,
+      "got": null,
+      "preliminary_group": "GNU returned success / no bash diagnostic",
+      "decision": "open"
+    },
+    {
+      "id": 1937,
+      "kind": "wanted bash to error in",
+      "input": "\"mkdir a; chmod 0222 a; cd a\"",
+      "want": null,
+      "got": null,
+      "preliminary_group": "GNU returned success / no bash diagnostic",
+      "decision": "open"
+    },
+    {
+      "id": 1938,
+      "kind": "wanted bash to error in",
+      "input": "\"mkdir a; chmod 0444 a; cd a\"",
+      "want": null,
+      "got": null,
+      "preliminary_group": "GNU returned success / no bash diagnostic",
+      "decision": "open"
+    },
+    {
+      "id": 1939,
+      "kind": "wanted bash to error in",
+      "input": "\"mkdir a; chmod 0010 a; cd a\"",
+      "want": null,
+      "got": null,
+      "preliminary_group": "GNU returned success / no bash diagnostic",
+      "decision": "open"
+    },
+    {
+      "id": 1940,
+      "kind": "wanted bash to error in",
+      "input": "\"mkdir a; chmod 0001 a; cd a\"",
+      "want": null,
+      "got": null,
+      "preliminary_group": "GNU returned success / no bash diagnostic",
+      "decision": "open"
+    },
+    {
+      "id": 1969,
+      "kind": "wrong bash output in",
+      "input": "\"set -x; animals=(\\\"dog\\\", \\\"cat\\\", \\\"otter\\\"); echo \\\"hello ${animals[*]}\\\"\"",
+      "want": "\"+ animals=(dog, cat, otter)\\n+ echo 'hello dog, cat, otter'\\nhello dog, cat, otter\\n\"",
+      "got": "\"+ animals=(\\\"dog\\\", \\\"cat\\\", \\\"otter\\\")\\n+ echo 'hello dog, cat, otter'\\nhello dog, cat, otter\\n\"",
+      "preliminary_group": "Formatting/platform output differences",
+      "decision": "open"
+    },
+    {
+      "id": 1971,
+      "kind": "wrong bash output in",
+      "input": "\"set -x; var=42; (( $var )); null=; (( $null )); set +x\"",
+      "want": "\"+ var=42\\n+ ((  42  ))\\n\\n+ ((    ))\\n+ set +x\\n\"",
+      "got": "\"+ var=42\\n+ ((  42  ))\\n+ null=\\n+ ((    ))\\n+ set +x\\n\"",
+      "preliminary_group": "Formatting/platform output differences",
+      "decision": "open"
+    }
+  ],
+  "total_cases": 1998,
+  "passing_cases": 1879,
+  "failing_cases": 119,
+  "skipped_cases": 0,
+  "raw_log": "/srv/sprint275/evidence/052-full/raw-logs/20260925T003237Z-293852/11.2096.run.log",
+  "status": "preliminary inventory; all case decisions remain open"
+}
