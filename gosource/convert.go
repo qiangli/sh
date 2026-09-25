@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode"
 
 	s "mvdan.cc/sh/v3/syntax"
 )
@@ -28,6 +29,14 @@ type converter struct {
 	// their types are spelled bare while that file is being lowered.
 	dotImports  map[*ast.File]map[string]bool
 	currentFile *ast.File
+	// perFileImports is set when each input file is emitted as its own Go
+	// file (a native library unit): an import binding written by one file is
+	// not in scope in another, so a type spelled in a file that does not
+	// import its package takes a synthetic import owned by that file.
+	perFileImports bool
+	// fileBindings caches, per file, the spelling of each package path the
+	// file binds by a named or implicit import (see fileImportBinding).
+	fileBindings map[*ast.File]map[string]string
 	// mapped maps each explicit package path linked into the same file to
 	// its map index. A selector on one of their import bindings collapses
 	// to the selected object's rename, and their package-level names are
@@ -245,6 +254,11 @@ func (c *converter) qualifier(p *types.Package) string {
 	if c.currentFile != nil && c.dotImports[c.currentFile][p.Path()] {
 		return ""
 	}
+	if c.currentFile != nil {
+		if name, ok := c.fileImportBinding(c.currentFile, p.Path()); ok {
+			return name
+		}
+	}
 	if imp, ok := c.syntheticImports[p.Path()]; ok {
 		if c.currentFile != nil {
 			imp.sources[c.currentFile.FileStart] = true
@@ -252,7 +266,7 @@ func (c *converter) qualifier(p *types.Package) string {
 		}
 		return imp.alias
 	}
-	if alias := c.importAliases[p.Path()]; alias != "" {
+	if alias := c.importAliases[p.Path()]; alias != "" && !(c.perFileImports && c.currentFile != nil) {
 		return alias
 	}
 	if c.suppressSyntheticImport {
@@ -271,9 +285,48 @@ func (c *converter) qualifier(p *types.Package) string {
 	if c.currentFile != nil {
 		imp.sources[c.currentFile.FileStart] = true
 	}
-	c.importAliases[p.Path()] = imp.alias
+	if c.importAliases[p.Path()] == "" {
+		c.importAliases[p.Path()] = imp.alias
+	}
 	c.syntheticImports[p.Path()] = imp
 	return imp.alias
+}
+
+// fileImportBinding reports the spelling f's own import of path has in the
+// generated Go: the binding's rename when it took one, else its name. Blank
+// and dot imports bind no qualifier. An alias another file minted for the
+// same path is not in f's scope once files are emitted separately, so the
+// file's own binding is preferred in both modes.
+func (c *converter) fileImportBinding(f *ast.File, path string) (string, bool) {
+	if c.fileBindings == nil {
+		c.fileBindings = map[*ast.File]map[string]string{}
+	}
+	bindings, ok := c.fileBindings[f]
+	if !ok {
+		bindings = map[string]string{}
+		for _, spec := range f.Imports {
+			var obj types.Object
+			if spec.Name != nil {
+				obj = c.info.Defs[spec.Name]
+			} else {
+				obj = c.info.Implicits[spec]
+			}
+			pkgname, ok := obj.(*types.PkgName)
+			if !ok || pkgname.Name() == "_" || pkgname.Name() == "." {
+				continue
+			}
+			name := c.renames[obj]
+			if name == "" {
+				name = pkgname.Name()
+			}
+			if _, seen := bindings[pkgname.Imported().Path()]; !seen {
+				bindings[pkgname.Imported().Path()] = name
+			}
+		}
+		c.fileBindings[f] = bindings
+	}
+	name, ok := bindings[path]
+	return name, ok
 }
 
 // typeString spells a checked type for the flat file. types.TypeString can
@@ -974,7 +1027,16 @@ func (c *converter) expr(e ast.Expr) s.BashPPExpr {
 				// time.Sleep(1e7). Preserve that checked boundary so the bridge
 				// sends an integer time.Duration rather than the literal's float
 				// spelling and lets reflect reject it at the dependency boundary.
+				// A boundary the use site cannot spell — an unexported type of
+				// another package, or a name a local declaration shadows there —
+				// is left as written: the checked source already converts it.
+				if !c.namedSpellable(named) {
+					return result
+				}
 				name := c.typeString(named)
+				if c.spellingShadowed(name, e.Pos(), named.Origin().Obj()) {
+					return result
+				}
 				return &s.BashPPConvertExpr{
 					ConvType:     c.lit(e.Pos(), name),
 					ConvTypeExpr: c.checkedType(named, e, "constant conversion type"),
@@ -988,7 +1050,7 @@ func (c *converter) expr(e ast.Expr) s.BashPPExpr {
 			// A package that redeclares this predeclared type name as a
 			// non-type has no usable `basic.Name()` conversion; emitting one
 			// calls the redeclared object. Leave the constant as written.
-			if c.shadowedBuiltins[basic.Name()] {
+			if c.shadowedBuiltins[basic.Name()] || c.spellingShadowed(basic.Name(), e.Pos(), types.Universe.Lookup(basic.Name())) {
 				return result
 			}
 			if c.constAsWrittenIn(e, basic) {
@@ -998,6 +1060,67 @@ func (c *converter) expr(e ast.Expr) s.BashPPExpr {
 		}
 	}
 	return result
+}
+
+// namedSpellable reports whether a named type can be spelled outside its
+// declaring package: exported, or declared by the converter's own package or
+// a package linked into the same flat file (whose names are renamed).
+func (c *converter) namedSpellable(named *types.Named) bool {
+	obj := named.Obj()
+	if obj.Pkg() == nil || obj.Exported() || obj.Pkg().Path() == c.packagePath {
+		return true
+	}
+	_, mapped := c.mapped[obj.Pkg().Path()]
+	return mapped
+}
+
+// spellingShadowed reports whether the leading identifier of a type spelling
+// (a predeclared or package-level type name, or a package qualifier) resolves
+// at pos to a different object than the one the spelling means, because a
+// local declaration of the same name is in scope there: `rune(x)` inside a
+// loop whose variable is named rune calls the variable. Hygienic names the
+// lowering minted cannot be shadowed. want, when known, is the type name an
+// unqualified spelling must resolve to.
+func (c *converter) spellingShadowed(spelling string, pos token.Pos, want types.Object) bool {
+	if c.currentFile == nil || c.info == nil || !pos.IsValid() {
+		return false
+	}
+	head := spelling
+	for head != "" && (head[0] == '*' || head[0] == '[' || head[0] == ']') {
+		head = head[1:]
+	}
+	end := strings.IndexFunc(head, func(r rune) bool {
+		return !(r == '_' || unicode.IsLetter(r) || unicode.IsDigit(r))
+	})
+	qualified := false
+	if end >= 0 {
+		qualified = head[end] == '.'
+		head = head[:end]
+	}
+	if head == "" || strings.HasPrefix(head, c.prefix) {
+		return false
+	}
+	scope := c.info.Scopes[c.currentFile]
+	if scope == nil {
+		return false
+	}
+	inner := scope.Innermost(pos)
+	if inner == nil {
+		return false
+	}
+	_, obj := inner.LookupParent(head, pos)
+	if obj == nil {
+		return false
+	}
+	if qualified {
+		_, isPkg := obj.(*types.PkgName)
+		return !isPkg
+	}
+	if want == nil {
+		_, isType := obj.(*types.TypeName)
+		return !isType
+	}
+	return obj != want
 }
 
 // constSpec locates a constant's declaring spec and the index of its name.

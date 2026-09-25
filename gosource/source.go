@@ -375,6 +375,7 @@ func Load(sources []Source, options Options) (*Program, error) {
 		lc.syntheticImports = syntheticImports
 		lc.dotImports = map[*ast.File]map[string]bool{}
 		lc.resolveImport = imp.resolve
+		lc.perFileImports = options.PreserveNativeInit
 		if lc != c {
 			if err := refuseEmbedDirectives(lc); err != nil {
 				return nil, err
