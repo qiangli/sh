@@ -582,10 +582,10 @@ func (r *Runner) bashPPScalarFromCell(cell *bashPPCell) bashPPScalar {
 		if typ == "" {
 			typ = bashPPTypeText(cell.declType)
 		}
-		if underlying, ok := r.bashPPUnderlyingType(&syntax.BashPPNamedType{Name: &syntax.Lit{Value: typ}}).(*syntax.BashPPNamedType); ok &&
-			underlying.Name != nil && (underlying.Name.Value == "complex64" || underlying.Name.Value == "complex128") {
+		if underlying, ok := r.bashPPUnderlyingTypeName(typ); ok &&
+			(underlying == "complex64" || underlying == "complex128") {
 			bits := 128
-			if underlying.Name.Value == "complex64" {
+			if underlying == "complex64" {
 				bits = 64
 			}
 			if runtimeValue, err := strconv.ParseComplex(text, bits); err == nil {
@@ -768,8 +768,8 @@ func (r *Runner) bashPPFloatTypeName(name string) bool {
 	if name == "" {
 		return false
 	}
-	named, ok := r.bashPPUnderlyingType(&syntax.BashPPNamedType{Name: &syntax.Lit{Value: name}}).(*syntax.BashPPNamedType)
-	return ok && named.Name != nil && (named.Name.Value == "float32" || named.Name.Value == "float64")
+	named, ok := r.bashPPUnderlyingTypeName(name)
+	return ok && (named == "float32" || named == "float64")
 }
 
 func bashPPScalarFloat64(value bashPPScalar) (float64, bool) {
@@ -794,8 +794,8 @@ func (r *Runner) bashPPRuntimeFloatSpecial(op token.Token, left, right bashPPSca
 	if !r.bashPPGoSource || !(left.runtime || right.runtime) || (op != token.ADD && op != token.SUB && op != token.MUL && op != token.QUO) {
 		return bashPPScalar{}, false
 	}
-	underlying, ok := r.bashPPUnderlyingType(&syntax.BashPPNamedType{Name: &syntax.Lit{Value: typ}}).(*syntax.BashPPNamedType)
-	if !ok || (underlying.Name.Value != "float32" && underlying.Name.Value != "float64") {
+	underlying, ok := r.bashPPUnderlyingTypeName(typ)
+	if !ok || (underlying != "float32" && underlying != "float64") {
 		return bashPPScalar{}, false
 	}
 	lf, lok := bashPPScalarFloat64(left)
@@ -814,7 +814,7 @@ func (r *Runner) bashPPRuntimeFloatSpecial(op token.Token, left, right bashPPSca
 	case token.QUO:
 		result = lf / rf
 	}
-	if underlying.Name.Value == "float32" {
+	if underlying == "float32" {
 		result = float64(float32(result))
 	}
 	if !math.IsInf(result, 0) && !math.IsNaN(result) {
@@ -932,13 +932,13 @@ func (r *Runner) bashPPBinaryScalar(op token.Token, left, right bashPPScalar) (b
 		}
 	}
 	if r.bashPPGoSource && (left.runtime || right.runtime) {
-		if named, ok := r.bashPPUnderlyingType(&syntax.BashPPNamedType{Name: &syntax.Lit{Value: resultType}}).(*syntax.BashPPNamedType); ok && (named.Name.Value == "float32" || named.Name.Value == "float64") {
+		if named, ok := r.bashPPUnderlyingTypeName(resultType); ok && (named == "float32" || named == "float64") {
 			var err error
-			left, err = r.bashPPConvertScalar(named.Name.Value, left)
+			left, err = r.bashPPConvertScalar(named, left)
 			if err != nil {
 				return bashPPScalar{}, err
 			}
-			right, err = r.bashPPConvertScalar(named.Name.Value, right)
+			right, err = r.bashPPConvertScalar(named, right)
 			if err != nil {
 				return bashPPScalar{}, err
 			}
@@ -1067,8 +1067,8 @@ func (r *Runner) bashPPBinaryScalar(op token.Token, left, right bashPPScalar) (b
 			runtime = runtime || right.runtime
 		}
 		if r.bashPPGoSource && runtime {
-			if named, ok := r.bashPPUnderlyingType(&syntax.BashPPNamedType{Name: &syntax.Lit{Value: left.typ}}).(*syntax.BashPPNamedType); ok && bashPPIntegerType(named.Name.Value) {
-				bits, _ := bashPPIntegerWidth(named.Name.Value)
+			if named, ok := r.bashPPUnderlyingTypeName(left.typ); ok && bashPPIntegerType(named) {
+				bits, _ := bashPPIntegerWidth(named)
 				if shift >= uint64(bits) {
 					value := constant.MakeInt64(0)
 					if op == token.SHR && constant.Sign(left.value) < 0 {
@@ -1088,12 +1088,11 @@ func (r *Runner) bashPPBinaryScalar(op token.Token, left, right bashPPScalar) (b
 }
 
 func (r *Runner) bashPPValidateUntypedScalarOperand(value constant.Value, typ string) error {
-	underlying := r.bashPPUnderlyingType(&syntax.BashPPNamedType{Name: &syntax.Lit{Value: typ}})
-	named, ok := underlying.(*syntax.BashPPNamedType)
+	named, ok := r.bashPPUnderlyingTypeName(typ)
 	if !ok {
 		return fmt.Errorf("BASHPP-EEXPR-TYPE: %s does not have a scalar underlying type", typ)
 	}
-	_, err := r.bashPPConvertScalar(named.Name.Value, bashPPScalar{value: value})
+	_, err := r.bashPPConvertScalar(named, bashPPScalar{value: value})
 	return err
 }
 
@@ -1105,21 +1104,20 @@ func (r *Runner) bashPPTypedScalarResult(value constant.Value, typ string, runti
 	if typ == "" {
 		return bashPPScalar{value: value, runtime: runtime}, nil
 	}
-	underlying := r.bashPPUnderlyingType(&syntax.BashPPNamedType{Name: &syntax.Lit{Value: typ}})
-	named, ok := underlying.(*syntax.BashPPNamedType)
+	named, ok := r.bashPPUnderlyingTypeName(typ)
 	if !ok {
 		return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-TYPE: %s does not have a scalar underlying type", typ)
 	}
-	if runtime && bashPPIntegerType(named.Name.Value) && value.Kind() == constant.Int {
-		value = bashPPWrapInteger(named.Name.Value, value)
+	if runtime && bashPPIntegerType(named) && value.Kind() == constant.Int {
+		value = bashPPWrapInteger(named, value)
 	}
-	if r.bashPPGoSource && (named.Name.Value == "float32" || named.Name.Value == "float64") {
-		out, err := r.bashPPConvertScalar(named.Name.Value, bashPPScalar{value: value, runtime: runtime})
+	if r.bashPPGoSource && (named == "float32" || named == "float64") {
+		out, err := r.bashPPConvertScalar(named, bashPPScalar{value: value, runtime: runtime})
 		out.typ = typ
 		return out, err
 	}
-	if r.bashPPGoSource && (named.Name.Value == "complex64" || named.Name.Value == "complex128") {
-		out, err := r.bashPPConvertComplex(named.Name.Value, bashPPScalar{value: value, runtime: runtime})
+	if r.bashPPGoSource && (named == "complex64" || named == "complex128") {
+		out, err := r.bashPPConvertComplex(named, bashPPScalar{value: value, runtime: runtime})
 		out.typ = typ
 		return out, err
 	}
@@ -1943,8 +1941,8 @@ func (r *Runner) bashPPRuntimeFloatToIntegerQY(typ string, x bashPPScalar) const
 	if bits < 32 {
 		boundBits, boundSigned = 64, true
 		source := x.typ
-		if shape, ok := r.bashPPUnderlyingType(&syntax.BashPPNamedType{Name: &syntax.Lit{Value: source}}).(*syntax.BashPPNamedType); ok && shape.Name != nil {
-			source = shape.Name.Value
+		if shape, ok := r.bashPPUnderlyingTypeName(source); ok {
+			source = shape
 		}
 		if source == "float32" {
 			boundBits = 32
