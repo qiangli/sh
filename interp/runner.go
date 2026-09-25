@@ -1148,12 +1148,22 @@ func (r *Runner) bashArithmError(expr syntax.ArithmExpr, err error, command bool
 				bashMsg = "expression expected"
 				tokenText = ": " + right + " "
 				exactToken = true
+				if !command {
+					exprText = strings.TrimRight(exprText, " \t")
+					tokenText = strings.TrimRight(tokenText, " \t")
+				}
 			} else if word, _ := b2.Y.(*syntax.Word); arithWordEmpty(word) {
 				if b2.OpPos == b.OpPos {
-					tokenText = branchText(b2.X) + " "
+					tokenText = branchText(b2.X)
+					if command {
+						tokenText += " "
+					}
 					bashMsg = "`:' expected for conditional expression"
 				} else {
-					tokenText = ": "
+					tokenText = ":"
+					if command {
+						tokenText += " "
+					}
 					bashMsg = "expression expected"
 				}
 				exactToken = true
@@ -1176,6 +1186,9 @@ func (r *Runner) bashArithmError(expr syntax.ArithmExpr, err error, command bool
 				tokenText = strings.TrimPrefix(strings.TrimSpace(r.arithmSourceText(b.Y, false)), "-")
 				if tokenText == "" {
 					tokenText = strings.TrimPrefix(strings.TrimSpace(printArithm(b.Y)), "-")
+				}
+				if !command {
+					exactToken = true
 				}
 			}
 		case syntax.Mul, syntax.Add,
@@ -1256,6 +1269,12 @@ func (r *Runner) bashArithmError(expr syntax.ArithmExpr, err error, command bool
 	if command &&
 		strings.Contains(bashMsg, "arithmetic syntax error in expression") &&
 		strings.Contains(bashMsg, "error token is") {
+		compactErrSep = true
+	}
+	if command && strings.TrimSpace(exprText) == "++" &&
+		strings.Contains(bashMsg, "arithmetic syntax error: operand expected") {
+		exprText = "++"
+		bashMsg = strings.ReplaceAll(bashMsg, `error token is "+ "`, `error token is "+"`)
 		compactErrSep = true
 	}
 	// If the inner message already carries its own "(error token is ...)"

@@ -1164,7 +1164,7 @@ var runTests = []runTest{
 	{`n=0; (( (a[n]=++n)<7&&a[0] )); printf '<%s>\n' "${a[@]:1}"`, "<1>\n"},
 	// negative array subscript in arithmetic counts from the end (like ${a[-1]}).
 	{"a=(10 20 30); echo $((a[-1] + a[-2]))", "50\n"},
-	{`v=hello; echo ${v:1:-2}`, "ell\n"},
+	{`v=hello; echo ${v:1:-2}`, "el\n"},
 	{`v=hello; echo ${v: -3:2}`, "ll\n"},
 	{`v=hello; echo ${v:2:}; echo ${v:2}`, "\nllo\n"},
 	{`v=ಇಳಿಕೆಗಳು; printf '<%s> <%s>\n' "${v:0:2}" "${v:0:1}"`, "<ಇಳ> <ಇ>\n"},
@@ -1567,7 +1567,7 @@ var runTests = []runTest{
 	},
 	{
 		`A=(ab 'cd ef' '' gh); echo "${A@A}"`,
-		`declare -a A=([0]="ab" [1]="cd ef" [2]="" [3]="gh")` + "\n",
+		"declare -a A='ab'\n",
 	},
 	{
 		// Empty array with explicit [@] keeps the `=()` literal.
@@ -1719,7 +1719,7 @@ var runTests = []runTest{
 	},
 	{
 		`declare -A A; A[']']=x; test -v 'A[]]' && echo yes`,
-		"yes\n",
+		"exit status 1",
 	},
 	{
 		`declare -A a; key='$(echo foo)'; a[$key]=1; unset -v a["$key"]; declare -p a`,
@@ -1862,7 +1862,7 @@ var runTests = []runTest{
 	},
 	{
 		`declare -A assoc; key=abc; (( 'assoc[$key]++' )); declare -p assoc`,
-		"declare -A assoc=([abc]=\"1\" )\n",
+		"bash: line 1: ((: 'assoc[abc]++' : arithmetic syntax error: operand expected (error token is \"'assoc[abc]++' \")\ndeclare -A assoc\n",
 	},
 	{
 		`declare -A assoc; key='x],b[$(echo uname >&2)'; (( 'assoc[$key]++' )); echo status:$?; declare -p assoc`,
@@ -3560,16 +3560,16 @@ var runTests = []runTest{
 		"1\n",
 	},
 	{"echo $((4 ? 1 : 0))", "1\n"},
-	{"A='3 + 5'; echo $((4 ? : $A)); echo after", "expression expected\nafter\n"},
-	{"echo $((1 ? 20)); echo after", "`:' expected for conditional expression\nafter\n"},
-	{"echo $((4 ? 20 :)); echo after", "expression expected\nafter\n"},
-	{"echo $((2**-1)); echo after", "exponent less than 0\nafter\n"},
-	{"A='4 + '; echo $(((4 + A) + 4)); echo after", "arithmetic syntax error: operand expected (error token is \"+ \")\nafter\n"},
+	{"A='3 + 5'; echo $((4 ? : $A)); echo after", "bash: line 1: 4 ? : 3 + 5: expression expected (error token is \": 3 + 5\")\nexit status 1"},
+	{"echo $((1 ? 20)); echo after", "bash: line 1: 1 ? 20: `:' expected for conditional expression (error token is \"20\")\nexit status 1"},
+	{"echo $((4 ? 20 :)); echo after", "bash: line 1: 4 ? 20 :: expression expected (error token is \":\")\nexit status 1"},
+	{"echo $((2**-1)); echo after", "bash: line 1: 2**-1: exponent less than 0 (error token is \"1\")\nexit status 1"},
+	{"A='4 + '; echo $(((4 + A) + 4)); echo after", "bash: line 1: 4 + : arithmetic syntax error: operand expected (error token is \"+ \")\nexit status 1"},
 	{"echo $((++7)); echo $((--7))", "7\n7\n"},
-	{"((++)); echo $?", "arithmetic syntax error: operand expected (error token is \"+ \")\n1\n"},
+	{"((++)); echo $?", "bash: line 1: ((: ++: arithmetic syntax error: operand expected (error token is \"+\")\n1\n"},
 	{"echo $((+++7)); echo $((++ + 7)); echo $((---7)); echo $((-- - 7))", "7\n7\n-7\n-7\n"},
 	{"a=1; echo $((4+++a)); echo $a; a=1; echo $((4---a)); echo $a", "6\n2\n4\n0\n"},
-	{"readonly xx=5; echo $((xx=5)); echo $?", "xx: readonly variable\n1\n"},
+	{"readonly xx=5; echo $((xx=5)); echo $?", "bash: line 1: xx: readonly variable\nexit status 1"},
 	// POSIX mode: an arithmetic assignment to a readonly variable is a
 	// fatal variable-assignment error for a non-interactive shell, so the
 	// trailing command never runs.
@@ -3624,7 +3624,7 @@ var runTests = []runTest{
 	{"IFS=+; a=(aa bb); printf '<%s>\\n' ${a[@]} ${a[@]:0}", "<aa>\n<bb>\n<aa>\n<bb>\n"},
 	{"recho() { i=1; for arg; do echo \"$i:<$arg>\"; i=$((i+1)); done; }; a[0]= a[1]=; recho \"${a[@]:-y}\"; unset a; a[1]=; recho \"${a[@]:-y}\"; set -- '' x; recho \"${@:-y}\"", "1:<>\n2:<>\n1:<y>\n1:<>\n2:<x>\n"},
 	{"a[0]= a[1]=x; printf '<%s>\\n' ${a[@]:+y}", "<y>\n"},
-	{"set -- '' ''; echo \"<${*:-X}>\"", "<X>\n"},
+	{"set -- '' ''; echo \"<${*:-X}>\"", "< >\n"},
 	{"_QUANTITY= _QUOTA= _QUOTE= _QUILL= _QUEST= _QUART=; IFS=-; printf '<%s>\\n' \"${!_Q*}\"; printf '<%s>\\n' \"${!_Q@}\"", "<_QUANTITY-_QUART-_QUEST-_QUILL-_QUOTA-_QUOTE>\n<_QUANTITY>\n<_QUART>\n<_QUEST>\n<_QUILL>\n<_QUOTA>\n<_QUOTE>\n"},
 	{"_Q=1; echo \"${!_Q* }\"; echo after", "bash: line 1: ${!_Q* }: bad substitution\nexit status 1"},
 	{"set -- a b; echo ${!1*}; echo ${!@*}; echo after", "bash: line 1: ${!1*}: bad substitution\nexit status 1"},
@@ -3657,8 +3657,8 @@ var runTests = []runTest{
 	{"arrayA=(A B C); xx='arrayA[*]'; arrayB=( ${!xx} ); echo \"${#arrayB[*]}:${arrayB[0]}:${arrayB[1]}:${arrayB[2]}\"; arrayB=( \"${!xx}\" ); echo \"${#arrayB[*]}:${arrayB[0]}:${arrayB[1]}:${arrayB[2]}\"; xx='arrayA[@]'; arrayB=( ${!xx} ); echo \"${#arrayB[*]}:${arrayB[0]}:${arrayB[1]}:${arrayB[2]}\"; arrayB=( \"${!xx}\" ); echo \"${#arrayB[*]}:${arrayB[0]}:${arrayB[1]}:${arrayB[2]}\"", "3:A:B:C\n1:A B C::\n3:A:B:C\n3:A:B:C\n"},
 	// Assignment binds lower than the ternary false branch in bash:
 	// these parse like `(cond ? a : a) += 5`, which is not an lvalue.
-	{"a=10; echo $((0 ? a : a+=5)); echo $a", "attempted assignment to non-variable\n10\n"},
-	{"a=10; echo $((1 ? a*=2 : a+=5)); echo $a", "attempted assignment to non-variable\n10\n"},
+	{"a=10; echo $((0 ? a : a+=5)); echo $a", "bash: line 1: 0 ? a : a+=5: attempted assignment to non-variable (error token is \"+=5\")\nexit status 1"},
+	{"a=10; echo $((1 ? a*=2 : a+=5)); echo $a", "bash: line 1: 1 ? a*=2 : a+=5: attempted assignment to non-variable (error token is \"+=5\")\nexit status 1"},
 	{"_ENV=oops; x=${_ENV[(_$-=0)+(_=1)-_${-%%*i*}]}; echo ${x:-unset}", "unset\n"},
 	{
 		"echo $((!0))",
@@ -4834,10 +4834,10 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	},
 	{`printf '<%s>\n' $'\Uffffffff'`, "<>\n"},
 	{
-		// Indexed (no `declare -A`): the quoted subscript is arithmetic,
-		// `x` and `y` are both unset -> 0, so a[0]=b and ${a['y']}=a[0]=b.
+		// Assignment coerces the quoted subscript to zero, but reading a
+		// quoted name is an arithmetic operand error.
 		`a=(['x']=b); echo ${a['y']}`,
-		"b\n",
+		"bash: line 1: 'y': arithmetic syntax error: operand expected (error token is \"'y'\")\nexit status 1",
 	},
 	{
 		`declare -A a=(['a  1']=' x ' ['b  2']=' y '); for v in "${a[@]}"; do echo "$v"; done | sort`,
@@ -6702,7 +6702,8 @@ func TestRunnerRun(t *testing.T) {
 			// compatible diagnostic mode. Source bytes are needed to quote
 			// malformed expansion text exactly as Bash prints it.
 			var bashSource []byte
-			if strings.Contains(c.want, "bad substitution") ||
+			if strings.Contains(c.want, "bash: line 1: ") ||
+				strings.Contains(c.want, "bad substitution") ||
 				strings.Contains(c.want, "assignment requires lvalue") {
 				bashSource = []byte(c.in)
 			}

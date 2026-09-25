@@ -728,7 +728,8 @@ func arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 			// array subscript coerces a quoted name to 0 (`a=(['x']=b)`),
 			// so restrict the bare-name case to arithmInOperand. The
 			// numeric/bad-text/set-name cases bash rejects everywhere.
-			if arithmBadSingleQuotedText(expanded) || quotedNumeric ||
+			if arithmBadSingleQuotedText(expanded) || strings.Contains(sqText, "++") ||
+				strings.Contains(sqText, "--") || quotedNumeric ||
 				(syntax.ValidName(sqText) && cfg.Env.Get(sqText).IsSet()) ||
 				(syntax.ValidName(sqText) && cfg.arithmInOperand) {
 				text := "'" + expanded + "'"
@@ -908,12 +909,13 @@ func arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 			if word, ok := expr.X.(*syntax.Word); ok {
 				if sqText, ok := arithmSingleQuotedText(word); ok {
 					expanded := cfg.expandArithmDiagnosticText(sqText)
-					if arithmBadSingleQuotedText(expanded) {
-						text := "'" + expanded + "'" + op
-						return 0, &ArithmError{
-							Text: text,
-							Err:  fmt.Errorf("arithmetic syntax error: operand expected (error token is \"%s\")", text+" "),
-						}
+					// Quotes survive in arithmetic source text. They make
+					// the whole increment operand invalid, even when the
+					// text inside names an existing array element.
+					text := "'" + expanded + "'" + op
+					return 0, &ArithmError{
+						Text: text,
+						Err:  fmt.Errorf("arithmetic syntax error: operand expected (error token is \"%s\")", text+" "),
 					}
 				}
 			}

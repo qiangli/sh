@@ -177,7 +177,7 @@ func TestArithFidelityBashSource(t *testing.T) {
 		},
 		{
 			input: "A='3 + 5'\necho $((4 ? : $A))\necho after",
-			want:  "./s: line 2: 4 ? : 3 + 5 : expression expected (error token is \": 3 + 5 \")\nafter\n",
+			want:  "./s: line 2: 4 ? : 3 + 5: expression expected (error token is \": 3 + 5\")\nafter\n",
 		},
 		{
 			input: "(( 1[2] = 3 ))\necho status=$?\n(( a[1][2] = 3 ))\necho status=$?",

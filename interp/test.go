@@ -819,6 +819,11 @@ func (r *Runner) varIsSetForTest(name string, classic bool) bool {
 		}
 		return err == nil && vr.IndexedSet(i)
 	case expand.Associative:
+		// In a -v operand the first unescaped closing bracket terminates
+		// the subscript. A trailing bracket is not part of the key.
+		if strings.Contains(index, "]") && !strings.Contains(index, `\]`) {
+			return false
+		}
 		// In `[[ ]]` the operand word — and so its subscript — was already
 		// expanded once when computing the test string, so re-expanding
 		// here would run a `$(…)` key a second time or strip a single-

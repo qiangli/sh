@@ -1741,9 +1741,6 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 			if pe.Slice.Length != nil {
 				if sliceLen < 0 {
 					end = slicePos(sliceLen)
-					if start > 0 && end < len(runes) {
-						end++
-					}
 				} else if start+sliceLen < end {
 					end = start + sliceLen
 				}
@@ -1834,13 +1831,7 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 				}
 			}
 			if name == "*" {
-				starAggregateNull = len(values) > 0
-				for _, elem := range values {
-					if elem != "" {
-						starAggregateNull = false
-						break
-					}
-				}
+				starAggregateNull = len(values) == 1 && values[0] == ""
 			} else {
 				starAggregateNull = len(values) == 1 && values[0] == ""
 			}
@@ -2304,6 +2295,24 @@ func (cfg *Config) paramAtKFields(vr Variable, name string) []string {
 func (cfg *Config) paramAtA(vr, orig Variable, name, scalarStr string, forceLiteral bool) string {
 	switch vr.Kind {
 	case Indexed, Associative:
+		if !forceLiteral {
+			// A bare array name addresses element zero. Bash's @A
+			// transformation therefore describes that scalar slot; [@] is
+			// required to serialize the complete array.
+			flags := vr.Flags()
+			if flags == "" {
+				flags = "-"
+			}
+			decl := "declare -" + flags + " " + name
+			if vr.Kind == Indexed {
+				if vr.IndexedSet(0) {
+					return decl + "=" + bashSingleQuote(vr.IndexedElem(0))
+				}
+			} else if value, ok := vr.Map["0"]; ok {
+				return decl + "=" + bashSingleQuote(value)
+			}
+			return decl
+		}
 		return declareArray(name, vr, forceLiteral)
 	default:
 		flags := orig.Flags()
@@ -2753,7 +2762,7 @@ func (cfg *Config) varInd(vr Variable, idx syntax.ArithmExpr) (string, error) {
 		if emptyLiteralIndex(idx) && cfg.curParam.Param != nil {
 			return "", BadSubstitutionError{Node: cfg.curParam}
 		}
-		if text, ok := singleQuotedWhitespaceIndex(idx); ok {
+		if text, ok := singleQuotedIndex(idx); ok {
 			return "", &ArithmError{
 				Text: "'" + text + "'",
 				Err:  fmt.Errorf("arithmetic syntax error: operand expected (error token is %q)", "'"+text+"'"),
@@ -2865,13 +2874,13 @@ func emptyLiteralIndex(idx syntax.ArithmExpr) bool {
 	return ok && lit.Value == ""
 }
 
-func singleQuotedWhitespaceIndex(idx syntax.ArithmExpr) (string, bool) {
+func singleQuotedIndex(idx syntax.ArithmExpr) (string, bool) {
 	word, ok := idx.(*syntax.Word)
 	if !ok || len(word.Parts) != 1 {
 		return "", false
 	}
 	sq, ok := word.Parts[0].(*syntax.SglQuoted)
-	if !ok || strings.TrimSpace(sq.Value) != "" {
+	if !ok {
 		return "", false
 	}
 	return sq.Value, true
