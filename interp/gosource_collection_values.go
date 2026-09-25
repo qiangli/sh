@@ -65,7 +65,11 @@ func (r *Runner) goSourceBuiltinArg(call *syntax.BashPPCall, index int) (bashPPB
 	if cell == nil {
 		return bashPPBuiltinArg{}, fmt.Errorf("Go builtin argument has no value")
 	}
-	return r.goSourceBuiltinCellArg(cell, bashPPWordSource(call.Args[index])), nil
+	arg := r.goSourceBuiltinCellArg(cell, bashPPWordSource(call.Args[index]))
+	if err := r.goSourceMaterializeBuiltinBridgeCollection(&arg); err != nil {
+		return bashPPBuiltinArg{}, err
+	}
+	return arg, nil
 }
 
 func (r *Runner) goSourceBuiltinCellArg(cell *bashPPCell, text string) bashPPBuiltinArg {
@@ -123,6 +127,66 @@ func (r *Runner) goSourceBuiltinTupleArgs(call *syntax.BashPPCall) ([]bashPPBuil
 		args[i] = r.goSourceBuiltinCellArg(cell, bashPPWordSource(call.Args[0]))
 	}
 	return args, true, nil
+}
+
+func (r *Runner) goSourceMaterializeBuiltinBridgeCollection(arg *bashPPBuiltinArg) error {
+	if arg == nil || arg.meta != nil {
+		return nil
+	}
+	native, ok := arg.value.(*bashPPBridgeValue)
+	if !ok || native == nil {
+		return nil
+	}
+	switch native.Kind {
+	case "slice", "array", "map":
+		typ := bashPPBridgeDynamicType(native.Type)
+		value, meta, err := r.bashPPBridgeContents(*native, typ)
+		if err != nil {
+			return err
+		}
+		arg.value, arg.meta, arg.typ = value, meta, typ
+		return nil
+	case "handle":
+		typ := bashPPBridgeDynamicType(native.Type)
+		value, meta, claimed, err := r.goSourceNativeSequenceContents(native, typ)
+		if !claimed || err != nil {
+			return err
+		}
+		arg.value, arg.meta, arg.typ = value, meta, typ
+		return nil
+	}
+	return nil
+}
+
+func (r *Runner) goSourceMaterializeBuiltinSelectorCollection(arg *bashPPBuiltinArg) error {
+	if arg == nil || arg.meta != nil || !r.bashPPGoSource || arg.text == "" || r.bashPPScope == nil {
+		return nil
+	}
+	parts := strings.Split(arg.text, ".")
+	if len(parts) < 2 {
+		return nil
+	}
+	for _, part := range parts {
+		if !syntax.BashPPValidIdent(part) {
+			return nil
+		}
+	}
+	cell := r.bashPPScope.lookup(parts[0])
+	if cell == nil {
+		return nil
+	}
+	value, err := r.bashPPBridgeCell(cell)
+	if err != nil {
+		return nil
+	}
+	for _, selector := range parts[1:] {
+		value, err = r.bashPPNativeAccess(r.ectx, "member", value, selector)
+		if err != nil {
+			return nil
+		}
+	}
+	arg.value = &value
+	return r.goSourceMaterializeBuiltinBridgeCollection(arg)
 }
 
 func (r *Runner) goSourceCollectionCallValue(expr syntax.BashPPExpr, expected syntax.BashPPTypeExpr) (any, *bashPPCollectionMeta, bool, error) {

@@ -174,11 +174,24 @@ func (r *Runner) bashPPBuiltinCollection(arg bashPPBuiltinArg, kinds ...string) 
 	}
 	shape, _ = r.bashPPBindTypeExpr(shape).(*syntax.BashPPCollectionType)
 	for _, kind := range kinds {
-		if arg.meta.kind == kind {
+		if shape.Kind == kind && bashPPBuiltinCollectionStorage(arg.value, kind) {
 			return shape, true
 		}
 	}
 	return nil, false
+}
+
+func bashPPBuiltinCollectionStorage(value any, kind string) bool {
+	switch kind {
+	case "slice", "array", "inferred-array":
+		_, ok := value.([]any)
+		return ok || value == nil
+	case "map":
+		_, ok := value.(map[string]any)
+		return ok || value == nil
+	default:
+		return false
+	}
 }
 
 func (r *Runner) bashPPBuiltinPointerArrayLen(arg bashPPBuiltinArg) (int, bool) {
@@ -430,6 +443,14 @@ func (r *Runner) bashPPRunValueBuiltin(name string, c *syntax.BashPPCall) (*bash
 			r.bashPPBuiltinArity(name, "at least 1 argument", len(args))
 			return nil, false
 		}
+		if err := r.goSourceMaterializeBuiltinBridgeCollection(&args[0]); err != nil {
+			r.bashPPBuiltinError("TYPE", "%v", err)
+			return nil, false
+		}
+		if err := r.goSourceMaterializeBuiltinSelectorCollection(&args[0]); err != nil {
+			r.bashPPBuiltinError("TYPE", "%v", err)
+			return nil, false
+		}
 		shape, ok := r.bashPPBuiltinCollection(args[0], "slice")
 		if !ok {
 			if args[0].value == nil {
@@ -445,6 +466,14 @@ func (r *Runner) bashPPRunValueBuiltin(name string, c *syntax.BashPPCall) (*bash
 		additional := len(args) - 1
 		stringSpread := false
 		if c.Ellipsis.IsValid() && len(args) == 2 {
+			if err := r.goSourceMaterializeBuiltinBridgeCollection(&args[1]); err != nil {
+				r.bashPPBuiltinError("TYPE", "%v", err)
+				return nil, false
+			}
+			if err := r.goSourceMaterializeBuiltinSelectorCollection(&args[1]); err != nil {
+				r.bashPPBuiltinError("TYPE", "%v", err)
+				return nil, false
+			}
 			if text, ok := args[1].value.(string); ok && args[1].meta == nil && args[1].channel == nil && r.bashPPBuiltinByteSlice(shape) {
 				additional, stringSpread = len([]byte(text)), true
 			} else if spread, ok := args[1].value.([]any); ok {
