@@ -31,10 +31,10 @@ func TestGoSourceBridgeWriterAlias(t *testing.T) {
 	differSprint153(t, "writer-proxy")
 }
 
-// TestGoSourceBridgeWriterRefusal proves the remaining class is refused, not
-// hung: a writer the dependency does not own — an original type's own Write
-// method — fails fast with the dependency-owned-writer message.
-func TestGoSourceBridgeWriterRefusal(t *testing.T) {
+// TestGoSourceBridgeLocalWriter proves an original writer the dependency does
+// not own is executed by the interpreter rather than hung or silently written
+// through a detached native copy.
+func TestGoSourceBridgeLocalWriter(t *testing.T) {
 	path := filepath.Join("testdata", "sprint153", "writer-proxy", "local_writer_refused.go.txt")
 	source, err := os.ReadFile(path)
 	if err != nil {
@@ -54,9 +54,9 @@ func TestGoSourceBridgeWriterRefusal(t *testing.T) {
 	defer cancel()
 	err = runner.Run(ctx, program.File)
 	if ctx.Err() != nil {
-		t.Fatal("original-writer refusal timed out instead of failing fast")
+		t.Fatal("original writer timed out")
 	}
-	if err == nil || !strings.Contains(err.Error(), "requires a dependency-owned writer") {
-		t.Fatalf("want writer refusal, got err=%v stdout=%q stderr=%q", err, stdout.String(), stderr.String())
+	if err != nil || stdout.String() != "4\n" || stderr.Len() != 0 {
+		t.Fatalf("run err=%v stdout=%q stderr=%q, want interpreted writer result", err, stdout.String(), stderr.String())
 	}
 }
