@@ -1210,7 +1210,7 @@ func TestParamSliceNegativeLength(t *testing.T) {
 		{`${@:1:$(($# - 2))}`, nil, "$(($# - 2)): substring expression < 0"},
 		{`${@: -3:-2}`, nil, "-2: substring expression < 0"},
 		{`${a[@]:0:-2}`, nil, "-2: substring expression < 0"},
-		{`${v:1:-2}`, []string{"ell"}, ""},
+		{`${v:1:-2}`, []string{"el"}, ""}, // GNU Bash 5.3: v=hello; ${v:1:-2} -> el
 		{`${v: -3:2}`, []string{"ll"}, ""},
 		{`${@:2:2}`, []string{"b", "c"}, ""},
 	}
