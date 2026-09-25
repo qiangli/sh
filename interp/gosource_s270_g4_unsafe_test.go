@@ -3,6 +3,7 @@
 package interp_test
 
 import (
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -116,6 +117,12 @@ func main() {
 	}
 }`
 		out, stderr, err := runGoSource(t, "s270-g4-issue8004", src)
+		if runtime.GOARCH != "amd64" {
+			if err == nil || !strings.Contains(stderr, "BASHPP-EUNSAFE-LAYOUT") {
+				t.Fatalf("unsupported layout: err=%v stderr=%q", err, stderr)
+			}
+			return
+		}
 		if err != nil || out != "" || stderr != "" {
 			t.Fatalf("err=%v out=%q stderr=%q", err, out, stderr)
 		}
