@@ -18,10 +18,9 @@ test: test-quick
 test-quick:
 	@/bin/bash ./scripts/test-quick.sh
 
-## test-full: Every Go test (-tags full), including the toolchain-driven evaluator and external-shell tests
+## test-full: Release tier; full-tag binaries once, each top-level test in its own process
 test-full:
-	go test -tags full -timeout=30m ./...
-	cd moreinterp && go test -timeout=30m ./...
+	@/bin/bash ./scripts/test-full.sh
 
 ## bashpp-race-gate: Run the Bash++ race/lifecycle gate and write local evidence
 bashpp-race-gate:
