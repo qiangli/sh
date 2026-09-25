@@ -246,6 +246,39 @@ func reflectedOriginalFunctionUse(q bashPPBridgeRequest) bool {
 	return false
 }
 
+// goSourceReflectedFunctionPointer answers Pointer on a reflected original
+// function. The dependency holds only a MakeFunc trampoline, whose code
+// address names no program function; Go reports the function's entry, so
+// the interpreter reports the entry of the synthetic program counter its
+// frame table issues for the function, which runtime.FuncForPC resolves to
+// the function's own name and declaration line.
+func (r *Runner) goSourceReflectedFunctionPointer(q bashPPBridgeRequest) (bashPPBridgeValue, bool) {
+	if q.Op != "call" || q.Selector != "Pointer" || len(q.Args) != 0 || q.Receiver == nil || !q.Receiver.reflectFunction {
+		return bashPPBridgeValue{}, false
+	}
+	fn := q.Receiver.reflectFunc
+	if fn == nil || !r.bashPPGoSource {
+		return bashPPBridgeValue{}, false
+	}
+	var name string
+	var pos syntax.Pos
+	switch {
+	case fn.decl != nil:
+		name, pos = r.goSourceDeclFrameName(fn.decl), fn.decl.Pos()
+	case fn.lit != nil:
+		literal, ok := r.goSourceLiteralNames()[fn.lit]
+		if !ok {
+			return bashPPBridgeValue{}, false
+		}
+		name, pos = literal, fn.lit.Pos()
+	default:
+		return bashPPBridgeValue{}, false
+	}
+	file, line := r.goSourceFramePosition(pos)
+	pc := r.goSourceFramePC(goSourceStackFrame{name: name, file: file, line: line})
+	return goSourceStackUintptr(goSourceFrameEntry(pc)), true
+}
+
 // reflectedValueCopy admits reflect.ValueOf over an interpreter value whose
 // every write the dependency could perform is either impossible or
 // reconciled. reflect.ValueOf copies its operand, exactly as Go does: the

@@ -354,6 +354,26 @@ func goSourceFrameFuncValue(pc uint64) bashPPBridgeValue {
 	return bashPPBridgeValue{Kind: "frame-func", Type: "*runtime.Func", Text: strconv.FormatUint(pc, 10)}
 }
 
+// goSourceFrameFuncEqual compares synthetic *runtime.Func values, which never
+// cross to the dependency. Go's runtime.FuncForPC returns one *Func per
+// function, so two are equal exactly when their counters share an entry. A
+// synthetic *Func is never nil and never one the dependency's runtime
+// issued, so it differs from every other operand.
+func goSourceFrameFuncEqual(lv, rv bashPPBridgeValue) (bool, bool) {
+	if lv.Kind != "frame-func" && rv.Kind != "frame-func" {
+		return false, false
+	}
+	if lv.Kind != rv.Kind {
+		return false, true
+	}
+	l, lerr := strconv.ParseUint(lv.Text, 10, 64)
+	r, rerr := strconv.ParseUint(rv.Text, 10, 64)
+	if lerr != nil || rerr != nil {
+		return false, false
+	}
+	return goSourceFrameEntry(l) == goSourceFrameEntry(r), true
+}
+
 // goSourceFrameFuncReceiver reports the synthetic *runtime.Func a method
 // call's receiver expression denotes, without evaluating anything that is
 // not one: a runtime.FuncForPC call, or a variable holding such a value.

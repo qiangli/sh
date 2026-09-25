@@ -135,6 +135,12 @@ func (r *Runner) bashPPNativeCompareValues(lv bashPPBridgeValue, op token.Token,
 		}
 		return equal, nil
 	}
+	if equal, handled := goSourceFrameFuncEqual(lv, rv); handled {
+		if op == token.NEQ {
+			equal = !equal
+		}
+		return equal, nil
+	}
 	// Building an evaluator request snapshots environment and local-type state.
 	// Scalar values never cross the bridge, so defer that work until the local
 	// comparison above has proved it is actually necessary.

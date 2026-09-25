@@ -56,3 +56,26 @@ func main() {
 		t.Fatalf("retained reflected original call: out=%q stderr=%q err=%v", out, stderr, err)
 	}
 }
+
+func TestS275ReflectedOriginalFunctionPointer(t *testing.T) {
+	src := `package main
+import (
+	"reflect"
+	"runtime"
+)
+func f(n int) int { return n }
+func name(fn any) string { return runtime.FuncForPC(reflect.ValueOf(fn).Pointer()).Name() }
+func main() {
+	lit := func() {}
+	println(name(f), name(lit))
+	pc := reflect.ValueOf(f).Pointer()
+	fn := runtime.FuncForPC(pc)
+	_, line := fn.FileLine(pc)
+	println(line, fn.Entry() == pc, runtime.FuncForPC(pc+1) == fn, runtime.FuncForPC(pc+1) != fn)
+	println(reflect.ValueOf(f).Pointer() == pc, reflect.ValueOf(lit).Pointer() == pc)
+}`
+	_, stderr, err := runGoSource(t, "s275-reflect-function-pointer", src)
+	if want := "main.f main.main.func1\n6 true true false\ntrue false\n"; err != nil || stderr != want {
+		t.Fatalf("reflected original pointer: err=%v stderr=%q want %q", err, stderr, want)
+	}
+}

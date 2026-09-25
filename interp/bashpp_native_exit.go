@@ -97,6 +97,9 @@ func (r *Runner) bashPPNativeRequest(ctx context.Context, req bashPPEvalRequest,
 	if handled, err := r.goSourceLocalTimeSleep(ctx, req, q); handled {
 		return nil, err
 	}
+	if value, handled := r.goSourceReflectedFunctionPointer(q); handled {
+		return []bashPPBridgeValue{value}, nil
+	}
 	if values, handled, err := r.goSourceLocalReflectRequest(ctx, req, &q); handled {
 		return values, err
 	}

@@ -58,6 +58,9 @@ type bashPPBridgeValue struct {
 	// Only synchronous Call and type inspection may use this callback-bearing
 	// handle; it is never accepted as an arbitrary dependency argument.
 	reflectFunction bool
+	// reflectFunc is the original function a reflectFunction handle wraps,
+	// so Pointer can name it in the interpreter's frame table. Host-only.
+	reflectFunc *bashPPFunc
 
 	// Callable is derived by the interpreter from authenticated native type or
 	// import metadata; the dependency worker cannot set callback policy itself.
@@ -880,6 +883,11 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 				if reply.Values[i].Kind == "handle" {
 					if reflectedOriginalFunctionValueOf(req, q) {
 						reply.Values[i].reflectFunction = true
+						if q.Args[0].Session == s.id {
+							s.mu.Lock()
+							reply.Values[i].reflectFunc = s.functions[q.Args[0].Handle]
+							s.mu.Unlock()
+						}
 					}
 					if q.Receiver != nil && q.Receiver.reflectFunction && q.Selector == "Type" {
 						reply.Values[i].Callbacks = false
