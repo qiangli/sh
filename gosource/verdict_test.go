@@ -181,6 +181,29 @@ func TestGoTypesParserDiagnostics(t *testing.T) {
 	}
 }
 
+func TestGoTypesParserDiagnosticsDedupsRecoveredGoStatement(t *testing.T) {
+	_, err := gosource.Load([]gosource.Source{{Name: "go.go", Data: []byte("package p\nfunc f() { go 1 }\n")}}, gosource.Options{
+		CheckAfterSyntaxErrors:   true,
+		GoTypesParserDiagnostics: true,
+	})
+	if err == nil {
+		t.Fatal("invalid go statement accepted")
+	}
+	list, ok := err.(gosource.ErrorList)
+	if !ok {
+		t.Fatalf("diagnostics = %T, want ErrorList", err)
+	}
+	count := 0
+	for _, row := range list {
+		if strings.Contains(row.Error(), "expression in go must be function call") {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("go statement diagnostic count = %d, want 1: %v", count, list)
+	}
+}
+
 // TestSyntaxVerdictClasses covers one out-of-corpus reproducer per failure
 // class from gosource/testdata/sprint154/parser/FINDINGS.md. Each case
 // asserts the exact gc diagnostic (message, line, col — column is 1-based

@@ -242,7 +242,7 @@ func Load(sources []Source, options Options) (*Program, error) {
 		return nil, parseErrors
 	}
 	c.checkerNames = prepareCgoFiles(c.fset, c.files)
-	if len(syntaxErrors) > 0 {
+	if len(syntaxErrors) > 0 && !options.GoTypesParserDiagnostics {
 		parseErrors = appendStructuralCheckerDiagnostics(parseErrors, gcFiles)
 	}
 	if len(syntaxErrors) == 0 {
