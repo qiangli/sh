@@ -60,3 +60,22 @@ func main() {
 	fmt.Println(once(), once(), calls)
 }`, nil, "")
 }
+
+func TestS281GenericBridgeTypeRegistration(t *testing.T) {
+	differGoSource(t, `package main
+import (
+	"fmt"
+	"hash/maphash"
+)
+
+type Thing struct{ Name string }
+type ThingHasher struct{}
+
+func (ThingHasher) Hash(h *maphash.Hash, v Thing) { h.WriteString(v.Name) }
+func (ThingHasher) Equal(x, y Thing) bool { return x.Name == y.Name }
+
+func main() {
+	ch := make(chan maphash.Hasher[Thing], 1)
+	fmt.Println(cap(ch), ThingHasher{}.Equal(Thing{"same"}, Thing{"other"}))
+}`, nil, "")
+}

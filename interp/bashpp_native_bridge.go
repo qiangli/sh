@@ -252,6 +252,7 @@ type bashPPNativeSession struct {
 	companions          string
 	cgo                 string
 	instances           string
+	genericTypes        string
 	id                  string
 }
 
@@ -337,6 +338,9 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 		}
 		if s.instances != bashPPImportedInstanceIdentity(req.Instances) {
 			return errors.New("gosource: imported instantiations changed after native dependency initialization")
+		}
+		if s.genericTypes != bashPPGenericTypeIdentity(req.GenericTypes) {
+			return errors.New("gosource: generic bridge types changed after native dependency initialization")
 		}
 		return nil
 	}
@@ -611,6 +615,7 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 	s.companions = bashPPNativeCompanionIdentity(req.CompanionFiles, req.NativeFuncs, req.CompanionTrampolines, req.CompanionUnmappedFrames)
 	s.cgo = bashPPCgoIdentity(req.CgoPackages)
 	s.instances = bashPPImportedInstanceIdentity(req.Instances)
+	s.genericTypes = bashPPGenericTypeIdentity(req.GenericTypes)
 	go func() {
 		for {
 			var reply bashPPBridgeResponse
@@ -1065,7 +1070,7 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 		}
 		alias := fmt.Sprintf("bpppkg%d", i)
 		fmt.Fprintf(&imports, "%s %q\n", alias, path)
-		used := false
+		used := bashPPGenericTypesUsePackage(req.GenericTypes, paths[path], path)
 		for _, name := range pkg.Scope().Names() {
 			obj := pkg.Scope().Lookup(name)
 			if !obj.Exported() {
@@ -1175,6 +1180,23 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 			imports.Reset()
 			imports.WriteString(strings.Replace(text, alias+" ", "_ ", 1))
 		}
+	}
+	localTypeEntries := map[string]bool{}
+	for _, local := range req.LocalTypes {
+		localTypeEntries[local.Name] = true
+		if local.WireType != "" {
+			localTypeEntries[local.WireType] = true
+		}
+	}
+	for _, typ := range req.GenericTypes {
+		if localTypeEntries[typ] {
+			continue
+		}
+		mapped, err := bashPPNativeTypeImports(typ, importAliases)
+		if err != nil {
+			return "", err
+		}
+		fmt.Fprintf(&typeEntries, "%q: reflect.TypeFor[%s](),\n", typ, mapped)
 	}
 	var embeds strings.Builder
 	for i, embed := range req.EmbedDecls {
@@ -1351,6 +1373,28 @@ func bashPPNativeFuncValueAvailable(path, name string) bool {
 func bashPPEmbedIdentity(decls []bashPPEmbedDecl) string {
 	data, _ := json.Marshal(decls)
 	return string(data)
+}
+
+func bashPPGenericTypeIdentity(types []string) string {
+	data, _ := json.Marshal(types)
+	return string(data)
+}
+
+func bashPPGenericTypesUsePackage(types, keys []string, path string) bool {
+	for _, typ := range types {
+		for _, key := range keys {
+			if strings.HasPrefix(key, "_:") {
+				continue
+			}
+			if strings.Contains(typ, key+".") {
+				return true
+			}
+		}
+		if strings.Contains(typ, path+".") {
+			return true
+		}
+	}
+	return false
 }
 
 func bashPPNativeCompanionIdentity(files []string, funcs []bashPPNativeFuncDecl, trampolines []bashPPCompanionTrampoline, unmapped []string) string {
