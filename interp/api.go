@@ -3125,6 +3125,9 @@ func (r *Runner) Reset() {
 
 		goSourceEnvironment: r.goSourceEnvironment,
 		ownedExecPaths:      r.ownedExecPaths,
+		// Initialize before task snapshots are made so every child of this run
+		// assigns opaque words from the same registry.
+		goSourceUnsafeOpaqueIDs: &goSourceUnsafeOpaqueIDs{},
 		// Seeded imports are construction-time configuration ([ForeignImports])
 		// owned by the embedder, not per-Run state.
 		bashPPSeededImports: r.bashPPSeededImports,
