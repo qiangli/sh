@@ -82,6 +82,15 @@ type converter struct {
 	// gotoTarget; nil until then.
 	gotoTargets       map[types.Object]bool
 	localChannelTypes map[string]bool
+	// innerNames caches, per file, the set of identifiers declared in any scope
+	// strictly inside the file scope — function, block, case, and other body
+	// scopes. A spelling head absent from this set cannot be shadowed by a local
+	// declaration at any position, so spellingShadowed resolves it against the
+	// file scope directly instead of walking the whole scope tree with
+	// types.Scope.Innermost once per reference (O(references × top-level-decls)
+	// on constant-saturated generated code such as cmd/compile/internal/ssa).
+	innerNamesFile *ast.File
+	innerNames     map[string]bool
 }
 
 // syntheticImport is an import created while spelling a checked type whose
@@ -1113,9 +1122,17 @@ func (c *converter) spellingShadowed(spelling string, pos token.Pos, want types.
 	if scope == nil {
 		return false
 	}
-	inner := scope.Innermost(pos)
-	if inner == nil {
-		return false
+	// A name no scope inside the file declares cannot be shadowed by a local at
+	// any position: the descent through inner scopes contributes nothing, so
+	// inner.LookupParent(head, pos) resolves head to exactly the object the file
+	// scope resolves it to. Skip the per-reference Innermost tree walk in that
+	// (overwhelmingly common) case and look it up on the file scope directly.
+	inner := scope
+	if c.fileInnerNames()[head] {
+		inner = scope.Innermost(pos)
+		if inner == nil {
+			return false
+		}
 	}
 	_, obj := inner.LookupParent(head, pos)
 	if obj == nil {
@@ -1130,6 +1147,38 @@ func (c *converter) spellingShadowed(spelling string, pos token.Pos, want types.
 		return !isType
 	}
 	return obj != want
+}
+
+// fileInnerNames returns the set of identifiers declared in any scope strictly
+// inside the current file's scope (every function, block, case and other body
+// scope, but not the file or package scope). It is built once per file and
+// memoized: spellingShadowed consults it to decide whether a given spelling
+// head could possibly be shadowed by a local declaration before paying for a
+// types.Scope.Innermost descent.
+func (c *converter) fileInnerNames() map[string]bool {
+	if c.innerNamesFile == c.currentFile && c.innerNames != nil {
+		return c.innerNames
+	}
+	names := map[string]bool{}
+	if fileScope := c.info.Scopes[c.currentFile]; fileScope != nil {
+		var collect func(scope *types.Scope)
+		collect = func(scope *types.Scope) {
+			for i := 0; i < scope.NumChildren(); i++ {
+				child := scope.Child(i)
+				for _, name := range child.Names() {
+					names[name] = true
+				}
+				collect(child)
+			}
+		}
+		// The file scope's own names (imports) are not inner declarations; a
+		// package-qualifier or type spelling that resolves to one is handled by
+		// the file-scope lookup itself, so only descendant scopes are collected.
+		collect(fileScope)
+	}
+	c.innerNamesFile = c.currentFile
+	c.innerNames = names
+	return names
 }
 
 // constSpec locates a constant's declaring spec and the index of its name.
