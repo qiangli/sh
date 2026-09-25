@@ -1477,7 +1477,10 @@ func (c *converter) computedImportedMethodCall(call *ast.CallExpr) (*s.BashPPFun
 	if simpleReceiver(selector.X) {
 		return nil, nil, false
 	}
-	if _, indexed := ast.Unparen(selector.X).(*ast.IndexExpr); !indexed {
+	index, indexed := ast.Unparen(selector.X).(*ast.IndexExpr)
+	// An index into a computed result already uses the computed-callee path.
+	// Wrapping it here would execute its producer again during method lookup.
+	if !indexed || !simpleReceiver(index.X) {
 		return nil, nil, false
 	}
 	signature, _ := c.checkedType(c.info.TypeOf(call.Fun), call.Fun, "computed imported method type").(*s.BashPPFuncType)
