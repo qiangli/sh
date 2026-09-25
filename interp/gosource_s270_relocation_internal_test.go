@@ -68,6 +68,28 @@ func linked() int64
 	buildS270DependencyWorker(t, source, t.TempDir())
 }
 
+// Package maps flatten imported names, but source directives still name the
+// original declaration. Keep the target when the worker sees that renamed name.
+func TestGoSourceS270DependencyBridgePreservesFlattenedFunctionLinkname(t *testing.T) {
+	program, err := gosource.Parse(strings.NewReader(`package main
+import _ "unsafe"
+
+//go:linkname linked runtime.nanotime
+func __gosource_pkg_0_linked() int64
+`), "linkname.go", gosource.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner := &Runner{bashPPGoSource: true, bashPPGoSourceFile: program.File}
+	_, funcs, _, _, err := runner.bashPPGoSourceNativeCompanions(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(funcs) != 1 || funcs[0].Name != "__gosource_pkg_0_linked" || funcs[0].Linkname != "runtime.nanotime" {
+		t.Fatalf("native funcs = %+v, want flattened local name and original linker target", funcs)
+	}
+}
+
 func buildS270DependencyWorker(t *testing.T, source, buildDir string) {
 	t.Helper()
 	mailboxImports, mailboxSource := bashPPMailboxWorkerSource(false)

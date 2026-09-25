@@ -130,7 +130,7 @@ func (r *Runner) bashPPGoSourceNativeCompanions(sourceDir string) ([]string, []b
 		linkname := ""
 		for _, comment := range stmt.Comments {
 			fields := strings.Fields(comment.Text)
-			if len(fields) == 3 && fields[0] == "go:linkname" && fields[1] == decl.Name.Value {
+			if len(fields) == 3 && fields[0] == "go:linkname" && fields[1] == goSourceDeclaredName(decl.Name.Value) {
 				linkname = fields[2]
 				break
 			}
