@@ -12,8 +12,8 @@ import (
 // go list of a bare import path in GOPATH mode. The original path remains the
 // language-visible import and the input to capability/visibility validation.
 func bashPPImportListTarget(ctx context.Context, req bashPPEvalRequest, path string) (string, error) {
-	command := exec.CommandContext(ctx, req.Go, "env", "-json", "GOMOD", "GOPATH", "GOROOT")
-	command.Dir, command.Env = req.Dir, req.Env
+	command := exec.CommandContext(ctx, req.internalBuildGo(), "env", "-json", "GOMOD", "GOPATH", "GOROOT")
+	command.Dir, command.Env = req.Dir, req.internalBuildEnv()
 	data, err := command.Output()
 	if err != nil {
 		if ctx.Err() != nil {

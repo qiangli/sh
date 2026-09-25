@@ -185,8 +185,8 @@ func bashPPGoListFacts(ctx context.Context, req bashPPEvalRequest, path string) 
 	if err != nil {
 		return bashPPPackageFacts{}, err
 	}
-	cmd := exec.CommandContext(ctx, req.Go, "list", "-e", "-json", target)
-	cmd.Dir, cmd.Env = req.Dir, req.Env
+	cmd := exec.CommandContext(ctx, req.internalBuildGo(), "list", "-e", "-json", target)
+	cmd.Dir, cmd.Env = req.Dir, req.internalBuildEnv()
 	var out, errBuf bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &out, &errBuf
 	if err := cmd.Run(); err != nil {

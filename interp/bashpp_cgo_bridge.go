@@ -60,9 +60,9 @@ func bashPPCgoWrapperSource(ctx context.Context, req bashPPEvalRequest, index in
 	if err := os.WriteFile(probeFile, []byte(probe.String()), 0600); err != nil {
 		return "", err
 	}
-	cmd := exec.CommandContext(ctx, req.Go, "tool", "cgo", "-objdir", objdir, probeFile)
+	cmd := exec.CommandContext(ctx, req.internalBuildGo(), "tool", "cgo", "-objdir", objdir, probeFile)
 	cmd.Dir = bashPPModuleRequest(req).Dir
-	cmd.Env = setEnvString(req.Env, "CGO_ENABLED", "1")
+	cmd.Env = setEnvString(req.internalBuildEnv(), "CGO_ENABLED", "1")
 	var diagnostics bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &diagnostics, &diagnostics
 	if err := cmd.Run(); err != nil {
