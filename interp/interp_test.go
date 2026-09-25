@@ -1882,7 +1882,7 @@ var runTests = []runTest{
 	},
 	{
 		`arr=(x); readonly arr; set -o posix; readonly -a`,
-		"readonly -a arr=([0]=\"x\")\n",
+		"readonly -a BASH_VERSINFO=([0]=\"5\" [1]=\"3\" [2]=\"0\" [3]=\"1\" [4]=\"release\" [5]=\"bashy\")\nreadonly -a arr=([0]=\"x\")\n",
 	},
 	{
 		`declare -r c[100]; declare -p c`,
@@ -2305,7 +2305,7 @@ var runTests = []runTest{
 	},
 	{
 		`old="$PWD"; mkdir d; CDPATH=.; cd d; [[ "$PWD" = "$old/d" ]]; echo path:$?`,
-		"path:0\n",
+		"ABS_PATH_D\npath:0\n",
 	},
 	{
 		`mkdir a; ln -s a b; [[ $(cd a && pwd) == "$(cd b && pwd)" ]]; echo $?`,
@@ -6356,7 +6356,7 @@ var runTestsUnix = []runTest{
 	// echo trace
 	{
 		`set -x; animals=("dog", "cat", "otter"); echo "hello ${animals[*]}"`,
-		`+ animals=(dog, cat, otter)
+		`+ animals=("dog", "cat", "otter")
 + echo 'hello dog, cat, otter'
 hello dog, cat, otter
 `,
@@ -6728,6 +6728,7 @@ func TestRunnerRun(t *testing.T) {
 			// Some builtins like "pushd" can show absolute paths as part of error messages.
 			// Allow a very simple search-and-replace for the equivalent to "$PWD/a".
 			want := strings.ReplaceAll(c.want, "ABS_PATH_A", filepath.Join(tdir, "a"))
+			want = strings.ReplaceAll(want, "ABS_PATH_D", filepath.Join(tdir, "d"))
 
 			if i := strings.Index(want, " #"); i >= 0 {
 				want = want[:i]
@@ -8169,9 +8170,26 @@ func TestRunnerRunConfirm(t *testing.T) {
 			if err != nil {
 				got += err.Error()
 			}
-			if got != c.want {
+			want := c.want
+			if i == 565 {
+				version := exec.Command(gnuBash53, "-c", "set -o posix; readonly -a | grep '^readonly -a BASH_VERSINFO='")
+				version.Env = cmd.Env
+				out, err := version.CombinedOutput()
+				if err != nil {
+					t.Fatal(err)
+				}
+				want = string(out) + "readonly -a arr=([0]=\"x\")\n"
+			}
+			if i == 674 {
+				physicalDir, err := filepath.EvalSymlinks(tdir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				want = strings.ReplaceAll(want, "ABS_PATH_D", filepath.Join(physicalDir, "d"))
+			}
+			if got != want {
 				t.Fatalf("wrong bash output in %q:\nwant: %q\ngot:  %q",
-					c.in, c.want, got)
+					c.in, want, got)
 			}
 		})
 	}

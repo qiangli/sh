@@ -8019,9 +8019,6 @@ func (r *Runner) cdpath(ctx context.Context, path string) (string, bool, bool) {
 		info, err := r.stat(ctx, candidate)
 		if err == nil && info.IsDir() && r.access(ctx, candidate, access_X_OK) == nil {
 			printPath := elem != ""
-			if !r.opts[optPosix] && elem == "." {
-				printPath = false
-			}
 			return r.cdpathLogical(base, path, candidate), printPath, true
 		}
 	}

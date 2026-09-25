@@ -1922,7 +1922,18 @@ func traceArrayLiteral(t *tracer, name, op string, elems []*syntax.ArrayElem, r 
 		// bash xtrace re-quotes purely-literal elements but
 		// keeps parameter expansions / command subs / arithmetic
 		// in their original source form (`$@`, `$(foo)`, …).
-		if pureLiteral(el.Value) {
+		// Bash keeps ordinary source quotes in compound assignments.
+		// ANSI-C quotes are normalized after escape processing.
+		sourceQuoted := false
+		for _, part := range el.Value.Parts {
+			switch part := part.(type) {
+			case *syntax.DblQuoted:
+				sourceQuoted = true
+			case *syntax.SglQuoted:
+				sourceQuoted = !part.Dollar
+			}
+		}
+		if pureLiteral(el.Value) && !sourceQuoted {
 			val, _ := expand.LiteralWithQuoteRemoval(r.ecfg, el.Value)
 			t.string(xtraceQuote(val))
 		} else {

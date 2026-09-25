@@ -1338,7 +1338,7 @@ func (r *Runner) printArrayVars(kind string, readonlyOnly, readonlyKeyword bool)
 			add(n)
 		}
 	} else {
-		for _, n := range []string{"BASH_ARGC", "BASH_ARGV", "BASH_LINENO", "BASH_SOURCE", "DIRSTACK", "FUNCNAME"} {
+		for _, n := range []string{"BASH_ARGC", "BASH_ARGV", "BASH_LINENO", "BASH_SOURCE", "BASH_VERSINFO", "DIRSTACK", "FUNCNAME"} {
 			add(n)
 		}
 	}
