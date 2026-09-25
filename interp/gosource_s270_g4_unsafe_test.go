@@ -8,6 +8,27 @@ import (
 )
 
 func TestS270G4UnsafeOpaquePointerReductions(t *testing.T) {
+	t.Run("opaque pointer words preserve identity without host addresses", func(t *testing.T) {
+		src := `package main
+import "unsafe"
+func main() {
+	a := new(int)
+	b := new(int)
+	c := a
+	ua := uintptr(unsafe.Pointer(a))
+	ub := uintptr(unsafe.Pointer(b))
+	uc := uintptr(unsafe.Pointer(c))
+	if ua == 0 { panic("zero word") }
+	if ua != uc { panic("same target mismatch") }
+	if ua == ub { panic("different targets match") }
+	if ua >= 1<<32 { panic("host-shaped address escaped") }
+}`
+		out, stderr, err := runGoSource(t, "s270-g4-opaque-identity", src)
+		if err != nil || out != "" || stderr != "" {
+			t.Fatalf("err=%v out=%q stderr=%q", err, out, stderr)
+		}
+	})
+
 	t.Run("bug246 forged integer pointers compare by address", func(t *testing.T) {
 		src := `package main
 import "unsafe"
@@ -102,6 +123,21 @@ func main() {
 }
 
 func TestS270G4UnsafeRawLayoutExclusionEvidence(t *testing.T) {
+	t.Run("opaque uintptr round trip does not regain dereference authority", func(t *testing.T) {
+		src := `package main
+import "unsafe"
+func main() {
+	p := new(int)
+	addr := uintptr(unsafe.Pointer(p))
+	q := (*int)(unsafe.Pointer(addr))
+	_ = *q
+}`
+		_, stderr, err := runGoSource(t, "s270-g4-opaque-forged-deref", src)
+		if err == nil || !strings.Contains(err.Error()+stderr, "BASHPP-EUNSAFE-FORGED") {
+			t.Fatalf("err=%v stderr=%q; want forged opaque-address refusal", err, stderr)
+		}
+	})
+
 	t.Run("issue15329 reflect uintptr dereference remains raw memory", func(t *testing.T) {
 		src := `package main
 import (

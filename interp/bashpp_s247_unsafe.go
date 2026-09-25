@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"go/constant"
 	"math/bits"
-	"strconv"
 	"strings"
+	"sync"
 
 	"mvdan.cc/sh/v3/syntax"
 )
@@ -214,41 +214,69 @@ func (r *Runner) goSourceUnsafePointerWord(conv *syntax.BashPPConvertExpr) (bash
 	if ptr == nil {
 		return bashPPScalar{value: constant.MakeInt64(0), typ: bashPPTypeText(target), runtime: true}, true, nil
 	}
-	return bashPPScalar{value: constant.MakeUint64(goSourceUnsafeOpaqueAddress(ptr)), typ: bashPPTypeText(target), runtime: true}, true, nil
+	return bashPPScalar{value: constant.MakeUint64(r.goSourceUnsafeOpaqueAddress(ptr)), typ: bashPPTypeText(target), runtime: true}, true, nil
 }
 
-func goSourceUnsafeOpaqueAddress(ptr *bashPPPointer) uint64 {
+type goSourceUnsafeOpaqueIDs struct {
+	mu    sync.Mutex
+	next  uint64
+	cells map[*bashPPCell]uint64
+}
+
+func (r *Runner) goSourceUnsafeOpaqueAddress(ptr *bashPPPointer) uint64 {
 	if ptr == nil {
 		return 0
 	}
 	if ptr.forged {
 		return ptr.unsafeAddress
 	}
-	addr := uint64(1)
-	if ptr.target != nil {
-		text := fmt.Sprintf("%p", ptr.target)
-		if parsed, err := strconv.ParseUint(strings.TrimPrefix(text, "0x"), 16, 64); err == nil {
-			addr = parsed
-		}
-	}
+	addr := r.goSourceUnsafeOpaqueCellID(ptr.target)
 	for _, step := range ptr.path {
-		addr = addr*131 + uint64(step.index+17)
+		addr = goSourceUnsafeOpaqueMix(addr, uint64(step.index+17))
 		if step.field != "" {
-			for _, r := range step.field {
-				addr = addr*131 + uint64(r)
+			for _, ch := range step.field {
+				addr = goSourceUnsafeOpaqueMix(addr, uint64(ch))
 			}
 		}
 		if step.deref {
-			addr = addr*131 + 1
+			addr = goSourceUnsafeOpaqueMix(addr, 1)
 		}
 	}
 	if ptr.unsafeOffset != 0 {
-		addr += uint64(ptr.unsafeOffset)
+		addr = goSourceUnsafeOpaqueMix(addr, uint64(ptr.unsafeOffset))
 	}
 	if addr == 0 {
 		return 1
 	}
 	return addr
+}
+
+func (r *Runner) goSourceUnsafeOpaqueCellID(cell *bashPPCell) uint64 {
+	if cell == nil {
+		return 1
+	}
+	ids := r.goSourceUnsafeOpaqueIDs
+	if ids == nil {
+		ids = &goSourceUnsafeOpaqueIDs{}
+		r.goSourceUnsafeOpaqueIDs = ids
+	}
+	ids.mu.Lock()
+	defer ids.mu.Unlock()
+	if ids.cells == nil {
+		ids.cells = make(map[*bashPPCell]uint64)
+	}
+	if id := ids.cells[cell]; id != 0 {
+		return id
+	}
+	ids.next++
+	id := ids.next + 0x10000
+	ids.cells[cell] = id
+	return id
+}
+
+func goSourceUnsafeOpaqueMix(base, part uint64) uint64 {
+	const prime = 1099511628211
+	return (base ^ (part + 0x9e3779b97f4a7c15)) * prime
 }
 
 // goSourceUnsafeElemSize is the gc size of the element type a span pointer

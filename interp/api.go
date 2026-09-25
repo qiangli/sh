@@ -137,6 +137,11 @@ type Runner struct {
 	// dialect takes: the read/write hooks in vars.go are one nil check.
 	// bashPPGoSource selects ordinary Go package scope semantics for gosource trees.
 	bashPPGoSource bool
+	// goSourceUnsafeOpaqueIDs assigns runner-owned words for
+	// uintptr(unsafe.Pointer(p)). It is shared with Go-source task snapshots
+	// so shared captured cells keep one observable pointer identity without
+	// exposing host heap addresses.
+	goSourceUnsafeOpaqueIDs *goSourceUnsafeOpaqueIDs
 	// bashPPConvertHashQY is runner-local compiler policy. It is selected from
 	// the runner's own GOFLAGS snapshot for a Go-source run, never process-global
 	// state, so concurrent runners may faithfully use different conversion
@@ -3949,6 +3954,7 @@ func (r *Runner) subshell(background bool) *Runner {
 	r2.bashPPDecoratorStack = append([]string(nil), r.bashPPDecoratorStack...)
 	r2.funcSources = maps.Clone(r.funcSources)
 	r2.bashPPImports = maps.Clone(r.bashPPImports)
+	r2.goSourceUnsafeOpaqueIDs = r.goSourceUnsafeOpaqueIDs
 	r2.bashPPImportedInterfacePackages = maps.Clone(r.bashPPImportedInterfacePackages)
 	r2.bashPPForeignFuncs = maps.Clone(r.bashPPForeignFuncs)
 	r2.bashPPForeignModules = append([]*polyglot.Module(nil), r.bashPPForeignModules...)
