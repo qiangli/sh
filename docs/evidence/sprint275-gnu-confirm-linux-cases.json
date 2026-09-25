@@ -10,7 +10,7 @@
       "want": null,
       "got": null,
       "preliminary_group": "GNU returned success / no bash diagnostic",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 113,
@@ -19,7 +19,7 @@
       "want": "\"a\\ncontinue: too many arguments\\n--\\n\"",
       "got": "\"a\\nbash: line 1: continue: too many arguments\\nexit status 2\"",
       "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 191,
@@ -28,7 +28,7 @@
       "want": "\"ok\\n\"",
       "got": "\"bash: line 1: runner-state: command not found\\nexit status 1\"",
       "preliminary_group": "Harness-only command absent from GNU Bash",
-      "decision": "open"
+      "decision": "deliberate divergence: runner-state is a bashy builtin with no GNU Bash counterpart"
     },
     {
       "id": 226,
@@ -37,7 +37,7 @@
       "want": "\"XY\\n\"",
       "got": "\"bash: line 1: printf: Value too large for defined data type\\nexit status 1\"",
       "preliminary_group": "Formatting / libc output",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 239,
@@ -46,7 +46,7 @@
       "want": "\"printf: missing hex digit for \\\\x\\n\\\\xexit status 1\"",
       "got": "\"bash: line 1: printf: missing hex digit for \\\\x\\n\\\\x\"",
       "preliminary_group": "Formatting/platform output differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 335,
@@ -55,7 +55,7 @@
       "want": "\"ell\\n\"",
       "got": "\"el\\n\"",
       "preliminary_group": "Arithmetic / parameter semantics still genuinely differ from Bash 5.3",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 382,
@@ -64,7 +64,7 @@
       "want": "\"open /dev/null/abc: not a directory\\nstatus:1\\n\"",
       "got": "\"bash: line 1: /dev/null/abc: Not a directory\\nstatus:1\\n\"",
       "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 489,
@@ -73,7 +73,7 @@
       "want": "\"declare -a A=([0]=\\\"ab\\\" [1]=\\\"cd ef\\\" [2]=\\\"\\\" [3]=\\\"gh\\\")\\n\"",
       "got": "\"declare -a A='ab'\\n\"",
       "preliminary_group": "Arithmetic / parameter semantics still genuinely differ from Bash 5.3",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 513,
@@ -82,7 +82,7 @@
       "want": "\"declare: `A[]]=X': not a valid identifier\\ndeclare -A A=([\\\"*\\\"]=\\\"X\\\" [\\\"@\\\"]=\\\"X\\\" )\\n\"",
       "got": "\"bash: line 1: declare: `A[]]=X': not a valid identifier\\ndeclare -A A=([\\\"*\\\"]=\\\"X\\\" [\\\"@\\\"]=\\\"X\\\" )\\n\"",
       "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 514,
@@ -91,7 +91,7 @@
       "want": "\"declare: `A[]]=X': not a valid identifier\\ndeclare -A A=([\\\"*\\\"]=\\\"X\\\" [\\\"@\\\"]=\\\"X\\\" )\\n\"",
       "got": "\"bash: line 1: declare: `A[]]=X': not a valid identifier\\ndeclare -A A=([\\\"*\\\"]=\\\"X\\\" [\\\"@\\\"]=\\\"X\\\" )\\n\"",
       "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 525,
@@ -100,7 +100,7 @@
       "want": "\"yes\\n\"",
       "got": "\"exit status 1\"",
       "preliminary_group": "Arithmetic / parameter semantics still genuinely differ from Bash 5.3",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 539,
@@ -109,7 +109,7 @@
       "want": null,
       "got": null,
       "preliminary_group": "GNU returned success / no bash diagnostic",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 554,
@@ -118,7 +118,7 @@
       "want": "\"declare -a array2=([0]=\\\"grep\\\" [1]=\\\"[\\\" [2]=\\\"123\\\" [3]=\\\"]\\\" [4]=\\\"*\\\")\\n<grep>\\n<[>\\n<123>\\n<]>\\n<*>\\n\"",
       "got": "\"declare -a array2=([0]=\\\"grep\\\" [1]=\\\"[ 123 ]\\\" [2]=\\\"*\\\")\\n<grep>\\n<[ 123 ]>\\n<*>\\n\"",
       "preliminary_group": "Array / nameref / assignment-word behavior differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 560,
@@ -127,7 +127,7 @@
       "want": "\"declare -A assoc=([abc]=\\\"1\\\" )\\n\"",
       "got": "\"bash: line 1: ((: 'assoc[abc]++' : arithmetic syntax error: operand expected (error token is \\\"'assoc[abc]++' \\\")\\ndeclare -A assoc\\n\"",
       "preliminary_group": "Arithmetic / parameter semantics still genuinely differ from Bash 5.3",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 561,
@@ -136,7 +136,7 @@
       "want": "\"arithmetic syntax error: operand expected (error token is \\\"'assoc[x\\\\],b\\\\[\\\\$(echo uname >&2)]++' \\\")\\nstatus:1\\ndeclare -A assoc\\n\"",
       "got": "\"bash: line 1: ((: 'assoc[x\\\\],b\\\\[\\\\$(echo uname >&2)]++' : arithmetic syntax error: operand expected (error token is \\\"'assoc[x\\\\],b\\\\[\\\\$(echo uname >&2)]++' \\\")\\nstatus:1\\ndeclare -A assoc\\n\"",
       "preliminary_group": "Array / nameref / assignment-word behavior differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 565,
@@ -145,7 +145,7 @@
       "want": "\"readonly -a arr=([0]=\\\"x\\\")\\n\"",
       "got": "\"readonly -a BASH_VERSINFO=([0]=\\\"5\\\" [1]=\\\"3\\\" [2]=\\\"0\\\" [3]=\\\"1\\\" [4]=\\\"release\\\" [5]=\\\"x86_64-pc-linux-gnu\\\")\\nreadonly -a arr=([0]=\\\"x\\\")\\n\"",
       "preliminary_group": "Unclassified output difference",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 573,
@@ -154,7 +154,7 @@
       "want": "\"readonly: invalid name \\\"invalid-name\\\"\\nstatus:1\\n\"",
       "got": "\"bash: line 1: readonly: `invalid-name': not a valid identifier\\nstatus:1\\n\"",
       "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 574,
@@ -163,7 +163,7 @@
       "want": "\"export: invalid name \\\"invalid-name\\\"\\nstatus:1\\n\"",
       "got": "\"bash: line 1: export: `invalid-name': not a valid identifier\\nstatus:1\\n\"",
       "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 575,
@@ -172,7 +172,7 @@
       "want": "\"readonly: invalid name \\\"non-identifier\\\"\\nreadonly: invalid name \\\"invalid+ident\\\"\\nstatus:1\\n\"",
       "got": "\"bash: line 1: readonly: `non-identifier': not a valid identifier\\nbash: line 1: readonly: `invalid+ident': not a valid identifier\\nstatus:1\\n\"",
       "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 576,
@@ -181,7 +181,7 @@
       "want": "\"export: invalid name \\\"non-identifier\\\"\\nexport: invalid name \\\"invalid+ident\\\"\\nstatus:1\\n\"",
       "got": "\"bash: line 1: export: `non-identifier': not a valid identifier\\nbash: line 1: export: `invalid+ident': not a valid identifier\\nstatus:1\\n\"",
       "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 674,
@@ -190,7 +190,7 @@
       "want": "\"path:0\\n\"",
       "got": "\"/tmp/TestRunnerRunConfirm#6742167120590/001/d\\npath:0\\n\"",
       "preliminary_group": "Formatting/platform output differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 823,
@@ -199,7 +199,7 @@
       "want": "\"a: cannot overwrite existing file\\nfoo\\n\"",
       "got": "\"bash: line 1: a: cannot overwrite existing file\\nfoo\\n\"",
       "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 863,
@@ -208,7 +208,7 @@
       "want": "\"\"",
       "got": "\"bash: line 1: disown: current: no such job\\nexit status 1\"",
       "preliminary_group": "Job control, signal, background, or process-environment model differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 866,
@@ -217,7 +217,7 @@
       "want": "\"\"",
       "got": "\"bash: line 1: disown: 12345: no such job\\nexit status 1\"",
       "preliminary_group": "Job control, signal, background, or process-environment model differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 867,
@@ -226,7 +226,7 @@
       "want": "\"\"",
       "got": "\"bash: line 1: disown: %1: no such job\\nexit status 1\"",
       "preliminary_group": "Job control, signal, background, or process-environment model differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 885,
@@ -235,7 +235,7 @@
       "want": "\" 1) SIGHUP        2) SIGINT        3) SIGQUIT       4) SIGILL        5) SIGTRAP      \\n\"",
       "got": "\" 1) SIGHUP\\t 2) SIGINT\\t 3) SIGQUIT\\t 4) SIGILL\\t 5) SIGTRAP\\n\"",
       "preliminary_group": "Formatting/platform output differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 888,
@@ -244,7 +244,7 @@
       "want": "\"HUP INT QUIT ILL TRAP\\nkill: SIGTERM: invalid signal specification\\nrc=1\\n\"",
       "got": "\"HUP INT QUIT ILL TRAP\\nbash: line 1: kill: SIGTERM: invalid signal specification\\nrc=1\\n\"",
       "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 905,
@@ -253,7 +253,7 @@
       "want": "\"g1\\n\"",
       "got": "\"642713\\n\"",
       "preliminary_group": "Job control, signal, background, or process-environment model differences",
-      "decision": "open"
+      "decision": "deliberate divergence: background builtins run as goroutines, so $! is a job id (g1), not a kernel PID"
     },
     {
       "id": 906,
@@ -262,7 +262,7 @@
       "want": "\"g1\\n\"",
       "got": "\"642710\\n\"",
       "preliminary_group": "Job control, signal, background, or process-environment model differences",
-      "decision": "open"
+      "decision": "deliberate divergence: background builtins run as goroutines, so $! is a job id (g1), not a kernel PID"
     },
     {
       "id": 907,
@@ -271,7 +271,7 @@
       "want": "\"wait: pid g1 is not a child of this shell\\n1\\n\"",
       "got": "\"bash: line 1: wait: pid 642707 is not a child of this shell\\n127\\n\"",
       "preliminary_group": "Job control, signal, background, or process-environment model differences",
-      "decision": "open"
+      "decision": "deliberate divergence: background builtins run as goroutines, so $! is a job id (g1), not a kernel PID"
     },
     {
       "id": 914,
@@ -280,7 +280,7 @@
       "want": "\"foo\\n\"",
       "got": "\"\"",
       "preliminary_group": "Job control, signal, background, or process-environment model differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1076,
@@ -289,7 +289,7 @@
       "want": "\"expression expected\\nafter\\n\"",
       "got": "\"bash: line 1: 4 ? : 3 + 5: expression expected (error token is \\\": 3 + 5\\\")\\nexit status 1\"",
       "preliminary_group": "Arithmetic / parameter semantics still genuinely differ from Bash 5.3",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1077,
@@ -298,7 +298,7 @@
       "want": "\"`:' expected for conditional expression\\nafter\\n\"",
       "got": "\"bash: line 1: 1 ? 20: `:' expected for conditional expression (error token is \\\"20\\\")\\nexit status 1\"",
       "preliminary_group": "Arithmetic / parameter semantics still genuinely differ from Bash 5.3",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1078,
@@ -307,7 +307,7 @@
       "want": "\"expression expected\\nafter\\n\"",
       "got": "\"bash: line 1: 4 ? 20 :: expression expected (error token is \\\":\\\")\\nexit status 1\"",
       "preliminary_group": "Arithmetic / parameter semantics still genuinely differ from Bash 5.3",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1079,
@@ -316,7 +316,7 @@
       "want": "\"exponent less than 0\\nafter\\n\"",
       "got": "\"bash: line 1: 2**-1: exponent less than 0 (error token is \\\"1\\\")\\nexit status 1\"",
       "preliminary_group": "Arithmetic / parameter semantics still genuinely differ from Bash 5.3",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1080,
@@ -325,7 +325,7 @@
       "want": "\"arithmetic syntax error: operand expected (error token is \\\"+ \\\")\\nafter\\n\"",
       "got": "\"bash: line 1: 4 + : arithmetic syntax error: operand expected (error token is \\\"+ \\\")\\nexit status 1\"",
       "preliminary_group": "Arithmetic / parameter semantics still genuinely differ from Bash 5.3",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1082,
@@ -334,7 +334,7 @@
       "want": "\"arithmetic syntax error: operand expected (error token is \\\"+ \\\")\\n1\\n\"",
       "got": "\"bash: line 1: ((: ++: arithmetic syntax error: operand expected (error token is \\\"+\\\")\\n1\\n\"",
       "preliminary_group": "Arithmetic / parameter semantics still genuinely differ from Bash 5.3",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1085,
@@ -343,7 +343,7 @@
       "want": "\"xx: readonly variable\\n1\\n\"",
       "got": "\"bash: line 1: xx: readonly variable\\nexit status 1\"",
       "preliminary_group": "Arithmetic / parameter semantics still genuinely differ from Bash 5.3",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1105,
@@ -352,7 +352,7 @@
       "want": "\"b: expression recursion level exceeded (error token is \\\"b\\\")\\nafter\\n\"",
       "got": "\"bash: line 1: b: expression recursion level exceeded (error token is \\\"b\\\")\\nexit status 1\"",
       "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1106,
@@ -361,7 +361,7 @@
       "want": "\"bash: line 1: 4+: 1:2: `+` must be followed by an expression\\nx=4+ y=\\n\"",
       "got": "\"bash: line 1: 4+: arithmetic syntax error: operand expected (error token is \\\"+\\\")\\nexit status 1\"",
       "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1107,
@@ -370,7 +370,7 @@
       "want": "\"++: assignment requires lvalue (error token is \\\"++ \\\")\\nafter\\n\"",
       "got": "\"bash: line 1: --x++: ++: assignment requires lvalue (error token is \\\"++\\\")\\nexit status 1\"",
       "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1108,
@@ -379,7 +379,7 @@
       "want": "\"arithmetic syntax error: operand expected (error token is \\\"}\\\")\\nafter\\n\"",
       "got": "\"bash: line 1: HOME: }: arithmetic syntax error: operand expected (error token is \\\"}\\\")\\nexit status 1\"",
       "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1109,
@@ -388,7 +388,7 @@
       "want": "\"arithmetic syntax error: operand expected (error token is \\\"'foo' \\\")\\nafter\\n\"",
       "got": "\"bash: line 1: 'foo' : arithmetic syntax error: operand expected (error token is \\\"'foo' \\\")\\nexit status 1\"",
       "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1110,
@@ -397,7 +397,7 @@
       "want": "\"op\\nbad-var: invalid variable name\\nafter\\n\"",
       "got": "\"op\\nbash: line 1: bad-var: invalid variable name\\nexit status 1\"",
       "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1112,
@@ -406,7 +406,7 @@
       "want": "\"$6: cannot assign in this way\\nafter\\n\"",
       "got": "\"bash: line 1: $6: cannot assign in this way\\nexit status 1\"",
       "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1126,
@@ -415,7 +415,7 @@
       "want": "\"<X>\\n\"",
       "got": "\"< >\\n\"",
       "preliminary_group": "Arithmetic / parameter semantics still genuinely differ from Bash 5.3",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1128,
@@ -424,7 +424,7 @@
       "want": "\"bad substitution\\nafter\\n\"",
       "got": "\"bash: line 1: ${!_Q* }: bad substitution\\nexit status 1\"",
       "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1129,
@@ -433,7 +433,7 @@
       "want": "\"bad substitution\\nbad substitution\\nafter\\n\"",
       "got": "\"bash: line 1: ${!1*}: bad substitution\\nexit status 1\"",
       "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1130,
@@ -442,7 +442,7 @@
       "want": "\"bad substitution\\nafter: 1\\n\"",
       "got": "\"bash: line 1: ${#+}: bad substitution\\nexit status 1\"",
       "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1131,
@@ -451,7 +451,7 @@
       "want": "\"bad substitution\\nafter: 1\\n\"",
       "got": "\"bash: line 1: ${x!y}: bad substitution\\nexit status 1\"",
       "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1132,
@@ -460,7 +460,7 @@
       "want": "\"bad substitution\\nafter: 1\\n\"",
       "got": "\"bash: line 1: ${#foo%}: bad substitution\\nexit status 1\"",
       "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1133,
@@ -469,7 +469,7 @@
       "want": "\"bad substitution\\nafter: 1\\n\"",
       "got": "\"bash: line 1: ${$(($#-1))}: bad substitution\\nexit status 1\"",
       "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1134,
@@ -478,7 +478,7 @@
       "want": "\"bad substitution\\nafter: 1\\n\"",
       "got": "\"bash: line 1: ${$(cmd)}: bad substitution\\nexit status 1\"",
       "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1135,
@@ -487,7 +487,7 @@
       "want": "\"var: invalid indirect expansion\\nafter: 1\\n\"",
       "got": "\"bash: line 1: var: invalid indirect expansion\\nexit status 1\"",
       "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1136,
@@ -496,7 +496,7 @@
       "want": "\"var: invalid indirect expansion\\nafter: 1\\n\"",
       "got": "\"bash: line 1: var: invalid indirect expansion\\nexit status 1\"",
       "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1137,
@@ -505,7 +505,7 @@
       "want": "\"-3: invalid variable name\\nafter: 1\\n\"",
       "got": "\"bash: line 1: -3: invalid variable name\\nexit status 1\"",
       "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1147,
@@ -514,7 +514,7 @@
       "want": "\"attempted assignment to non-variable\\n10\\n\"",
       "got": "\"bash: line 1: 0 ? a : a+=5: attempted assignment to non-variable (error token is \\\"+=5\\\")\\nexit status 1\"",
       "preliminary_group": "Arithmetic / parameter semantics still genuinely differ from Bash 5.3",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1148,
@@ -523,7 +523,7 @@
       "want": "\"attempted assignment to non-variable\\n10\\n\"",
       "got": "\"bash: line 1: 1 ? a*=2 : a+=5: attempted assignment to non-variable (error token is \\\"+=5\\\")\\nexit status 1\"",
       "preliminary_group": "Arithmetic / parameter semantics still genuinely differ from Bash 5.3",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1179,
@@ -532,7 +532,7 @@
       "want": "\"let: expression expected\\n1\\n\"",
       "got": "\"bash: line 1: let: expression expected\\n1\\n\"",
       "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1185,
@@ -541,7 +541,7 @@
       "want": "\"a: expression recursion level exceeded (error token is \\\"a\\\")\\n\"",
       "got": "\"bash: line 1: a: expression recursion level exceeded (error token is \\\"a\\\")\\nexit status 1\"",
       "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1195,
@@ -550,7 +550,7 @@
       "want": "\"1) a\\n2) b\\n3) c\\n> end=1\\n\"",
       "got": "\"1) a\\n2) b\\n3) c\\n> \\nend=1\\n\"",
       "preliminary_group": "Formatting/platform output differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1261,
@@ -559,7 +559,7 @@
       "want": "\"exit status 1\"",
       "got": "\"bash: line 1: set: a: invalid option name\\n\"",
       "preliminary_group": "Option-name shorthand expectations not accepted by GNU Bash `set -o/+o`",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1262,
@@ -568,7 +568,7 @@
       "want": "\"val\\n\"",
       "got": "\"bash: line 1: set: a: invalid option name\\nval\\n\"",
       "preliminary_group": "Option-name shorthand expectations not accepted by GNU Bash `set -o/+o`",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1263,
@@ -577,7 +577,7 @@
       "want": "\"exit status 1\"",
       "got": "\"bash: line 1: set: f: invalid option name\\n\"",
       "preliminary_group": "Option-name shorthand expectations not accepted by GNU Bash `set -o/+o`",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1264,
@@ -586,7 +586,7 @@
       "want": "\"foo*\\n\"",
       "got": "\"bash: line 1: set: f: invalid option name\\nfoo*\\n\"",
       "preliminary_group": "Option-name shorthand expectations not accepted by GNU Bash `set -o/+o`",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1267,
@@ -595,7 +595,7 @@
       "want": "\"exit status 1\"",
       "got": "\"bash: line 1: set: u: invalid option name\\n\"",
       "preliminary_group": "Option-name shorthand expectations not accepted by GNU Bash `set -o/+o`",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1268,
@@ -604,7 +604,7 @@
       "want": "\"+ set +o x\\nexit status 1\"",
       "got": "\"+ set +o x\\nbash: line 1: set: x: invalid option name\\n+ [[ -o xtrace ]]\\n\"",
       "preliminary_group": "Option-name shorthand expectations not accepted by GNU Bash `set -o/+o`",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1269,
@@ -613,7 +613,7 @@
       "want": "\"exit status 1\"",
       "got": "\"bash: line 1: set: e: invalid option name\\nexit status 2\"",
       "preliminary_group": "Option-name shorthand expectations not accepted by GNU Bash `set -o/+o`",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1270,
@@ -622,7 +622,7 @@
       "want": "\"\"",
       "got": "\"bash: line 1: set: a: invalid option name\\nexit status 1\"",
       "preliminary_group": "Option-name shorthand expectations not accepted by GNU Bash `set -o/+o`",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1271,
@@ -631,7 +631,7 @@
       "want": "\"\"",
       "got": "\"bash: line 1: set: f: invalid option name\\nexit status 1\"",
       "preliminary_group": "Option-name shorthand expectations not accepted by GNU Bash `set -o/+o`",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1272,
@@ -640,7 +640,7 @@
       "want": "\"\"",
       "got": "\"bash: line 1: set: n: invalid option name\\nexit status 1\"",
       "preliminary_group": "Option-name shorthand expectations not accepted by GNU Bash `set -o/+o`",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1273,
@@ -649,7 +649,7 @@
       "want": "\"\"",
       "got": "\"bash: line 1: set: u: invalid option name\\nexit status 1\"",
       "preliminary_group": "Option-name shorthand expectations not accepted by GNU Bash `set -o/+o`",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1274,
@@ -658,7 +658,7 @@
       "want": "\"\"",
       "got": "\"bash: line 1: set: e: invalid option name\\nexit status 1\"",
       "preliminary_group": "Option-name shorthand expectations not accepted by GNU Bash `set -o/+o`",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1275,
@@ -667,7 +667,7 @@
       "want": "\"\"",
       "got": "\"bash: line 1: set: C: invalid option name\\nexit status 1\"",
       "preliminary_group": "Option-name shorthand expectations not accepted by GNU Bash `set -o/+o`",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1276,
@@ -676,7 +676,7 @@
       "want": "\"exit status 1\"",
       "got": "\"bash: line 1: set: C: invalid option name\\nbash: line 1: set: C: invalid option name\\nexit status 1\"",
       "preliminary_group": "Option-name shorthand expectations not accepted by GNU Bash `set -o/+o`",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1290,
@@ -685,7 +685,7 @@
       "want": "\"\"",
       "got": "\"bash: line 1: set: b: invalid option name\\nexit status 1\"",
       "preliminary_group": "Option-name shorthand expectations not accepted by GNU Bash `set -o/+o`",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1291,
@@ -694,7 +694,7 @@
       "want": "\"exit status 1\"",
       "got": "\"bash: line 1: set: b: invalid option name\\nbash: line 1: set: b: invalid option name\\nexit status 1\"",
       "preliminary_group": "Option-name shorthand expectations not accepted by GNU Bash `set -o/+o`",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1297,
@@ -703,7 +703,7 @@
       "want": null,
       "got": null,
       "preliminary_group": "GNU returned success / no bash diagnostic",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1312,
@@ -712,7 +712,7 @@
       "want": "\"`invalid-name': not a valid identifier\\nouter:2\\n\"",
       "got": "\"bash: line 1: `invalid-name': not a valid identifier\\nouter:2\\n\"",
       "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1313,
@@ -721,7 +721,7 @@
       "want": "\"`$1': not a valid identifier\\nstatus:1\\n\"",
       "got": "\"bash: line 1: `$1': not a valid identifier\\nstatus:1\\n\"",
       "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1403,
@@ -730,7 +730,7 @@
       "want": "\"builtin\\nfile\\n\"",
       "got": "\"builtin\\nfile\\nfile\\n\"",
       "preliminary_group": "Unclassified output difference",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1407,
@@ -739,7 +739,7 @@
       "want": "\"swap32_posix is a function\\nswap32_posix () \\n{ \\n    local arg;\\n    for arg in \\\"$@\\\";\\n    do\\n        echo $((\\n                        ($arg & 4278190080) >> 24 |\\n                        ($arg & 16711680) >> 8 |\\n                        ($arg & 65280) << 8 |\\n                        ($arg & 255) << 24\\n                ));\\n    done\\n}\\n\"",
       "got": "\"swap32_posix is a function\\nswap32_posix () \\n{ \\n    local arg;\\n    for arg in \\\"$@\\\";\\n    do\\n        echo $((\\n\\t\\t\\t($arg & 4278190080) >> 24 |\\n\\t\\t\\t($arg & 16711680) >> 8 |\\n\\t\\t\\t($arg & 65280) << 8 |\\n\\t\\t\\t($arg & 255) << 24\\n\\t\\t));\\n    done\\n}\\n\"",
       "preliminary_group": "Formatting/platform output differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1429,
@@ -748,7 +748,7 @@
       "want": "\"1 main \\n\"",
       "got": "\"exit status 1\"",
       "preliminary_group": "Unclassified output difference",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1430,
@@ -757,7 +757,7 @@
       "want": "\"1 f \\n1 main \\n\"",
       "got": "\"1 f bash\\nexit status 1\"",
       "preliminary_group": "Unclassified output difference",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1454,
@@ -766,7 +766,7 @@
       "want": "\"<3>\\n<z>\\n<2>\\n<y>\\n<1>\\n<x>\\nargc:2\\nargc:2\\nargc:2\\n\"",
       "got": "\"<>\\nargc:\\n\"",
       "preliminary_group": "Job control, signal, background, or process-environment model differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1527,
@@ -775,7 +775,7 @@
       "want": "\"b\\n\"",
       "got": "\"bash: line 1: 'y': arithmetic syntax error: operand expected (error token is \\\"'y'\\\")\\nexit status 1\"",
       "preliminary_group": "Arithmetic / parameter semantics still genuinely differ from Bash 5.3",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1594,
@@ -784,7 +784,7 @@
       "want": "\"local -\\nhB|hB\\n\"",
       "got": "\"local -\\nhBs|hBs\\n\"",
       "preliminary_group": "Job control, signal, background, or process-environment model differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1615,
@@ -793,7 +793,7 @@
       "want": "\"b\\ndeclare -a arr=([0]=\\\"a\\\" [1]=\\\"X\\\" [2]=\\\"c\\\")\\narr[1]\\narr[1]\\n\"",
       "got": "\"b\\ndeclare -a arr=([0]=\\\"a\\\" [1]=\\\"X\\\" [2]=\\\"c\\\")\\narr[1]\\n\\n\"",
       "preliminary_group": "Array / nameref / assignment-word behavior differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1641,
@@ -802,7 +802,7 @@
       "want": "\"1  *  2\\n\"",
       "got": "\"bash: line 1: export: `*': not a valid identifier\\nbash: line 1: export: `2': not a valid identifier\\n1\\n\"",
       "preliminary_group": "Array / nameref / assignment-word behavior differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1642,
@@ -811,7 +811,7 @@
       "want": "\"1  *  2\\n\"",
       "got": "\"bash: line 1: readonly: `*': not a valid identifier\\nbash: line 1: readonly: `2': not a valid identifier\\n1\\n\"",
       "preliminary_group": "Array / nameref / assignment-word behavior differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1643,
@@ -820,7 +820,7 @@
       "want": "\"v: readonly variable\\nafter: 1\\na\\n\"",
       "got": "\"bash: line 1: v: readonly variable\\nafter: 1\\na\\n\"",
       "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1644,
@@ -829,7 +829,7 @@
       "want": "\"v: readonly variable\\nafter: 1\\na\\n\"",
       "got": "\"bash: line 1: v: readonly variable\\nafter: 1\\na\\n\"",
       "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1645,
@@ -838,7 +838,7 @@
       "want": "\"shift: 2: shift count out of range\\nafter: 1\\n\"",
       "got": "\"bash: line 1: shift: 2: shift count out of range\\nafter: 1\\n\"",
       "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1646,
@@ -847,7 +847,7 @@
       "want": "\"shift: shift count out of range\\nafter: 1\\n\"",
       "got": "\"bash: line 1: shift: shift count out of range\\nafter: 1\\n\"",
       "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1650,
@@ -856,7 +856,7 @@
       "want": "\"VAR: readonly variable\\n4\\n\"",
       "got": "\"bash: line 1: VAR: readonly variable\\n4\\n\"",
       "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1654,
@@ -865,7 +865,7 @@
       "want": "\"VAR: readonly variable\\nok\\nstatus:0\\n\"",
       "got": "\"bash: line 1: VAR: readonly variable\\nok\\nstatus:0\\n\"",
       "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1656,
@@ -874,7 +874,7 @@
       "want": "\"/foo/bar\\n7\\n\"",
       "got": "\"declare -x DBUS_SESSION_BUS_ADDRESS=\\\"unix:path=/run/user/0/bus\\\"\\ndeclare -x ENV_PROG=\\\"env\\\"\\ndeclare -x FULL_TEST_EVIDENCE_DIR=\\\"/srv/sprint275/evidence/052-full\\\"\\ndeclare -x GOFLAGS=\\\"-tags=netgo,full\\\"\\ndeclare -x GOSH_PROG=\\\"/tmp/sh-full-test.7sfoGb/11.test\\\"\\ndeclare -x GO_TEST_DIR=\\\"/srv/sprint275/candidate-sh/interp\\\"\\ndeclare -x HOME=\\\"/root\\\"\\ndeclare -x INTERP_GLOBAL=\\\"value\\\"\\ndeclare -x LANG=\\\"C.UTF-8\\\"\\ndeclare -x LANGUAGE=\\\"C.UTF-8\\\"\\ndeclare -x LC_ALL=\\\"C.UTF-8\\\"\\ndeclare -x LC_CTYPE=\\\"C.UTF-8\\\"\\ndeclare -x LOGNAME=\\\"root\\\"\\ndeclare -x MAKEFLAGS=\\\"\\\"\\ndeclare -x MAKELEVEL=\\\"1\\\"\\ndeclare -x MFLAGS=\\\"\\\"\\ndeclare -x MIXEDCASE_INTERP_GLOBAL=\\\"value\\\"\\ndeclare -x MULTILINE_INTERP_GLOBAL=$'\\\\nwith\\\\nnewlines\\\\n\\\\n'\\ndeclare -x OLDPWD=\\\"/srv/sprint275/candidate-sh\\\"\\ndeclare -x PATH=\\\"/tmp/interp-bin-300619884:/srv/sprint275/gnu-bash-5.3/bin:/srv/sprint269/authenticated-sdk/bin:/usr/bin:/bin\\\"\\ndeclare -x PATH_PROG=\\\"sh\\\"\\ndeclare -x PWD=\\\"/tmp/TestRunnerRunConfirm#16561455211207/001\\\"\\ndeclare -x REQUIRE_SHELLS=\\\"1\\\"\\ndeclare -x SHELL=\\\"/bin/bash\\\"\\ndeclare -x SHLVL=\\\"2\\\"\\ndeclare -x SSH_CLIENT=\\\"76.103.216.225 54007 22\\\"\\ndeclare -x SSH_CONNECTION=\\\"76.103.216.225 54007 167.71.133.144 22\\\"\\ndeclare -x USER=\\\"root\\\"\\ndeclare -x XDG_RUNTIME_DIR=\\\"/run/user/0\\\"\\ndeclare -x XDG_SESSION_CLASS=\\\"user\\\"\\ndeclare -x XDG_SESSION_ID=\\\"458\\\"\\ndeclare -x XDG_SESSION_TYPE=\\\"tty\\\"\\n/root\\n7\\n\"",
       "preliminary_group": "Array / nameref / assignment-word behavior differences",
-      "decision": "open"
+      "decision": "fixed: under set -k, HOME=/foo/bar is a temporary assignment to export (GNU); the old expectation encoded the wrong semantics. Case now starts from HOME=/foo/original and discards export's host-dependent listing (sh 5c35c99c); passes at 03dc6473"
     },
     {
       "id": 1657,
@@ -883,7 +883,7 @@
       "want": "\"/a/b/c 9 /a/b/c\\n\"",
       "got": "\"declare -x DBUS_SESSION_BUS_ADDRESS=\\\"unix:path=/run/user/0/bus\\\"\\ndeclare -x ENV_PROG=\\\"env\\\"\\ndeclare -x FULL_TEST_EVIDENCE_DIR=\\\"/srv/sprint275/evidence/052-full\\\"\\ndeclare -x GOFLAGS=\\\"-tags=netgo,full\\\"\\ndeclare -x GOSH_PROG=\\\"/tmp/sh-full-test.7sfoGb/11.test\\\"\\ndeclare -x GO_TEST_DIR=\\\"/srv/sprint275/candidate-sh/interp\\\"\\ndeclare -x HOME=\\\"/root\\\"\\ndeclare -x INTERP_GLOBAL=\\\"value\\\"\\ndeclare -x LANG=\\\"C.UTF-8\\\"\\ndeclare -x LANGUAGE=\\\"C.UTF-8\\\"\\ndeclare -x LC_ALL=\\\"C.UTF-8\\\"\\ndeclare -x LC_CTYPE=\\\"C.UTF-8\\\"\\ndeclare -x LOGNAME=\\\"root\\\"\\ndeclare -x MAKEFLAGS=\\\"\\\"\\ndeclare -x MAKELEVEL=\\\"1\\\"\\ndeclare -x MFLAGS=\\\"\\\"\\ndeclare -x MIXEDCASE_INTERP_GLOBAL=\\\"value\\\"\\ndeclare -x MULTILINE_INTERP_GLOBAL=$'\\\\nwith\\\\nnewlines\\\\n\\\\n'\\ndeclare -x OLDPWD=\\\"/srv/sprint275/candidate-sh\\\"\\ndeclare -x PATH=\\\"/tmp/interp-bin-300619884:/srv/sprint275/gnu-bash-5.3/bin:/srv/sprint269/authenticated-sdk/bin:/usr/bin:/bin\\\"\\ndeclare -x PATH_PROG=\\\"sh\\\"\\ndeclare -x PWD=\\\"/tmp/TestRunnerRunConfirm#16572544257321/001\\\"\\ndeclare -x REQUIRE_SHELLS=\\\"1\\\"\\ndeclare -x SHELL=\\\"/bin/bash\\\"\\ndeclare -x SHLVL=\\\"2\\\"\\ndeclare -x SSH_CLIENT=\\\"76.103.216.225 54007 22\\\"\\ndeclare -x SSH_CONNECTION=\\\"76.103.216.225 54007 167.71.133.144 22\\\"\\ndeclare -x USER=\\\"root\\\"\\ndeclare -x XDG_RUNTIME_DIR=\\\"/run/user/0\\\"\\ndeclare -x XDG_SESSION_CLASS=\\\"user\\\"\\ndeclare -x XDG_SESSION_ID=\\\"458\\\"\\ndeclare -x XDG_SESSION_TYPE=\\\"tty\\\"\\n/a/b/c 9 /a/b/c\\n\"",
       "preliminary_group": "Array / nameref / assignment-word behavior differences",
-      "decision": "open"
+      "decision": "fixed: under set -k, HOME=/foo/bar is a temporary assignment to export (GNU); the old expectation encoded the wrong semantics. Case now starts from HOME=/foo/original and discards export's host-dependent listing (sh 5c35c99c); passes at 03dc6473"
     },
     {
       "id": 1659,
@@ -892,7 +892,7 @@
       "want": "\"`var[0]': not a valid identifier\\n1\\n\"",
       "got": "\"bash: line 1: `var[0]': not a valid identifier\\n1\\n\"",
       "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1713,
@@ -901,7 +901,7 @@
       "want": "\". .. .a .foo\\n. .. .a .foo\\n.. .a\\n.. .a\\n---\\n*(.)\\n\"",
       "got": "\"bash: line 1: syntax error near unexpected token `('\\nbash: line 1: `shopt -s extglob; shopt -u globskipdots; touch .a .foo a.log; echo .*; echo @(.*); echo .?; echo @(.?); echo '---'; echo *(.)'\\nexit status 2\"",
       "preliminary_group": "Loadable/extglob/parser-timing mismatch",
-      "decision": "open"
+      "decision": "deliberate divergence: GNU Bash parses the whole line before shopt -s extglob runs; this parser always accepts extglob"
     },
     {
       "id": 1716,
@@ -910,7 +910,7 @@
       "want": "\"0\\n1\\n\"",
       "got": "\"bash: line 1: enable: cannot open shared object ./strmatch.so: ./strmatch.so: cannot open shared object file: No such file or directory\\nbash: line 1: strmatch: command not found\\n127\\nbash: line 1: strmatch: command not found\\n127\\n\"",
       "preliminary_group": "GNU loadable / build environment",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1791,
@@ -919,7 +919,7 @@
       "want": null,
       "got": null,
       "preliminary_group": "GNU returned success / no bash diagnostic",
-      "decision": "open"
+      "decision": "deliberate divergence: an embedded interpreter must not hand control to the host newgrp, which switches groups and may start a new shell"
     },
     {
       "id": 1808,
@@ -928,7 +928,7 @@
       "want": "\"fg: no job control\\nafter=1\\n\"",
       "got": "\"bash: line 1: fg: no job control\\nafter=1\\n\"",
       "preliminary_group": "Job control, signal, background, or process-environment model differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1809,
@@ -937,7 +937,7 @@
       "want": "\"\"",
       "got": "\"bash: line 2: leaked: command not found\\nexit status 127\"",
       "preliminary_group": "Job control, signal, background, or process-environment model differences",
-      "decision": "open"
+      "decision": "deliberate divergence: the program is parsed up front, not read from stdin; an async job reads /dev/null (VSC-PCTS TP460)"
     },
     {
       "id": 1818,
@@ -946,7 +946,7 @@
       "want": "\"umask: 999: octal number out of range\\nexit status 1\"",
       "got": "\"bash: line 1: umask: 999: octal number out of range\\nexit status 1\"",
       "preliminary_group": "Diagnostic prefix / non-interactive fatality differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1866,
@@ -955,7 +955,7 @@
       "want": "\"abcde 0\\n\"",
       "got": "\"unset 142\\n\"",
       "preliminary_group": "Timing-sensitive read behavior",
-      "decision": "open"
+      "decision": "deliberate divergence: GNU Bash races its 1us alarm against the here-string read (142 on Linux); ready input is read here"
     },
     {
       "id": 1867,
@@ -964,7 +964,7 @@
       "want": "\"abcde 0\\n\"",
       "got": "\"unset 142\\n\"",
       "preliminary_group": "Timing-sensitive read behavior",
-      "decision": "open"
+      "decision": "deliberate divergence: GNU Bash races its 1us alarm against the here-string read (142 on Linux); ready input is read here"
     },
     {
       "id": 1887,
@@ -973,7 +973,7 @@
       "want": "\"OPTARG: readonly variable\\nstatus:1\\nunset\\n\"",
       "got": "\"bash: line 1: OPTARG: readonly variable\\nstatus:0\\nunset\\n\"",
       "preliminary_group": "Array / nameref / assignment-word behavior differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1907,
@@ -982,7 +982,7 @@
       "want": "\"signaled\\n\"",
       "got": "\"bash: line 1: 640793 User defined signal 1      while kill -s 0 $$; do\\n    :;\\ndone\\nsignaled\\n\"",
       "preliminary_group": "Job control, signal, background, or process-environment model differences",
-      "decision": "open"
+      "decision": "deliberate divergence: a goroutine-backed job has no kernel PID, so no numeric termination notice is printed"
     },
     {
       "id": 1908,
@@ -991,7 +991,7 @@
       "want": "\"OK\\n\"",
       "got": "\"ERROR\\n\"",
       "preliminary_group": "Linux permissions / process environment",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1912,
@@ -1000,7 +1000,7 @@
       "want": null,
       "got": null,
       "preliminary_group": "GNU returned success / no bash diagnostic",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1915,
@@ -1009,7 +1009,7 @@
       "want": "\"\"",
       "got": "\"bash: line 1: enable: cannot open shared object ./strmatch.so: ./strmatch.so: cannot open shared object file: No such file or directory\\nbash: line 1: enable: strmatch: not a shell builtin\\nexit status 1\"",
       "preliminary_group": "GNU loadable / build environment",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1936,
@@ -1018,7 +1018,7 @@
       "want": null,
       "got": null,
       "preliminary_group": "GNU returned success / no bash diagnostic",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1937,
@@ -1027,7 +1027,7 @@
       "want": null,
       "got": null,
       "preliminary_group": "GNU returned success / no bash diagnostic",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1938,
@@ -1036,7 +1036,7 @@
       "want": null,
       "got": null,
       "preliminary_group": "GNU returned success / no bash diagnostic",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1939,
@@ -1045,7 +1045,7 @@
       "want": null,
       "got": null,
       "preliminary_group": "GNU returned success / no bash diagnostic",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1940,
@@ -1054,7 +1054,7 @@
       "want": null,
       "got": null,
       "preliminary_group": "GNU returned success / no bash diagnostic",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1969,
@@ -1063,7 +1063,7 @@
       "want": "\"+ animals=(dog, cat, otter)\\n+ echo 'hello dog, cat, otter'\\nhello dog, cat, otter\\n\"",
       "got": "\"+ animals=(\\\"dog\\\", \\\"cat\\\", \\\"otter\\\")\\n+ echo 'hello dog, cat, otter'\\nhello dog, cat, otter\\n\"",
       "preliminary_group": "Formatting/platform output differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     },
     {
       "id": 1971,
@@ -1072,7 +1072,7 @@
       "want": "\"+ var=42\\n+ ((  42  ))\\n\\n+ ((    ))\\n+ set +x\\n\"",
       "got": "\"+ var=42\\n+ ((  42  ))\\n+ null=\\n+ ((    ))\\n+ set +x\\n\"",
       "preliminary_group": "Formatting/platform output differences",
-      "decision": "open"
+      "decision": "fixed: matches GNU Bash 5.3.0 on Linux at sh 03dc6473 (TestRunnerRunConfirm 2002 pass, 0 fail, 0 skip)"
     }
   ],
   "total_cases": 1998,
@@ -1080,5 +1080,6 @@
   "failing_cases": 119,
   "skipped_cases": 0,
   "raw_log": "/srv/sprint275/evidence/052-full/raw-logs/20260925T003237Z-293852/11.2096.run.log",
-  "status": "preliminary inventory; all case decisions remain open"
+  "status": "resolved at sh 03dc6473 (Linux do2, GNU Bash 5.3.0, user s275): 2002 pass, 0 fail, 0 skip; every case fixed or decided",
+  "final_candidate": "03dc6473"
 }
