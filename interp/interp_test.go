@@ -975,7 +975,7 @@ var runTests = []runTest{
 
 	// runner-state introspection builtin emits JSON; check it round-trips
 	// by extracting a known key via grep -q.
-	{`f(){ :; }; runner-state funcs | grep -q '"funcs":\[.*"f"' && echo ok`, "ok\n"},
+	{`f(){ :; }; runner-state funcs | grep -q '"funcs":\[.*"f"' && echo ok`, "ok\n #IGNORE S275 decision: runner-state is a bashy builtin with no GNU Bash counterpart"},
 	{`runner-state bogus`, "runner-state: unknown section \"bogus\" (try: vars opts traps fds funcs callstack all)\nexit status 2 #JUSTERR"},
 	{"printf %1", "printf: `%1': missing format character\nexit status 1 #JUSTERR"},
 	{"printf %+", "printf: `%+': missing format character\nexit status 1 #JUSTERR"},
@@ -3072,7 +3072,7 @@ var runTests = []runTest{
 	{"false & pid=$!; wait $pid", "exit status 1"},
 	{"{ sleep 0.01; true; } & pid=$!; wait $pid", ""},
 	{"{ sleep 0.01; false; } & pid=$!; wait $pid", "exit status 1"},
-	{"set -o posix; sleep 0.1 & pid=$!; kill -s INT $pid; kill -s QUIT $pid; wait $pid; echo status:$?", "status:0\n"},
+	{"set -o posix; sleep 0.1 & pid=$!; kill -s INT $pid; kill -s QUIT $pid; wait $pid; echo status:$?", "status:0\n #IGNORE S275 decision: POSIX async lists ignore INT/QUIT (VSC-PCTS TP8); GNU Bash 5.3.0 on Linux reports 130"},
 	{"set -o posix; trap 'echo foo' EXIT >/dev/null & wait $!", ""},
 	{
 		"set -o posix; kill() (trap 'sleep 0' EXIT; (trap 'sleep 0' EXIT; (trap 'sleep 0' EXIT; command kill \"$@\"))); trap X USR1; alias X='echo 1'; kill -s USR1 $$; alias X='echo 2'; kill -s USR1 $$",
@@ -5412,7 +5412,7 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	},
 	{
 		"shopt -s extglob; shopt -u globskipdots; touch .a .foo a.log; echo .*; echo @(.*); echo .?; echo @(.?); echo '---'; echo *(.)",
-		". .. .a .foo\n. .. .a .foo\n.. .a\n.. .a\n---\n*(.)\n",
+		". .. .a .foo\n. .. .a .foo\n.. .a\n.. .a\n---\n*(.)\n #IGNORE S275 decision: GNU Bash parses the whole line before shopt -s extglob runs; this parser always accepts extglob",
 	},
 	{
 		"shopt -s extglob\ntouch az a1z a12z a123z; echo a@([0-9])z",
@@ -5911,11 +5911,11 @@ type swap32_posix`, "swap32_posix is a function\nswap32_posix () \n{ \n    local
 	},
 	{
 		"a=4; read -t 0.000001 a <<< abcde; status=$?; echo ${a:-unset} $status",
-		"abcde 0\n",
+		"abcde 0\n #IGNORE S275 decision: GNU Bash races its 1us alarm against the here-string read (142 on Linux); ready input is read here",
 	},
 	{
 		"a=4; read -t 0.000001 a <<<abcde; status=$?; echo ${a:-unset} $status",
-		"abcde 0\n",
+		"abcde 0\n #IGNORE S275 decision: GNU Bash races its 1us alarm against the here-string read (142 on Linux); ready input is read here",
 	},
 	{
 		"echo abcde | { read -t 0.5 a; status=$?; echo ${a:-unset} $status; }",
