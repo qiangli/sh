@@ -766,6 +766,12 @@ func bashPPBridgeFloatText(text string) (string, bool) {
 // `type Celsius float64` crosses the boundary as a float and keeps the
 // materialised Celsius identity rather than arriving as a string.
 func (r *Runner) bashPPBridgeDefinedScalar(value bashPPBridgeValue) (bashPPBridgeValue, error) {
+	out, err := r.bashPPBridgeDefinedScalarKind(value)
+	out.Type = r.bashPPReservedTypeSpelling(out.Type)
+	return out, err
+}
+
+func (r *Runner) bashPPBridgeDefinedScalarKind(value bashPPBridgeValue) (bashPPBridgeValue, error) {
 	if value.Type == "" {
 		return value, nil
 	}

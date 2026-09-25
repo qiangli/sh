@@ -51,9 +51,11 @@ func TestGoSourceSprint165UnregisteredIdentityStillRefused(t *testing.T) {
 
 import "fmt"
 
-type symbols struct{ N int }
-
 func main() {
+	// A function-local type named like a helper identifier stays
+	// unmaterialised; the package-level spelling is registered under a
+	// generated identity since Sprint 290 (bashpp_s290_reserved_type_names.go).
+	type symbols struct{ N int }
 	fmt.Println(symbols{N: 1})
 }
 `)

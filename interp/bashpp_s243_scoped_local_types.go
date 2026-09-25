@@ -129,9 +129,20 @@ func (r *Runner) bashPPScopedLocalTypeName(named *syntax.BashPPNamedType) (strin
 		return "", false
 	}
 	scope, known := r.goSourceLocalTypeScope(named)
-	if !known || scope == "" {
+	if !known {
+		// A synthesized reference — the type a conversion `value(2)` boxes
+		// with — carries no position. It can only mean the package-level
+		// declaration when the program declares no local type of the name.
+		if index := r.goSourceLocalTypes(); index != nil && len(index.decls[named.Name.Value]) == 0 {
+			if name, ok := cache.scoped[bashPPScopedLocalKey(named.Name.Value, "")]; ok {
+				return name, true
+			}
+		}
 		return "", false
 	}
+	// Scope "" is a package-level type registered under a generated
+	// identity because its name is reserved by the helper
+	// (bashpp_s290_reserved_type_names.go); no other package-level key exists.
 	name, ok := cache.scoped[bashPPScopedLocalKey(named.Name.Value, scope)]
 	return name, ok
 }

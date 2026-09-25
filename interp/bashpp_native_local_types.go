@@ -247,12 +247,22 @@ func (r *Runner) bashPPBuildLocalTypeDescriptorsWithout(withdrawn map[string]boo
 			}
 		}
 	}
+	// A package-level type named like one of the helper's own identifiers
+	// (`request`, `value`, `response`, ...) cannot be declared under its
+	// name in the helper. It is registered under a generated identity keyed
+	// by the package scope "", and every reference spells that identity, the
+	// way a reused local name is (bashpp_s290_reserved_type_names.go).
+	reservedPackage, reservedDecls := bashPPReservedPackageTypes(r.bashPPGoSourceFile)
+	for _, name := range reservedPackage {
+		key := bashPPScopedLocalKey(name, "")
+		scopedNames[key] = bashPPScopedLocalName(key)
+	}
 	resolveScoped := func(named *syntax.BashPPNamedType) (string, bool) {
 		if len(scopedNames) == 0 || named.Name == nil {
 			return "", false
 		}
 		scope, known := r.goSourceLocalTypeScope(named)
-		if !known || scope == "" {
+		if !known {
 			return "", false
 		}
 		name, ok := scopedNames[bashPPScopedLocalKey(named.Name.Value, scope)]
@@ -373,6 +383,30 @@ func (r *Runner) bashPPBuildLocalTypeDescriptorsWithout(withdrawn map[string]boo
 			continue
 		}
 		out = append(out, bashPPLocalType{Name: scopedNames[key], Identity: d.GoTypeIdentity, Decl: decl, Alias: d.Alias, refs: local.refs})
+	}
+	for _, name := range reservedPackage {
+		d := reservedDecls[name]
+		local.refs = map[string]bool{}
+		decl, ok := local.source(d.DeclTypeExpr, 0)
+		if !ok {
+			continue
+		}
+		materialised := bashPPLocalType{Name: scopedNames[bashPPScopedLocalKey(name, "")], Identity: d.GoTypeIdentity, Decl: decl, Callback: name, refs: local.refs}
+		if decl != "any" && !strings.HasPrefix(decl, "interface") {
+			materialised.Methods = local.mirrored(methods[name])
+			for _, method := range methods[name] {
+				mirrored := false
+				for _, m := range materialised.Methods {
+					if m.Name == method.Name.Value {
+						mirrored = true
+					}
+				}
+				if !mirrored {
+					materialised.OmittedMethods = append(materialised.OmittedMethods, method.Name.Value)
+				}
+			}
+		}
+		out = append(out, materialised)
 	}
 	for _, name := range names {
 		if bashPPHelperReserved[name] {
