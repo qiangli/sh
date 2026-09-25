@@ -4,18 +4,11 @@ package interp_test
 
 // Sprint: #118; Story: #52; Story-ID: d564bada90bb
 import (
-	"bytes"
-	"context"
 	"crypto/sha256"
 	"fmt"
-	"mvdan.cc/sh/v3/gosource"
-	"mvdan.cc/sh/v3/interp"
-	"mvdan.cc/sh/v3/syntax"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
-	"time"
 )
 
 func TestGoSourceOriginalTypeRegistryThreeModes(t *testing.T) {
@@ -64,30 +57,12 @@ func TestGoSourceTypeRegistryScopedLocalTypes(t *testing.T) {
 	}
 }
 
-// A reused generic type name is still outside the represented namespace:
-// it must fail before a dependency can observe conflated instantiations.
-func TestGoSourceTypeRegistryRejectsAmbiguousGeneric(t *testing.T) {
+// A reused function-local generic type name also denotes distinct Go types
+// per scope. Since Sprint 275 (story 758) such declarations outside generic
+// functions register under their own helper identity, so this valid program
+// runs as native Go does instead of being refused; it was previously pinned
+// as a refusal (TestGoSourceTypeRegistryRejectsAmbiguousGeneric).
+func TestGoSourceTypeRegistryScopedLocalGenerics(t *testing.T) {
 	source := "package main;import \"fmt\";func one(){type box[T any] struct{V T};fmt.Println(box[int]{1})};func two(){type box[T any] struct{V T};fmt.Println(box[int]{2})};func main(){one();two()}\n"
-	program, err := gosource.Parse(strings.NewReader(source), "ambiguous.go", gosource.Options{RunMain: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var out, errout bytes.Buffer
-	runner, err := interp.New(interp.Lang(syntax.LangBashPP), interp.Dir(t.TempDir()), interp.StdIO(nil, &out, &errout))
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	err = runner.Run(ctx, program.File)
-	if err == nil {
-		t.Fatalf("ambiguous generic types accepted: %q", out.String())
-	}
-	diagnostic := err.Error() + errout.String()
-	if !strings.Contains(diagnostic, "unregistered bridge type") && !strings.Contains(diagnostic, "redeclared") {
-		t.Fatalf("unexpected failure: %v stderr=%q", err, errout.String())
-	}
-	if out.Len() != 0 {
-		t.Fatalf("dependency observed ambiguous type: %q", out.String())
-	}
+	differGoSource(t, source, nil, "")
 }
