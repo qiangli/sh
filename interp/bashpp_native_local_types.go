@@ -220,7 +220,9 @@ func (r *Runner) bashPPBuildLocalTypeDescriptorsWithout(withdrawn map[string]boo
 	for key := range scopedDecls {
 		scopedNames[key] = bashPPScopedLocalName(key)
 		if d := scopedDecls[key].decl; len(d.TypeParams) > 0 {
-			generics[scopedNames[key]] = d
+			if !ambiguous[d.Name.Value] {
+				generics[scopedNames[key]] = d
+			}
 		}
 	}
 	for name := range ambiguous {
@@ -1141,7 +1143,7 @@ func (l *bashPPLocalTypeSet) source(typ syntax.BashPPTypeExpr, depth int) (strin
 				// original name, and the two would not address the same
 				// field. (Sprint 153's recorded refusal; the instantiation
 				// itself is materialised, see instanceRef.)
-				if l.embeddedInstantiation(field.FieldTypeExpr) && !l.embeddedPublic(field.FieldTypeExpr) {
+				if l.embeddedInstantiation(field.FieldTypeExpr) {
 					return "", false
 				}
 				element, ok := l.source(field.FieldTypeExpr, depth+1)
