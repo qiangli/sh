@@ -412,6 +412,12 @@ func (r *Runner) bashPPBuildLocalTypeDescriptorsWithout(withdrawn map[string]boo
 		if !ok {
 			continue
 		}
+		// Field tracking requires a defined struct type. An anonymous
+		// descriptor containing a tracked field cannot be emitted as a Go
+		// alias; named declarations of the same shape are handled above.
+		if strings.Contains(decl, `go:"track"`) {
+			continue
+		}
 		name := fmt.Sprintf("bppAnonymous_%x", sha256.Sum256([]byte(key)))
 		for declared[name] != nil || bashPPHelperReserved[name] {
 			name += "_"

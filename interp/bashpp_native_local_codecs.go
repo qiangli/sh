@@ -88,7 +88,17 @@ func bashPPLocalCodecsGo(locals []bashPPLocalType) (string, error) {
 		}
 		ast.Inspect(expr, func(node ast.Node) bool {
 			if shape, ok := node.(*ast.StructType); ok {
-				shapes[render(shape)] = shape
+				// A go:"track" field is legal in a named declaration under
+				// fieldtrack, but not in the anonymous type expression used
+				// to register a structural codec. The named codec above
+				// already covers this shape.
+				tracked := false
+				for _, field := range shape.Fields.List {
+					tracked = tracked || field.Tag != nil && strings.Contains(field.Tag.Value, `go:"track"`)
+				}
+				if !tracked {
+					shapes[render(shape)] = shape
+				}
 			}
 			return true
 		})
