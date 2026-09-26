@@ -57,6 +57,35 @@ func bashPPTransportOrigin(session *bashPPNativeSession, ptr *bashPPPointer) uin
 	return session.originNext
 }
 
+// bashPPTransportSliceOrigin gives an interpreter slice backing array a stable
+// session-local identity. A reslice starting at the same element retains the
+// identity; a replacement header naming a different array does not. Keeping
+// the view in the session prevents address reuse while a native reflect.Value
+// can still retain an element selected from that backing array.
+func bashPPTransportSliceOrigin(session *bashPPNativeSession, view []any) uint64 {
+	if session == nil || cap(view) == 0 {
+		return 0
+	}
+	data := reflect.ValueOf(view).Pointer()
+	if data == 0 {
+		return 0
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if id := session.sliceOriginIndex[data]; id != 0 {
+		return id
+	}
+	if session.sliceOriginIndex == nil {
+		session.sliceOriginIndex = make(map[uintptr]uint64)
+		session.sliceOriginKeep = make(map[uint64][]any)
+	}
+	session.sliceOriginNext++
+	id := session.sliceOriginNext
+	session.sliceOriginIndex[data] = id
+	session.sliceOriginKeep[id] = view[:cap(view)]
+	return id
+}
+
 // bashPPOriginKey is the storage identity a transport origin names: the root
 // cell and an exact spelling of the step path. A nil path and an empty path
 // spell differently, as reflect.DeepEqual distinguishes them.

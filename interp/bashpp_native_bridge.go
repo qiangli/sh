@@ -75,22 +75,29 @@ type bashPPBridgeValue struct {
 
 	// Callable is derived by the interpreter from authenticated native type or
 	// import metadata; the dependency worker cannot set callback policy itself.
-	Callable     string                       `json:"-"`
-	NativeType   string                       `json:"native_type,omitempty"`
-	NativeTypeID uint64                       `json:"native_type_id,omitempty"`
-	Callbacks    bool                         `json:"callbacks,omitempty"`
-	Function     bool                         `json:"function,omitempty"`
-	Origin       uint64                       `json:"origin,omitempty"`
-	Interface    string                       `json:"interface,omitempty"`
-	Session      string                       `json:"session,omitempty"`
-	Kind         string                       `json:"kind"`
-	Type         string                       `json:"type,omitempty"`
-	Text         string                       `json:"text,omitempty"`
-	Bytes        []byte                       `json:"bytes,omitempty"`
-	Handle       uint64                       `json:"handle,omitempty"`
-	Elements     []bashPPBridgeValue          `json:"elements,omitempty"`
-	Fields       map[string]bashPPBridgeValue `json:"fields,omitempty"`
-	Entries      []bashPPBridgeEntry          `json:"entries,omitempty"`
+	Callable     string `json:"-"`
+	NativeType   string `json:"native_type,omitempty"`
+	NativeTypeID uint64 `json:"native_type_id,omitempty"`
+	Callbacks    bool   `json:"callbacks,omitempty"`
+	Function     bool   `json:"function,omitempty"`
+	Origin       uint64 `json:"origin,omitempty"`
+	// Storage identifies interpreter-owned slice backing storage within this
+	// session. Capacity is the capacity of the transported view. The worker
+	// uses both only while refreshing an authenticated pointer origin; they
+	// preserve element aliases without turning ordinary ValueOf(value) copies
+	// into live views.
+	Storage   uint64                       `json:"storage,omitempty"`
+	Capacity  int                          `json:"capacity,omitempty"`
+	Interface string                       `json:"interface,omitempty"`
+	Session   string                       `json:"session,omitempty"`
+	Kind      string                       `json:"kind"`
+	Type      string                       `json:"type,omitempty"`
+	Text      string                       `json:"text,omitempty"`
+	Bytes     []byte                       `json:"bytes,omitempty"`
+	Handle    uint64                       `json:"handle,omitempty"`
+	Elements  []bashPPBridgeValue          `json:"elements,omitempty"`
+	Fields    map[string]bashPPBridgeValue `json:"fields,omitempty"`
+	Entries   []bashPPBridgeEntry          `json:"entries,omitempty"`
 
 	// NilChannel marks a dependency channel handle whose value is nil. A nil
 	// channel never communicates, so a select arm on it needs no arbitration.
@@ -243,6 +250,9 @@ type bashPPNativeSession struct {
 	originIndex         map[bashPPOriginKey]uint64 // protected by mu; see bashPPTransportOrigin
 	originIndexed       int                        // len(origins) the index covers
 	originNext          uint64
+	sliceOriginIndex    map[uintptr]uint64 // protected by mu; backing-array start -> id
+	sliceOriginKeep     map[uint64][]any   // keeps registered backing arrays live
+	sliceOriginNext     uint64
 	start               sync.Mutex
 	write               sync.Mutex
 	mu                  sync.Mutex

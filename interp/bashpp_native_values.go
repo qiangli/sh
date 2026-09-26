@@ -1044,6 +1044,8 @@ func (r *Runner) bashPPBridgeCollection(value any, meta *bashPPCollectionMeta, t
 		}
 		if r.bashPPGoSource && result.Kind == "slice" {
 			result.sliceView = &bashPPNativeSlice{view: value, meta: meta, typ: typ}
+			result.Storage = bashPPTransportSliceOrigin(r.bashPPTools.bridge, value)
+			result.Capacity = cap(value)
 		}
 		for i, item := range value {
 			var child *bashPPCollectionMeta

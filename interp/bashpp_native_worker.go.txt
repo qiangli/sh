@@ -47,6 +47,8 @@ type value struct {
  NativeType string `json:"native_type,omitempty"`
  NativeTypeID uint64 `json:"native_type_id,omitempty"`
  Origin uint64 `json:"origin,omitempty"`
+ Storage uint64 `json:"storage,omitempty"`
+ Capacity int `json:"capacity,omitempty"`
  Interface string `json:"interface,omitempty"`
  Session string `json:"session,omitempty"`
  Kind string `json:"kind"`
@@ -199,6 +201,7 @@ func mirroredMethodExpression(fn reflect.Value) bool {
 //LOCALTYPES
 
 var originalPointers = struct {sync.Mutex; values map[uint64]reflect.Value; ids map[uintptr]uint64; sent map[uint64]string}{values:map[uint64]reflect.Value{},ids:map[uintptr]uint64{},sent:map[uint64]string{}}
+var originalSlices = struct {sync.Mutex; values map[uint64]reflect.Value}{values:map[uint64]reflect.Value{}}
 // pointerSnapshot renders one origin pointee so the writeback can report only
 // what this dependency actually changed. Without it every later call would
 // re-send every live pointee and revert original state it never touched.
@@ -253,7 +256,21 @@ func encodeHandle(v reflect.Value,result value)value {
  // Retaining the pointer value prevents its address being reused while the
  // session's typed-address key remains live. Native ownership stays unchanged.
  if v.Kind()==reflect.Pointer{handles.pointers[pointerKey]=id}
- result.Kind="handle";result.Handle=id;return result
+ result.Kind="handle";result.Handle=id
+ if v.Type()==reflect.TypeFor[reflect.Value]()&&v.CanInterface(){result.Storage=originalSliceStorage(v.Interface().(reflect.Value))}
+ return result
+}
+func originalSliceStorage(v reflect.Value)uint64 {
+ for v.IsValid()&&v.Kind()==reflect.Interface&&!v.IsNil(){v=v.Elem()}
+ originalSlices.Lock();defer originalSlices.Unlock()
+ for id,slice:=range originalSlices.values {
+  if !slice.IsValid()||slice.Kind()!=reflect.Slice||slice.IsNil(){continue}
+  if v.IsValid()&&v.Kind()==reflect.Slice&&v.Type()==slice.Type()&&!v.IsNil()&&v.Pointer()==slice.Pointer(){return id}
+  if !v.IsValid()||!v.CanAddr()||v.Type()!=slice.Type().Elem()||slice.Cap()==0{continue}
+  address:=v.Addr().Pointer();start:=slice.Pointer();size:=slice.Type().Elem().Size()
+  if size>0&&address>=start&&address<start+uintptr(slice.Cap())*size{return id}
+ }
+ return 0
 }
 func reflectedContext(id uint64)(reflectedMethodContext,bool){handles.Lock();defer handles.Unlock();ctx,ok:=handles.reflected[id];return ctx,ok}
 func setReflectedContext(id uint64,ctx reflectedMethodContext){handles.Lock();handles.reflected[id]=ctx;handles.Unlock()}
@@ -381,7 +398,7 @@ func resolveType(name string) reflect.Type {
 // registers are recorded once the WHOLE value graph is decoded, since a
 // pointee reached through a back-reference is still being filled while its
 // referrer decodes (bashpp_sprint165_runtime2_cycle.go).
-type decodeState struct{ pointees []uint64 }
+type decodeState struct{ pointees []uint64; originDepth int }
 func decode(v value, target reflect.Type)(reflect.Value,error){st:=&decodeState{};result,err:=decodeIn(st,v,target);if err==nil{originalPointers.Lock();ptrs:=make([]reflect.Value,len(st.pointees));for i,origin:=range st.pointees{ptrs[i]=originalPointers.values[origin]};originalPointers.Unlock();for i,origin:=range st.pointees{if ptrs[i].IsValid(){recordPointee(origin,ptrs[i])}}};return result,err}
 func decodeIn(st *decodeState, v value, target reflect.Type)(reflect.Value,error){
  var result reflect.Value
@@ -424,7 +441,7 @@ func decodeIn(st *decodeState, v value, target reflect.Type)(reflect.Value,error
   case "uint":n,e:=strconv.ParseUint(v.Text,10,64);if e!=nil{return result,e};switch typ.Kind(){case reflect.Uint,reflect.Uint8,reflect.Uint16,reflect.Uint32,reflect.Uint64,reflect.Uintptr:if result.OverflowUint(n){return result,fmt.Errorf("unsigned overflow")};result.SetUint(n);case reflect.Int,reflect.Int8,reflect.Int16,reflect.Int32,reflect.Int64:if n>1<<63-1||result.OverflowInt(int64(n)){return result,fmt.Errorf("integer overflow")};result.SetInt(int64(n));case reflect.Float32,reflect.Float64:result.SetFloat(float64(n));default:return result,fmt.Errorf("unsigned for %s",typ)}
   case "complex":n,e:=strconv.ParseComplex(v.Text,128);if e!=nil{return result,e};if typ.Kind()!=reflect.Complex64&&typ.Kind()!=reflect.Complex128{return result,fmt.Errorf("complex for %s",typ)};if result.OverflowComplex(n){return result,fmt.Errorf("complex overflow")};result.SetComplex(n)
   case "float":n,e:=strconv.ParseFloat(v.Text,64);if e!=nil{return result,e};switch typ.Kind(){case reflect.Float32,reflect.Float64:result.SetFloat(n);case reflect.Complex64,reflect.Complex128:result.SetComplex(complex(n,0));default:return result,fmt.Errorf("float for %s",typ)}
-  case "slice","array":if typ.Kind()==reflect.Slice {result=reflect.MakeSlice(typ,len(v.Elements),len(v.Elements))} else if typ.Kind()!=reflect.Array||typ.Len()!=len(v.Elements){return result,fmt.Errorf("invalid collection %s",typ)};for i,elem:=range v.Elements{item,e:=decodeIn(st,elem,typ.Elem());if e!=nil{return result,e};result.Index(i).Set(item)}
+  case "slice","array":if typ.Kind()==reflect.Slice {capacity:=v.Capacity;if capacity<len(v.Elements){capacity=len(v.Elements)};if st.originDepth>0&&v.Storage!=0{originalSlices.Lock();backing:=originalSlices.values[v.Storage];if !backing.IsValid()||backing.Type()!=typ||backing.Cap()<capacity{backing=reflect.MakeSlice(typ,capacity,capacity)};originalSlices.values[v.Storage]=backing.Slice3(0,capacity,capacity);originalSlices.Unlock();result=backing.Slice3(0,len(v.Elements),capacity)}else{result=reflect.MakeSlice(typ,len(v.Elements),capacity)}} else if typ.Kind()!=reflect.Array||typ.Len()!=len(v.Elements){return result,fmt.Errorf("invalid collection %s",typ)};for i,elem:=range v.Elements{item,e:=decodeIn(st,elem,typ.Elem());if e!=nil{return result,e};result.Index(i).Set(item)}
   case "pointer":if typ.Kind()!=reflect.Pointer{return result,fmt.Errorf("pointer for %s",typ)}
    // A back-reference: a pointer already on the interpreter's transport path
    // (a cycle) arrives with its origin and no pointee, and binds to the
@@ -439,7 +456,7 @@ func decodeIn(st *decodeState, v value, target reflect.Type)(reflect.Value,error
    // The storage is chosen and registered BEFORE the pointee is decoded, so
    // a pointee that refers back to this pointer resolves to it.
    originalPointers.Lock();if v.Origin!=0 {result=originalPointers.values[v.Origin]};if !result.IsValid() || result.Type()!=typ || result.IsNil(){result=reflect.New(typ.Elem())};if v.Origin!=0{originalPointers.values[v.Origin]=result;originalPointers.ids[result.Pointer()]=v.Origin};originalPointers.Unlock()
-   item,e:=decodeIn(st,v.Elements[0],typ.Elem());if e!=nil{return result,e};result.Elem().Set(item);if v.Origin!=0{st.pointees=append(st.pointees,v.Origin)}
+   st.originDepth++;item,e:=decodeIn(st,v.Elements[0],typ.Elem());st.originDepth--;if e!=nil{return result,e};result.Elem().Set(item);if v.Origin!=0{st.pointees=append(st.pointees,v.Origin)}
   case "map":if typ.Kind()!=reflect.Map{return result,fmt.Errorf("map for %s",typ)};result=reflect.MakeMapWithSize(typ,len(v.Entries));for _,entry:=range v.Entries{key,e:=decodeIn(st,entry.Key,typ.Key());if e!=nil{return result,e};item,e:=decodeIn(st,entry.Value,typ.Elem());if e!=nil{return result,e};result.SetMapIndex(key,item)}
   case "struct":if typ.Kind()!=reflect.Struct{return result,fmt.Errorf("struct for %s",typ)};if len(v.Elements)>0&&(len(v.Fields)>0||len(v.Elements)!=typ.NumField()){return result,fmt.Errorf("invalid positional field count or mixed fields for %s",typ)};if codec,ok:=localStructCodecs[typ];ok{var err error;result,err=codec.decode(st,v);if err!=nil{return result,err};break};for name,field:=range v.Fields{slot:=result.FieldByName(name);if !slot.IsValid(){return result,fmt.Errorf("unknown field %s of %s",name,typ)};if !slot.CanSet(){return result,fmt.Errorf("unexported field %s of %s cannot cross the dependency boundary",name,typ)};item,e:=decodeIn(st,field,slot.Type());if e!=nil{return result,e};slot.Set(item)}
    for i,field:=range v.Elements{if i>=result.NumField(){return result,fmt.Errorf("too many values for %s",typ)};slot:=result.Field(i);if !slot.CanSet(){return result,fmt.Errorf("unexported field %s of %s cannot cross the dependency boundary",typ.Field(i).Name,typ)};item,e:=decodeIn(st,field,slot.Type());if e!=nil{return result,e};slot.Set(item)}
@@ -641,6 +658,10 @@ func primitiveTemplateTree(node bppTemplateParse.Node)bool {
 func dispatch(q request)(reply response){
  reply.ID=q.ID
  defer func(){if e:=recover();e!=nil{if original,ok:=e.(originalCallbackPanic);ok{reply.Panic=&original.value}else if raised,ok:=e.(dependencyStringPanic);ok{reply.Panic=&value{Kind:"panic",Type:"string",Text:string(raised)}}else{reply.Error=fmt.Sprintf("native dependency panic: %v",e)}}}()
+ if q.Op=="origin-refresh" {
+  if q.Receiver!=nil||len(q.Args)!=1||q.Args[0].Kind!="pointer"||q.Args[0].Origin==0{reply.Error="origin refresh requires one authenticated pointer";return}
+  if _,err:=decode(q.Args[0],nil);err!=nil{reply.Error=err.Error()};return
+ }
  if q.Op=="channel-make" {
   typ:=resolveType(q.Selector);if typ==nil||typ.Kind()!=reflect.Chan||len(q.Args)!=1{reply.Error="channel make requires one capacity and a registered channel type";return}
   n,err:=strconv.Atoi(q.Args[0].Text);if err!=nil||n<0{panic("makechan: size out of range")}

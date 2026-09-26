@@ -297,6 +297,15 @@ func prepareNativeSliceBuffers(req bashPPEvalRequest, q *bashPPBridgeRequest) er
 		if hasSlice && !hasDirectSlice && nativeSharedReferenceConsumer(req, *q) {
 			return nil
 		}
+		// ValueOf over an authenticated original pointer creates the worker
+		// storage that goSourceLocalReflect refreshes on later uses. A nested
+		// slice is part of that origin rather than an untracked direct copy.
+		// Keep the admission proof-based: the coherence collector must resolve
+		// the argument to that re-readable origin and reject malformed or
+		// unauthenticated pointer graphs.
+		if hasSlice && !hasDirectSlice && reflectedMethodValueOf(req, *q) && prepareNativeCopyCoherence(req, q) {
+			return nil
+		}
 		// A read-only dependency handed a direct original slice can keep the
 		// copy live across synchronous callbacks. Register it as a normal slice
 		// buffer; each callback first publishes the dependency's current backing
