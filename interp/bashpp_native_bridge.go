@@ -275,6 +275,7 @@ type bashPPNativeSession struct {
 func (r *Runner) closeGoSourceBridge() {
 	r.bashPPTools.nativeTypes = nil
 	r.bashPPTools.requestEnv = nil
+	r.bashPPTools.buildEnv = nil
 	r.bashPPTools.runtimeEnv = nil
 	if session := r.bashPPTools.bridge; session != nil {
 		session.close()

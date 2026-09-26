@@ -182,12 +182,14 @@ type bashPPToolchain struct {
 	// subshell copies. Its file and import-map identity keep source replacement
 	// and import rebinding from reusing stale generic types or selectors.
 	bridgeMetadata *bashPPBridgeMetadataCache
-	// requestEnv and runtimeEnv are the immutable process environments used to
-	// start a live dependency session. Once that session is connected, later
-	// bridge requests only service callbacks; rebuilding the Runner's shell
-	// environment for each callback is both unused and disproportionately hot
-	// for image encoders. closeGoSourceBridge clears these with the session.
+	// requestEnv, buildEnv, and runtimeEnv are the immutable process
+	// environments used to start a live dependency session. Once that session
+	// is connected, later bridge requests only service callbacks; rebuilding
+	// the Runner's shell environment for each callback is both unused and
+	// disproportionately hot for image encoders. closeGoSourceBridge clears
+	// them with the session.
 	requestEnv []string
+	buildEnv   []string
 	runtimeEnv []string
 }
 
@@ -602,12 +604,15 @@ func (nativeBashPPEvaluator) Values(ctx context.Context, req bashPPEvalRequest) 
 
 func (r *Runner) bashPPEvalRequest() (bashPPEvalRequest, error) {
 	env := r.bashPPTools.requestEnv
+	buildEnv := r.bashPPTools.buildEnv
 	runtimeEnv := r.bashPPTools.runtimeEnv
 	connected := r.bashPPTools.bridge != nil && r.bashPPTools.bridge.conn != nil
-	if !connected || env == nil {
+	envFresh := !connected || env == nil
+	if envFresh {
 		env = nativeExecEnv(environStrings(r.writeEnv))
 	}
-	if !connected || runtimeEnv == nil {
+	runtimeEnvFresh := !connected || runtimeEnv == nil
+	if runtimeEnvFresh {
 		runtimeEnv = env
 	}
 	if r.bashPPTools.goBinary == "" {
@@ -641,14 +646,17 @@ func (r *Runner) bashPPEvalRequest() (bashPPEvalRequest, error) {
 			}
 		}
 	}
-	if r.bashPPTools.goRoot != "" {
+	if envFresh && r.bashPPTools.goRoot != "" {
 		env = setEnvString(env, "GOROOT", r.bashPPTools.goRoot)
 		env = setEnvString(env, "GOTOOLCHAIN", r.bashPPTools.goVersion)
 	}
-	buildEnv := append([]string(nil), env...)
-	if r.bashPPTools.buildGoRoot != "" {
-		buildEnv = setEnvString(buildEnv, "GOROOT", r.bashPPTools.buildGoRoot)
-		buildEnv = setEnvString(buildEnv, "GOTOOLCHAIN", r.bashPPTools.buildGoVersion)
+	buildEnvFresh := !connected || buildEnv == nil
+	if buildEnvFresh {
+		buildEnv = append([]string(nil), env...)
+		if r.bashPPTools.buildGoRoot != "" {
+			buildEnv = setEnvString(buildEnv, "GOROOT", r.bashPPTools.buildGoRoot)
+			buildEnv = setEnvString(buildEnv, "GOTOOLCHAIN", r.bashPPTools.buildGoVersion)
+		}
 	}
 	if r.bashPPGoSource && r.bashPPTools.bridge == nil {
 		// The dependency helper materialises the original local types but
@@ -662,10 +670,10 @@ func (r *Runner) bashPPEvalRequest() (bashPPEvalRequest, error) {
 		importPath, testMain = r.bashPPTools.importPath, r.bashPPTools.testMain
 	}
 	if r.bashPPGoSource {
-		if !connected || runtimeEnv == nil {
+		if runtimeEnvFresh {
 			runtimeEnv = nativeExecEnv(r.bashPPGoSourceEnvironment())
 		}
-		if r.goSourceEnvironment == nil && r.bashPPTools.goRoot != "" {
+		if runtimeEnvFresh && r.goSourceEnvironment == nil && r.bashPPTools.goRoot != "" {
 			runtimeEnv = setEnvString(runtimeEnv, "GOROOT", r.bashPPTools.goRoot)
 			runtimeEnv = setEnvString(runtimeEnv, "GOTOOLCHAIN", r.bashPPTools.goVersion)
 		}
@@ -675,7 +683,7 @@ func (r *Runner) bashPPEvalRequest() (bashPPEvalRequest, error) {
 	// session values is therefore correct even if an original callback mutates
 	// the shell environment while it runs.
 	if r.bashPPGoSource && !connected {
-		r.bashPPTools.requestEnv, r.bashPPTools.runtimeEnv = env, runtimeEnv
+		r.bashPPTools.requestEnv, r.bashPPTools.buildEnv, r.bashPPTools.runtimeEnv = env, buildEnv, runtimeEnv
 	}
 	embedDecls, sourceDir := r.bashPPGoSourceEmbedRequest()
 	if r.bashPPGoSource && sourceDir == "" {
