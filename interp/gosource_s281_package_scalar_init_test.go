@@ -19,7 +19,7 @@ func TestS281PackageLocalImportedScalarInitializer(t *testing.T) {
 import "test/p"
 
 func main() { p.Run() }
-`, map[string]string{"p.go": `package p
+`, map[string]string{"a.go": `package p
 
 import (
 	"fmt"
