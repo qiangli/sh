@@ -102,6 +102,14 @@ type Options struct {
 	// Bash's $PROMPT_COMMAND is the canonical use case.
 	PreCommand func(context.Context, *interp.Runner)
 
+	// Route, if non-nil, sees each fresh input line (never a continuation
+	// line) before the shell parses it and returns the line to run instead.
+	// Returning the line unchanged keeps plain shell semantics, continuation
+	// prompts included; returning a different line runs that line as typed
+	// input (no continuation); returning "" skips it. Agent front ends use it
+	// to route input that is not a shell command (bashy's action ladder).
+	Route func(ctx context.Context, r *interp.Runner, line string) string
+
 	// OnRunError is called when a parsed statement returns a non-nil error
 	// that is not just a non-zero command exit code. Default behaviour:
 	// write "<err>\n" to Stderr. Set to a no-op func to suppress.
@@ -154,6 +162,16 @@ func currentLang(opts Options, r *interp.Runner, fallback syntax.LangVariant) sy
 		}
 	}
 	return fallback
+}
+
+// route applies opts.Route to a fresh input line. rerouted reports that the
+// router replaced the line, which then runs as typed with no continuation.
+func route(ctx context.Context, opts Options, r *interp.Runner, line string) (routed string, rerouted bool) {
+	if opts.Route == nil {
+		return line, false
+	}
+	routed = opts.Route(ctx, r, line)
+	return routed, routed != line
 }
 
 func runInput(ctx context.Context, opts Options, r *interp.Runner, input string, fallback syntax.LangVariant, stderr io.Writer, onRunError func(error)) (error, bool) {
@@ -337,13 +355,17 @@ func Run(ctx context.Context, opts Options) error {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
+		routed, rerouted := route(ctx, opts, r, line)
+		if routed == "" {
+			continue
+		}
 
 		// Multi-line continuation: keep reading until the parser is
 		// satisfied or hits a real syntax error. parser.Parse leaves the
 		// instance in an indeterminate state after returning, so each
 		// probe uses a fresh parser — mirrors the cmd/bashy pattern.
-		input := line
-		for {
+		input := routed
+		for !rerouted {
 			pp := syntax.NewParser(syntax.Variant(currentLang(opts, r, lang)), syntax.PosixMode(opts.PosixMode))
 			_, perr := pp.Parse(strings.NewReader(input), "")
 			if perr == nil {
@@ -497,12 +519,16 @@ func runAssumedTTY(ctx context.Context, opts Options, histFile string, r *interp
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
+		routed, rerouted := route(ctx, opts, r, line)
+		if routed == "" {
+			continue
+		}
 
 		// Multi-line continuation: keep reading until the parser is
 		// satisfied or hits a real syntax error. Same shape as the
 		// readline loop, using a fresh parser per probe.
-		input := line
-		for {
+		input := routed
+		for !rerouted {
 			pp := syntax.NewParser(syntax.Variant(currentLang(opts, r, lang)), syntax.PosixMode(opts.PosixMode))
 			_, perr := pp.Parse(strings.NewReader(input), "")
 			if perr != nil && !pp.Incomplete() && opts.LangFunc != nil {

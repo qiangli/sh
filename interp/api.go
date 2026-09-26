@@ -2785,6 +2785,14 @@ func (r *Runner) VimMode() bool {
 	return r.noOpSetState["vi"]
 }
 
+// AliasDefined reports whether name is a defined alias. Intended for
+// embedders that route interactive input by its first word (a line router
+// must treat an alias like any other command name).
+func (r *Runner) AliasDefined(name string) bool {
+	_, ok := r.alias[name]
+	return ok
+}
+
 // LiveVar returns the current value of the named variable, resolved through
 // the active scope (locals, globals, and the writable environment overlay).
 // Unlike the read-only [Runner.Env] — which holds only the initial
