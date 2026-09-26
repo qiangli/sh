@@ -868,7 +868,15 @@ func (r *Runner) bashPPConvertNamedScalar(name string, target syntax.BashPPTypeE
 		base = shape.Name.Value
 	}
 	if r.bashPPGoSource && !bashPPBuiltinType(base) {
-		base, ok = r.goSourceImportedScalarUnderlying(name)
+		// A local defined type can have an imported defined scalar as its
+		// immediate underlying shape (for example `type atPos token.Pos`).
+		// Resolve that retained shape before falling back to a directly
+		// imported conversion target.
+		if imported, importedOK := r.goSourceImportedScalarUnderlying(base); importedOK {
+			base, ok = imported, true
+		} else {
+			base, ok = r.goSourceImportedScalarUnderlying(name)
+		}
 	}
 	if !ok || !bashPPBuiltinType(base) {
 		return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-CONVERT: cannot convert %s to %s", x.value.Kind(), name)
