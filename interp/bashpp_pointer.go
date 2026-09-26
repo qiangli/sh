@@ -957,6 +957,16 @@ func bashPPStoreCellValue(cell *bashPPCell, value any, meta *bashPPCollectionMet
 		}
 		return
 	}
+	if native, ok := value.(*bashPPBridgeValue); ok && native != nil {
+		// A native handle read out of a func-typed collection element arrives
+		// with no collection metadata of its own: the map stored the dependency
+		// function value (dep.Init) as the bridge handle it is. It must be kept
+		// as that handle Object so a later `f = m[k]` or `m[k](...)` still calls
+		// the dependency; fmt.Sprint would flatten the descriptor to text and a
+		// native call would then be handed a "string" for its func(*T) parameter.
+		cell.vr = expand.NewObject(native)
+		return
+	}
 	cell.vr = expand.Variable{Set: true, Kind: expand.String, Str: fmt.Sprint(value)}
 }
 
