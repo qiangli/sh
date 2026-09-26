@@ -23,10 +23,11 @@ package interp
 //     refusal does not apply to it; its callback and its slice are the same
 //     Runner's own state, in one goroutine.
 //
-//   - slices.SortFunc/SortStableFunc/IndexFunc/ContainsFunc and cmp.Compare/Less
-//     are uninstantiated generic functions, which are not reflectable imported
-//     symbols. They are answered interpreter-side over the values that already
-//     crossed the collection transport, exactly as slices.Sort/Equal are.
+//   - slices.SortFunc/SortStableFunc/EqualFunc/IndexFunc/ContainsFunc and
+//     cmp.Compare/Less are uninstantiated generic functions, which are not
+//     reflectable imported symbols. They are answered interpreter-side over the
+//     original slice storage when identity can matter, exactly as slices.Sort/
+//     Equal are.
 
 import (
 	"context"
@@ -46,7 +47,7 @@ import (
 func goSourceInterpretedCallable(name string) bool {
 	switch name {
 	case "slices.Sort", "slices.Equal", "slices.Collect",
-		"slices.SortFunc", "slices.SortStableFunc", "slices.IndexFunc", "slices.ContainsFunc",
+		"slices.SortFunc", "slices.SortStableFunc", "slices.EqualFunc", "slices.IndexFunc", "slices.ContainsFunc",
 		"cmp.Compare", "cmp.Less":
 		return true
 	}
@@ -235,6 +236,10 @@ func (r *Runner) goSourceCallbackBool(ctx context.Context, fn *bashPPFunc, args 
 	if err != nil {
 		return false, err
 	}
+	return r.goSourceCallbackBoolResult(results)
+}
+
+func (r *Runner) goSourceCallbackBoolResult(results []*bashPPCell) (bool, error) {
 	if len(results) != 1 {
 		return false, fmt.Errorf("gosource: predicate callback must return one value")
 	}
@@ -268,10 +273,160 @@ func (r *Runner) goSourceGenericCallbackHelper(ctx context.Context, req bashPPEv
 		return []bashPPBridgeValue{{Kind: "int", Type: "int", Text: strconv.Itoa(n)}}, true, nil
 	case "slices.SortFunc", "slices.SortStableFunc":
 		return nil, true, r.goSourceSlicesSortFunc(ctx, req, q)
+	case "slices.EqualFunc":
+		return r.goSourceSlicesEqualFunc(ctx, req, q)
 	case "slices.IndexFunc", "slices.ContainsFunc":
 		return r.goSourceSlicesSearchFunc(ctx, req, q, name == "slices.ContainsFunc")
 	}
 	return nil, false, nil
+}
+
+// goSourceSlicesEqualFunc answers slices.EqualFunc over the live original
+// backing arrays when they are representable. That preserves interface dynamic
+// values and pointer identity, and a callback mutation of a later element is
+// visible to the next comparison just as it is in native Go.
+func (r *Runner) goSourceSlicesEqualFunc(ctx context.Context, req bashPPEvalRequest, q *bashPPBridgeRequest) ([]bashPPBridgeValue, bool, error) {
+	name := nativeSliceCallable(req, *q)
+	if len(q.Args) != 3 {
+		return nil, true, fmt.Errorf("gosource: %s requires two slices and an equality function", name)
+	}
+	left, err := r.goSourceEqualFuncOperand(ctx, req, q.Args[0])
+	if err != nil {
+		return nil, true, err
+	}
+	right, err := r.goSourceEqualFuncOperand(ctx, req, q.Args[1])
+	if err != nil {
+		return nil, true, err
+	}
+	if left.len != right.len {
+		return []bashPPBridgeValue{{Kind: "bool", Type: "bool", Text: "false"}}, true, nil
+	}
+	if left.len == 0 {
+		return []bashPPBridgeValue{{Kind: "bool", Type: "bool", Text: "true"}}, true, nil
+	}
+	fn, err := goSourceCallbackFunc(req, q.Args[2])
+	if err != nil {
+		return nil, true, err
+	}
+	params := bashppParams(fn.params())
+	if len(params) != 2 {
+		return nil, true, fmt.Errorf("gosource: %s equality function wants two parameters", name)
+	}
+	for i := range left.len {
+		leftCell, leftText, err := left.callbackCell(ctx, req, r, i, params[0])
+		if err != nil {
+			return nil, true, err
+		}
+		rightCell, rightText, err := right.callbackCell(ctx, req, r, i, params[1])
+		if err != nil {
+			return nil, true, err
+		}
+		results, err := r.goSourceInvokeCallbackCells(ctx, fn, []*bashPPCell{leftCell, rightCell}, []string{leftText, rightText})
+		if err != nil {
+			return nil, true, err
+		}
+		equal, err := r.goSourceCallbackBoolResult(results)
+		if err != nil {
+			return nil, true, err
+		}
+		if !equal {
+			return []bashPPBridgeValue{{Kind: "bool", Type: "bool", Text: "false"}}, true, nil
+		}
+	}
+	return []bashPPBridgeValue{{Kind: "bool", Type: "bool", Text: "true"}}, true, nil
+}
+
+type goSourceEqualFuncOperand struct {
+	len      int
+	shared   *goSourceSharedSlice
+	elements []bashPPBridgeValue
+	handle   *bashPPBridgeValue
+}
+
+func (r *Runner) goSourceEqualFuncOperand(ctx context.Context, req bashPPEvalRequest, v bashPPBridgeValue) (goSourceEqualFuncOperand, error) {
+	if shared, ok := r.goSourceSharedReadSliceOf(v); ok {
+		return goSourceEqualFuncOperand{len: len(shared.view), shared: &shared}, nil
+	}
+	if v.Kind == "handle" {
+		n, err := r.goSourceNativeSliceLen(ctx, req, v)
+		if err != nil {
+			return goSourceEqualFuncOperand{}, err
+		}
+		return goSourceEqualFuncOperand{len: n, handle: &v}, nil
+	}
+	elements, err := goSourceSequenceElements(v)
+	if err != nil {
+		return goSourceEqualFuncOperand{}, err
+	}
+	return goSourceEqualFuncOperand{len: len(elements), elements: elements}, nil
+}
+
+func (o goSourceEqualFuncOperand) callbackCell(ctx context.Context, req bashPPEvalRequest, r *Runner, i int, param bashPPParam) (*bashPPCell, string, error) {
+	if o.shared != nil {
+		return o.shared.elementCell(i, param), "", nil
+	}
+	var value bashPPBridgeValue
+	if o.handle != nil {
+		var err error
+		value, err = r.goSourceNativeSliceIndex(ctx, req, *o.handle, i)
+		if err != nil {
+			return nil, "", err
+		}
+	} else {
+		value = o.elements[i]
+	}
+	return r.goSourceCallbackCell(value, param)
+}
+
+func (r *Runner) goSourceNativeSliceLen(ctx context.Context, req bashPPEvalRequest, v bashPPBridgeValue) (int, error) {
+	if req.Bridge == nil {
+		return 0, fmt.Errorf("gosource: native slice handle is not bound to a dependency session")
+	}
+	values, err := req.Bridge.request(ctx, req, bashPPBridgeRequest{Op: "len", Receiver: &v})
+	if err != nil {
+		return 0, err
+	}
+	if len(values) != 1 || values[0].Kind != "int" {
+		return 0, fmt.Errorf("gosource: native slice length returned invalid shape")
+	}
+	n, err := strconv.Atoi(values[0].Text)
+	if err != nil || n < 0 {
+		return 0, fmt.Errorf("gosource: native slice length returned %q", values[0].Text)
+	}
+	return n, nil
+}
+
+func (r *Runner) goSourceNativeSliceIndex(ctx context.Context, req bashPPEvalRequest, v bashPPBridgeValue, i int) (bashPPBridgeValue, error) {
+	if req.Bridge == nil {
+		return bashPPBridgeValue{}, fmt.Errorf("gosource: native slice handle is not bound to a dependency session")
+	}
+	values, err := req.Bridge.request(ctx, req, bashPPBridgeRequest{
+		Op:       "index",
+		Receiver: &v,
+		Args:     []bashPPBridgeValue{{Kind: "int", Type: "int", Text: strconv.Itoa(i)}},
+	})
+	if err != nil {
+		return bashPPBridgeValue{}, err
+	}
+	if len(values) != 1 {
+		return bashPPBridgeValue{}, fmt.Errorf("gosource: native slice index returned invalid shape")
+	}
+	return values[0], nil
+}
+
+func (r *Runner) goSourceSharedReadSliceOf(v bashPPBridgeValue) (goSourceSharedSlice, bool) {
+	capture := v.sliceView
+	if capture == nil || v.Kind != "slice" {
+		return goSourceSharedSlice{}, false
+	}
+	collection, ok := r.bashPPUnderlyingType(capture.typ).(*syntax.BashPPCollectionType)
+	if !ok || collection.Kind != "slice" {
+		return goSourceSharedSlice{}, false
+	}
+	if capture.meta != nil && len(capture.meta.sequence) < len(capture.view) {
+		return goSourceSharedSlice{}, false
+	}
+	return goSourceSharedSlice{view: capture.view, meta: capture.meta, elem: collection.Element}, true
 }
 
 // goSourceSlicesSortFunc reorders the original backing array in place with
