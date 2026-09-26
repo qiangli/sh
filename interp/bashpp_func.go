@@ -579,12 +579,15 @@ func (r *Runner) bashPPLookupFunc(c *syntax.BashPPCall) (*bashPPFunc, bool) {
 			}
 			return r.bashPPInstantiateFunc(c, fn)
 		}
-		cell, err := r.goSourceValueCell(c.CalleeExpr)
+		cell, err := r.goSourceComputedCalleeCell(c.CalleeExpr)
 		if err != nil {
 			r.exit.fatal(err)
 			return nil, false
 		}
-		return r.bashPPClosure(cell.vr.Str)
+		if fn, ok := r.bashPPClosure(cell.vr.Str); ok {
+			return fn, true
+		}
+		return r.goSourceComputedNativeFuncCell(c, cell)
 	}
 	if c.FuncLit != nil {
 		return r.bashPPNewClosure(c.FuncLit), true

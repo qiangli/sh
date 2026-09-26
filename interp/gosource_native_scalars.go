@@ -57,8 +57,23 @@ func (r *Runner) goSourceNativeScalarReceiver(expr syntax.BashPPExpr) bool {
 			return false
 		}
 		return r.goSourceNativeScalarCell(r.bashPPScope.lookup(x.Name.Value))
+	case *syntax.BashPPCall:
+		if len(x.ResultTypes) == 1 {
+			_, imported := r.goSourceImportedScalarUnderlying(bashPPTypeText(x.ResultTypes[0]))
+			return imported
+		}
 	}
-	return false
+	// A computed receiver can be produced by interpreted code while its
+	// checked result type is still an imported defined scalar, as in
+	// p.Pos().IsValid() where Pos returns token.Pos. Classification must stay
+	// static here: evaluating the expression to discover its type would replay
+	// the receiver when bashPPNativeMethodReceiver performs the actual call.
+	typ, ok := r.goSourceStaticExprType(expr)
+	if !ok {
+		return false
+	}
+	_, imported := r.goSourceImportedScalarUnderlying(bashPPTypeText(typ))
+	return imported
 }
 
 // goSourceNativeScalarCell reports whether cell holds a scalar of an imported

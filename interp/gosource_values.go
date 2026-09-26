@@ -119,6 +119,31 @@ func (r *Runner) goSourceValueCell(expr syntax.BashPPExpr) (*bashPPCell, error) 
 	return cells[0], nil
 }
 
+// goSourceComputedCalleeCell evaluates the value in callee position once.
+// The general value path first probes selector/index reads for structured
+// metadata and then falls back to scalar evaluation; that is harmless for a
+// passive local but replays an effectful receiver or index. A computed callee
+// needs the value either way, so materialize the first read directly into the
+// same typed cell used by collection reads and native handles.
+func (r *Runner) goSourceComputedCalleeCell(expr syntax.BashPPExpr) (*bashPPCell, error) {
+	if paren, ok := expr.(*syntax.BashPPParenExpr); ok {
+		return r.goSourceComputedCalleeCell(paren.X)
+	}
+	if cell, handled, err := r.goSourceCallableCell(expr); handled {
+		return cell, err
+	}
+	switch expr.(type) {
+	case *syntax.BashPPSelectorExpr, *syntax.BashPPIndexExpr, *syntax.BashPPSliceExpr,
+		*syntax.BashPPDerefExpr, *syntax.BashPPTypeAssertExpr:
+		value, meta, err := r.bashPPReadExpr(expr)
+		if err != nil {
+			return nil, err
+		}
+		return r.goSourceCollectionReadCell(expr, value, meta), nil
+	}
+	return r.goSourceValueCell(expr)
+}
+
 // goSourceValueCells evaluates one expression to its result cells. A call is
 // the only expression with more than one: with spread set it contributes
 // every result it returns, which is how `f(g())` hands g's results to f;
@@ -398,8 +423,18 @@ func (r *Runner) goSourceComputedNativeFunc(c *syntax.BashPPCall) (*bashPPFunc, 
 	if !r.bashPPGoSource || c == nil || c.CalleeExpr == nil {
 		return nil, false
 	}
-	cell, err := r.goSourceValueCell(c.CalleeExpr)
+	cell, err := r.goSourceComputedCalleeCell(c.CalleeExpr)
 	if err != nil || cell == nil {
+		return nil, false
+	}
+	return r.goSourceComputedNativeFuncCell(c, cell)
+}
+
+// goSourceComputedNativeFuncCell recognizes an already-evaluated computed
+// callee. Keeping recognition separate from evaluation lets local closure and
+// native-handle dispatch share one read of an effectful selector or index.
+func (r *Runner) goSourceComputedNativeFuncCell(c *syntax.BashPPCall, cell *bashPPCell) (*bashPPFunc, bool) {
+	if c == nil || cell == nil {
 		return nil, false
 	}
 	value, err := r.bashPPBridgeCell(cell)

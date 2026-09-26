@@ -2245,6 +2245,30 @@ func (r *Runner) bashPPBooleanExprShape(expr syntax.BashPPExpr) (known, boolean 
 // by the scalar evaluator. In particular a skipped logical operand never
 // evaluates arguments or enters the function frame.
 func (r *Runner) bashPPScalarFuncCall(call *syntax.BashPPCall) (bashPPScalar, error) {
+	// A method selected from an imported scalar result belongs to the
+	// dependency even when the receiver expression itself was evaluated by
+	// the interpreter. Dispatch it before speculative local lookup: the
+	// bridge evaluates that receiver exactly once and returns an authenticated
+	// scalar cell, while a failed local bind would both report the wrong
+	// callable error and leave no safe way to replay the receiver.
+	if r.bashPPGoSource && r.bashPPBridgeHandles(call) {
+		values, err := r.bashPPBridgeCall(r.ectx, call)
+		if err != nil {
+			return bashPPScalar{}, err
+		}
+		if len(values) != 1 {
+			return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-CALL: scalar call requires one result")
+		}
+		cells := r.goSourceNativeCallResultCells(call, values)
+		if len(cells) != 1 {
+			return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-CALL: scalar result metadata missing")
+		}
+		result := r.bashPPScalarFromCell(cells[0])
+		if result.kind() == constant.Unknown {
+			return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-OPERAND: call result is not a scalar")
+		}
+		return result, nil
+	}
 	fn, ok := r.bashPPLookupFunc(call)
 	if !ok {
 		if r.goSourceNilFuncCallee(call) {
