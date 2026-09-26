@@ -26,10 +26,9 @@ package interp
 //
 // Only arguments whose live storage can be re-read are admitted: a direct
 // original slice (its captured view), an origin-bearing pointer (its origin),
-// a dependency-owned value, and a value copy that holds no reference at all
-// (Go copies it into the interface at the call, exactly as the bridge does).
-// Anything else — a struct value carrying a slice or map, a map argument, a
-// receiver the request does not own — keeps the refusal.
+// or a struct or array containing those sources. Dependency-owned values and
+// reference-free copies need no re-read. Maps, channels, functions, and pointers
+// without an authenticated origin keep the refusal.
 
 import (
 	"fmt"
@@ -86,26 +85,57 @@ func prepareNativeCopyCoherence(req bashPPEvalRequest, q *bashPPBridgeRequest) b
 	}
 	c := &goSourceCopyCoherence{pointee: map[uint64]string{}}
 	for _, arg := range q.Args {
-		switch {
-		case arg.sliceView != nil:
-			c.sources = append(c.sources, goSourceCopySource{view: arg.sliceView})
-		case arg.Kind == "pointer" && arg.Origin != 0 && arg.Session == req.Bridge.id:
-			c.sources = append(c.sources, goSourceCopySource{origin: arg.Origin})
-		case bridgeValueDependencyOwned(arg) || bridgeValueReferenceFree(arg):
-			continue
-		default:
+		if !c.collectSources(arg, req) {
 			return false
 		}
-		spelled, ok := goSourceCanonicalValue(arg, c.pointee)
-		if !ok {
-			return false
-		}
-		c.args = append(c.args, spelled)
 	}
 	if len(c.sources) == 0 {
 		return false
 	}
 	q.coherence = c
+	return true
+}
+
+// collectSources walks one argument and records every re-readable live source
+// it holds: a slice (its captured backing view), an origin-bearing pointer (its
+// origin). A slice or origin pointer is re-read whole, so its contents are not
+// walked again. A struct or array value is opened field by field and element by
+// element, so a slice nested inside a value receiver — the shape a fmt %v walk
+// hands an ir node — is tracked exactly as a direct slice argument is. A leaf
+// that shares no interpreter storage (a scalar, a dependency handle) contributes
+// no source. Anything whose live storage cannot be re-read — a map, a channel, a
+// function, a pointer without an authenticated origin — keeps the request out of
+// the coherence path so it stays refused.
+func (c *goSourceCopyCoherence) collectSources(v bashPPBridgeValue, req bashPPEvalRequest) bool {
+	switch {
+	case v.sliceView != nil:
+		c.sources = append(c.sources, goSourceCopySource{view: v.sliceView})
+	case v.Kind == "pointer" && v.Origin != 0 && v.Session == req.Bridge.id:
+		c.sources = append(c.sources, goSourceCopySource{origin: v.Origin})
+	case bridgeValueDependencyOwned(v) || bridgeValueReferenceFree(v):
+		return true
+	case v.Kind == "struct":
+		for _, field := range v.Fields {
+			if !c.collectSources(field, req) {
+				return false
+			}
+		}
+		return true
+	case v.Kind == "array":
+		for _, e := range v.Elements {
+			if !c.collectSources(e, req) {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
+	spelled, ok := goSourceCanonicalValue(v, c.pointee)
+	if !ok {
+		return false
+	}
+	c.args = append(c.args, spelled)
 	return true
 }
 

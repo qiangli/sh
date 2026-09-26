@@ -14,8 +14,13 @@
 //     a local slice type whose only method (Equal) fmt never looks up is
 //     printed directly; the stale-alias refusal is for protocol methods.
 //
-// The negative space stays: a String or Error method that could write the
-// slice while fmt reads its copy is refused before the callback runs.
+// A String or Error method fmt looks up over a direct original slice used to be
+// refused wholesale, on the theory it could write the slice while fmt reads a
+// decoded copy. That boundary is now coherence-checked instead (Sprint #281):
+// the callback runs, the direct slice is synchronised around it, and the
+// post-callback coherence re-read fails loudly if the body wrote a copied
+// source. A read-only protocol method prints exactly as Go does; a write that
+// the copy could not observe fails the callback rather than printing stale.
 package interp_test
 
 import (
@@ -117,35 +122,56 @@ func main() {
 	qt.Assert(t, qt.Equals(out, "x [[1] [2 3]] false\n[4 5] 9\n"))
 }
 
-// The boundary the relaxation must not cross: a protocol method fmt does look
-// up — String, Error — could write the original slice while fmt reads its
-// decoded copy, so the request is refused before any callback runs.
-func TestS219FmtDirectSliceProtocolMethodRefused(t *testing.T) {
-	for name, src := range map[string]string{
-		"stringer": `package main
+// A protocol method fmt looks up — String, Error — over a direct original
+// slice now runs coherently instead of being refused. A read-only method prints
+// exactly as Go does; a method that writes a copied source (the stringer's
+// b[0] = 7) has that slice synchronised around the callback, so fmt reads the
+// same value Go's left-to-right walk would. Compare each against the native
+// Go oracle's output, captured with `go run`.
+func TestS219FmtDirectSliceProtocolMethodCoherent(t *testing.T) {
+	cases := []struct {
+		name, src, wantOut, wantErrOut string
+	}{{
+		// A value String that writes a global byte slice fmt also prints. Go's
+		// walk formats Tag(1) first (running String, which sets b[0] = 7) and
+		// then b, so it prints the written value; synchronisation matches that.
+		name: "stringer",
+		src: `package main
 import "fmt"
 var b = []byte{1}
 type Tag int
 func (t Tag) String() string { println("original-read"); b[0] = 7; return "tag" }
 func main() { fmt.Println(Tag(1), b); println("after") }`,
-		"error_in_slice": `package main
+		wantOut:    "tag [7]\n",
+		wantErrOut: "original-read\nafter\n",
+	}, {
+		// A read-only Error over a slice element.
+		name: "error_in_slice",
+		src: `package main
 import "fmt"
 type E int
 func (e E) Error() string { println("original-read"); return "e" }
 func main() { es := []E{1}; fmt.Println(es); println("after") }`,
-		"embedded_stringer": `package main
+		wantOut:    "[e]\n",
+		wantErrOut: "original-read\nafter\n",
+	}, {
+		// A read-only String promoted from an embedded field.
+		name: "embedded_stringer",
+		src: `package main
 import "fmt"
 type inner int
 func (inner) String() string { println("original-read"); return "in" }
 type outer struct{ inner; N int }
 func main() { os := []outer{{1, 2}}; fmt.Println(os); println("after") }`,
-	} {
-		t.Run(name, func(t *testing.T) {
-			out, stderr, err := runGoSource(t, "s219refuse-"+name, src)
-			qt.Assert(t, qt.IsNotNil(err))
-			qt.Assert(t, qt.StringContains(err.Error(), "original callback with copied slice references is unsupported"))
-			qt.Assert(t, qt.IsFalse(strings.Contains(out+stderr, "original-read")), qt.Commentf("callback ran: %q %q", out, stderr))
-			qt.Assert(t, qt.IsFalse(strings.Contains(out+stderr, "after")), qt.Commentf("program continued: %q %q", out, stderr))
+		wantOut:    "[in]\n",
+		wantErrOut: "original-read\nafter\n",
+	}}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, stderr, err := runGoSource(t, "s219coherent-"+tc.name, tc.src)
+			qt.Assert(t, qt.IsNil(err), qt.Commentf("stderr: %s", stderr))
+			qt.Assert(t, qt.Equals(out, tc.wantOut))
+			qt.Assert(t, qt.Equals(stderr, tc.wantErrOut))
 		})
 	}
 }

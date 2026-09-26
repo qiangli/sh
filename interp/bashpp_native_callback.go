@@ -100,17 +100,19 @@ func (s *bashPPNativeSession) callbackAnswer(ctx context.Context, owner *Runner,
 		// may run against a different view of the backing storage.
 	} else if owner == nil || q.Receiver == nil {
 		answer.Error = "gosource: callback has no original owner or receiver"
-	} else if coherence != nil && bashPPNativeProtocolCallback(q) && q.Receiver.Origin == 0 && !bashPPPureValueStringCallback(owner, q) {
-		// A value receiver has no live pointee to reconcile. A pointer with
-		// an authenticated origin can run: coherence checks the live slices
-		// and pointees after its callback, before fmt reads another copy.
-		err := errGoSourceCopiedSliceCallback
-		answer.Error = err.Error()
-		if !owner.exit.exiting {
-			owner.exit.fatal(err)
-			s.recordCallbackRefusal(err)
-		}
 	} else {
+		// A protocol callback runs whether its receiver is a pointer or a value.
+		// A pointer with an authenticated origin has its pointee reconciled after
+		// the body (below); a value receiver owns only a decoded copy of itself
+		// and reaches no live pointee, but a write through that copy's reference
+		// storage is caught by the copied-receiver digest in bashPPNativeCallback.
+		// Either way, when the parked request copied original storage for a
+		// read-only emitter, the post-callback coherence check (afterCallback)
+		// re-reads every copied source — including a slice nested inside a value
+		// receiver's own struct fields — and fails the callback if the body wrote
+		// storage the dependency still holds a stale copy of. So a value receiver
+		// needs no up-front refusal beyond that general check.
+		//
 		// The dependency may have written to its pipes before asking for this
 		// callback. Wait for those bytes only if the interpreted body writes to
 		// a caller stream. The outer request still drains on its final reply.
@@ -178,86 +180,6 @@ func (s *bashPPNativeSession) callbackAnswer(ctx context.Context, owner *Runner,
 		}
 	}
 	return answer
-}
-
-// A value-receiver String method may run while fmt walks a copied slice when
-// its entire body is one return of fmt.Sprint over literals and scalar fields
-// of that receiver. This shape cannot write the source slice or any global;
-// the ordinary post-callback coherence check still runs before fmt reads on.
-// Other value methods keep the pre-callback refusal, including a method that
-// prints or writes a global before returning.
-func bashPPPureValueStringCallback(owner *Runner, q bashPPBridgeResponse) bool {
-	if owner == nil || q.Receiver == nil || q.Receiver.Kind != "struct" || q.Receiver.Origin != 0 {
-		return false
-	}
-	typeName, method, ok := strings.Cut(q.Selector, ".")
-	if !ok || method != "String" || owner.bashPPImports["fmt"] != "fmt" {
-		return false
-	}
-	fn := owner.bashPPMethods[bashPPLocalTypeName(typeName)][method]
-	if fn == nil || fn.decl == nil || fn.decl.Receiver == nil || fn.decl.Receiver.Pointer || fn.decl.Receiver.Name == nil || fn.decl.Body == nil || len(fn.decl.Body.Stmts) != 1 {
-		return false
-	}
-	ret, ok := fn.decl.Body.Stmts[0].Cmd.(*syntax.BashPPReturn)
-	if !ok || ret.Call == nil || len(ret.Call.Fun) != 2 || ret.Call.Fun[0].Value != "fmt" || ret.Call.Fun[1].Value != "Sprint" || len(ret.Call.ArgExprs) != len(ret.Call.Args) {
-		return false
-	}
-	for _, arg := range ret.Call.ArgExprs {
-		switch expr := arg.(type) {
-		case *syntax.BashPPBasicLit:
-			// A literal carries no receiver or global reference.
-		case *syntax.BashPPSelectorExpr:
-			id, ok := expr.X.(*syntax.BashPPIdent)
-			if !ok || id.Name == nil || id.Name.Value != fn.decl.Receiver.Name.Value || expr.Sel == nil {
-				return false
-			}
-			field, ok := q.Receiver.Fields[expr.Sel.Value]
-			if !ok || !bashPPPureScalarValue(field) {
-				return false
-			}
-		default:
-			return false
-		}
-	}
-	return true
-}
-
-func bashPPPureScalarValue(v bashPPBridgeValue) bool {
-	switch v.Kind {
-	case "bool":
-		return v.Type == "bool"
-	case "int":
-		switch v.Type {
-		case "int", "int8", "int16", "int32", "int64":
-			return true
-		}
-	case "uint":
-		switch v.Type {
-		case "uint", "uint8", "uint16", "uint32", "uint64", "uintptr":
-			return true
-		}
-	case "float":
-		return v.Type == "float32" || v.Type == "float64"
-	case "complex":
-		return v.Type == "complex64" || v.Type == "complex128"
-	case "string":
-		return v.Type == "string"
-	}
-	return false
-}
-
-var errGoSourceCopiedSliceCallback = errors.New("gosource: original callback with copied slice references is unsupported")
-
-func bashPPNativeProtocolCallback(q bashPPBridgeResponse) bool {
-	_, method, ok := strings.Cut(q.Selector, ".")
-	if !ok {
-		return false
-	}
-	switch method {
-	case "String", "Error", "Format", "GoString":
-		return true
-	}
-	return false
 }
 
 func (s *bashPPNativeSession) recordCallbackRefusal(err error) {
