@@ -10,6 +10,7 @@ import (
 	"go/types"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"mvdan.cc/sh/v3/expand"
@@ -111,6 +112,7 @@ func (r *Runner) bashPPImportedInterfaceType(named *syntax.BashPPNamedType) (*sy
 	if native == nil {
 		return nil, false
 	}
+	bindings := bashPPImportedInterfaceTypeBindings(native, named)
 	iface, ok := types.Unalias(native).Underlying().(*types.Interface)
 	if !ok || !iface.IsMethodSet() {
 		return nil, false
@@ -131,9 +133,33 @@ func (r *Runner) bashPPImportedInterfaceType(named *syntax.BashPPNamedType) (*sy
 		if !ok || sig.TypeParams().Len() != 0 {
 			return nil, false
 		}
-		out.Methods = append(out.Methods, bashPPImportedMethodSpec(method.Name(), sig))
+		spec := bashPPImportedMethodSpec(method.Name(), sig)
+		if len(bindings) > 0 {
+			spec.Params = bashPPSubstituteFields(spec.Params, bindings)
+			spec.Results = bashPPSubstituteFields(spec.Results, bindings)
+		}
+		out.Methods = append(out.Methods, spec)
 	}
 	return out, true
+}
+
+func bashPPImportedInterfaceTypeBindings(native types.Type, named *syntax.BashPPNamedType) map[string]syntax.BashPPTypeExpr {
+	base, ok := types.Unalias(native).(*types.Named)
+	if !ok || named == nil || len(named.TypeArgs) == 0 {
+		return nil
+	}
+	params := base.TypeParams()
+	if params == nil || params.Len() != len(named.TypeArgs) {
+		return nil
+	}
+	bindings := make(map[string]syntax.BashPPTypeExpr, params.Len())
+	for i, arg := range named.TypeArgs {
+		if arg.ArgType == nil {
+			return nil
+		}
+		bindings[params.At(i).Obj().Name()] = arg.ArgType
+	}
+	return bindings
 }
 
 func bashPPImportedMethodSpec(name string, sig *types.Signature) *syntax.BashPPMethodSpec {
@@ -439,16 +465,14 @@ func bashPPStructLiteralOwner(typ syntax.BashPPTypeExpr) bool {
 }
 
 // bashPPAliasedSignatureEqual reports whether two signatures whose texts
-// differ spell the same types once declared aliases are read through:
-// `M1(IntAlias2) Float64` is `M1(Int) float64` when IntAlias2 = IntAlias =
-// Int and Float64 = float64. Native import aliases are compared by package
-// path and local types retain lexical identity. Only textual mismatches reach
-// this fallback; ordinary identical signatures need no alias walk.
+// differ spell the same types once declared aliases and Go-source transport
+// identities are read through: `M1(IntAlias2) Float64` is `M1(Int) float64`
+// when IntAlias2 = IntAlias = Int and Float64 = float64. Native import aliases
+// are compared by package path and local types retain lexical identity. Only
+// textual mismatches reach this fallback; ordinary identical signatures need
+// no alias walk.
 func (r *Runner) bashPPAliasedSignatureEqual(aParams, aResults, bParams, bResults []*syntax.BashPPField) bool {
 	aliases := r.bashPPDeclaredAliasBindings()
-	if len(aliases) == 0 {
-		return false
-	}
 	canonical := func(fields []*syntax.BashPPField) string {
 		text := bashPPFieldsSignature(fields)
 		// An alias may name another alias; the substitution repeats until
@@ -469,13 +493,166 @@ func (r *Runner) bashPPAliasedSignatureEqual(aParams, aResults, bParams, bResult
 				return name, true
 			}
 			alias, member, qualified := strings.Cut(named.Name.Value, ".")
-			if path, imported := r.bashPPImports[alias]; qualified && imported {
+			if path := r.goSourceSignatureImportPath(alias, member); qualified && path != "" {
 				return path + "." + member, true
 			}
 			return "", false
 		})
 	}
 	return canonical(aParams) == canonical(bParams) && canonical(aResults) == canonical(bResults)
+}
+
+func (r *Runner) goSourceSignatureImportPath(alias, member string) string {
+	imported := r.goSourceSignatureImportPaths()
+	if path := r.bashPPImports[alias]; path != "" && r.goSourceSignatureImportPathUnambiguous(imported, alias, member, path) {
+		return path
+	}
+	if !r.bashPPGoSource {
+		return ""
+	}
+	if r.bashPPGoSourceFile != nil {
+		for _, stmt := range r.bashPPGoSourceFile.Stmts {
+			imp, ok := stmt.Cmd.(*syntax.BashPPImport)
+			if !ok || imp.Language != nil {
+				continue
+			}
+			specs := imp.Specs
+			if imp.Path != nil {
+				specs = []*syntax.BashPPImportSpec{{Alias: imp.Alias, Path: imp.Path}}
+			}
+			for _, spec := range specs {
+				if spec == nil || spec.Path == nil || len(spec.Path.Parts) != 1 {
+					continue
+				}
+				lit, ok := spec.Path.Parts[0].(*syntax.Lit)
+				if !ok {
+					continue
+				}
+				path, err := strconv.Unquote(`"` + lit.Value + `"`)
+				if err != nil {
+					continue
+				}
+				name := goSourceImportPathBase(path)
+				if spec.Alias != nil {
+					name = spec.Alias.Value
+				}
+				if name == alias {
+					if r.goSourceSignatureImportPathUnambiguous(imported, alias, member, path) {
+						return path
+					}
+					return ""
+				}
+			}
+		}
+	}
+	var found string
+	for key, typ := range r.bashPPTools.nativeTypes {
+		dot := strings.LastIndexByte(key, '.')
+		if dot < 0 {
+			continue
+		}
+		path, name := key[:dot], key[dot+1:]
+		if name != member {
+			continue
+		}
+		if _, ok := imported[path]; !ok {
+			continue
+		}
+		pkg := goSourceSignatureTypePackage(typ)
+		if pkg == nil || pkg.Path() != path || pkg.Name() != alias {
+			continue
+		}
+		if found != "" && found != path {
+			return ""
+		}
+		found = path
+	}
+	return found
+}
+
+func (r *Runner) goSourceSignatureImportPathUnambiguous(imported map[string]struct{}, alias, member, path string) bool {
+	if alias == "_" || alias == "." {
+		return true
+	}
+	matches := 0
+	for key, typ := range r.bashPPTools.nativeTypes {
+		dot := strings.LastIndexByte(key, '.')
+		if dot < 0 {
+			continue
+		}
+		candidatePath, name := key[:dot], key[dot+1:]
+		if name != member {
+			continue
+		}
+		if _, ok := imported[candidatePath]; !ok {
+			continue
+		}
+		pkg := goSourceSignatureTypePackage(typ)
+		if pkg == nil || pkg.Path() != candidatePath || pkg.Name() != alias {
+			continue
+		}
+		matches++
+		if candidatePath != path || matches > 1 {
+			return false
+		}
+	}
+	return true
+}
+
+func (r *Runner) goSourceSignatureImportPaths() map[string]struct{} {
+	imported := make(map[string]struct{}, len(r.bashPPImports))
+	for _, path := range r.bashPPImports {
+		imported[path] = struct{}{}
+	}
+	if !r.bashPPGoSource || r.bashPPGoSourceFile == nil {
+		return imported
+	}
+	for _, stmt := range r.bashPPGoSourceFile.Stmts {
+		imp, ok := stmt.Cmd.(*syntax.BashPPImport)
+		if !ok || imp.Language != nil {
+			continue
+		}
+		specs := imp.Specs
+		if imp.Path != nil {
+			specs = []*syntax.BashPPImportSpec{{Alias: imp.Alias, Path: imp.Path}}
+		}
+		for _, spec := range specs {
+			if spec == nil || spec.Path == nil || len(spec.Path.Parts) != 1 {
+				continue
+			}
+			lit, ok := spec.Path.Parts[0].(*syntax.Lit)
+			if !ok {
+				continue
+			}
+			path, err := strconv.Unquote(`"` + lit.Value + `"`)
+			if err != nil {
+				continue
+			}
+			imported[path] = struct{}{}
+		}
+	}
+	return imported
+}
+
+func goSourceSignatureTypePackage(typ types.Type) *types.Package {
+	switch typ := typ.(type) {
+	case *types.Named:
+		if obj := typ.Obj(); obj != nil {
+			return obj.Pkg()
+		}
+	case *types.Alias:
+		if obj := typ.Obj(); obj != nil {
+			return obj.Pkg()
+		}
+	}
+	return nil
+}
+
+func goSourceImportPathBase(path string) string {
+	if i := strings.LastIndexByte(path, '/'); i >= 0 {
+		return path[i+1:]
+	}
+	return path
 }
 
 // bashPPDeclaredAliasBindings maps every declared non-generic alias to the
