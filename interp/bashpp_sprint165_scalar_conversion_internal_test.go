@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"mvdan.cc/sh/v3/syntax"
 )
 
 // The wide-integer fallback is confined to GoSource; Classic retains its
@@ -110,5 +112,34 @@ func TestS281ImportedScalarStringCarrierIdentity(t *testing.T) {
 	})
 	if _, handled, err := ambiguous.bashPPConvertGoSourceStringCarrier("uint64", carrier("token.Pos", "7")); handled || err != nil {
 		t.Fatalf("ambiguous package name handled=%v err=%v, want refused", handled, err)
+	}
+}
+
+func TestS281LocalImportedScalarUnderlying(t *testing.T) {
+	pkg := types.NewPackage("go/token", "token")
+	obj := types.NewTypeName(token.NoPos, pkg, "Pos", nil)
+	tokenPos := types.NewNamed(obj, types.Typ[types.Int], nil)
+	named := func(name string) *syntax.BashPPNamedType {
+		return &syntax.BashPPNamedType{Name: &syntax.Lit{Value: name}}
+	}
+	r := &Runner{
+		bashPPGoSource: true,
+		bashPPImports:  map[string]string{"tok": "go/token"},
+		bashPPTools:    bashPPToolchain{nativeTypes: map[string]types.Type{"go/token.Pos": tokenPos}},
+		bashPPTypes: map[string]bashPPType{
+			"atPos":      {underlying: "tok.Pos", typeExpr: named("tok.Pos")},
+			"ordinary":   {underlying: "string", typeExpr: named("string")},
+			"posPointer": {underlying: "*tok.Pos", typeExpr: &syntax.BashPPPointerType{Element: named("tok.Pos")}},
+		},
+	}
+
+	if got, ok := r.goSourceScalarUnderlying(named("atPos")); !ok || got != "int" {
+		t.Fatalf("atPos underlying = %q, %v; want int, true", got, ok)
+	}
+	if got, ok := r.goSourceScalarUnderlying(named("ordinary")); !ok || got != "string" {
+		t.Fatalf("ordinary underlying = %q, %v; want string, true", got, ok)
+	}
+	if got, ok := r.goSourceScalarUnderlying(named("posPointer")); ok || got != "" {
+		t.Fatalf("posPointer underlying = %q, %v; want empty, false", got, ok)
 	}
 }
