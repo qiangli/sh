@@ -96,6 +96,15 @@ func (r *Runner) goSourceVariadicElement(arg string, cell *bashPPCell, expected 
 		// so its existing diagnostic remains authoritative.
 		return arg, nil
 	case cell.vr.Kind == expand.Object:
+		// A dependency-owned value remains an authenticated handle when it is
+		// packed into a variadic slice. The payload alone is not enough: range
+		// uses each element's parallel metadata to decide whether to preserve an
+		// object or render it as a scalar. Losing that metadata here flattened a
+		// native pointer before a later function argument or struct map key could
+		// use its type and identity.
+		if native, ok := cell.vr.Obj.(*bashPPBridgeValue); ok && native != nil {
+			return native, &bashPPCollectionMeta{kind: "native", typ: expected}
+		}
 		return bashPPCopyArrayValue(cell.vr.Obj, bashPPCellMeta(cell))
 	}
 	return bashPPScalarAny(r.bashPPScalarFromCell(cell).value), nil
