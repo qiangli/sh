@@ -172,3 +172,92 @@ func main() {
 		t.Fatalf("run=%v outcome=%+v", err, got)
 	}
 }
+
+func TestS281EqualFuncSynchronizesInterfaceSliceIdentities(t *testing.T) {
+	source := `package main
+
+import (
+	"fmt"
+	"slices"
+)
+
+type Type interface{ ID() string }
+
+type Basic struct{ name string }
+
+func (b *Basic) ID() string { return b.name }
+
+var (
+	a = &Basic{"a"}
+	b = &Basic{"b"}
+	c = &Basic{"c"}
+
+	xargs []Type
+	yargs []Type
+	calls int
+)
+
+func Identical(x, y Type) bool {
+	calls++
+	fmt.Println("cb", calls, x.ID(), y.ID(), x == y)
+	if calls == 1 {
+		xargs[1], yargs[1] = c, c
+	}
+	return x == y
+}
+
+func main() {
+	xargs = []Type{a, b}
+	yargs = []Type{a, b}
+	fmt.Println(slices.EqualFunc(xargs, yargs, Identical))
+	fmt.Println(xargs[1] == c, yargs[1] == c, calls, len(xargs), cap(xargs))
+
+	var nils []Type
+	empty := []Type{}
+	fmt.Println(slices.EqualFunc(nils, empty, func(Type, Type) bool { panic("unused") }), calls)
+
+	head := []Type{a, b, c}
+	xs := head[:2:3]
+	ys := head[:2:2]
+	fmt.Println(slices.EqualFunc(xs, ys, Identical))
+	fmt.Println(len(xs), cap(xs), len(ys), cap(ys), calls)
+}
+`
+	differGoSource(t, source, nil, "")
+}
+
+func TestS281EqualFuncManagerIdentityAndMutation(t *testing.T) {
+	for name, body := range map[string]string{
+		"pointer identity":                `p:=&N{V:1};a:=[]T{p,p};b:=[]T{p,p};fmt.Println(slices.EqualFunc(a,b,func(x,y T)bool{return x==y}))`,
+		"callback replaces later element": `p:=&N{V:1};q:=&N{V:2};a:=[]T{p,p};b:=[]T{p,q};count:=0;fmt.Println(slices.EqualFunc(a,b,func(x,y T)bool{count++;if count==1{a[1]=q};return x==y}),count,a[1]==q)`,
+		"overlapping backing":             `p:=&N{V:1};q:=&N{V:2};back:=[]T{p,p,p};a,b:=back[:2],back[1:];count:=0;fmt.Println(slices.EqualFunc(a,b,func(x,y T)bool{count++;if count==1{back[2]=q};return x==y}),count,back[2]==q)`,
+		"typed nil":                       `var p *N;fmt.Println(slices.EqualFunc([]T{p},[]T{nil},func(x,y T)bool{return x==y}))`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			differGoSource(t, `package main
+import("fmt";"slices")
+type T interface{Value()int}
+type N struct{V int}
+func(n *N)Value()int{return n.V}
+func main(){`+body+`}`, nil, "")
+		})
+	}
+}
+
+func TestS281EqualFuncManagerNativeSliceAndShortCircuit(t *testing.T) {
+	for name, source := range map[string]string{
+		"native slice result": `package main
+import("fmt";"slices";"strings")
+func main(){a:=[]string{"a","a"};b:=strings.Fields("a b");count:=0;fmt.Println(slices.EqualFunc(a,b,func(x,y string)bool{count++;if count==1{a[1]="b"};return x==y}),count)}`,
+		"nil comparator empty": `package main
+import("fmt";"slices")
+func main(){var eq func(int,int)bool;fmt.Println(slices.EqualFunc([]int{},[]int{},eq))}`,
+		"nil comparator mismatch": `package main
+import("fmt";"slices")
+func main(){var eq func(int,int)bool;fmt.Println(slices.EqualFunc([]int{1},[]int{},eq))}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			differGoSource(t, source, nil, "")
+		})
+	}
+}
