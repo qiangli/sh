@@ -1039,26 +1039,45 @@ func (r *Runner) bashPPCellForInterfaceExpr(expr syntax.BashPPExpr) (*bashPPCell
 			return nil, nil, err
 		}
 		if cell.vr.Kind != expand.Object && cell.interfaceValue == nil && cell.declType == nil && !cell.pointer {
-			// A plain scalar result: the scalar path below names its default
-			// type and is what every other scalar takes.
-			return r.bashPPScalarInterfaceCell(expr)
+			return r.bashPPScalarInterfaceCellFromCell(expr, cell, "call result")
 		}
 		return r.bashPPInterfaceSourceCell(cell, "call result")
 	}
 	// A dereference is a typed value read, including aggregate pointees and
 	// unsafe blank views. Reuse the structured cell path so interface boxing
 	// preserves its dynamic type and value copy instead of forcing a scalar.
-	// A field read is a typed value read too: `s.F` boxes with the field's
-	// declared type, and an aggregate field keeps its structure.
+	// Field, index, and slice reads are typed value reads too: `s.F` boxes
+	// with the field's declared type, `Typ[0]` can box a pointer element, and
+	// aggregate children keep their structure.
 	if _, sel := expr.(*syntax.BashPPSelectorExpr); sel && r.bashPPGoSource {
 		cell, err := r.goSourceValueCell(expr)
 		if err != nil {
 			return nil, nil, err
 		}
 		if cell.vr.Kind != expand.Object && cell.interfaceValue == nil && cell.declType == nil && !cell.pointer {
-			return r.bashPPScalarInterfaceCell(expr)
+			return r.bashPPScalarInterfaceCellFromCell(expr, cell, "field")
 		}
 		return r.bashPPInterfaceSourceCell(cell, "field")
+	}
+	switch expr.(type) {
+	case *syntax.BashPPIndexExpr, *syntax.BashPPSliceExpr:
+		if r.bashPPGoSource {
+			cell, handled, err := r.bashPPInterfaceIndexedCell(expr)
+			if err != nil {
+				return nil, nil, err
+			}
+			if handled {
+				return r.bashPPInterfaceSourceCell(cell, "indexed value")
+			}
+			cell, err = r.goSourceValueCell(expr)
+			if err != nil {
+				return nil, nil, err
+			}
+			if cell.vr.Kind != expand.Object && cell.interfaceValue == nil && cell.declType == nil && !cell.pointer {
+				return r.bashPPScalarInterfaceCellFromCell(expr, cell, "indexed value")
+			}
+			return r.bashPPInterfaceSourceCell(cell, "indexed value")
+		}
 	}
 	if _, deref := expr.(*syntax.BashPPDerefExpr); deref && r.bashPPGoSource {
 		cell, err := r.goSourceValueCell(expr)
@@ -1129,6 +1148,19 @@ func (r *Runner) bashPPCellForInterfaceExpr(expr syntax.BashPPExpr) (*bashPPCell
 		}
 	}
 	return r.bashPPScalarInterfaceCell(expr)
+}
+
+func (r *Runner) bashPPInterfaceIndexedCell(expr syntax.BashPPExpr) (*bashPPCell, bool, error) {
+	switch expr.(type) {
+	case *syntax.BashPPIndexExpr, *syntax.BashPPSliceExpr:
+	default:
+		return nil, false, nil
+	}
+	value, meta, err := r.bashPPReadExpr(expr)
+	if err != nil {
+		return nil, true, err
+	}
+	return r.goSourceCollectionReadCell(expr, value, meta), true, nil
 }
 
 // bashPPScalarInterfaceCell materializes a scalar expression as the cell an
@@ -1207,6 +1239,34 @@ func (r *Runner) bashPPInterfaceSourceCell(cell *bashPPCell, what string) (*bash
 	if actual == nil {
 		return nil, nil, fmt.Errorf("BASHPP-EINTERFACE-VALUE: %s has no dynamic type", what)
 	}
+	return cell, actual, nil
+}
+
+// bashPPScalarInterfaceCellFromCell materializes an already-evaluated scalar
+// cell as an interface value. This is the scalar counterpart of
+// bashPPInterfaceSourceCell for expression forms which must be evaluated once
+// before we can tell whether they are plain scalars.
+func (r *Runner) bashPPScalarInterfaceCellFromCell(expr syntax.BashPPExpr, source *bashPPCell, what string) (*bashPPCell, syntax.BashPPTypeExpr, error) {
+	actual := source.declType
+	name := source.typeName
+	if actual == nil && name != "" {
+		actual, name = bashPPScalarNamedType(name)
+	}
+	if actual == nil {
+		if name = bashPPDefaultScalarTypeName(source.scalarKind); name != "" {
+			actual = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: name}}
+		}
+	}
+	if actual == nil {
+		return nil, nil, fmt.Errorf("BASHPP-EINTERFACE-VALUE: %s has no dynamic type", what)
+	}
+	if name == "" {
+		name = bashPPTypeText(actual)
+	}
+	actual = r.bashPPConvertBoxedType(expr, actual, name)
+	cell := bashPPCopyInterfaceCell(source)
+	cell.typeName = name
+	cell.declType = actual
 	return cell, actual, nil
 }
 
