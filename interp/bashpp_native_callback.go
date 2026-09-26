@@ -271,15 +271,17 @@ func (r *Runner) bashPPNativeCallback(ctx context.Context, selector string, recv
 	// rather than consumed by this nested invocation.
 	savedResults, savedChannels := r.bashPPResultCells, r.bashPPCallChannels
 	savedInterfaces, savedCells := r.bashPPCallInterfaces, r.bashPPCallCells
+	savedSpread := r.bashPPCallSpread
 	savedExit, savedPanic, failure := r.exit, r.bashPPPanic, r.bashPPShortFailureSeq
 	savedCtx := r.ectx
 	r.ectx = ctx
 	defer func() {
 		r.bashPPResultCells, r.bashPPCallChannels = savedResults, savedChannels
 		r.bashPPCallInterfaces, r.bashPPCallCells = savedInterfaces, savedCells
+		r.bashPPCallSpread = savedSpread
 		r.ectx = savedCtx
 	}()
-	r.bashPPCallChannels, r.bashPPCallInterfaces, r.bashPPCallCells = nil, nil, nil
+	r.bashPPCallChannels, r.bashPPCallInterfaces, r.bashPPCallCells, r.bashPPCallSpread = nil, nil, nil, false
 
 	// A pointer receiver binds to the original interpreter storage.
 	bound, ok := r.bashPPBindMethodReceiver(cell, method, true, copied != nil)
@@ -324,7 +326,15 @@ func (r *Runner) bashPPNativeCallback(ctx context.Context, selector string, recv
 		for i, arg := range recv.CallArgs {
 			cell := goSourceNativeValueCell(arg)
 			cell.declType = params[i].typ
-			cell.typeName = bashPPTypeText(params[i].typ)
+			if params[i].variadic {
+				// A generated variadic mirror receives its trailing arguments as
+				// Go's one []T parameter. Bind that slice with spread semantics so
+				// the original frame observes the same nil/header/backing identity
+				// and each transported element keeps its own value metadata.
+				cell.declType = &syntax.BashPPCollectionType{Kind: "slice", Element: params[i].typ}
+				r.bashPPCallSpread = true
+			}
+			cell.typeName = bashPPTypeText(cell.declType)
 			cells[i] = cell
 			text := ""
 			if scalar, err := arg.scalar(); err == nil {

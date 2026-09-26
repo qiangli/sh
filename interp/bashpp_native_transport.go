@@ -104,7 +104,7 @@ func validateLocalTransport(req bashPPEvalRequest, q bashPPBridgeRequest) error 
 		// wherever the value is addressable.
 		if len(typ.Methods) > 0 && (reference || nestedRef) && !identity {
 			for _, m := range typ.Methods {
-				if m.Pointer {
+				if m.Pointer && dependencyMayInvokeOriginalMethod(req, q, m.Name) {
 					return false, false, fmt.Errorf("gosource: pointer-receiver callback on reference-bearing value %s requires original reference identity", v.Type)
 				}
 			}
@@ -220,6 +220,19 @@ func validateLocalTransport(req bashPPEvalRequest, q bashPPBridgeRequest) error 
 		return nil
 	}
 	return fmt.Errorf("gosource: dependency mutation of interpreter-owned references is unsupported for %s", q.Selector)
+}
+
+// dependencyMayInvokeOriginalMethod reports whether the selected dependency
+// operation can reach one method while inspecting an argument. Most imported
+// calls remain conservative. The fmt family is narrower by Go's own contract:
+// it can invoke only the formatting protocols, so an unrelated method such as
+// (*Nodes).Append may ride on a copied value without becoming callable.
+func dependencyMayInvokeOriginalMethod(req bashPPEvalRequest, q bashPPBridgeRequest, method string) bool {
+	alias, _, selected := strings.Cut(q.Selector, ".")
+	if selected && req.Imports[alias] == "fmt" {
+		return fmtProtocolMethod(method)
+	}
+	return true
 }
 
 // synchronousOriginalMethodCallback admits the general method-callback bridge:
