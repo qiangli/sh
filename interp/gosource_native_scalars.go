@@ -41,6 +41,24 @@ func (r *Runner) goSourceImportedScalarUnderlying(name string) (string, bool) {
 	return basic.Name(), true
 }
 
+// goSourceScalarUnderlying resolves the basic representation of a scalar
+// declared in interpreted Go source. Local defined types may stop at an
+// imported defined type because the latter lives in export metadata rather
+// than the interpreter's type registry (for example atPos -> token.Pos ->
+// int). Keep that boundary typed instead of leaving package initialization to
+// store the initializer's unevaluated source spelling.
+func (r *Runner) goSourceScalarUnderlying(typ syntax.BashPPTypeExpr) (string, bool) {
+	named, ok := r.bashPPUnderlyingType(typ).(*syntax.BashPPNamedType)
+	if !ok || named.Name == nil {
+		return "", false
+	}
+	name := named.Name.Value
+	if bashPPBuiltinType(name) && bashPPScalarTypeName(name) {
+		return name, true
+	}
+	return r.goSourceImportedScalarUnderlying(name)
+}
+
 func (r *Runner) goSourceImportedScalarByPackageName(packageName, typeName string) types.Type {
 	var found types.Type
 	for key, typ := range r.bashPPTools.nativeTypes {

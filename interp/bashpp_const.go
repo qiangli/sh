@@ -6,6 +6,7 @@ package interp
 import (
 	"context"
 	"fmt"
+	"go/constant"
 	"strconv"
 
 	"mvdan.cc/sh/v3/expand"
@@ -93,12 +94,13 @@ func (r *Runner) bashPPConstGroup(ctx context.Context, group *syntax.BashPPConst
 			return
 		}
 		var scalar bashPPScalar
+		scalarKind := constant.Unknown
 		var vr expand.Variable
 		var err error
 		if effective.DeclTypeExpr != nil {
 			decl := &syntax.BashPPDecl{Site: syntax.StartConst, Kw: group.Kw, Name: spec.Name, DeclType: effective.DeclType, DeclTypeExpr: effective.DeclTypeExpr, Init: effective.Init, InitExpr: expr}
 			var handled bool
-			vr, handled, err = r.bashPPTypedScalarDeclValue(decl)
+			vr, scalarKind, handled, err = r.bashPPTypedScalarDeclValue(decl)
 			if !handled && err == nil {
 				err = fmt.Errorf("BASHPP-ECONST-TYPE: unsupported grouped constant type")
 			}
@@ -124,6 +126,7 @@ func (r *Runner) bashPPConstGroup(ctx context.Context, group *syntax.BashPPConst
 			return
 		}
 		cell := r.bashPPScope.lookup(spec.Name.Value)
+		cell.scalarKind = scalarKind
 		if scalar.value != nil {
 			cell.exactScalar = scalar.value
 		} else if value, evalErr := r.bashPPEvalScalarExpr(expr); evalErr == nil {
@@ -132,7 +135,11 @@ func (r *Runner) bashPPConstGroup(ctx context.Context, group *syntax.BashPPConst
 			// rounding, rather than the untyped source expression.
 			shape := r.bashPPUnderlyingType(effective.DeclTypeExpr)
 			if named, ok := shape.(*syntax.BashPPNamedType); ok {
-				if converted, convertErr := r.bashPPConvertScalar(named.Name.Value, value); convertErr == nil {
+				base := named.Name.Value
+				if r.bashPPGoSource {
+					base, _ = r.goSourceScalarUnderlying(effective.DeclTypeExpr)
+				}
+				if converted, convertErr := r.bashPPConvertScalar(base, value); convertErr == nil {
 					value = converted
 				}
 			}

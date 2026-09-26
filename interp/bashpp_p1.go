@@ -300,7 +300,8 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 			vr = callable.vr
 		}
 	}
-	if typed, handled, err := r.bashPPTypedScalarDeclValue(d); handled {
+	typedScalarKind := constant.Unknown
+	if typed, scalarKind, handled, err := r.bashPPTypedScalarDeclValue(d); handled {
 		if err != nil {
 			if errors.Is(err, errBashPPScalarInterrupted) {
 				return
@@ -314,6 +315,7 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 			return
 		}
 		vr = typed
+		typedScalarKind = scalarKind
 	}
 	legacyPointerVR := vr
 	legacyPointerInit := false
@@ -442,6 +444,9 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 		*target = *bashPPCopyAssignmentCell(callableDeclCell)
 		target.vr.Exported = exported
 	}
+	if typedScalarKind != constant.Unknown {
+		r.bashPPScope.lookup(name).scalarKind = typedScalarKind
+	}
 	if r.bashPPGoSource && d.Site == syntax.StartConst && d.InitExpr != nil {
 		if value, err := r.bashPPEvalScalarExpr(d.InitExpr); err == nil {
 			cell := r.bashPPScope.lookup(name)
@@ -486,16 +491,16 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 // bashPPTypedScalarDeclValue applies Go's zero-value, representability, and
 // assignability rules to scalar declarations. Structured, pointer, and
 // interface values retain their single-model paths below in bashPPDeclare.
-func (r *Runner) bashPPTypedScalarDeclValue(d *syntax.BashPPDecl) (expand.Variable, bool, error) {
+func (r *Runner) bashPPTypedScalarDeclValue(d *syntax.BashPPDecl) (expand.Variable, constant.Kind, bool, error) {
 	if r.bashPPGoSource && d.Site == syntax.StartConst && d.DeclTypeExpr == nil {
 		value, err := r.bashPPEvalScalarExpr(d.InitExpr)
 		if err != nil {
-			return expand.Variable{}, true, err
+			return expand.Variable{}, constant.Unknown, true, err
 		}
-		return expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarString(value.value)}, true, nil
+		return expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarString(value.value)}, value.kind(), true, nil
 	}
 	if (d.Site != syntax.StartVar && d.Site != syntax.StartConst) || d.DeclTypeExpr == nil {
-		return expand.Variable{}, false, nil
+		return expand.Variable{}, constant.Unknown, false, nil
 	}
 	shape := r.bashPPUnderlyingType(d.DeclTypeExpr)
 	named, ok := shape.(*syntax.BashPPNamedType)
@@ -503,17 +508,17 @@ func (r *Runner) bashPPTypedScalarDeclValue(d *syntax.BashPPDecl) (expand.Variab
 	if ok {
 		base = named.Name.Value
 	}
-	if r.bashPPGoSource && (!ok || !bashPPBuiltinType(base)) {
-		base, ok = r.goSourceImportedScalarUnderlying(bashPPTypeText(d.DeclTypeExpr))
+	if r.bashPPGoSource {
+		base, ok = r.goSourceScalarUnderlying(d.DeclTypeExpr)
 	}
 	if !ok || !bashPPBuiltinType(base) || base == "error" {
 		if d.Site == syntax.StartConst {
-			return expand.Variable{}, true, fmt.Errorf("BASHPP-ECONST-TYPE: const initializer has unsupported type %s", bashPPTypeText(d.DeclTypeExpr))
+			return expand.Variable{}, constant.Unknown, true, fmt.Errorf("BASHPP-ECONST-TYPE: const initializer has unsupported type %s", bashPPTypeText(d.DeclTypeExpr))
 		}
-		return expand.Variable{}, false, nil
+		return expand.Variable{}, constant.Unknown, false, nil
 	}
 	if !r.bashPPGoSource && (base == "complex64" || base == "complex128") {
-		return expand.Variable{}, true, fmt.Errorf("BASHPP-ECOMPLEX-UNSUPPORTED: complex constants are not supported by the Bash++ scalar carrier")
+		return expand.Variable{}, constant.Unknown, true, fmt.Errorf("BASHPP-ECOMPLEX-UNSUPPORTED: complex constants are not supported by the Bash++ scalar carrier")
 	}
 	if d.InitExpr == nil {
 		zero := "0"
@@ -523,10 +528,21 @@ func (r *Runner) bashPPTypedScalarDeclValue(d *syntax.BashPPDecl) (expand.Variab
 		case "string":
 			zero = ""
 		}
-		return expand.Variable{Set: true, Kind: expand.String, Str: zero}, true, nil
+		kind := constant.Int
+		switch base {
+		case "bool":
+			kind = constant.Bool
+		case "string":
+			kind = constant.String
+		case "float32", "float64":
+			kind = constant.Float
+		case "complex64", "complex128":
+			kind = constant.Complex
+		}
+		return expand.Variable{Set: true, Kind: expand.String, Str: zero}, kind, true, nil
 	}
 	if d.Site == syntax.StartConst && !r.bashPPConstantScalarExpr(d.InitExpr, base) {
-		return expand.Variable{}, true, fmt.Errorf("BASHPP-ECONST-EXPR: const initializer is not a constant expression")
+		return expand.Variable{}, constant.Unknown, true, fmt.Errorf("BASHPP-ECONST-EXPR: const initializer is not a constant expression")
 	}
 	var value bashPPScalar
 	var err error
@@ -539,25 +555,25 @@ func (r *Runner) bashPPTypedScalarDeclValue(d *syntax.BashPPDecl) (expand.Variab
 		value, err = r.bashPPEvalScalarExpr(d.InitExpr)
 	}
 	if err != nil {
-		return expand.Variable{}, true, err
+		return expand.Variable{}, constant.Unknown, true, err
 	}
 	if value.typ != "" {
 		actual, _ := bashPPScalarNamedType(value.typ)
 		if value.typ != bashPPTypeText(d.DeclTypeExpr) &&
 			!r.goSourceNativeTypeIdentical(actual, d.DeclTypeExpr) &&
 			!r.bashPPTypeAssignable(actual, d.DeclTypeExpr) {
-			return expand.Variable{}, true, fmt.Errorf("BASHPP-EASSIGN-TYPE: cannot use %s as %s in declaration", value.typ, bashPPTypeText(d.DeclTypeExpr))
+			return expand.Variable{}, constant.Unknown, true, fmt.Errorf("BASHPP-EASSIGN-TYPE: cannot use %s as %s in declaration", value.typ, bashPPTypeText(d.DeclTypeExpr))
 		}
 	} else if !bashPPUntypedScalarAssignable(base, value.value) {
-		return expand.Variable{}, true, fmt.Errorf("BASHPP-EASSIGN-TYPE: cannot use %s constant as %s in declaration", value.value.Kind(), bashPPTypeText(d.DeclTypeExpr))
+		return expand.Variable{}, constant.Unknown, true, fmt.Errorf("BASHPP-EASSIGN-TYPE: cannot use %s constant as %s in declaration", value.value.Kind(), bashPPTypeText(d.DeclTypeExpr))
 	}
 	converted, err := r.bashPPConvertScalar(base, value)
 	if err != nil {
-		return expand.Variable{}, true, err
+		return expand.Variable{}, constant.Unknown, true, err
 	}
 	// `var nan float64 = math.NaN()` keeps the non-finite spelling, which
 	// the float-typed cell decodes on every read.
-	return expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarStorageString(converted)}, true, nil
+	return expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarStorageString(converted)}, converted.kind(), true, nil
 }
 
 func (r *Runner) bashPPConstantScalarExpr(expr syntax.BashPPExpr, targetBase string) bool {
