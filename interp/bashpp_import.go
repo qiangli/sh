@@ -14,6 +14,7 @@ import (
 	"go/types"
 	goversion "go/version"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	pathpkg "path"
@@ -177,6 +178,10 @@ type bashPPToolchain struct {
 	// instantiations; see bashpp_sprint165_runtime_instantiations.go.
 	instantiations *bashPPInstantiationIndex
 	localTypes     *bashPPLocalTypeCache
+	// bridgeMetadata is immutable after publication and shared safely by
+	// subshell copies. Its file and import-map identity keep source replacement
+	// and import rebinding from reusing stale generic types or selectors.
+	bridgeMetadata *bashPPBridgeMetadataCache
 	// requestEnv and runtimeEnv are the immutable process environments used to
 	// start a live dependency session. Once that session is connected, later
 	// bridge requests only service callbacks; rebuilding the Runner's shell
@@ -184,6 +189,13 @@ type bashPPToolchain struct {
 	// for image encoders. closeGoSourceBridge clears these with the session.
 	requestEnv []string
 	runtimeEnv []string
+}
+
+type bashPPBridgeMetadataCache struct {
+	file         *syntax.File
+	imports      map[string]string
+	genericTypes []string
+	selectors    []string
 }
 
 type bashPPGoReview struct {
@@ -682,7 +694,26 @@ func (r *Runner) bashPPEvalRequest() (bashPPEvalRequest, error) {
 		Stdout: r.bashPPWriter(r.stdout), Stderr: r.bashPPWriter(r.stderr), Imports: r.bashPPImports, SourceDir: sourceDir, SourceFile: sourceFile, EmbedDecls: embedDecls, CompanionFiles: companionFiles, NativeFuncs: nativeFuncs, MappedCompanions: mappedCompanions, CompanionTrampolines: trampolines, CompanionUnmappedFrames: unmappedFrames, RootFiles: r.bashPPGoSourceRootFiles(), CgoPackages: r.bashPPGoSourceCgoPackages()}, nil
 }
 
+func (r *Runner) bashPPBridgeMetadata() *bashPPBridgeMetadataCache {
+	cache := r.bashPPTools.bridgeMetadata
+	if cache != nil && cache.file == r.bashPPGoSourceFile && maps.Equal(cache.imports, r.bashPPImports) {
+		return cache
+	}
+	cache = &bashPPBridgeMetadataCache{
+		file:    r.bashPPGoSourceFile,
+		imports: maps.Clone(r.bashPPImports),
+	}
+	cache.genericTypes = r.bashPPBuildGenericBridgeTypes()
+	cache.selectors = r.bashPPBuildReferencedSelectors()
+	r.bashPPTools.bridgeMetadata = cache
+	return cache
+}
+
 func (r *Runner) bashPPGenericBridgeTypes() []string {
+	return r.bashPPBridgeMetadata().genericTypes
+}
+
+func (r *Runner) bashPPBuildGenericBridgeTypes() []string {
 	if r.bashPPGoSourceFile == nil {
 		return nil
 	}
@@ -735,6 +766,10 @@ func (r *Runner) bashPPGenericBridgeTypes() []string {
 // that cannot prove the whole program's reach keeps the register-everything
 // default.
 func (r *Runner) bashPPReferencedSelectors() []string {
+	return r.bashPPBridgeMetadata().selectors
+}
+
+func (r *Runner) bashPPBuildReferencedSelectors() []string {
 	if r.bashPPGoSourceFile == nil || len(r.bashPPImports) == 0 {
 		return nil
 	}
