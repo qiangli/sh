@@ -125,6 +125,24 @@ func (r *Runner) goSourceLocalReflectRequest(ctx context.Context, req bashPPEval
 				value.localReflect = &goSourceLocalReflect{ptr: lr.ptr, origin: lr.origin, typeName: lr.typeName, parent: lr, selection: bashPPBridgeRequest{Op: q.Op, Selector: q.Selector, Args: q.Args, SourceFile: q.SourceFile, SourceLine: q.SourceLine}, method: method}
 				return []bashPPBridgeValue{value}, true, nil
 			}
+		case !lr.operand && lr.method == "" && goSourceReflectNavStep(*q):
+			// Selection is eager, as it is in Go: bad indexes and field numbers
+			// panic here, and an Index result remains bound to the backing array
+			// selected now even if a containing slice header is later replaced.
+			// The descriptor retains that one native handle; later uses refresh
+			// only the original pointer storage, never replay this selection.
+			selected := &goSourceLocalReflect{
+				ptr: lr.ptr, origin: lr.origin, typeName: lr.typeName,
+				parent:    lr,
+				selection: bashPPBridgeRequest{Op: q.Op, Selector: q.Selector, Args: q.Args, SourceFile: q.SourceFile, SourceLine: q.SourceLine},
+			}
+			value, err := r.goSourceLocalReflectMaterialize(ctx, req, selected)
+			if err != nil {
+				return nil, true, err
+			}
+			value.localReflect = selected
+			goSourceReflectTraceStep(q.Selector)
+			return []bashPPBridgeValue{value}, true, nil
 		case lr.method != "" && q.Selector == "Interface" && len(q.Args) == 0:
 			value, err := r.goSourceLocalReflectInterface(ctx, req, lr, *q)
 			if err != nil {
@@ -133,12 +151,88 @@ func (r *Runner) goSourceLocalReflectRequest(ctx context.Context, req bashPPEval
 			goSourceReflectTraceStep("local:Interface")
 			return []bashPPBridgeValue{value}, true, nil
 		}
+		if err := r.goSourceRefuseDetachedReflectWrite(lr, *q); err != nil {
+			return nil, true, err
+		}
 	}
 	if err := r.goSourceMaterializeLocalReflect(ctx, req, q); err != nil {
 		return nil, true, err
 	}
 	goSourceReflectTraceStep(q.Selector)
 	return nil, false, nil
+}
+
+// goSourceReflectNavStep reports the reflect.Value operations whose result is
+// a selected Value. They must execute once, at the source operation, rather
+// than becoming a replayable recipe: selection validates eagerly and may bind
+// to storage whose containing header changes later.
+func goSourceReflectNavStep(q bashPPBridgeRequest) bool {
+	if q.Spread {
+		return false
+	}
+	switch q.Selector {
+	case "Elem":
+		return len(q.Args) == 0
+	case "Field", "Index":
+		return len(q.Args) == 1 && q.Args[0].Kind == "int" && q.Args[0].localReflect == nil
+	case "FieldByName":
+		return len(q.Args) == 1 && q.Args[0].Kind == "string" && q.Args[0].localReflect == nil
+	}
+	return false
+}
+
+func goSourceReflectWrite(q bashPPBridgeRequest) bool {
+	return q.Op == "call" && (strings.HasPrefix(q.Selector, "Set") || q.Selector == "Clear" || q.Selector == "Grow")
+}
+
+// A selected slice element can outlive replacement of its containing header.
+// Reads remain well-defined because the worker retains the old backing array.
+// A write can cross back only while some path from the original pointer still
+// names that backing storage; otherwise refusing is safer than reporting a
+// successful mutation of the worker's detached copy.
+func (r *Runner) goSourceRefuseDetachedReflectWrite(lr *goSourceLocalReflect, q bashPPBridgeRequest) error {
+	if !goSourceReflectWrite(q) || lr == nil || lr.ptr == nil {
+		return nil
+	}
+	lr.mu.Lock()
+	var storage uint64
+	if lr.handle != nil {
+		storage = lr.handle.Storage
+	}
+	lr.mu.Unlock()
+	if storage == 0 {
+		return nil
+	}
+	root, err := r.bashPPBridgePointerValue(lr.ptr)
+	if err != nil {
+		return err
+	}
+	if bridgeValueHasStorage(root, storage) {
+		return nil
+	}
+	return fmt.Errorf("gosource: reflected write targets slice storage no longer reachable from its original pointer")
+}
+
+func bridgeValueHasStorage(v bashPPBridgeValue, storage uint64) bool {
+	if v.Storage == storage {
+		return true
+	}
+	for _, child := range v.Elements {
+		if bridgeValueHasStorage(child, storage) {
+			return true
+		}
+	}
+	for _, child := range v.Fields {
+		if bridgeValueHasStorage(child, storage) {
+			return true
+		}
+	}
+	for _, entry := range v.Entries {
+		if bridgeValueHasStorage(entry.Key, storage) || bridgeValueHasStorage(entry.Value, storage) {
+			return true
+		}
+	}
+	return false
 }
 
 func goSourceReflectTraceStep(step string) {
@@ -457,6 +551,11 @@ func (r *Runner) goSourceLocalReflectMaterialize(ctx context.Context, req bashPP
 	if lr.handle != nil {
 		value := *lr.handle
 		lr.mu.Unlock()
+		if !lr.operand && lr.ptr != nil {
+			if err := r.goSourceLocalReflectRefresh(ctx, req, lr); err != nil {
+				return bashPPBridgeValue{}, err
+			}
+		}
 		return value, nil
 	}
 	lr.mu.Unlock()
@@ -493,4 +592,56 @@ func (r *Runner) goSourceLocalReflectMaterialize(ctx context.Context, req bashPP
 		lr.handle = &value
 	}
 	return *lr.handle, nil
+}
+
+// goSourceLocalReflectRefresh updates the worker's persistent storage for an
+// original pointer without recreating a reflect.Value or replaying any
+// selection or Call. Stable slice-storage ids make an in-place element update
+// visible through retained Index values, while a replacement header binds the
+// root to new backing and leaves earlier Index selections on the old backing.
+func (r *Runner) goSourceLocalReflectRefresh(ctx context.Context, req bashPPEvalRequest, lr *goSourceLocalReflect) error {
+	arg, err := r.bashPPBridgePointerValue(lr.ptr)
+	if err != nil {
+		return err
+	}
+	if arg.Origin == 0 || arg.Session != req.Bridge.id {
+		return fmt.Errorf("gosource: reflected original pointer identity expired")
+	}
+	_, err = req.Bridge.request(ctx, req, bashPPBridgeRequest{
+		Op: "origin-refresh", Args: []bashPPBridgeValue{arg},
+	})
+	if err != nil {
+		return err
+	}
+	lr.mu.Lock()
+	storage := uint64(0)
+	if lr.handle != nil {
+		storage = lr.handle.Storage
+	}
+	lr.mu.Unlock()
+	if storage == 0 || bridgeValueHasStorage(arg, storage) {
+		return nil
+	}
+	// The selected backing may have become detached from the containing slice
+	// header while remaining live through another interpreter alias. Refresh
+	// exactly that retained backing; never replay the selection or another
+	// pointer origin.
+	req.Bridge.mu.Lock()
+	kept := req.Bridge.sliceOriginKeep[storage]
+	var retainedView bashPPNativeSlice
+	if kept != nil {
+		retainedView = *kept
+	}
+	req.Bridge.mu.Unlock()
+	if kept == nil {
+		return fmt.Errorf("gosource: reflected slice storage identity expired")
+	}
+	retained, err := r.bashPPBridgeCollection(retainedView.view, retainedView.meta, retainedView.typ)
+	if err != nil {
+		return err
+	}
+	_, err = req.Bridge.request(ctx, req, bashPPBridgeRequest{
+		Op: "storage-refresh", Args: []bashPPBridgeValue{retained},
+	})
+	return err
 }
