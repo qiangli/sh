@@ -1811,6 +1811,26 @@ func (r *Runner) bashPPValidateReusedShortValue(target, candidate *bashPPCell) e
 		}
 		return nil
 	}
+	// A func value read from a collection element or a call result carries no
+	// declared type of its own: it travels as the closure handle in the scalar
+	// carrier. Reassigning it to an already-declared func-typed variable must
+	// recover that func identity rather than read the handle as an untyped
+	// scalar; otherwise `var f func(*T); f = m[k]` (the compiler's arch-init
+	// map) is refused as "untyped result is not assignable to func(*T)".
+	if _, ok := r.bashPPUnderlyingType(target.declType).(*syntax.BashPPFuncType); ok && candidate.vr.Kind == expand.String {
+		if stored, claimed, err := r.bashPPCollectionFuncElement(candidate.vr.Str, target.declType); claimed {
+			if err != nil {
+				return err
+			}
+			if handle, ok := stored.(string); ok {
+				candidate.vr.Str = handle
+			}
+			candidate.declType = target.declType
+			candidate.typeName = ""
+			candidate.scalarKind = constant.Unknown
+			return nil
+		}
+	}
 	shape, ok := r.bashPPUnderlyingType(target.declType).(*syntax.BashPPNamedType)
 	if !ok || !bashPPBuiltinType(shape.Name.Value) || candidate.vr.Kind != expand.String {
 		return fmt.Errorf("BASHPP-EASSIGN-TYPE: untyped result is not assignable to %s", bashPPTypeText(target.declType))
