@@ -49,6 +49,11 @@ import "fmt"
 type Tag int
 func(t Tag)String()string{return fmt.Sprint(int(t))}
 func main(){ch:=make(chan string,2);go func(){v:=fmt.Sprint(Tag(7));ch<-v}();go func(){v:=fmt.Sprint(Tag(7));ch<-v}();a:=<-ch;b:=<-ch;fmt.Println(a,b)}`,
+		"delayed_callback_reply": `package main
+import("fmt";"time")
+type Tag int
+func(t Tag)String()string{time.Sleep(20*time.Millisecond);return fmt.Sprint("tag",int(t))}
+func main(){fmt.Println(Tag(5));fmt.Println("after")}`,
 		"pointer_mutation": `package main
 import "fmt"
 type Counter struct{ N int }
