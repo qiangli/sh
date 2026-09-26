@@ -419,6 +419,19 @@ func (r *Runner) bashPPRunValueBuiltin(name string, c *syntax.BashPPCall) (*bash
 			args[i] = bashPPBuiltinArg{value: bashPPBuiltinExactScalarValue(text, scalar), scalar: scalar, hasScalar: true, text: text}
 			continue
 		}
+		if r.bashPPGoSource && name == "delete" && i == 1 && i < len(c.ArgExprs) && c.ArgExprs[i] != nil {
+			if shape, ok := r.bashPPBuiltinCollection(args[0], "map"); ok {
+				if _, pointerKey := r.bashPPUnderlyingType(shape.Key).(*syntax.BashPPPointerType); pointerKey {
+					value, meta, err := r.bashPPEvalElement(c.ArgExprs[i], shape.Key)
+					if err != nil {
+						r.exit.fatal(err)
+						return nil, false
+					}
+					args[i] = bashPPBuiltinArg{value: value, meta: meta, typ: shape.Key}
+					continue
+				}
+			}
+		}
 		var err error
 		args[i], err = r.goSourceBuiltinArg(c, i)
 		if err != nil {

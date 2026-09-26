@@ -203,6 +203,13 @@ func (r *Runner) bashPPSprint165MapKey(value any, meta *bashPPCollectionMeta, ty
 			}
 		}
 	case *syntax.BashPPPointerType:
+		if native, ok := value.(*bashPPBridgeValue); ok {
+			if native == nil || native.Kind == "nil" || (native.Handle == 0 && native.Origin == 0) {
+				return bashPPMapKey{typ: typeName, value: "nil"}, false, nil
+			}
+			// Pointer handles remain stable across crossings in one session.
+			return bashPPMapKey{typ: typeName, value: fmt.Sprintf("native:%s:%d:%d", native.Session, native.Handle, native.Origin)}, false, nil
+		}
 		pointer, ok := value.(*bashPPPointer)
 		if !ok || pointer == nil {
 			return bashPPMapKey{typ: typeName, value: "nil"}, false, nil
