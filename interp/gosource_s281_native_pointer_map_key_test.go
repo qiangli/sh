@@ -66,7 +66,11 @@ func main() {
 	for _, rt := range unicode.GraphicRanges {
 		add(rt, "runtime", "slicebytetostringtmp", func() int { return 1 })
 	}
-	fmt.Println(len(m), len(unicode.GraphicRanges))
+	hits := 0
+ for _, rt := range unicode.GraphicRanges {
+  if _, ok := m[intrinsicKey{rt, "runtime", "slicebytetostringtmp"}]; ok { hits++ }
+ }
+ fmt.Println(len(m), len(unicode.GraphicRanges), hits)
 }
 `, nil)
 	t.Logf("out=%q stderr=%q", out, stderr)
@@ -74,7 +78,7 @@ func main() {
 		t.Fatalf("unexpected stderr=%q out=%q", stderr, out)
 	}
 	fields := strings.Fields(out)
-	if len(fields) != 2 || fields[0] != fields[1] || fields[0] == "0" {
+	if len(fields) != 3 || fields[0] != fields[1] || fields[1] != fields[2] || fields[0] == "0" {
 		t.Fatalf("no output; panic on duplicate native pointer key? out=%q stderr=%q", out, stderr)
 	}
 }
