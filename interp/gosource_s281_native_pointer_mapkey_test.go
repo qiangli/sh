@@ -113,3 +113,39 @@ func TestPointerKeys(t *testing.T) {
 		t.Fatalf("interpreter diagnostic: %s", stderr.String())
 	}
 }
+
+// A dependency-owned value handle is not a value snapshot. Keeping that
+// handle as variadic element metadata aliases the caller, including after a
+// range assignment which Go requires to make another value copy. Refuse both
+// paths until the bridge can materialize an independent native value.
+func TestS281VariadicNativeValueRefusal(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		body string
+	}{
+		{"ordinary value", `err := values[0].UnmarshalText([]byte("2001-01-01T00:00:00Z")); fmt.Println(err == nil, values[0].Year())`},
+		{"range value", `for _, value := range values { err := value.UnmarshalText([]byte("2001-01-01T00:00:00Z")); fmt.Println(err == nil, value.Year()) }`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			source := `package main
+import (
+	"fmt"
+	"time"
+)
+func change(values ...time.Time) { ` + tc.body + ` }
+func main() {
+	original := time.Unix(0, 0).UTC()
+	change(original)
+	fmt.Println(original.Year())
+}
+`
+			got := runGoSourceRunnerError(t, source)
+			if !strings.Contains(got, "BASHPP-EVARIADIC-NATIVE-VALUE:") {
+				t.Fatalf("missing native value-copy refusal: %q", got)
+			}
+			if strings.Contains(got, "2001") {
+				t.Fatalf("refused value call still ran: %q", got)
+			}
+		})
+	}
+}

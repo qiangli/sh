@@ -2,6 +2,8 @@ package interp
 
 // Sprint: #118; Story: #67; Story-ID: 83b5cdc6fca6
 import (
+	"fmt"
+
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
 )
@@ -96,14 +98,33 @@ func (r *Runner) goSourceVariadicElement(arg string, cell *bashPPCell, expected 
 		// so its existing diagnostic remains authoritative.
 		return arg, nil
 	case cell.vr.Kind == expand.Object:
-		// A dependency-owned value remains an authenticated handle when it is
+		// A dependency-owned pointer remains an authenticated handle when it is
 		// packed into a variadic slice. The payload alone is not enough: range
 		// uses each element's parallel metadata to decide whether to preserve an
 		// object or render it as a scalar. Losing that metadata here flattened a
 		// native pointer before a later function argument or struct map key could
 		// use its type and identity.
+		//
+		// Do not extend this to dependency-owned values. An ordinary variadic
+		// call copies each value into fresh slice storage, while preserving a
+		// native handle would alias the caller. Until the bridge can represent
+		// that copy, refuse opaque handles instead of silently changing Go value
+		// semantics. Other object representations retain their prior path below.
 		if native, ok := cell.vr.Obj.(*bashPPBridgeValue); ok && native != nil {
-			return native, &bashPPCollectionMeta{kind: "native", typ: expected}
+			if _, pointer := r.bashPPPointerType(expected); pointer {
+				switch native.Kind {
+				case "handle", "nil", "pointer":
+					if err := bashPPNativeScopeOf(r).checkHandle(*native); err != nil {
+						r.exit.fatal(fmt.Errorf("gosource: variadic native pointer: %w", err))
+						return arg, nil
+					}
+					return native, &bashPPCollectionMeta{kind: "native", typ: expected}
+				}
+			}
+			if native.Kind == "handle" {
+				r.exit.fatal(fmt.Errorf("BASHPP-EVARIADIC-NATIVE-VALUE: cannot faithfully copy dependency-owned %s into variadic slice", bashPPTypeText(expected)))
+				return arg, nil
+			}
 		}
 		return bashPPCopyArrayValue(cell.vr.Obj, bashPPCellMeta(cell))
 	}
