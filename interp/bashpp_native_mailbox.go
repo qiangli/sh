@@ -132,6 +132,7 @@ func mailboxCallback(response)(request,bool,error){return request{},false,nil}`
  "os"
  "sync/atomic"
  "syscall"
+ bppMailboxTime "time"
 `
 	implementation = fmt.Sprintf(`
 const callbackMailboxSlots=%d
@@ -146,6 +147,7 @@ var callbackMailbox []byte
 func callbackMailboxWord(slot,offset int)*uint32{return (*uint32)(unsafe.Pointer(&callbackMailbox[slot*callbackMailboxSlotSize+offset]))}
 func callbackMailboxRequestBytes(slot int)[]byte{start:=slot*callbackMailboxSlotSize+callbackMailboxHeader;return callbackMailbox[start:start+callbackMailboxHalf]}
 func callbackMailboxReplyBytes(slot int)[]byte{start:=slot*callbackMailboxSlotSize+callbackMailboxHeader+callbackMailboxHalf;return callbackMailbox[start:(slot+1)*callbackMailboxSlotSize]}
+func callbackMailboxWaitYield(spin *uint32){n:=atomic.AddUint32(spin,1);if n<64{bppRuntime.Gosched();return};d:=bppMailboxTime.Microsecond;if n>512{d=50*bppMailboxTime.Microsecond}else if n>128{d=10*bppMailboxTime.Microsecond};bppMailboxTime.Sleep(d)}
 %s
 func mailboxCallback(q response)(request,bool,error){
  if callbackMailbox==nil{return request{},false,nil}
@@ -154,7 +156,8 @@ func mailboxCallback(q response)(request,bool,error){
  for i:=0;i<callbackMailboxSlots;i++{if atomic.CompareAndSwapUint32(callbackMailboxWord(i,0),callbackMailboxFree,callbackMailboxWriting){slot=i;break}}
  if slot<0{return request{},false,nil}
  copy(callbackMailboxRequestBytes(slot),payload);atomic.StoreUint32(callbackMailboxWord(slot,4),uint32(len(payload)));atomic.StoreUint32(callbackMailboxWord(slot,0),callbackMailboxRequest)
- for atomic.LoadUint32(callbackMailboxWord(slot,0))!=callbackMailboxReply{select{case <-handles.stop:atomic.StoreUint32(callbackMailboxWord(slot,0),callbackMailboxFree);return request{},true,fmt.Errorf("interpreter connection closed during callback");default:}}
+ var spin uint32
+ for atomic.LoadUint32(callbackMailboxWord(slot,0))!=callbackMailboxReply{select{case <-handles.stop:atomic.StoreUint32(callbackMailboxWord(slot,0),callbackMailboxFree);return request{},true,fmt.Errorf("interpreter connection closed during callback");default:callbackMailboxWaitYield(&spin)}}
  n:=int(atomic.LoadUint32(callbackMailboxWord(slot,8)));var reply request
  if n<=0||n>len(callbackMailboxReplyBytes(slot)){err=fmt.Errorf("invalid callback mailbox reply size")}else{err=json.Unmarshal(callbackMailboxReplyBytes(slot)[:n],&reply)}
  atomic.StoreUint32(callbackMailboxWord(slot,0),callbackMailboxFree)
