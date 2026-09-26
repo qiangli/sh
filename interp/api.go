@@ -961,6 +961,7 @@ type Runner struct {
 	// shell's own names and PATH for the introspection builtins — see
 	// [CommandResolver].
 	commandResolver CommandResolverFunc
+	servedInProcess func(name string) bool
 
 	// structuredErrorHandler, when non-nil, is invoked for known
 	// user-facing diagnostics as they are emitted to stderr. It is an
@@ -2654,6 +2655,21 @@ func CommandResolver(fn CommandResolverFunc) RunnerOption {
 	}
 }
 
+// ServedInProcess names the commands the embedder's exec handlers serve in
+// process (an applet by its bare name). Such a name is never entered in the
+// command hash table and a hash hit never rewrites its argv[0] to a PATH
+// file: bash hashes what it found on PATH, and these names are not run from
+// PATH. Without it, the first call reaches the in-process command while the
+// lookup also hashes a same-named host file, and every later call runs that
+// file instead (or fails where the host has none). `type`, `command -v` and
+// `hash` are unchanged. nil (the default) keeps bash's behavior.
+func ServedInProcess(fn func(name string) bool) RunnerOption {
+	return func(r *Runner) error {
+		r.servedInProcess = fn
+		return nil
+	}
+}
+
 // WithAuditLog writes each [AuditEvent] as one JSON object per line.
 // It is additive with [WithAuditHandler]; both receive the same event.
 func WithAuditLog(w io.Writer) RunnerOption {
@@ -3242,6 +3258,7 @@ func (r *Runner) Reset() {
 		stdinScript:            r.stdinScript,
 		auditHandler:           r.auditHandler,
 		commandResolver:        r.commandResolver,
+		servedInProcess:        r.servedInProcess,
 		auditLog:               r.auditLog,
 		structuredErrorHandler: r.structuredErrorHandler,
 		deterministic:          r.deterministic,
@@ -3938,6 +3955,7 @@ func (r *Runner) subshell(background bool) *Runner {
 		strictPosix:            r.strictPosix,
 		auditHandler:           r.auditHandler,
 		commandResolver:        r.commandResolver,
+		servedInProcess:        r.servedInProcess,
 		auditLog:               r.auditLog,
 		structuredErrorHandler: r.structuredErrorHandler,
 		deterministic:          r.deterministic,

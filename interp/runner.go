@@ -11209,7 +11209,9 @@ func (r *Runner) execStartErrorMode(ctx context.Context, name string, windows bo
 // An empty argv0 means no override.
 func (r *Runner) execAs(ctx context.Context, pos syntax.Pos, argv0 string, clearEnv bool, replace bool, args []string) {
 	hashed := false
-	registeredSchema := false
+	// unhashed: a registered command (schema) or a name served in process
+	// is not a PATH file, so the hash table never applies to it.
+	unhashed := false
 	if len(args) > 0 {
 		name := args[0]
 		if r.commandResolver != nil && !strings.ContainsRune(name, '/') {
@@ -11223,11 +11225,15 @@ func (r *Runner) execAs(ctx context.Context, pos syntax.Pos, argv0 string, clear
 					return
 				}
 				args = bound.args
-				registeredSchema = true
+				unhashed = true
 			}
 		}
 		newlyHashed := false
-		if entry, ok := r.cmdHashTable[name]; ok && !registeredSchema {
+		if r.servedInProcess != nil && !strings.ContainsRune(name, '/') && r.servedInProcess(name) {
+			// Served by the embedder in process, not from PATH: never hashed.
+			unhashed = true
+		}
+		if entry, ok := r.cmdHashTable[name]; ok && !unhashed {
 			// bash 5.3 findcmd.c search_for_command: a remembered path is
 			// re-checked when `posixly_correct || check_hashed_filenames`;
 			// if the file no longer exists or is not executable, the entry
@@ -11278,7 +11284,7 @@ func (r *Runner) execAs(ctx context.Context, pos syntax.Pos, argv0 string, clear
 		if enabled, ok := r.noOpSetState["hashall"]; ok {
 			hashall = enabled
 		}
-		if _, ok := r.cmdHashTable[name]; !ok && !registeredSchema && hashall && !strings.ContainsRune(name, '/') {
+		if _, ok := r.cmdHashTable[name]; !ok && !unhashed && hashall && !strings.ContainsRune(name, '/') {
 			if path, err := LookPathDir(r.Dir, r.writeEnv, name); err == nil {
 				if r.cmdHashTable == nil {
 					r.cmdHashTable = make(map[string]cmdHashEntry)
@@ -11287,7 +11293,7 @@ func (r *Runner) execAs(ctx context.Context, pos syntax.Pos, argv0 string, clear
 				newlyHashed = true
 			}
 		}
-		if entry, ok := r.cmdHashTable[args[0]]; ok && !registeredSchema && !hashed && !newlyHashed {
+		if entry, ok := r.cmdHashTable[args[0]]; ok && !unhashed && !hashed && !newlyHashed {
 			hashed = true
 			entry.hits++
 			r.cmdHashTable[args[0]] = entry
