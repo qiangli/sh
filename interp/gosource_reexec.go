@@ -32,6 +32,9 @@ import (
 // Concurrent Go tool identity probes (-V=full) are single-flighted and their
 // successful output is cached for the launcher's lifetime and relevant build
 // configuration, rather than starting one interpreter per probing go command.
+// The launcher also forwards os.Interrupt and SIGTERM to its replayed child and
+// waits for it, so signalling the launcher process terminates the replayed
+// program rather than leaving it running after the launcher exits.
 // Without this option, os.Executable retains its former dependency-bridge
 // behavior.
 func GoSourceReexecPlan(plan ...string) RunnerOption {
@@ -129,8 +132,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 )
 func main() {
@@ -157,7 +162,34 @@ func command(plan []string) *exec.Cmd {
 func run(plan []string, stdin *os.File, stdout *os.File) int {
 	cmd := command(plan)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdin, stdout, os.Stderr
-	err := cmd.Run()
+	return wait(plan, cmd)
+}
+// wait runs cmd while forwarding os.Interrupt and SIGTERM to it, then waits for
+// it to exit. Signalling the launcher process alone (not its group) would
+// otherwise leave the replayed child running after the launcher returned;
+// forwarding the signal and waiting terminates the direct child with the
+// launcher.
+func wait(plan []string, cmd *exec.Cmd) int {
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(signals)
+	if err := cmd.Start(); err != nil {
+		fmt.Fprintf(os.Stderr, "gosource reexec %q: %v\n", plan, err)
+		return 127
+	}
+	done := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case s := <-signals:
+				_ = cmd.Process.Signal(s)
+			case <-done:
+				return
+			}
+		}
+	}()
+	err := cmd.Wait()
+	close(done)
 	if err == nil { return 0 }
 	if exit, ok := err.(*exec.ExitError); ok { return exit.ExitCode() }
 	fmt.Fprintf(os.Stderr, "gosource reexec %q: %v\n", plan, err)
@@ -207,10 +239,8 @@ func populateVersionCache(plan []string, cache, lock string) int {
 	var output bytes.Buffer
 	cmd := command(plan)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, &output, os.Stderr
-	if err := cmd.Run(); err != nil {
-		if exit, ok := err.(*exec.ExitError); ok { return exit.ExitCode() }
-		fmt.Fprintf(os.Stderr, "gosource reexec %q: %v\n", plan, err)
-		return 127
+	if code := wait(plan, cmd); code != 0 {
+		return code
 	}
 	if temp, err := os.CreateTemp(filepath.Dir(cache), ".tool-version-"); err == nil {
 		name := temp.Name()
