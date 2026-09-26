@@ -16,11 +16,13 @@ package interp
 import (
 	"bytes"
 	"context"
+	"net"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/gosource"
 	"mvdan.cc/sh/v3/syntax"
 )
@@ -177,5 +179,95 @@ func main() { fmt.Println("ok") }
 	resetRunner.Reset()
 	if afterReset := resetRunner.bashPPBridgeMetadata(); afterReset == beforeReset || afterReset.file != nil {
 		t.Fatal("Reset reused prior source metadata")
+	}
+}
+
+func TestS281ConnectedEvalRequestReusesCachedEnvs(t *testing.T) {
+	hasEnv := func(env []string, entry string) bool {
+		for _, got := range env {
+			if got == entry {
+				return true
+			}
+		}
+		return false
+	}
+
+	left, right := net.Pipe()
+	defer left.Close()
+	defer right.Close()
+	runner := &Runner{
+		bashPPGoSource: true,
+		bashPPTools: bashPPToolchain{
+			bridge:         &bashPPNativeSession{conn: left},
+			goBinary:       "go",
+			goRoot:         "/runtime/root",
+			goVersion:      "go1.27.1",
+			buildGoBinary:  "go",
+			buildGoRoot:    "/build/root",
+			buildGoVersion: "go1.27.1",
+			requestEnv:     []string{"PATH=/bin", "GOROOT=/runtime/root", "GOTOOLCHAIN=go1.27.1"},
+			buildEnv:       []string{"PATH=/bin", "GOROOT=/build/root", "GOTOOLCHAIN=go1.27.1"},
+			runtimeEnv:     []string{"PATH=/bin", "GOROOT=/runtime/root", "GOTOOLCHAIN=go1.27.1"},
+		},
+		bashPPImports: map[string]string{},
+	}
+	reqEnv, buildEnv, runtimeEnv := runner.bashPPTools.requestEnv, runner.bashPPTools.buildEnv, runner.bashPPTools.runtimeEnv
+	request, err := runner.bashPPEvalRequest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if &request.Env[0] != &reqEnv[0] || &request.BuildEnv[0] != &buildEnv[0] || &request.RuntimeEnv[0] != &runtimeEnv[0] {
+		t.Fatal("connected request rebuilt cached environments")
+	}
+	if &runner.bashPPTools.requestEnv[0] != &reqEnv[0] || &runner.bashPPTools.buildEnv[0] != &buildEnv[0] || &runner.bashPPTools.runtimeEnv[0] != &runtimeEnv[0] {
+		t.Fatal("connected request replaced cached environments")
+	}
+
+	newRequestRunner := func(path, goRoot, buildRoot string) *Runner {
+		env := expand.ListEnviron("PATH=" + path)
+		return &Runner{
+			Env:            env,
+			writeEnv:       newOverlayEnviron(env, false),
+			bashPPGoSource: true,
+			bashPPTools: bashPPToolchain{
+				goBinary:       "go",
+				goRoot:         goRoot,
+				goVersion:      "go1.27.1",
+				buildGoBinary:  "go",
+				buildGoRoot:    buildRoot,
+				buildGoVersion: "go1.27.1",
+			},
+		}
+	}
+	rebuildRunner := newRequestRunner("/bin", "/runtime/new", "/build/new")
+	rebuilt, err := rebuildRunner.bashPPEvalRequest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasEnv(rebuilt.Env, "GOROOT=/runtime/new") || !hasEnv(rebuilt.RuntimeEnv, "GOROOT=/runtime/new") || !hasEnv(rebuilt.BuildEnv, "GOROOT=/build/new") {
+		t.Fatalf("disconnected request reused stale environment: env=%v build=%v runtime=%v", rebuilt.Env, rebuilt.BuildEnv, rebuilt.RuntimeEnv)
+	}
+	if len(rebuilt.Env) == 0 || len(rebuilt.BuildEnv) == 0 || &rebuilt.Env[0] == &rebuilt.BuildEnv[0] {
+		t.Fatal("build env aliases request env storage")
+	}
+
+	otherRunner := newRequestRunner("/usr/bin", "/runtime/other", "/build/other")
+	other, err := otherRunner.bashPPEvalRequest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasEnv(other.Env, "PATH=/usr/bin") || !hasEnv(other.Env, "GOROOT=/runtime/other") || !hasEnv(other.BuildEnv, "GOROOT=/build/other") {
+		t.Fatalf("second runner has wrong environment: env=%v build=%v runtime=%v", other.Env, other.BuildEnv, other.RuntimeEnv)
+	}
+	if hasEnv(rebuildRunner.bashPPTools.requestEnv, "GOROOT=/runtime/other") || hasEnv(otherRunner.bashPPTools.requestEnv, "GOROOT=/runtime/new") {
+		t.Fatal("runner environment caches crossed content")
+	}
+	if &rebuildRunner.bashPPTools.requestEnv[0] == &otherRunner.bashPPTools.requestEnv[0] || &rebuildRunner.bashPPTools.buildEnv[0] == &otherRunner.bashPPTools.buildEnv[0] {
+		t.Fatal("runner environment caches share backing storage")
+	}
+
+	rebuildRunner.closeGoSourceBridge()
+	if rebuildRunner.bashPPTools.requestEnv != nil || rebuildRunner.bashPPTools.buildEnv != nil || rebuildRunner.bashPPTools.runtimeEnv != nil {
+		t.Fatal("close did not clear cached environments")
 	}
 }
