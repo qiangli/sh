@@ -59,11 +59,13 @@ func bashPPTransportOrigin(session *bashPPNativeSession, ptr *bashPPPointer) uin
 
 // bashPPTransportSliceOrigin gives overlapping interpreter slice views a
 // stable session-local backing identity and reports the view's element offset.
-// A view wholly contained in an already registered live region reuses it,
-// including shifted and full-slice-capacity-restricted views. A later wider
-// view receives a new id: enlarging the worker's old slice would relocate and
-// invalidate reflect.Values already selected from it. The old interpreter
-// view remains live and can be refreshed independently.
+// A view wholly contained in an already registered live region reuses its
+// tightest containing region, including shifted and capacity-restricted views.
+// Choosing the tightest match matters once a later wider view is registered:
+// map iteration order must not redirect a refresh away from earlier retained
+// storage. A later wider view receives a new id because enlarging the worker's
+// old slice would relocate and invalidate reflect.Values already selected
+// from it. The old interpreter view remains live and refreshable independently.
 func bashPPTransportSliceOrigin(session *bashPPNativeSession, view []any, meta *bashPPCollectionMeta, typ syntax.BashPPTypeExpr) (uint64, int) {
 	if session == nil || cap(view) == 0 {
 		return 0, 0
@@ -76,15 +78,25 @@ func bashPPTransportSliceOrigin(session *bashPPNativeSession, view []any, meta *
 	end := data + uintptr(cap(view))*size
 	session.mu.Lock()
 	defer session.mu.Unlock()
+	var bestID uint64
+	var bestStart uintptr
+	bestCapacity := 0
 	for id, kept := range session.sliceOriginKeep {
 		if kept == nil || cap(kept.view) == 0 {
 			continue
 		}
 		keptStart := reflect.ValueOf(kept.view).Pointer()
-		keptEnd := keptStart + uintptr(cap(kept.view))*size
-		if data >= keptStart && end <= keptEnd {
-			return id, int((data - keptStart) / size)
+		keptCapacity := cap(kept.view)
+		keptEnd := keptStart + uintptr(keptCapacity)*size
+		if data >= keptStart && end <= keptEnd &&
+			(bestID == 0 || keptCapacity < bestCapacity || keptCapacity == bestCapacity && id < bestID) {
+			bestID = id
+			bestStart = keptStart
+			bestCapacity = keptCapacity
 		}
+	}
+	if bestID != 0 {
+		return bestID, int((data - bestStart) / size)
 	}
 	if session.sliceOriginKeep == nil {
 		session.sliceOriginKeep = make(map[uint64]*bashPPNativeSlice)
