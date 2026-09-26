@@ -3,8 +3,10 @@
 package interp
 
 import (
-	"mvdan.cc/sh/v3/syntax"
+	"go/types"
 	"testing"
+
+	"mvdan.cc/sh/v3/syntax"
 )
 
 func TestS243AliasSignatureImportIdentity(t *testing.T) {
@@ -33,4 +35,69 @@ func TestS243AliasSignatureImportIdentity(t *testing.T) {
 	if r.bashPPAliasedSignatureEqual(fields("a.T"), nil, nil, fields("b.T")) {
 		t.Fatal("parameter and result roles merged")
 	}
+}
+
+func TestS281SignatureImportIdentity(t *testing.T) {
+	named := func(name string) *syntax.BashPPNamedType {
+		return &syntax.BashPPNamedType{Name: &syntax.Lit{Value: name}}
+	}
+	fields := func(name string) []*syntax.BashPPField {
+		return []*syntax.BashPPField{{FieldTypeExpr: named(name)}}
+	}
+	nativeType := func(path, pkgName, typeName string) types.Type {
+		pkg := types.NewPackage(path, pkgName)
+		obj := types.NewTypeName(0, pkg, typeName, nil)
+		return types.NewNamed(obj, types.NewStruct(nil, nil), nil)
+	}
+
+	t.Run("ambiguous declared qualifier refuses", func(t *testing.T) {
+		r := &Runner{
+			bashPPGoSource: true,
+			bashPPImports: map[string]string{
+				"first":  "example/a/p",
+				"second": "example/b/p",
+			},
+		}
+		r.bashPPTools.nativeTypes = map[string]types.Type{
+			"example/a/p.Token": nativeType("example/a/p", "p", "Token"),
+			"example/b/p.Token": nativeType("example/b/p", "p", "Token"),
+		}
+		if got := r.goSourceSignatureImportPath("p", "Token"); got != "" {
+			t.Fatalf("ambiguous declared qualifier resolved to %q", got)
+		}
+		if r.bashPPAliasedSignatureEqual(nil, fields("p.Token"), nil, fields("first.Token")) {
+			t.Fatal("ambiguous declared qualifier matched an imported package")
+		}
+	})
+
+	t.Run("declared package name from versioned path", func(t *testing.T) {
+		const path = "example/versioned/v2"
+		r := &Runner{
+			bashPPGoSource: true,
+			bashPPImports:  map[string]string{"synthetic": path},
+		}
+		r.bashPPTools.nativeTypes = map[string]types.Type{
+			path + ".Token": nativeType(path, "actualpkg", "Token"),
+		}
+		if got := r.goSourceSignatureImportPath("actualpkg", "Token"); got != path {
+			t.Fatalf("declared package identity got %q", got)
+		}
+	})
+
+	t.Run("renamed import and declared package name share identity", func(t *testing.T) {
+		const path = "example/versioned/v2"
+		r := &Runner{
+			bashPPGoSource: true,
+			bashPPImports:  map[string]string{"renamed": path},
+		}
+		r.bashPPTools.nativeTypes = map[string]types.Type{
+			path + ".Token": nativeType(path, "actualpkg", "Token"),
+		}
+		if got := r.goSourceSignatureImportPath("renamed", "Token"); got != path {
+			t.Fatalf("renamed import got %q", got)
+		}
+		if !r.bashPPAliasedSignatureEqual(nil, fields("renamed.Token"), nil, fields("actualpkg.Token")) {
+			t.Fatal("renamed import and declared package name did not match")
+		}
+	})
 }
