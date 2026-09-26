@@ -361,6 +361,11 @@ func synchronousFunctionCallback(req bashPPEvalRequest, q bashPPBridgeRequest) b
 		if q.Selector == "Run" && (q.Receiver.NativeType == "testing.M" || q.Receiver.NativeType == "*testing.M") {
 			return true
 		}
+		// Link.AllPos walks the inlining stack and invokes its visitor inline;
+		// the callback is neither retained nor launched from another goroutine.
+		if q.Selector == "AllPos" && (q.Receiver.NativeType == "cmd/internal/obj.Link" || q.Receiver.NativeType == "*cmd/internal/obj.Link") {
+			return true
+		}
 	}
 	if path == "" {
 		alias, name, ok := strings.Cut(q.Selector, ".")
