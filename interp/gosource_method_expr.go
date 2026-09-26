@@ -59,6 +59,18 @@ func (r *Runner) goSourceMethodExprType(x syntax.BashPPExpr) (syntax.BashPPTypeE
 	}
 }
 
+// goSourceMethodExprSelector reports whether a selector is a method
+// expression `T.M` or `(*T).M` used as a value rather than a bound method
+// value or a field read. The value paths route it to the forwarding closure
+// (goSourceCallableCell) instead of reading its `(*T)` operand as a pointer.
+func (r *Runner) goSourceMethodExprSelector(sel *syntax.BashPPSelectorExpr) bool {
+	if !r.bashPPGoSource || sel.MethodValue {
+		return false
+	}
+	_, ok := r.goSourceMethodExprType(sel.X)
+	return ok
+}
+
 // goSourceMethodExprCallee reports the method expression a call's callee
 // spells, in either of its two arrivals: `T.M(...)` comes as the two-part
 // name, `(*T).M(...)` as a computed callee.

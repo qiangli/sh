@@ -1020,8 +1020,11 @@ func (r *Runner) bashPPEvalElement(expr syntax.BashPPExpr, expected syntax.BashP
 		return value, meta, nil
 	}
 	// A method value — `Config{TearDown: res.teardown}` — is the closure
-	// the callable path below binds, not a field to read.
-	if sel, selected := expr.(*syntax.BashPPSelectorExpr); selected && !(sel.MethodValue && r.bashPPGoSource && !r.bashPPNativeExpr(sel.X)) {
+	// the callable path below binds, not a field to read. A method
+	// expression — `[]…{(*state).one}` naming a type's method — is likewise
+	// the forwarding closure that path binds; reading its `(*state)` operand
+	// as a value would ask for a pointer the type name is not.
+	if sel, selected := expr.(*syntax.BashPPSelectorExpr); selected && !(sel.MethodValue && r.bashPPGoSource && !r.bashPPNativeExpr(sel.X)) && !r.goSourceMethodExprSelector(sel) {
 		value, meta, err := r.bashPPReadExpr(expr)
 		if err != nil {
 			return nil, nil, err
