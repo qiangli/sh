@@ -1048,8 +1048,9 @@ func (r *Runner) bashPPCellForInterfaceExpr(expr syntax.BashPPExpr) (*bashPPCell
 	// A dereference is a typed value read, including aggregate pointees and
 	// unsafe blank views. Reuse the structured cell path so interface boxing
 	// preserves its dynamic type and value copy instead of forcing a scalar.
-	// A field read is a typed value read too: `s.F` boxes with the field's
-	// declared type, and an aggregate field keeps its structure.
+	// Field, index, and slice reads are typed value reads too: `s.F` boxes
+	// with the field's declared type, `Typ[0]` can box a pointer element, and
+	// aggregate children keep their structure.
 	if _, sel := expr.(*syntax.BashPPSelectorExpr); sel && r.bashPPGoSource {
 		cell, err := r.goSourceValueCell(expr)
 		if err != nil {
@@ -1059,6 +1060,19 @@ func (r *Runner) bashPPCellForInterfaceExpr(expr syntax.BashPPExpr) (*bashPPCell
 			return r.bashPPScalarInterfaceCell(expr)
 		}
 		return r.bashPPInterfaceSourceCell(cell, "field")
+	}
+	switch expr.(type) {
+	case *syntax.BashPPIndexExpr, *syntax.BashPPSliceExpr:
+		if r.bashPPGoSource {
+			cell, err := r.goSourceValueCell(expr)
+			if err != nil {
+				return nil, nil, err
+			}
+			if cell.vr.Kind != expand.Object && cell.interfaceValue == nil && cell.declType == nil && !cell.pointer {
+				return r.bashPPScalarInterfaceCell(expr)
+			}
+			return r.bashPPInterfaceSourceCell(cell, "indexed value")
+		}
 	}
 	if _, deref := expr.(*syntax.BashPPDerefExpr); deref && r.bashPPGoSource {
 		cell, err := r.goSourceValueCell(expr)
