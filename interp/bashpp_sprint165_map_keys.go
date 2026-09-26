@@ -75,6 +75,27 @@ func bashPPSprint165PointerMapValue(pointer *bashPPPointer) string {
 	return fmt.Sprintf("%p/%s", pointer.target, path.String())
 }
 
+func bashPPSprint165MapStorageName(value any, meta *bashPPCollectionMeta, nonce uint64) string {
+	if meta != nil && (meta.interfaceValue != nil || meta.channel != nil) {
+		return "#map" + strconv.FormatUint(nonce, 10)
+	}
+	switch value := value.(type) {
+	case string:
+		return value
+	case bool, int, int64, float64, complex64, complex128:
+		return fmt.Sprint(value)
+	case *bashPPBridgeValue:
+		if value != nil {
+			return "#map" + strconv.FormatUint(nonce, 10)
+		}
+	case *bashPPPointer:
+		return "#map" + strconv.FormatUint(nonce, 10)
+	case map[string]any, []any:
+		return "#map" + strconv.FormatUint(nonce, 10)
+	}
+	return fmt.Sprint(value)
+}
+
 func (r *Runner) bashPPSprint165MapKey(value any, meta *bashPPCollectionMeta, typ syntax.BashPPTypeExpr) (bashPPMapKey, bool, error) {
 	if meta != nil && meta.interfaceValue != nil {
 		iface := meta.interfaceValue
@@ -337,7 +358,8 @@ func (r *Runner) bashPPSprint165MapStore(mapping map[string]any, meta *bashPPCol
 		meta.mapNonce++
 		key.nonce = meta.mapNonce
 	}
-	storage := fmt.Sprint(value)
+	meta.mapNonce++
+	storage := bashPPSprint165MapStorageName(value, valueMeta, meta.mapNonce)
 	if _, exists := mapping[storage]; exists {
 		for {
 			meta.mapNonce++
