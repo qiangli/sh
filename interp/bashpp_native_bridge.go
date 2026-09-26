@@ -82,11 +82,13 @@ type bashPPBridgeValue struct {
 	Function     bool   `json:"function,omitempty"`
 	Origin       uint64 `json:"origin,omitempty"`
 	// Storage identifies interpreter-owned slice backing storage within this
-	// session. Capacity is the capacity of the transported view. The worker
-	// uses both only while refreshing an authenticated pointer origin; they
-	// preserve element aliases without turning ordinary ValueOf(value) copies
-	// into live views.
+	// session. Offset, Length and Capacity describe one view into that backing.
+	// The worker uses them only while refreshing authenticated storage; they
+	// preserve overlapping views and capacity-only elements without turning
+	// ordinary ValueOf(value) copies into live views.
 	Storage   uint64                       `json:"storage,omitempty"`
+	Offset    int                          `json:"offset,omitempty"`
+	Length    int                          `json:"length,omitempty"`
 	Capacity  int                          `json:"capacity,omitempty"`
 	Interface string                       `json:"interface,omitempty"`
 	Session   string                       `json:"session,omitempty"`
@@ -250,8 +252,7 @@ type bashPPNativeSession struct {
 	originIndex         map[bashPPOriginKey]uint64 // protected by mu; see bashPPTransportOrigin
 	originIndexed       int                        // len(origins) the index covers
 	originNext          uint64
-	sliceOriginIndex    map[uintptr]uint64 // protected by mu; backing-array start -> id
-	sliceOriginKeep     map[uint64][]any   // keeps registered backing arrays live
+	sliceOriginKeep     map[uint64]*bashPPNativeSlice // widest registered view, kept live
 	sliceOriginNext     uint64
 	start               sync.Mutex
 	write               sync.Mutex

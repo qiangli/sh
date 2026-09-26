@@ -48,6 +48,8 @@ type value struct {
  NativeTypeID uint64 `json:"native_type_id,omitempty"`
  Origin uint64 `json:"origin,omitempty"`
  Storage uint64 `json:"storage,omitempty"`
+ Offset int `json:"offset,omitempty"`
+ Length int `json:"length,omitempty"`
  Capacity int `json:"capacity,omitempty"`
  Interface string `json:"interface,omitempty"`
  Session string `json:"session,omitempty"`
@@ -400,6 +402,7 @@ func resolveType(name string) reflect.Type {
 // referrer decodes (bashpp_sprint165_runtime2_cycle.go).
 type decodeState struct{ pointees []uint64; originDepth int }
 func decode(v value, target reflect.Type)(reflect.Value,error){st:=&decodeState{};result,err:=decodeIn(st,v,target);if err==nil{originalPointers.Lock();ptrs:=make([]reflect.Value,len(st.pointees));for i,origin:=range st.pointees{ptrs[i]=originalPointers.values[origin]};originalPointers.Unlock();for i,origin:=range st.pointees{if ptrs[i].IsValid(){recordPointee(origin,ptrs[i])}}};return result,err}
+func decodeRetainedStorage(v value)error{st:=&decodeState{originDepth:1};_,err:=decodeIn(st,v,nil);return err}
 func decodeIn(st *decodeState, v value, target reflect.Type)(reflect.Value,error){
  var result reflect.Value
  if v.Kind=="nil" {
@@ -441,7 +444,7 @@ func decodeIn(st *decodeState, v value, target reflect.Type)(reflect.Value,error
   case "uint":n,e:=strconv.ParseUint(v.Text,10,64);if e!=nil{return result,e};switch typ.Kind(){case reflect.Uint,reflect.Uint8,reflect.Uint16,reflect.Uint32,reflect.Uint64,reflect.Uintptr:if result.OverflowUint(n){return result,fmt.Errorf("unsigned overflow")};result.SetUint(n);case reflect.Int,reflect.Int8,reflect.Int16,reflect.Int32,reflect.Int64:if n>1<<63-1||result.OverflowInt(int64(n)){return result,fmt.Errorf("integer overflow")};result.SetInt(int64(n));case reflect.Float32,reflect.Float64:result.SetFloat(float64(n));default:return result,fmt.Errorf("unsigned for %s",typ)}
   case "complex":n,e:=strconv.ParseComplex(v.Text,128);if e!=nil{return result,e};if typ.Kind()!=reflect.Complex64&&typ.Kind()!=reflect.Complex128{return result,fmt.Errorf("complex for %s",typ)};if result.OverflowComplex(n){return result,fmt.Errorf("complex overflow")};result.SetComplex(n)
   case "float":n,e:=strconv.ParseFloat(v.Text,64);if e!=nil{return result,e};switch typ.Kind(){case reflect.Float32,reflect.Float64:result.SetFloat(n);case reflect.Complex64,reflect.Complex128:result.SetComplex(complex(n,0));default:return result,fmt.Errorf("float for %s",typ)}
-  case "slice","array":if typ.Kind()==reflect.Slice {capacity:=v.Capacity;if capacity<len(v.Elements){capacity=len(v.Elements)};if st.originDepth>0&&v.Storage!=0{originalSlices.Lock();backing:=originalSlices.values[v.Storage];if !backing.IsValid()||backing.Type()!=typ||backing.Cap()<capacity{backing=reflect.MakeSlice(typ,capacity,capacity)};originalSlices.values[v.Storage]=backing.Slice3(0,capacity,capacity);originalSlices.Unlock();result=backing.Slice3(0,len(v.Elements),capacity)}else{result=reflect.MakeSlice(typ,len(v.Elements),capacity)}} else if typ.Kind()!=reflect.Array||typ.Len()!=len(v.Elements){return result,fmt.Errorf("invalid collection %s",typ)};for i,elem:=range v.Elements{item,e:=decodeIn(st,elem,typ.Elem());if e!=nil{return result,e};result.Index(i).Set(item)}
+  case "slice","array":if typ.Kind()==reflect.Slice {length:=v.Length;capacity:=v.Capacity;if capacity<len(v.Elements){capacity=len(v.Elements)};if length>capacity||v.Offset<0{return result,fmt.Errorf("invalid slice view")};if st.originDepth>0&&v.Storage!=0{needed:=v.Offset+capacity;originalSlices.Lock();backing:=originalSlices.values[v.Storage];if backing.IsValid()&&(backing.Type()!=typ||backing.Cap()<needed){originalSlices.Unlock();return result,fmt.Errorf("retained slice storage cannot expand without invalidating existing selections")};if !backing.IsValid(){backing=reflect.MakeSlice(typ,needed,needed)};originalSlices.values[v.Storage]=backing.Slice3(0,needed,needed);originalSlices.Unlock();result=backing.Slice3(v.Offset,v.Offset+length,v.Offset+capacity)}else{result=reflect.MakeSlice(typ,length,capacity)}} else if typ.Kind()!=reflect.Array||typ.Len()!=len(v.Elements){return result,fmt.Errorf("invalid collection %s",typ)};write:=result;if typ.Kind()==reflect.Slice&&len(v.Elements)>result.Len(){write=result.Slice3(0,len(v.Elements),result.Cap())};for i,elem:=range v.Elements{item,e:=decodeIn(st,elem,typ.Elem());if e!=nil{return result,e};write.Index(i).Set(item)}
   case "pointer":if typ.Kind()!=reflect.Pointer{return result,fmt.Errorf("pointer for %s",typ)}
    // A back-reference: a pointer already on the interpreter's transport path
    // (a cycle) arrives with its origin and no pointee, and binds to the
@@ -661,6 +664,10 @@ func dispatch(q request)(reply response){
  if q.Op=="origin-refresh" {
   if q.Receiver!=nil||len(q.Args)!=1||q.Args[0].Kind!="pointer"||q.Args[0].Origin==0{reply.Error="origin refresh requires one authenticated pointer";return}
   if _,err:=decode(q.Args[0],nil);err!=nil{reply.Error=err.Error()};return
+ }
+ if q.Op=="storage-refresh" {
+  if q.Receiver!=nil||len(q.Args)!=1||q.Args[0].Kind!="slice"||q.Args[0].Storage==0{reply.Error="storage refresh requires one authenticated slice";return}
+  if err:=decodeRetainedStorage(q.Args[0]);err!=nil{reply.Error=err.Error()};return
  }
  if q.Op=="channel-make" {
   typ:=resolveType(q.Selector);if typ==nil||typ.Kind()!=reflect.Chan||len(q.Args)!=1{reply.Error="channel make requires one capacity and a registered channel type";return}

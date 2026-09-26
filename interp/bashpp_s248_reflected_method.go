@@ -610,5 +610,38 @@ func (r *Runner) goSourceLocalReflectRefresh(ctx context.Context, req bashPPEval
 	_, err = req.Bridge.request(ctx, req, bashPPBridgeRequest{
 		Op: "origin-refresh", Args: []bashPPBridgeValue{arg},
 	})
+	if err != nil {
+		return err
+	}
+	lr.mu.Lock()
+	storage := uint64(0)
+	if lr.handle != nil {
+		storage = lr.handle.Storage
+	}
+	lr.mu.Unlock()
+	if storage == 0 || bridgeValueHasStorage(arg, storage) {
+		return nil
+	}
+	// The selected backing may have become detached from the containing slice
+	// header while remaining live through another interpreter alias. Refresh
+	// exactly that retained backing; never replay the selection or another
+	// pointer origin.
+	req.Bridge.mu.Lock()
+	kept := req.Bridge.sliceOriginKeep[storage]
+	var retainedView bashPPNativeSlice
+	if kept != nil {
+		retainedView = *kept
+	}
+	req.Bridge.mu.Unlock()
+	if kept == nil {
+		return fmt.Errorf("gosource: reflected slice storage identity expired")
+	}
+	retained, err := r.bashPPBridgeCollection(retainedView.view, retainedView.meta, retainedView.typ)
+	if err != nil {
+		return err
+	}
+	_, err = req.Bridge.request(ctx, req, bashPPBridgeRequest{
+		Op: "storage-refresh", Args: []bashPPBridgeValue{retained},
+	})
 	return err
 }

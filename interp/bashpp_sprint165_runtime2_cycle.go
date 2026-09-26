@@ -57,33 +57,42 @@ func bashPPTransportOrigin(session *bashPPNativeSession, ptr *bashPPPointer) uin
 	return session.originNext
 }
 
-// bashPPTransportSliceOrigin gives an interpreter slice backing array a stable
-// session-local identity. A reslice starting at the same element retains the
-// identity; a replacement header naming a different array does not. Keeping
-// the view in the session prevents address reuse while a native reflect.Value
-// can still retain an element selected from that backing array.
-func bashPPTransportSliceOrigin(session *bashPPNativeSession, view []any) uint64 {
+// bashPPTransportSliceOrigin gives overlapping interpreter slice views a
+// stable session-local backing identity and reports the view's element offset.
+// A view wholly contained in an already registered live region reuses it,
+// including shifted and full-slice-capacity-restricted views. A later wider
+// view receives a new id: enlarging the worker's old slice would relocate and
+// invalidate reflect.Values already selected from it. The old interpreter
+// view remains live and can be refreshed independently.
+func bashPPTransportSliceOrigin(session *bashPPNativeSession, view []any, meta *bashPPCollectionMeta, typ syntax.BashPPTypeExpr) (uint64, int) {
 	if session == nil || cap(view) == 0 {
-		return 0
+		return 0, 0
 	}
 	data := reflect.ValueOf(view).Pointer()
 	if data == 0 {
-		return 0
+		return 0, 0
 	}
+	size := reflect.TypeFor[any]().Size()
+	end := data + uintptr(cap(view))*size
 	session.mu.Lock()
 	defer session.mu.Unlock()
-	if id := session.sliceOriginIndex[data]; id != 0 {
-		return id
+	for id, kept := range session.sliceOriginKeep {
+		if kept == nil || cap(kept.view) == 0 {
+			continue
+		}
+		keptStart := reflect.ValueOf(kept.view).Pointer()
+		keptEnd := keptStart + uintptr(cap(kept.view))*size
+		if data >= keptStart && end <= keptEnd {
+			return id, int((data - keptStart) / size)
+		}
 	}
-	if session.sliceOriginIndex == nil {
-		session.sliceOriginIndex = make(map[uintptr]uint64)
-		session.sliceOriginKeep = make(map[uint64][]any)
+	if session.sliceOriginKeep == nil {
+		session.sliceOriginKeep = make(map[uint64]*bashPPNativeSlice)
 	}
 	session.sliceOriginNext++
 	id := session.sliceOriginNext
-	session.sliceOriginIndex[data] = id
-	session.sliceOriginKeep[id] = view[:cap(view)]
-	return id
+	session.sliceOriginKeep[id] = &bashPPNativeSlice{view: view[:cap(view)], meta: meta, typ: typ}
+	return id, 0
 }
 
 // bashPPOriginKey is the storage identity a transport origin names: the root

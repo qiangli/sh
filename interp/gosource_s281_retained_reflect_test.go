@@ -71,3 +71,23 @@ func main() {
 		t.Fatalf("expected detached-write refusal, got err=%v stderr=%q", err, stderr)
 	}
 }
+
+func TestS281RetainedReflectSliceBackingSemantics(t *testing.T) {
+	for name, main := range map[string]string{
+		"detached original alias write": `n := &node{Body: []int{1, 2}}; old := n.Body; v := reflect.ValueOf(n).Elem().FieldByName("Body").Index(0); n.Body = []int{8}; old[0] = 9; fmt.Println(v.Int())`,
+		"shifted overlapping alias":     `n := &node{Body: []int{1, 2}}; v := reflect.ValueOf(n).Elem().FieldByName("Body").Index(1); n.Body = n.Body[1:]; n.Body[0] = 9; fmt.Println(v.Int())`,
+		"capacity tail reslice":         `n := &node{Body: append(make([]int, 0, 3), 1, 2, 3)[:1]}; v := reflect.ValueOf(n).Elem().FieldByName("Body"); fmt.Println(v.Slice(0, 3).Index(2).Int())`,
+		"restricted capacity alias":     `n := &node{Body: []int{1, 2}}; v := reflect.ValueOf(n).Elem().FieldByName("Body").Index(0); n.Body = n.Body[:1:1]; n.Body[0] = 9; fmt.Println(v.Int())`,
+		"widened earlier alias":         `whole := []int{1, 2, 3}; n := &node{Body: whole[1:]}; v := reflect.ValueOf(n).Elem().FieldByName("Body").Index(0); n.Body = whole; whole[1] = 9; fmt.Println(v.Int())`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			source := `package main
+import ("fmt"; "reflect")
+type node struct { Body []int }
+func (n *node) String() string { return "node" }
+func main() { ` + main + ` }
+`
+			differGoSource(t, source, nil, "")
+		})
+	}
+}

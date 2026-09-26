@@ -1017,6 +1017,8 @@ func (r *Runner) bashPPBridgeCollection(value any, meta *bashPPCollectionMeta, t
 		return r.bashPPBridgePointerValue(value)
 	case []any:
 		result.Kind = "slice"
+		visibleLength := bashPPSequenceLen(meta, value)
+		viewCapacity := bashPPSequenceCap(meta, value)
 		inferredArray := false
 		if meta != nil {
 			result.Kind = meta.kind
@@ -1043,9 +1045,15 @@ func (r *Runner) bashPPBridgeCollection(value any, meta *bashPPCollectionMeta, t
 			result.Type = "[" + strconv.Itoa(len(value)) + "]" + r.bashPPBridgeTypeIdentity(collection.Element)
 		}
 		if r.bashPPGoSource && result.Kind == "slice" {
-			result.sliceView = &bashPPNativeSlice{view: value, meta: meta, typ: typ}
-			result.Storage = bashPPTransportSliceOrigin(r.bashPPTools.bridge, value)
-			result.Capacity = cap(value)
+			if visibleLength < 0 || viewCapacity < visibleLength || viewCapacity > cap(value) {
+				return result, fmt.Errorf("gosource: invalid interpreter slice shape len=%d cap=%d", visibleLength, viewCapacity)
+			}
+			view := value[:visibleLength:viewCapacity]
+			result.sliceView = &bashPPNativeSlice{view: view, meta: meta, typ: typ}
+			result.Storage, result.Offset = bashPPTransportSliceOrigin(r.bashPPTools.bridge, view, meta, typ)
+			result.Length = visibleLength
+			result.Capacity = viewCapacity
+			value = view[:viewCapacity]
 		}
 		for i, item := range value {
 			var child *bashPPCollectionMeta
@@ -1055,6 +1063,11 @@ func (r *Runner) bashPPBridgeCollection(value any, meta *bashPPCollectionMeta, t
 			converted, err := r.bashPPBridgeCollection(item, child, collection.Element)
 			if err != nil {
 				return result, err
+			}
+			if converted.Kind == "nil" && result.Kind == "slice" {
+				if zero, ok := bridgeZeroScalar(bashPPTypeText(r.bashPPUnderlyingType(collection.Element))); ok {
+					converted = zero
+				}
 			}
 			result.Elements = append(result.Elements, converted)
 		}
