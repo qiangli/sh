@@ -72,6 +72,40 @@ func main() {
 }
 `
 
+const s281ReexecArgv0Source = `package main
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+)
+func main() {
+	name := filepath.Base(os.Args[0])
+	if len(os.Args) == 2 && os.Args[1] == "payload" {
+		fmt.Println("replayed-argv0", name)
+		return
+	}
+	if len(os.Args) == 2 && os.Args[1] == "-V=full" {
+		fmt.Println(name, "version go1.27.1")
+		return
+	}
+	launcher, err := os.Executable()
+	if err != nil { panic(err) }
+	renamed := os.Getenv("BASHPP_S281_RENAMED_TOOL")
+	data, err := os.ReadFile(launcher)
+	if err != nil { panic(err) }
+	if err := os.WriteFile(renamed, data, 0755); err != nil { panic(err) }
+	fmt.Println("copied-launcher", renamed)
+}
+`
+
+const s281Argv0Source = `package main
+import (
+	"fmt"
+	"os"
+)
+func main() { fmt.Println(os.Args[0]) }
+`
+
 func TestGoSourceS281SelfReexecLauncher(t *testing.T) {
 	args := os.Args
 	for len(args) > 0 && args[0] != "--" {
@@ -91,6 +125,104 @@ func TestGoSourceS281SelfReexecLauncher(t *testing.T) {
 	got := runS281ReexecProgram(t, nil, nil, []string{self, "-test.run=^TestGoSourceS281SelfReexecLauncher$", "--"})
 	if !strings.Contains(got, "interpreted-child payload\n") {
 		t.Fatalf("reexec output = %q, want interpreted child marker", got)
+	}
+}
+
+// TestGoSourceS281SelfReexecLauncherArgv0 copies the generated launcher to the
+// name of a replacement tool. Both a normal child replay and the Go command's
+// -V=full probe must observe that invoked name, not the reconstructed source
+// filename or the host test binary.
+func TestGoSourceS281SelfReexecLauncherArgv0(t *testing.T) {
+	args := os.Args
+	for len(args) > 0 && args[0] != "--" {
+		args = args[1:]
+	}
+	if len(args) == 2 && (args[1] == "payload" || args[1] == "-V=full") {
+		self, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		plan := []string{self, "-test.run=^TestGoSourceS281SelfReexecLauncherArgv0$", "--"}
+		runS281ReexecSourceProgram(t, s281ReexecArgv0Source, os.Stdout, args[1:], plan)
+		return
+	}
+	name := "renamed-compile-tool"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	renamed := filepath.Join(t.TempDir(), name)
+	t.Setenv("BASHPP_S281_RENAMED_TOOL", renamed)
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	launcherOutput := runS281ReexecSourceProgram(t, s281ReexecArgv0Source, nil, nil,
+		[]string{self, "-test.run=^TestGoSourceS281SelfReexecLauncherArgv0$", "--"})
+	if want := "copied-launcher " + renamed + "\n"; launcherOutput != want {
+		t.Fatalf("launcher output = %q, want %q", launcherOutput, want)
+	}
+	command := exec.Command(renamed, "payload")
+	command.Env = s281WithoutEnv(os.Environ(), "GOSH_PROG")
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("replay: %v: %s", err, output)
+	}
+	if want := "replayed-argv0 " + name + "\n"; !strings.Contains(string(output), want) {
+		t.Fatalf("reexec output = %q, want %q", output, want)
+	}
+	command = exec.Command(renamed, "-V=full")
+	command.Env = s281WithoutEnv(os.Environ(), "GOSH_PROG")
+	output, err = command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("version probe: %v: %s", err, output)
+	}
+	if want := name + " version go1.27.1\n"; !strings.Contains(string(output), want) {
+		t.Fatalf("version probe output = %q, want %q", output, want)
+	}
+}
+
+func s281WithoutEnv(env []string, name string) []string {
+	prefix := name + "="
+	out := make([]string, 0, len(env))
+	for _, entry := range env {
+		if !strings.HasPrefix(entry, prefix) {
+			out = append(out, entry)
+		}
+	}
+	return out
+}
+
+func TestGoSourceS281ReexecArgv0Selection(t *testing.T) {
+	t.Setenv("BASHPP_REEXEC_ARGV0", "process-global-replay")
+	withoutReplay := make([]string, 0, len(os.Environ()))
+	for _, entry := range os.Environ() {
+		if !strings.HasPrefix(entry, "BASHPP_REEXEC_ARGV0=") {
+			withoutReplay = append(withoutReplay, entry)
+		}
+	}
+	withReplay := append(append([]string(nil), withoutReplay...), "BASHPP_REEXEC_ARGV0=runner-replay")
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := []string{self, "-test.run=^$", "--"}
+	for _, tc := range []struct {
+		name string
+		plan []string
+		opts []interp.RunnerOption
+		want string
+	}{
+		{name: "default source filename", want: "reexec.go"},
+		{name: "explicit argv0", opts: []interp.RunnerOption{interp.WithArgv0("configured-tool")}, want: "configured-tool"},
+		{name: "process environment does not leak", plan: plan, opts: []interp.RunnerOption{interp.Env(expand.ListEnviron(withoutReplay...)), interp.WithArgv0("configured-tool")}, want: "configured-tool"},
+		{name: "runner replay overrides configured argv0", plan: plan, opts: []interp.RunnerOption{interp.Env(expand.ListEnviron(withReplay...)), interp.WithArgv0("configured-tool")}, want: "runner-replay"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := runS281ReexecSourceProgram(t, s281Argv0Source, nil, nil, tc.plan, tc.opts...)
+			if got != tc.want+"\n" {
+				t.Fatalf("os.Args[0] = %q, want %q", strings.TrimSpace(got), tc.want)
+			}
+		})
 	}
 }
 
@@ -291,7 +423,7 @@ func runS281ReexecProgram(t *testing.T, stdout io.Writer, args, plan []string) s
 	return runS281ReexecSourceProgram(t, s281ReexecSource, stdout, args, plan)
 }
 
-func runS281ReexecSourceProgram(t *testing.T, source string, stdout io.Writer, args, plan []string) string {
+func runS281ReexecSourceProgram(t *testing.T, source string, stdout io.Writer, args, plan []string, extra ...interp.RunnerOption) string {
 	t.Helper()
 	dir := t.TempDir()
 	program, err := gosource.Parse(strings.NewReader(source), "reexec.go", gosource.Options{RunMain: true, Importer: lower.NewModuleImporter(dir)})
@@ -313,6 +445,7 @@ func runS281ReexecSourceProgram(t *testing.T, source string, stdout io.Writer, a
 	if plan != nil {
 		options = append(options, interp.GoSourceReexecPlan(plan...))
 	}
+	options = append(options, extra...)
 	runner, err := interp.New(options...)
 	if err != nil {
 		t.Fatal(err)

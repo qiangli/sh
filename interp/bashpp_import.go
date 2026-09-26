@@ -690,7 +690,7 @@ func (r *Runner) bashPPEvalRequest() (bashPPEvalRequest, error) {
 	if err != nil {
 		return bashPPEvalRequest{}, err
 	}
-	return bashPPEvalRequest{CallbackOwner: r, CallbackDepth: r.bashPPTools.callbackDepth, PanicOnFault: r.bashPPTools.panicOnFault, LocalTypes: r.bashPPLocalTypeDescriptors(), Instances: r.bashPPImportedInstances(), GenericTypes: r.bashPPGenericBridgeTypes(), Selectors: r.bashPPReferencedSelectors(), RuntimeEnv: runtimeEnv, ModuleDir: moduleDir, ImportPath: importPath, TestMain: testMain, Argv: append([]string{r.filename}, r.Params...), Bridge: r.bashPPTools.bridge, Go: r.bashPPTools.goBinary, BuildGo: r.bashPPTools.buildGoBinary, BuildEnv: buildEnv, Dir: r.Dir, Env: env, Stdin: r.stdin,
+	return bashPPEvalRequest{CallbackOwner: r, CallbackDepth: r.bashPPTools.callbackDepth, PanicOnFault: r.bashPPTools.panicOnFault, LocalTypes: r.bashPPLocalTypeDescriptors(), Instances: r.bashPPImportedInstances(), GenericTypes: r.bashPPGenericBridgeTypes(), Selectors: r.bashPPReferencedSelectors(), RuntimeEnv: runtimeEnv, ModuleDir: moduleDir, ImportPath: importPath, TestMain: testMain, Argv: append([]string{r.goSourceReexecArgv0()}, r.Params...), Bridge: r.bashPPTools.bridge, Go: r.bashPPTools.goBinary, BuildGo: r.bashPPTools.buildGoBinary, BuildEnv: buildEnv, Dir: r.Dir, Env: env, Stdin: r.stdin,
 		Stdout: r.bashPPWriter(r.stdout), Stderr: r.bashPPWriter(r.stderr), Imports: r.bashPPImports, SourceDir: sourceDir, SourceFile: sourceFile, EmbedDecls: embedDecls, CompanionFiles: companionFiles, NativeFuncs: nativeFuncs, MappedCompanions: mappedCompanions, CompanionTrampolines: trampolines, CompanionUnmappedFrames: unmappedFrames, RootFiles: r.bashPPGoSourceRootFiles(), CgoPackages: r.bashPPGoSourceCgoPackages()}, nil
 }
 

@@ -48,6 +48,29 @@ func GoSourceReexecPlan(plan ...string) RunnerOption {
 	}
 }
 
+// reexecArgv0Env carries the executable identity (argv[0]) a reexec launcher was
+// invoked under, so a replayed program keeps that identity across interpreter
+// re-entry instead of falling back to the reconstructed source name.
+const reexecArgv0Env = "BASHPP_REEXEC_ARGV0"
+
+// goSourceReexecArgv0 reports the argv[0] the Go-source program should observe.
+// A reexec launcher supplies its invoked identity through the Runner's own
+// environment; consulting the process environment here would leak one replay's
+// identity into unrelated Runners hosted by the same process. An explicitly
+// configured argv0 remains authoritative for ordinary runs, while the historic
+// default remains the source filename.
+func (r *Runner) goSourceReexecArgv0() string {
+	if len(r.bashPPTools.reexecPlan) != 0 {
+		if vr := r.lookupVar(reexecArgv0Env); vr.IsSet() && vr.String() != "" {
+			return vr.String()
+		}
+	}
+	if r.origArgv0 != "" {
+		return r.origArgv0
+	}
+	return r.filename
+}
+
 func (r *Runner) goSourceExecutableCall(ctx context.Context, call *syntax.BashPPCall) ([]bashPPBridgeValue, bool, error) {
 	if !r.bashPPGoSource || len(r.bashPPTools.reexecPlan) == 0 || call == nil || call.Ellipsis.IsValid() || len(call.Args) != 0 || len(call.ArgExprs) != 0 {
 		return nil, false, nil
@@ -122,9 +145,13 @@ func command(plan []string) *exec.Cmd {
 	cmd := exec.Command(plan[0], args...)
 	for _, entry := range os.Environ() {
 		name, _, _ := strings.Cut(entry, "=")
-		if !strings.EqualFold(name, "BASHPP_GO") { cmd.Env = append(cmd.Env, entry) }
+		if !strings.EqualFold(name, "BASHPP_GO") && !strings.EqualFold(name, "BASHPP_REEXEC_ARGV0") { cmd.Env = append(cmd.Env, entry) }
 	}
 	cmd.Env = append(cmd.Env, "BASHPP_GO=" + ` + quotedBuildGo + `)
+	// Propagate the launcher's own invoked argv[0] so the replayed program keeps
+	// the executable identity it was invoked under (e.g. go tool compile), rather
+	// than the interpreter's reconstructed source name. See goSourceReexecArgv0.
+	cmd.Env = append(cmd.Env, "BASHPP_REEXEC_ARGV0=" + os.Args[0])
 	return cmd
 }
 func run(plan []string, stdin *os.File, stdout *os.File) int {
