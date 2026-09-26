@@ -1914,7 +1914,7 @@ func (r *Runner) bashPPConvertScalar(typ string, x bashPPScalar) (bashPPScalar, 
 			return bashPPScalar{value: value, typ: typ, runtime: x.runtime, negativeZero: x.negativeZero && constant.Sign(value) == 0}, nil
 		}
 	default:
-		if converted, ok, err := r.bashPPConvertGoSourceStringToUint64(typ, x); ok {
+		if converted, ok, err := r.bashPPConvertGoSourceStringCarrier(typ, x); ok {
 			return converted, err
 		}
 		if bashPPIntegerType(typ) && (x.value.Kind() == constant.Int || x.value.Kind() == constant.Float) {
@@ -2056,8 +2056,8 @@ func bashPPIntegerBounds(bits int, signed bool) (constant.Value, constant.Value)
 	return makeValue(minimum), makeValue(maximum)
 }
 
-func (r *Runner) bashPPConvertGoSourceStringToUint64(typ string, x bashPPScalar) (bashPPScalar, bool, error) {
-	if !r.bashPPGoSource || !x.runtime || typ != "uint64" || x.value.Kind() != constant.String {
+func (r *Runner) bashPPConvertGoSourceStringCarrier(typ string, x bashPPScalar) (bashPPScalar, bool, error) {
+	if !r.bashPPGoSource || !x.runtime || !bashPPIntegerType(typ) || x.value.Kind() != constant.String {
 		return bashPPScalar{}, false, nil
 	}
 	source, ok := r.bashPPGoSourceStringCarrierType(x.typ)
@@ -2094,6 +2094,14 @@ func (r *Runner) bashPPGoSourceStringCarrierType(typ string) (string, bool) {
 	named := &syntax.BashPPNamedType{Name: &syntax.Lit{Value: typ}}
 	shape, ok := r.bashPPUnderlyingType(named).(*syntax.BashPPNamedType)
 	if !ok || shape == named || shape.Name == nil || !bashPPBuiltinType(shape.Name.Value) {
+		if source, imported := r.goSourceImportedScalarUnderlying(typ); imported {
+			return source, true
+		}
+		if ok && shape != named && shape.Name != nil {
+			if source, imported := r.goSourceImportedScalarUnderlying(shape.Name.Value); imported {
+				return source, true
+			}
+		}
 		return "", false
 	}
 	return shape.Name.Value, true

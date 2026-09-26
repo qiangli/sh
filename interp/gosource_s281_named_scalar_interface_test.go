@@ -57,6 +57,66 @@ func main() {
 	differGoSource(t, source, nil, "")
 }
 
+func TestS281ImportedNamedScalarInterfaceStoredInStructSlice(t *testing.T) {
+	out, stderr, err := runGoSourcePackages(t, `package main
+
+import "test/p"
+
+func main() {
+	p.Run()
+}
+`, map[string]string{"a.go": `package p
+
+import (
+	"fmt"
+	"go/token"
+)
+
+type atPos token.Pos
+
+func (p atPos) Pos() token.Pos { return token.Pos(p) }
+
+type positioner interface {
+	Pos() token.Pos
+}
+
+type desc struct {
+	posn positioner
+	msg  string
+}
+
+type errList struct {
+	desc []desc
+}
+
+func (e *errList) addf(at positioner, msg string) {
+	e.desc = append(e.desc, desc{at, msg})
+}
+
+func (e *errList) msg() string {
+	out := ""
+	for i := range e.desc {
+		p := &e.desc[i]
+		if i > 0 && p.posn.Pos().IsValid() {
+			out += fmt.Sprintf("%d:", p.posn.Pos())
+		}
+		out += p.msg
+	}
+	return out
+}
+
+func Run() {
+	var e errList
+	e.addf(atPos(0), "first")
+	e.addf(atPos(7), " second")
+	fmt.Println(e.msg())
+}
+`})
+	if err != nil || out != "first7: second\n" {
+		t.Fatalf("err=%v stdout=%q stderr=%q", err, out, stderr)
+	}
+}
+
 func TestS281ComputedFunctionReceiverEvaluatedOnce(t *testing.T) {
 	differGoSource(t, `package main
 import "fmt"

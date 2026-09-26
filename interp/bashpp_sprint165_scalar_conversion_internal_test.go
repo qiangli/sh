@@ -6,6 +6,7 @@ package interp
 import (
 	"go/constant"
 	"go/token"
+	"go/types"
 	"os"
 	"path/filepath"
 	"strings"
@@ -37,7 +38,7 @@ func TestSprint165StringToUint64NegativeSet(t *testing.T) {
 		}
 		name, sourceType, text, want := fields[0], fields[1], fields[2], fields[3]
 		t.Run(name, func(t *testing.T) {
-			got, handled, err := (&Runner{bashPPGoSource: true}).bashPPConvertGoSourceStringToUint64("uint64", bashPPScalar{
+			got, handled, err := (&Runner{bashPPGoSource: true}).bashPPConvertGoSourceStringCarrier("uint64", bashPPScalar{
 				value:   constant.MakeString(text),
 				typ:     sourceType,
 				runtime: true,
@@ -52,5 +53,62 @@ func TestSprint165StringToUint64NegativeSet(t *testing.T) {
 				t.Fatalf("handled=%v err=%v, want %q", handled, err, want)
 			}
 		})
+	}
+}
+
+func TestS281ImportedScalarStringCarrierIdentity(t *testing.T) {
+	named := func(path, packageName, typeName string, underlying types.Type) types.Type {
+		pkg := types.NewPackage(path, packageName)
+		obj := types.NewTypeName(token.NoPos, pkg, typeName, nil)
+		return types.NewNamed(obj, underlying, nil)
+	}
+	runner := func(imports map[string]string, nativeTypes map[string]types.Type) *Runner {
+		return &Runner{
+			bashPPGoSource: true,
+			bashPPImports:  imports,
+			bashPPTools:    bashPPToolchain{nativeTypes: nativeTypes},
+		}
+	}
+	carrier := func(typ, text string) bashPPScalar {
+		return bashPPScalar{value: constant.MakeString(text), typ: typ, runtime: true}
+	}
+
+	tokenPos := named("go/token", "token", "Pos", types.Typ[types.Int])
+	r := runner(map[string]string{"tok": "go/token"}, map[string]types.Type{"go/token.Pos": tokenPos})
+	got, handled, err := r.bashPPConvertGoSourceStringCarrier("uint64", carrier("token.Pos", "7"))
+	if err != nil || !handled || got.value == nil || constant.ToInt(got.value).String() != "7" {
+		t.Fatalf("token.Pos carrier handled=%v got=%v err=%v", handled, got.value, err)
+	}
+
+	got, handled, err = r.bashPPConvertGoSourceStringCarrier("int", carrier("float64", "3.75"))
+	if err != nil || !handled || got.value == nil || constant.ToInt(got.value).String() != "3" {
+		t.Fatalf("float carrier to integer handled=%v got=%v err=%v", handled, got.value, err)
+	}
+
+	got, handled, err = r.bashPPConvertGoSourceStringCarrier("float64", carrier("float64", "-0"))
+	if handled || err != nil || got.value != nil {
+		t.Fatalf("float carrier to float handled=%v got=%v err=%v, want unhandled", handled, got.value, err)
+	}
+
+	for _, typ := range []string{"*token.Pos", "string"} {
+		got, handled, err := r.bashPPConvertGoSourceStringCarrier("uint64", carrier(typ, "7"))
+		if handled || err != nil || got.value != nil {
+			t.Fatalf("%s carrier handled=%v got=%v err=%v, want refused", typ, handled, got.value, err)
+		}
+	}
+
+	invalid := runner(map[string]string{"token": "go/token"}, map[string]types.Type{
+		"example.com/not-token.Pos": named("example.com/not-token", "token", "Pos", types.Typ[types.Int]),
+	})
+	if _, handled, err := invalid.bashPPConvertGoSourceStringCarrier("uint64", carrier("token.Pos", "7")); handled || err != nil {
+		t.Fatalf("invalid package identity handled=%v err=%v, want refused", handled, err)
+	}
+
+	ambiguous := runner(map[string]string{"one": "example.com/one/token", "two": "example.com/two/token"}, map[string]types.Type{
+		"example.com/one/token.Pos": named("example.com/one/token", "token", "Pos", types.Typ[types.Int]),
+		"example.com/two/token.Pos": named("example.com/two/token", "token", "Pos", types.Typ[types.Int]),
+	})
+	if _, handled, err := ambiguous.bashPPConvertGoSourceStringCarrier("uint64", carrier("token.Pos", "7")); handled || err != nil {
+		t.Fatalf("ambiguous package name handled=%v err=%v, want refused", handled, err)
 	}
 }
