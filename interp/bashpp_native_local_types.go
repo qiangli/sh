@@ -32,6 +32,7 @@ import (
 type bashPPLocalMethod struct {
 	Name              string
 	Pointer           bool
+	Variadic          bool
 	ReaderLocalBuffer bool
 	Params            []string
 	Results           []string
@@ -957,7 +958,7 @@ func (l *bashPPLocalTypeSet) mirrored(decls []*syntax.BashPPFuncDecl) []bashPPLo
 		methods = append(methods, bashPPLocalMethod{Name: "Read", Pointer: decl.Receiver.Pointer, ReaderLocalBuffer: bashPPReaderLocalBufferProof(decl)})
 		break
 	}
-	// Every remaining method with an expressible non-variadic signature is
+	// Every remaining method with an expressible signature is
 	// mirrored by the generalised stub — exported or not, any result arity —
 	// so the materialised type presents the original method set to reflect
 	// and the dependency can invoke any of them through the callback. Each
@@ -977,36 +978,45 @@ func (l *bashPPLocalTypeSet) mirrored(decls []*syntax.BashPPFuncDecl) []bashPPLo
 			continue
 		}
 		l.refs = map[string]bool{}
-		params, okParams := l.fieldTypes(decl.Params)
-		results, okResults := l.fieldTypes(decl.Results)
+		params, variadic, okParams := l.methodFieldTypes(decl.Params, true)
+		results, _, okResults := l.methodFieldTypes(decl.Results, false)
 		refs := l.refs
 		l.refs = shared
 		if !okParams || !okResults {
 			continue
 		}
 		seen[decl.Name.Value] = true
-		methods = append(methods, bashPPLocalMethod{Name: decl.Name.Value, Pointer: decl.Receiver.Pointer, Params: params, Results: results, General: true, refs: refs})
+		methods = append(methods, bashPPLocalMethod{Name: decl.Name.Value, Pointer: decl.Receiver.Pointer, Variadic: variadic, Params: params, Results: results, General: true, refs: refs})
 	}
 	return methods
 }
 
-// fieldTypes renders a parameter or result list one entry per declared value.
-// It reports false for variadic or inexpressible entries.
-func (l *bashPPLocalTypeSet) fieldTypes(fields []*syntax.BashPPField) ([]string, bool) {
+// methodFieldTypes renders a parameter or result list one entry per declared
+// value. A final variadic parameter is represented by its element type and the
+// separate variadic result; generated stubs receive it as Go's one []T value.
+func (l *bashPPLocalTypeSet) methodFieldTypes(fields []*syntax.BashPPField, allowVariadic bool) ([]string, bool, bool) {
 	var out []string
-	for _, field := range fields {
+	variadic := false
+	for i, field := range fields {
 		if field.Variadic() {
-			return nil, false
+			if !allowVariadic || variadic || i != len(fields)-1 || len(field.Names) > 1 {
+				return nil, false, false
+			}
+			variadic = true
 		}
 		text, ok := l.source(field.FieldTypeExpr, 0)
 		if !ok {
-			return nil, false
+			return nil, false, false
 		}
-		for range max(len(field.Names), 1) {
+		count := max(len(field.Names), 1)
+		if field.Variadic() {
+			count = 1
+		}
+		for range count {
 			out = append(out, text)
 		}
 	}
-	return out, true
+	return out, variadic, true
 }
 
 // importedType reports whether typ names exactly the symbol path.name through
@@ -1402,7 +1412,11 @@ func bashPPLocalMethodGo(typeName, receiver string, method bashPPLocalMethod) st
 	params := make([]string, len(method.Params))
 	encoded := make([]string, len(method.Params))
 	for i, typ := range method.Params {
-		params[i] = fmt.Sprintf("bpparg%d %s", i, typ)
+		if method.Variadic && i == len(method.Params)-1 {
+			params[i] = fmt.Sprintf("bpparg%d ...%s", i, typ)
+		} else {
+			params[i] = fmt.Sprintf("bpparg%d %s", i, typ)
+		}
 		encoded[i] = fmt.Sprintf("encode(reflect.ValueOf(bpparg%d))", i)
 	}
 	results := strings.Join(method.Results, ", ")
@@ -1465,11 +1479,11 @@ func bashPPLocalTypeIdentity(locals []bashPPLocalType) string {
 	for _, local := range locals {
 		fmt.Fprintf(&b, "%s|%s|%s|%s|%t|%s|%s|%s|", local.Name, local.PublicType, local.GenericDecl, local.Decl, local.Alias, local.WireType, local.Callback, local.Nest)
 		for _, method := range local.GenericMethods {
-			fmt.Fprintf(&b, "%s:%s:%t:%t:%t:%v:%v,", method.Receiver, method.Name, method.Pointer, method.ReaderLocalBuffer, method.General, method.Params, method.Results)
+			fmt.Fprintf(&b, "%s:%s:%t:%t:%t:%t:%v:%v,", method.Receiver, method.Name, method.Pointer, method.Variadic, method.ReaderLocalBuffer, method.General, method.Params, method.Results)
 		}
 		fmt.Fprintf(&b, "%v|", local.Identity)
 		for _, method := range local.Methods {
-			fmt.Fprintf(&b, "%s:%t:%t:%t:%v:%v,", method.Name, method.Pointer, method.ReaderLocalBuffer, method.General, method.Params, method.Results)
+			fmt.Fprintf(&b, "%s:%t:%t:%t:%t:%v:%v,", method.Name, method.Pointer, method.Variadic, method.ReaderLocalBuffer, method.General, method.Params, method.Results)
 		}
 		fmt.Fprintf(&b, "%v;", local.OmittedMethods)
 	}
