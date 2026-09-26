@@ -20,8 +20,8 @@ package interp
 //   - reflect.ValueOf(p), p an original pointer to a non-generic original
 //     type that declares methods, answers a lazy reflect.Value: a handle
 //     descriptor that carries the receiver pointer instead of a helper id.
-//   - Method(i)/MethodByName(name) on it select a method the type declares
-//     directly with a pointer receiver and answer a lazy method value.
+//   - Method(i)/MethodByName(name) on it select an exported original method
+//     in the complete method set and answer a lazy method value.
 //   - Interface() on that answers any(bound method): the same interpreter
 //     closure a Go method value p.M is, bound to p's own storage, so the call
 //     runs on the calling goroutine's Runner with receiver identity and
@@ -268,12 +268,12 @@ func (r *Runner) goSourceLocalReflectValueOf(ctx context.Context, req bashPPEval
 	typeName = bashPPLocalTypeName(typeName)
 	plain := false
 	for _, local := range req.LocalTypes {
-		if local.Name == typeName && !local.Alias && local.WireType == "" && local.PublicType == "" && local.GenericDecl == "" && len(local.Methods) > 0 {
+		if local.Name == typeName && !local.Alias && local.WireType == "" && local.PublicType == "" && local.GenericDecl == "" {
 			plain = true
 			break
 		}
 	}
-	if !plain || len(r.bashPPMethods[typeName]) == 0 {
+	if !plain || len(r.goSourceLocalReflectMethodNames(typeName)) == 0 {
 		return bashPPBridgeValue{}, false
 	}
 	s.mu.Lock()
@@ -298,21 +298,37 @@ func (r *Runner) goSourceLocalReflectValueOf(ctx context.Context, req bashPPEval
 	}, true
 }
 
+// goSourceLocalReflectMethodNames returns the exported, unambiguous original
+// method set of *typeName in reflect's lexical order. Resolving every known
+// original name through the ordinary selector walk preserves shadowing and
+// ambiguity; no method is admitted merely because its spelling matches.
+func (r *Runner) goSourceLocalReflectMethodNames(typeName string) []string {
+	root := &syntax.BashPPPointerType{Element: &syntax.BashPPNamedType{Name: &syntax.Lit{Value: typeName}}}
+	seen := make(map[string]bool)
+	var methods []string
+	for _, declared := range r.bashPPMethods {
+		for name := range declared {
+			if seen[name] || !token.IsExported(name) {
+				continue
+			}
+			seen[name] = true
+			sel := r.bashPPResolveSelection(root, name, true, false)
+			if !sel.ambiguous && sel.method != nil {
+				methods = append(methods, name)
+			}
+		}
+	}
+	slices.Sort(methods)
+	return methods
+}
+
 // goSourceLocalReflectSelect resolves Method(i) or MethodByName(name) against
-// the methods the original type declares, and reports the method only when
-// the interpreter owns its call: exported and declared directly with a pointer
-// receiver. A type with an embedded field may promote more methods than it
-// declares, so its method set is left to the helper.
+// that full method set. The saved name is resolved again when the descriptor
+// is called, retaining the exact embedded field path on the live outer value.
 func (r *Runner) goSourceLocalReflectSelect(lr *goSourceLocalReflect, q bashPPBridgeRequest) (string, bool) {
 	if len(q.Args) != 1 || q.Spread {
 		return "", false
 	}
-	for _, field := range r.bashPPTypes[lr.typeName].fields {
-		if field.Embedded {
-			return "", false
-		}
-	}
-	methods := r.bashPPMethods[lr.typeName]
 	var method string
 	switch q.Selector {
 	case "MethodByName":
@@ -328,13 +344,7 @@ func (r *Runner) goSourceLocalReflectSelect(lr *goSourceLocalReflect, q bashPPBr
 		if err != nil {
 			return "", false
 		}
-		var exported []string
-		for name := range methods {
-			if token.IsExported(name) {
-				exported = append(exported, name)
-			}
-		}
-		slices.Sort(exported)
+		exported := r.goSourceLocalReflectMethodNames(lr.typeName)
 		if index < 0 || index >= len(exported) {
 			return "", false
 		}
@@ -342,8 +352,10 @@ func (r *Runner) goSourceLocalReflectSelect(lr *goSourceLocalReflect, q bashPPBr
 	default:
 		return "", false
 	}
-	fn := methods[method]
-	if !token.IsExported(method) || fn == nil || fn.decl == nil || fn.decl.Receiver == nil || !fn.decl.Receiver.Pointer {
+	root := &syntax.BashPPPointerType{Element: &syntax.BashPPNamedType{Name: &syntax.Lit{Value: lr.typeName}}}
+	sel := r.bashPPResolveSelection(root, method, true, false)
+	if !token.IsExported(method) || sel.ambiguous || sel.method == nil ||
+		(!sel.method.decl.Receiver.Pointer && len(sel.edges) == 0) {
 		return "", false
 	}
 	return method, true
@@ -391,8 +403,12 @@ func (r *Runner) goSourceLocalReflectFunc(value *bashPPBridgeValue) (*bashPPFunc
 		return nil, false
 	}
 	lr := value.localReflect
-	bound, ok := r.bashPPBindMethod(bashPPPointerCell(lr.ptr), lr.method, true)
-	return bound, ok
+	root := &syntax.BashPPPointerType{Element: &syntax.BashPPNamedType{Name: &syntax.Lit{Value: lr.typeName}}}
+	sel := r.bashPPResolveSelection(root, lr.method, true, false)
+	if sel.ambiguous || sel.method == nil {
+		return nil, false
+	}
+	return r.bashPPBindPromotedMethod(bashPPPointerCell(lr.ptr), lr.method, sel, true)
 }
 
 // goSourceLocalReflectCall answers a call whose callee names a reflected func

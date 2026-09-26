@@ -168,15 +168,37 @@ func (s *bashPPNativeSession) callbackAnswer(ctx context.Context, owner *Runner,
 		}
 	}
 	if owner != nil && outer != nil && answer.Error == "" {
-		buffers, err := nativeCallbackSliceBuffers(owner, *outer)
-		if err != nil {
-			answer.Error, answer.Values = err.Error(), nil
-			if !owner.exit.exiting {
-				owner.exit.fatal(err)
-				s.recordCallbackRefusal(err)
+		if outer.sliceCallbackSync {
+			buffers, err := nativeCallbackSliceBuffers(owner, *outer)
+			if err != nil {
+				answer.Error, answer.Values = err.Error(), nil
+				if !owner.exit.exiting {
+					owner.exit.fatal(err)
+					s.recordCallbackRefusal(err)
+				}
+			} else {
+				answer.SliceBuffers = buffers
 			}
-		} else {
-			answer.SliceBuffers = buffers
+		} else if len(q.SliceUpdates) > 0 {
+			// Every helper callback raised inside a call with decoded slice
+			// arguments owns a callback slice frame, even when admission did not
+			// request interpreter-side reconciliation. The reply must still match
+			// that frame exactly. Echo its authenticated snapshot: it is a no-op
+			// refresh of the helper's own backing arrays, not a copied-slice write.
+			answer.SliceBuffers = append([]bashPPNativeSliceBuffer(nil), q.SliceUpdates...)
+			for i := range answer.SliceBuffers {
+				buffer := &answer.SliceBuffers[i]
+				if buffer.Length < 0 || buffer.Length > len(buffer.Value.Elements) {
+					answer.Error, answer.Values, answer.SliceBuffers = "gosource: invalid callback slice snapshot", nil, nil
+					break
+				}
+				// callbackSliceSnapshot publishes the full-capacity backing array;
+				// applyCallbackSliceReply decodes a value whose length must match
+				// the live argument header. Preserve that header in the no-op echo.
+				buffer.Value.Elements = buffer.Value.Elements[:buffer.Length]
+				buffer.Value.Length = buffer.Length
+				buffer.Value.Capacity = buffer.Length
+			}
 		}
 	}
 	return answer
@@ -223,17 +245,19 @@ func (r *Runner) bashPPNativeCallback(ctx context.Context, selector string, recv
 	if name, ok := strings.CutPrefix(selector, bashPPCompanionSelectorPrefix); ok {
 		return r.bashPPNativeCompanionCallback(ctx, name, recv.CallArgs)
 	}
-	typeName, method, ok := strings.Cut(selector, ".")
+	declaringType, method, ok := strings.Cut(selector, ".")
 	if !ok {
 		return nil, fmt.Errorf("gosource: malformed original method selector %q", selector)
 	}
-	typeName = bashPPLocalTypeName(typeName)
+	declaringType = bashPPLocalTypeName(declaringType)
 	var copied *bashPPCell
-	if r.bashPPMethods[typeName][method] == nil {
-		return nil, fmt.Errorf("gosource: original type %s has no method %s", typeName, method)
+	fn := r.bashPPMethods[declaringType][method]
+	if fn == nil {
+		return nil, fmt.Errorf("gosource: original type %s has no method %s", declaringType, method)
 	}
-	named := r.bashPPSprint162CallbackType(recv, typeName)
+	named := r.bashPPSprint162CallbackType(recv, declaringType)
 	var cell *bashPPCell
+	var promoted bashPPSelection
 	if recv.Origin != 0 {
 		session := r.bashPPTools.bridge
 		session.mu.Lock()
@@ -243,21 +267,32 @@ func (r *Runner) bashPPNativeCallback(ctx context.Context, selector string, recv
 			return nil, fmt.Errorf("gosource: callback receiver identity expired")
 		}
 		cell = bashPPPointerCell(ptr)
+		// A generated helper method is declared on the embedded type, so its
+		// callback selector names that declaration even when reflect invoked it
+		// as a promoted method of an outer value. The authenticated origin is
+		// authoritative for the actual receiver. Resolve from its complete type
+		// and require the selected method to be the exact declaration reported
+		// by the helper; this retains the field path and refuses ambiguity or a
+		// same-named outer method instead of falling back by name.
+		promoted = r.bashPPResolveSelection(cell.declType, method, true, false)
+		if promoted.ambiguous || promoted.method != fn {
+			return nil, fmt.Errorf("gosource: original method %s does not belong to authenticated receiver %s", selector, bashPPTypeText(cell.declType))
+		}
 	} else if recv.Kind == "nil" {
 		// A typed-nil pointer receiver has no storage to bind. The original
 		// body runs with a nil receiver, exactly as native Go invokes it — a
 		// body that checks its receiver observes nil, one that dereferences
 		// it panics as the original would.
-		cell = &bashPPCell{pointer: true, nilPointer: true, typeName: typeName, declType: &syntax.BashPPPointerType{Element: named}}
+		cell = &bashPPCell{pointer: true, nilPointer: true, typeName: declaringType, declType: &syntax.BashPPPointerType{Element: named}}
 	} else {
-		if r.bashPPMethods[typeName][method].decl.Receiver.Pointer {
+		if fn.decl.Receiver.Pointer {
 			return nil, fmt.Errorf("gosource: pointer callback requires original receiver identity")
 		}
 		value, meta, err := r.bashPPBridgeContents(recv, named)
 		if err != nil {
 			return nil, fmt.Errorf("gosource: %s receiver: %w", selector, err)
 		}
-		cell = &bashPPCell{declType: named, typeName: typeName}
+		cell = &bashPPCell{declType: named, typeName: declaringType}
 		bashPPStoreCellValue(cell, value, meta)
 		// The receiver is a copy of storage the caller still shares. A write
 		// through one of its references would be invisible to the caller here,
@@ -284,7 +319,12 @@ func (r *Runner) bashPPNativeCallback(ctx context.Context, selector string, recv
 	r.bashPPCallChannels, r.bashPPCallInterfaces, r.bashPPCallCells, r.bashPPCallSpread = nil, nil, nil, false
 
 	// A pointer receiver binds to the original interpreter storage.
-	bound, ok := r.bashPPBindMethodReceiver(cell, method, true, copied != nil)
+	var bound *bashPPFunc
+	if len(promoted.edges) > 0 {
+		bound, ok = r.bashPPBindPromotedMethod(cell, method, promoted, true)
+	} else {
+		bound, ok = r.bashPPBindMethodReceiver(cell, method, true, copied != nil)
+	}
 	if !ok {
 		return nil, fmt.Errorf("gosource: cannot bind original method %s", selector)
 	}
