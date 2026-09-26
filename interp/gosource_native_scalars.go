@@ -15,17 +15,22 @@ import (
 // visible to declaration evaluation, so this lookup is deliberately keyed by
 // the authenticated go/types identity rather than by display text alone.
 func (r *Runner) goSourceImportedScalarUnderlying(name string) (string, bool) {
-	bare := strings.TrimLeft(name, "*")
-	dot := strings.LastIndex(bare, ".")
+	if strings.HasPrefix(name, "*") {
+		return "", false
+	}
+	dot := strings.LastIndex(name, ".")
 	if dot < 0 {
 		return "", false
 	}
-	qualifier, typeName := bare[:dot], bare[dot+1:]
+	qualifier, typeName := name[:dot], name[dot+1:]
 	path := r.bashPPImports[qualifier]
 	if path == "" {
 		path = qualifier
 	}
 	typ := r.bashPPTools.nativeTypes[path+"."+typeName]
+	if typ == nil {
+		typ = r.goSourceImportedScalarByPackageName(qualifier, typeName)
+	}
 	if typ == nil {
 		return "", false
 	}
@@ -34,6 +39,42 @@ func (r *Runner) goSourceImportedScalarUnderlying(name string) (string, bool) {
 		return "", false
 	}
 	return basic.Name(), true
+}
+
+func (r *Runner) goSourceImportedScalarByPackageName(packageName, typeName string) types.Type {
+	var found types.Type
+	for key, typ := range r.bashPPTools.nativeTypes {
+		dot := strings.LastIndexByte(key, '.')
+		if dot < 0 || key[dot+1:] != typeName {
+			continue
+		}
+		path := key[:dot]
+		if !r.goSourceImportsPath(path) {
+			continue
+		}
+		named, ok := types.Unalias(typ).(*types.Named)
+		if !ok || named.Obj() == nil || named.Obj().Pkg() == nil {
+			continue
+		}
+		pkg := named.Obj().Pkg()
+		if pkg.Path() != path || pkg.Name() != packageName {
+			continue
+		}
+		if found != nil && found != typ {
+			return nil
+		}
+		found = typ
+	}
+	return found
+}
+
+func (r *Runner) goSourceImportsPath(path string) bool {
+	for _, imported := range r.bashPPImports {
+		if imported == path {
+			return true
+		}
+	}
+	return false
 }
 
 // goSourceNativeScalarReceiver reports whether expr names a plain interpreter
