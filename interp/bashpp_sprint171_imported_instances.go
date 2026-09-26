@@ -95,11 +95,33 @@ func (r *Runner) bashPPImportedInstances() []bashPPImportedInstance {
 // renders declarations with, built from the same declarations under the
 // same ambiguity rule, for rendering a type expression outside a declaration.
 func (r *Runner) bashPPLocalTypeRenderer() *bashPPLocalTypeSet {
+	cache := r.bashPPTools.localTypeDecls
+	if cache == nil || cache.file != r.bashPPGoSourceFile {
+		cache = bashPPScanLocalTypeDecls(r.bashPPGoSourceFile)
+		r.bashPPTools.localTypeDecls = cache
+	}
+	// A renderer carries request-local refs and substitution state, so only
+	// the immutable declaration index is shared. In particular, use the
+	// Runner's current import map rather than pinning the map from the scan.
+	return &bashPPLocalTypeSet{declared: cache.declared, imports: r.bashPPImports, generics: cache.generics}
+}
+
+// bashPPLocalTypeDeclCache is the immutable result of scanning one source
+// file's declarations. Go-source execution does not rewrite its syntax tree:
+// generic body substitution clones nodes before changing them. File identity
+// therefore invalidates the scan while allowing copied Runners to share a hit.
+type bashPPLocalTypeDeclCache struct {
+	file     *syntax.File
+	declared map[string]syntax.BashPPTypeExpr
+	generics map[string]*syntax.BashPPDecl
+}
+
+func bashPPScanLocalTypeDecls(file *syntax.File) *bashPPLocalTypeDeclCache {
 	declared := map[string]syntax.BashPPTypeExpr{}
 	generics := map[string]*syntax.BashPPDecl{}
 	ambiguous := map[string]bool{}
-	if r.bashPPGoSourceFile != nil {
-		syntax.Walk(r.bashPPGoSourceFile, func(node syntax.Node) bool {
+	if file != nil {
+		syntax.Walk(file, func(node syntax.Node) bool {
 			d, ok := node.(*syntax.BashPPDecl)
 			if !ok || d.Site != syntax.StartTypeDecl || d.DeclTypeExpr == nil || d.Name == nil {
 				return true
@@ -122,7 +144,7 @@ func (r *Runner) bashPPLocalTypeRenderer() *bashPPLocalTypeSet {
 		delete(declared, name)
 		delete(generics, name)
 	}
-	return &bashPPLocalTypeSet{declared: declared, imports: r.bashPPImports, generics: generics}
+	return &bashPPLocalTypeDeclCache{file: file, declared: declared, generics: generics}
 }
 
 // bashPPImportedInstanceIdentity is the session identity contribution of the

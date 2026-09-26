@@ -177,6 +177,7 @@ type bashPPToolchain struct {
 	// instantiations is the per-file closure of reached generic
 	// instantiations; see bashpp_sprint165_runtime_instantiations.go.
 	instantiations *bashPPInstantiationIndex
+	localTypeDecls *bashPPLocalTypeDeclCache
 	localTypes     *bashPPLocalTypeCache
 	// bridgeMetadata is immutable after publication and shared safely by
 	// subshell copies. Its file and import-map identity keep source replacement
