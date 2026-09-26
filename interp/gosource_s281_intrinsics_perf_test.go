@@ -50,7 +50,7 @@ func main() {
 		arch := unicode.GraphicRanges[i%len(unicode.GraphicRanges)]
 		key := intrinsicKey{arch, "runtime", name}
 		if _, found := m[key]; found { panic("duplicate intrinsic") }
-		m[key] = func() int { return 1 }
+		m[key] = func() int { return i + len(name) }
 	}
 	hits := 0
 	for i, name := range names {
@@ -63,6 +63,14 @@ func main() {
 }
 `)
 	return src.String()
+}
+
+func s281IntrinsicExpectedOutput(entries int) string {
+	hits := entries * (entries - 1) / 2
+	for i := 0; i < entries; i++ {
+		hits += len("fn" + strconv.Itoa(i))
+	}
+	return strconv.Itoa(entries) + " " + strconv.Itoa(hits)
 }
 
 func runS281IntrinsicMap(tb testing.TB, entries int) (load, run time.Duration, output string) {
@@ -93,7 +101,7 @@ func TestS281IntrinsicMapWorkScalesLinearly(t *testing.T) {
 	const small, large = 64, 1024
 	smallLoad, smallRun, smallOut := runS281IntrinsicMap(t, small)
 	largeLoad, largeRun, largeOut := runS281IntrinsicMap(t, large)
-	if smallOut != "64 64" || largeOut != "1024 1024" {
+	if smallOut != s281IntrinsicExpectedOutput(small) || largeOut != s281IntrinsicExpectedOutput(large) {
 		t.Fatalf("wrong result: small=%q large=%q", smallOut, largeOut)
 	}
 	t.Logf("small: load=%v run=%v; large: load=%v run=%v; run ratio=%.2f", smallLoad, smallRun, largeLoad, largeRun, float64(largeRun)/float64(smallRun))
@@ -107,7 +115,7 @@ func TestS281IntrinsicMapWorkScalesLinearly(t *testing.T) {
 func BenchmarkS281IntrinsicMap(b *testing.B) {
 	for b.Loop() {
 		_, _, output := runS281IntrinsicMap(b, 1024)
-		if output != "1024 1024" {
+		if output != s281IntrinsicExpectedOutput(1024) {
 			b.Fatalf("wrong result: %q", output)
 		}
 	}
