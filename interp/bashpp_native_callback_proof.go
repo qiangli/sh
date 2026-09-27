@@ -120,6 +120,7 @@ type dependencyCallbackDeferred struct {
 type dependencyCallbackValue struct {
 	callback *dependencyCallbackClosure // nil lit means the original callback
 	object   *dependencyCallbackObject
+	callable bool // source declares this clean value to have function type
 }
 
 func (v dependencyCallbackValue) tainted() bool {
@@ -143,8 +144,13 @@ func dependencyCallbackObjectTainted(obj *dependencyCallbackObject, seen map[*de
 }
 
 type dependencyCallbackType struct {
-	fields   map[string]string
+	fields   map[string]dependencyCallbackField
 	embedded []string
+}
+
+type dependencyCallbackField struct {
+	typ      string
+	callable bool
 }
 
 type dependencyCallbackFormal struct {
@@ -163,16 +169,17 @@ type dependencyCallbackCompletedFrame struct {
 }
 
 type dependencyCallbackProof struct {
-	funcs   map[string][]*ast.FuncDecl
-	methods map[string]map[string]*ast.FuncDecl
-	types   map[string]dependencyCallbackType
-	globals map[string]bool
-	consts  map[string]bool
-	active  map[string]dependencyCallbackActiveFrame
-	done    map[string][]dependencyCallbackCompletedFrame
-	results []map[string]bool
-	defers  [][]dependencyCallbackDeferred
-	steps   int
+	funcs     map[string][]*ast.FuncDecl
+	methods   map[string]map[string]*ast.FuncDecl
+	types     map[string]dependencyCallbackType
+	funcTypes map[string]bool
+	globals   map[string]bool
+	consts    map[string]bool
+	active    map[string]dependencyCallbackActiveFrame
+	done      map[string][]dependencyCallbackCompletedFrame
+	results   []map[string]bool
+	defers    [][]dependencyCallbackDeferred
+	steps     int
 
 	fset        *token.FileSet
 	currentFunc string
@@ -184,7 +191,24 @@ type dependencyCallbackProof struct {
 func newDependencyCallbackProof(files []*ast.File) *dependencyCallbackProof {
 	p := &dependencyCallbackProof{
 		funcs: make(map[string][]*ast.FuncDecl), methods: make(map[string]map[string]*ast.FuncDecl),
-		types: make(map[string]dependencyCallbackType), globals: make(map[string]bool), consts: make(map[string]bool), active: make(map[string]dependencyCallbackActiveFrame), done: make(map[string][]dependencyCallbackCompletedFrame),
+		types: make(map[string]dependencyCallbackType), funcTypes: make(map[string]bool), globals: make(map[string]bool), consts: make(map[string]bool), active: make(map[string]dependencyCallbackActiveFrame), done: make(map[string][]dependencyCallbackCompletedFrame),
+	}
+	for _, file := range files {
+		for _, decl := range file.Decls {
+			gen, ok := decl.(*ast.GenDecl)
+			if !ok || gen.Tok != token.TYPE {
+				continue
+			}
+			for _, item := range gen.Specs {
+				spec, ok := item.(*ast.TypeSpec)
+				if !ok {
+					continue
+				}
+				if _, ok := spec.Type.(*ast.FuncType); ok {
+					p.funcTypes[spec.Name.Name] = true
+				}
+			}
+		}
 	}
 	for _, file := range files {
 		for _, decl := range file.Decls {
@@ -210,7 +234,7 @@ func newDependencyCallbackProof(files []*ast.File) *dependencyCallbackProof {
 						if !ok {
 							continue
 						}
-						shape := dependencyCallbackType{fields: make(map[string]string)}
+						shape := dependencyCallbackType{fields: make(map[string]dependencyCallbackField)}
 						for _, field := range st.Fields.List {
 							fieldType := dependencyCallbackTypeName(field.Type)
 							if len(field.Names) == 0 {
@@ -219,8 +243,9 @@ func newDependencyCallbackProof(files []*ast.File) *dependencyCallbackProof {
 								}
 								continue
 							}
+							_, directFunc := field.Type.(*ast.FuncType)
 							for _, name := range field.Names {
-								shape.fields[name.Name] = fieldType
+								shape.fields[name.Name] = dependencyCallbackField{typ: fieldType, callable: directFunc || p.funcTypes[fieldType]}
 							}
 						}
 						p.types[spec.Name.Name] = shape
@@ -472,7 +497,7 @@ func dependencyCallbackSameFrame(active dependencyCallbackActiveFrame, supplied 
 }
 
 func dependencyCallbackSameValue(left, right dependencyCallbackValue) bool {
-	return left.callback == right.callback && left.object == right.object
+	return left.callback == right.callback && left.object == right.object && left.callable == right.callable
 }
 
 func dependencyCallbackFrameSnapshot(supplied map[string]dependencyCallbackValue, receiver dependencyCallbackValue) string {
@@ -510,6 +535,10 @@ func (s *dependencyCallbackSnapshot) value(b *strings.Builder, value dependencyC
 	}
 	if value.object != nil {
 		s.object(b, value.object)
+		return
+	}
+	if value.callable {
+		b.WriteByte('F')
 		return
 	}
 	b.WriteByte('_')
@@ -1242,6 +1271,15 @@ func (p *dependencyCallbackProof) callWithResolvedCallee(call *ast.CallExpr, cal
 	for i := range args {
 		tainted = tainted || args[i].tainted()
 	}
+	// A function-valued field is not a method call: selecting it does not pass
+	// its containing object as an implicit receiver. When source declares the
+	// field callable and both its current value and explicit arguments are
+	// clean, invoking it cannot expose a callback carried elsewhere in the
+	// containing object. Tainted fields are represented as callbacks above.
+	if callee.callable && !tainted {
+		dependencyCallbackMarkEscaped(args)
+		return true
+	}
 	switch fun := call.Fun.(type) {
 	case *ast.Ident:
 		if !tainted {
@@ -1338,8 +1376,11 @@ func (p *dependencyCallbackProof) field(receiver dependencyCallbackValue, name s
 	}
 	seen[receiver.object.typ] = true
 	shape := p.types[receiver.object.typ]
-	if typ, ok := shape.fields[name]; ok {
-		child := dependencyCallbackValue{object: &dependencyCallbackObject{typ: typ, owned: receiver.object.owned, fields: make(map[string]dependencyCallbackValue)}}
+	if field, ok := shape.fields[name]; ok {
+		if field.callable {
+			return dependencyCallbackValue{callable: true}
+		}
+		child := dependencyCallbackValue{object: &dependencyCallbackObject{typ: field.typ, owned: receiver.object.owned, fields: make(map[string]dependencyCallbackValue)}}
 		receiver.object.fields[name] = child
 		return child
 	}

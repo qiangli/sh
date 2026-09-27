@@ -255,6 +255,36 @@ func Parse(cb func(error)) { var p parser; p.init(cb); p.parse() }
 			want: true,
 		},
 		{
+			name: "clean function field on callback-bearing receiver",
+			source: `package dep
+type Handler func(int)
+type source struct { callback func() }
+func (s *source) pos() int { return 1 }
+type parser struct { source; handler Handler }
+func (p *parser) clear() { p.handler(p.pos()) }
+func Parse(cb func(), handler Handler) { var p parser; p.callback = cb; p.handler = handler; p.clear() }
+`,
+			want: true,
+		},
+		{
+			name: "function field cannot receive callback",
+			source: `package dep
+type Handler func(func())
+type parser struct { callback func(); handler Handler }
+func (p *parser) pass() { p.handler(p.callback) }
+func Parse(cb func(), handler Handler) { var p parser; p.callback = cb; p.handler = handler; p.pass() }
+`,
+		},
+		{
+			name: "unknown field on callback-bearing receiver",
+			source: `package dep
+type parser struct { callback func() }
+func (p *parser) pos() int { return 1 }
+func (p *parser) call() { p.unknown(p.pos()) }
+func Parse(cb func()) { var p parser; p.callback = cb; p.call() }
+`,
+		},
+		{
 			name: "recursive callback substitution is unproved",
 			source: `package dep
 func walk(cb func()) { next := func() { cb() }; walk(next) }
