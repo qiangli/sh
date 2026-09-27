@@ -1099,6 +1099,20 @@ func Parse(cb func(), choose bool) { Retain(cb, choose) }
 `,
 		},
 		{
+			name: "block local closure keeps captured cell alive",
+			source: `package dep
+var saved func()
+func Parse(cb func()) {
+	var getter func()
+	{
+		var f func() = cb
+		getter = func() { saved = f }
+	}
+	getter()
+}
+`,
+		},
+		{
 			name: "direct helper callback invocation remains synchronous",
 			source: `package dep
 func run(fn func()) { fn() }

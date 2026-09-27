@@ -117,6 +117,10 @@ type dependencyCallbackClosure struct {
 	captures map[string]bool
 }
 
+type dependencyCallbackCell struct {
+	value dependencyCallbackValue
+}
+
 type dependencyCallbackDeferred struct {
 	call      *ast.CallExpr
 	args      []dependencyCallbackValue
@@ -127,6 +131,7 @@ type dependencyCallbackDeferred struct {
 type dependencyCallbackValue struct {
 	callback *dependencyCallbackClosure // nil lit means the original callback
 	object   *dependencyCallbackObject
+	cell     *dependencyCallbackCell
 	callable bool // source declares this clean value to have function type
 	escaped  bool
 }
@@ -134,10 +139,22 @@ type dependencyCallbackValue struct {
 const dependencyCallbackElementField = "[]"
 
 func (v dependencyCallbackValue) tainted() bool {
+	if v.cell != nil {
+		return v.cell.value.tainted()
+	}
 	if v.callback != nil {
 		return true
 	}
 	return dependencyCallbackObjectTainted(v.object, map[*dependencyCallbackObject]bool{})
+}
+
+func dependencyCallbackResolvedValue(value dependencyCallbackValue) dependencyCallbackValue {
+	seen := make(map[*dependencyCallbackCell]bool)
+	for value.cell != nil && !seen[value.cell] {
+		seen[value.cell] = true
+		value = value.cell.value
+	}
+	return value
 }
 
 func dependencyCallbackObjectTainted(obj *dependencyCallbackObject, seen map[*dependencyCallbackObject]bool) bool {
@@ -146,6 +163,7 @@ func dependencyCallbackObjectTainted(obj *dependencyCallbackObject, seen map[*de
 	}
 	seen[obj] = true
 	for _, field := range obj.fields {
+		field = dependencyCallbackResolvedValue(field)
 		if field.callback != nil || dependencyCallbackObjectTainted(field.object, seen) {
 			return true
 		}
@@ -847,6 +865,8 @@ func dependencyCallbackSameFrame(active dependencyCallbackActiveFrame, supplied 
 }
 
 func dependencyCallbackSameValue(left, right dependencyCallbackValue) bool {
+	left = dependencyCallbackResolvedValue(left)
+	right = dependencyCallbackResolvedValue(right)
 	return left.callback == right.callback && left.object == right.object && left.callable == right.callable && left.escaped == right.escaped
 }
 
@@ -1210,6 +1230,7 @@ type dependencyCallbackSnapshot struct {
 }
 
 func (s *dependencyCallbackSnapshot) value(b *strings.Builder, value dependencyCallbackValue) {
+	value = dependencyCallbackResolvedValue(value)
 	if value.callback != nil {
 		s.closure(b, value.callback)
 		if value.escaped {
@@ -1291,6 +1312,7 @@ func (s *dependencyCallbackSnapshot) object(b *strings.Builder, obj *dependencyC
 }
 
 func dependencyCallbackSnapshotOmitField(value dependencyCallbackValue) bool {
+	value = dependencyCallbackResolvedValue(value)
 	return value.callback == nil && !value.callable && !value.escaped &&
 		value.object != nil && value.object.synthetic && value.object.scalar && len(value.object.fields) == 0
 }
@@ -1333,6 +1355,7 @@ func dependencyCallbackCloneDiagnosticFrame(frame map[string]string) map[string]
 }
 
 func (g *dependencyCallbackDiagnosticGraph) value(path string, value dependencyCallbackValue) {
+	value = dependencyCallbackResolvedValue(value)
 	if g.nodes >= 512 {
 		return
 	}
@@ -1373,6 +1396,7 @@ func (g *dependencyCallbackDiagnosticGraph) value(path string, value dependencyC
 }
 
 func (g *dependencyCallbackDiagnosticGraph) summary(value dependencyCallbackValue) string {
+	value = dependencyCallbackResolvedValue(value)
 	if value.object != nil {
 		id := g.objectID(value.object)
 		typ := value.object.typ
@@ -1833,15 +1857,28 @@ func dependencyCallbackCloneEnv(env map[string]dependencyCallbackValue) map[stri
 	return clone
 }
 
+func dependencyCallbackCaptureCell(env map[string]dependencyCallbackValue, name string) dependencyCallbackValue {
+	value := env[name]
+	if value.cell != nil {
+		return value
+	}
+	cell := &dependencyCallbackCell{value: value}
+	captured := dependencyCallbackValue{cell: cell}
+	env[name] = captured
+	return captured
+}
+
 type dependencyCallbackGraphCloner struct {
 	objects  map[*dependencyCallbackObject]*dependencyCallbackObject
 	closures map[*dependencyCallbackClosure]*dependencyCallbackClosure
+	cells    map[*dependencyCallbackCell]*dependencyCallbackCell
 }
 
 func newDependencyCallbackGraphCloner() *dependencyCallbackGraphCloner {
 	return &dependencyCallbackGraphCloner{
 		objects:  make(map[*dependencyCallbackObject]*dependencyCallbackObject),
 		closures: make(map[*dependencyCallbackClosure]*dependencyCallbackClosure),
+		cells:    make(map[*dependencyCallbackCell]*dependencyCallbackCell),
 	}
 }
 
@@ -1858,12 +1895,28 @@ func (c *dependencyCallbackGraphCloner) env(env map[string]dependencyCallbackVal
 }
 
 func (c *dependencyCallbackGraphCloner) value(value dependencyCallbackValue) dependencyCallbackValue {
+	if value.cell != nil {
+		return dependencyCallbackValue{cell: c.cell(value.cell), escaped: value.escaped}
+	}
 	return dependencyCallbackValue{
 		callback: c.closure(value.callback),
 		object:   c.object(value.object),
 		callable: value.callable,
 		escaped:  value.escaped,
 	}
+}
+
+func (c *dependencyCallbackGraphCloner) cell(cell *dependencyCallbackCell) *dependencyCallbackCell {
+	if cell == nil {
+		return nil
+	}
+	if clone := c.cells[cell]; clone != nil {
+		return clone
+	}
+	clone := &dependencyCallbackCell{}
+	c.cells[cell] = clone
+	clone.value = c.value(cell.value)
+	return clone
 }
 
 func (c *dependencyCallbackGraphCloner) object(obj *dependencyCallbackObject) *dependencyCallbackObject {
@@ -1926,6 +1979,8 @@ func (s *dependencyCallbackJoinState) value(left, right dependencyCallbackValue)
 		dependencyCallbackMarkEscaped([]dependencyCallbackValue{left, right})
 		return dependencyCallbackValue{callback: &dependencyCallbackClosure{}}
 	}
+	left = dependencyCallbackResolvedValue(left)
+	right = dependencyCallbackResolvedValue(right)
 	if left.object == nil && left.callback == nil && !left.callable && !left.escaped {
 		return right
 	}
@@ -1979,6 +2034,7 @@ func (s *dependencyCallbackJoinState) mergeObjectFields(dst, src *dependencyCall
 }
 
 func dependencyCallbackOverwriteObject(dst *dependencyCallbackObject, src dependencyCallbackValue) {
+	src = dependencyCallbackResolvedValue(src)
 	if dst == nil || src.object == nil {
 		return
 	}
@@ -1994,6 +2050,7 @@ func dependencyCallbackOverwriteObject(dst *dependencyCallbackObject, src depend
 }
 
 func dependencyCallbackValueCopy(value dependencyCallbackValue) dependencyCallbackValue {
+	value = dependencyCallbackResolvedValue(value)
 	if value.object == nil {
 		return value
 	}
@@ -2030,6 +2087,7 @@ func dependencyCallbackObjectValueCopy(obj *dependencyCallbackObject, seen map[*
 }
 
 func dependencyCallbackValueCopyField(value dependencyCallbackValue) dependencyCallbackValue {
+	value = dependencyCallbackResolvedValue(value)
 	if value.object == nil {
 		return value
 	}
@@ -2044,6 +2102,7 @@ func dependencyCallbackValueCopyField(value dependencyCallbackValue) dependencyC
 }
 
 func (p *dependencyCallbackProof) assign(lhs ast.Expr, value dependencyCallbackValue, env map[string]dependencyCallbackValue, define bool) bool {
+	value = dependencyCallbackResolvedValue(value)
 	switch lhs := lhs.(type) {
 	case *ast.Ident:
 		if lhs.Name == "_" {
@@ -2055,8 +2114,12 @@ func (p *dependencyCallbackProof) assign(lhs ast.Expr, value dependencyCallbackV
 		if p.currentResultName(lhs.Name) && value.tainted() {
 			return p.refuse(lhs, "assignment stores callback-bearing value in named result")
 		}
-		if value.tainted() && env[lhs.Name].escaped {
+		if value.tainted() && dependencyCallbackResolvedValue(env[lhs.Name]).escaped {
 			return p.refuse(lhs, "assignment stores callback-bearing value in escaped closure cell")
+		}
+		if existing := env[lhs.Name]; existing.cell != nil && !define {
+			existing.cell.value = value
+			return true
 		}
 		_, local := env[lhs.Name]
 		if p.globals[lhs.Name] && !define && !local {
@@ -2138,7 +2201,7 @@ func (p *dependencyCallbackProof) currentResultName(name string) bool {
 func (p *dependencyCallbackProof) value(expr ast.Expr, env map[string]dependencyCallbackValue) dependencyCallbackValue {
 	switch expr := expr.(type) {
 	case *ast.Ident:
-		return env[expr.Name]
+		return dependencyCallbackResolvedValue(env[expr.Name])
 	case *ast.ParenExpr:
 		return p.value(expr.X, env)
 	case *ast.UnaryExpr:
@@ -2169,7 +2232,12 @@ func (p *dependencyCallbackProof) value(expr ast.Expr, env map[string]dependency
 		base := p.value(expr.X, env)
 		return p.field(base, expr.Sel.Name, map[string]bool{})
 	case *ast.FuncLit:
-		return dependencyCallbackValue{callback: &dependencyCallbackClosure{lit: expr, env: env, captures: dependencyCallbackFuncLitCaptures(expr, env)}}
+		captures := dependencyCallbackFuncLitCaptures(expr, env)
+		closureEnv := make(map[string]dependencyCallbackValue, len(captures))
+		for name := range captures {
+			closureEnv[name] = dependencyCallbackCaptureCell(env, name)
+		}
+		return dependencyCallbackValue{callback: &dependencyCallbackClosure{lit: expr, env: closureEnv, captures: captures}}
 	case *ast.CompositeLit:
 		obj := &dependencyCallbackObject{typ: dependencyCallbackTypeName(expr.Type), owned: true, fields: make(map[string]dependencyCallbackValue)}
 		fieldOrder, structLiteral := p.compositeFieldOrder(expr.Type)
@@ -2476,6 +2544,11 @@ func (p *dependencyCallbackProof) markClosureCellsEscaped(closure *dependencyCal
 	}
 	seen[closure] = true
 	for name, value := range closure.env {
+		if value.cell != nil {
+			value.cell.value.escaped = true
+			p.markClosureCellsEscaped(value.cell.value.callback, seen)
+			continue
+		}
 		value.escaped = true
 		closure.env[name] = value
 		p.markClosureCellsEscaped(value.callback, seen)
@@ -2485,6 +2558,7 @@ func (p *dependencyCallbackProof) markClosureCellsEscaped(closure *dependencyCal
 func dependencyCallbackMarkEscaped(values []dependencyCallbackValue) {
 	seen := make(map[*dependencyCallbackObject]bool)
 	for _, value := range values {
+		value = dependencyCallbackResolvedValue(value)
 		dependencyCallbackMarkObjectEscaped(value.object, seen)
 		dependencyCallbackMarkClosureObjectsEscaped(value.callback, seen, make(map[*dependencyCallbackClosure]bool))
 	}
@@ -2497,6 +2571,7 @@ func dependencyCallbackMarkObjectEscaped(obj *dependencyCallbackObject, seen map
 	seen[obj] = true
 	obj.escaped = true
 	for _, field := range obj.fields {
+		field = dependencyCallbackResolvedValue(field)
 		dependencyCallbackMarkObjectEscaped(field.object, seen)
 	}
 }
@@ -2507,6 +2582,7 @@ func dependencyCallbackMarkClosureObjectsEscaped(closure *dependencyCallbackClos
 	}
 	closures[closure] = true
 	for _, value := range closure.env {
+		value = dependencyCallbackResolvedValue(value)
 		dependencyCallbackMarkObjectEscaped(value.object, objects)
 		dependencyCallbackMarkClosureObjectsEscaped(value.callback, objects, closures)
 	}
@@ -2515,6 +2591,7 @@ func dependencyCallbackMarkClosureObjectsEscaped(closure *dependencyCallbackClos
 func dependencyCallbackMarkGeneralized(values []dependencyCallbackValue) {
 	seen := make(map[*dependencyCallbackObject]bool)
 	for _, value := range values {
+		value = dependencyCallbackResolvedValue(value)
 		dependencyCallbackMarkObjectGeneralized(value.object, seen)
 	}
 }
@@ -2526,6 +2603,7 @@ func dependencyCallbackMarkObjectGeneralized(obj *dependencyCallbackObject, seen
 	seen[obj] = true
 	obj.general = true
 	for _, field := range obj.fields {
+		field = dependencyCallbackResolvedValue(field)
 		dependencyCallbackMarkObjectGeneralized(field.object, seen)
 	}
 }
@@ -2566,6 +2644,7 @@ func dependencyCallbackFunctionName(decl *ast.FuncDecl) string {
 }
 
 func (p *dependencyCallbackProof) method(receiver dependencyCallbackValue, name string, seen map[string]bool) (*ast.FuncDecl, dependencyCallbackValue) {
+	receiver = dependencyCallbackResolvedValue(receiver)
 	if receiver.object == nil || receiver.object.typ == "" || seen[receiver.object.typ] {
 		return nil, dependencyCallbackValue{}
 	}
@@ -2591,6 +2670,7 @@ func (p *dependencyCallbackProof) method(receiver dependencyCallbackValue, name 
 // anonymous in parser, denotes the embedded object itself. Ownership follows
 // the containing object; no package- or type-specific exception is involved.
 func (p *dependencyCallbackProof) field(receiver dependencyCallbackValue, name string, seen map[string]bool) dependencyCallbackValue {
+	receiver = dependencyCallbackResolvedValue(receiver)
 	if receiver.object == nil {
 		if receiver.callback != nil || receiver.callable {
 			return receiver
