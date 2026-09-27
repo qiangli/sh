@@ -1581,15 +1581,8 @@ func bashPPCompareValuesWithRunner(r *Runner, left any, leftMeta *bashPPCollecti
 		// arrive here in different scalar storage types; compare their
 		// numeric values without evaluating either expression again.
 		if r != nil && r.bashPPGoSource {
-			switch l := left.(type) {
-			case float64:
-				if n, ok := right.(int); ok {
-					return l == float64(n), nil
-				}
-			case int:
-				if n, ok := right.(float64); ok {
-					return float64(l) == n, nil
-				}
+			if equal, ok := bashPPCompareContextualNumeric(left, right); ok {
+				return equal, nil
 			}
 		}
 		return bashPPCompareScalarAny(left, right)
@@ -1597,6 +1590,13 @@ func bashPPCompareValuesWithRunner(r *Runner, left any, leftMeta *bashPPCollecti
 	if r != nil && r.bashPPGoSource && (bashPPScalarComparableMeta(leftMeta) || bashPPScalarComparableMeta(rightMeta)) {
 		if ok, err := r.bashPPScalarComparisonAssignable(leftMeta, rightMeta); !ok {
 			return false, err
+		}
+		// Native callback fields retain their declared scalar metadata, while
+		// a contextual integer literal does not. Apply the same Go numeric
+		// coercion as the metadata-free path, but only after the declared-type
+		// compatibility check above has rejected mismatched typed operands.
+		if equal, ok := bashPPCompareContextualNumeric(left, right); ok {
+			return equal, nil
 		}
 		return bashPPCompareScalarAny(left, right)
 	}
@@ -1764,6 +1764,20 @@ func bashPPCompareScalarAny(left, right any) (bool, error) {
 		return ok && l == r, nil
 	}
 	return false, fmt.Errorf("BASHPP-ECOMPARE-NONCOMPARABLE: unsupported scalar comparison")
+}
+
+func bashPPCompareContextualNumeric(left, right any) (bool, bool) {
+	switch l := left.(type) {
+	case float64:
+		if n, ok := right.(int); ok {
+			return l == float64(n), true
+		}
+	case int:
+		if n, ok := right.(float64); ok {
+			return float64(l) == n, true
+		}
+	}
+	return false, false
 }
 
 func bashPPPointerEqual(left, right any) bool {
