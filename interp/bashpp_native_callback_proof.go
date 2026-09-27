@@ -18,6 +18,11 @@ import (
 const dependencyCallbackProofDiagnosticEnv = "BASHPP_CALLBACK_PROOF_DIAG"
 const dependencyCallbackProofDiagnosticLimit = 48
 
+// dependencyCallbackProofStepBudget bounds the statements one proof may walk.
+// Every proof starts at this budget; only the test-only refusal enumeration
+// raises it, and only to see past the first refusal it records.
+const dependencyCallbackProofStepBudget = 20000
+
 // dependencyFunctionCallbackLifetimeProof proves, from the exact package
 // sources selected for the dependency worker, that a package function cannot
 // retain or asynchronously invoke any original callback argument. A missing
@@ -219,6 +224,17 @@ type dependencyCallbackActiveFrame struct {
 	diagnosticFrame  map[string]string
 }
 
+// dependencyCallbackRefusalSite is one refusal the proof reached, handed to
+// the test-only enumerate hook so a measurement run can group the sites the
+// production proof would only ever report one of.
+type dependencyCallbackRefusalSite struct {
+	function string
+	position string
+	reason   string
+	store    string
+	line     string
+}
+
 type dependencyCallbackCompletedFrame struct {
 	before string
 	after  string
@@ -256,6 +272,16 @@ type dependencyCallbackProof struct {
 	funcSteps map[string]int
 	probe     func(*dependencyCallbackProof)
 
+	// stepLimit is the statement budget of this proof, always
+	// dependencyCallbackProofStepBudget in production.
+	stepLimit int
+
+	// enumerate, when non-nil, replaces the verdict of every refusal with
+	// whatever it returns, so a measurement run can record a refusal site and
+	// then keep walking its siblings. Production leaves it nil, which is the
+	// only configuration in which refuse reports a refusal.
+	enumerate func(dependencyCallbackRefusalSite) bool
+
 	fset        *token.FileSet
 	currentFunc string
 	reason      string
@@ -270,6 +296,7 @@ func newDependencyCallbackProof(files []*ast.File) *dependencyCallbackProof {
 	p := &dependencyCallbackProof{
 		funcs: make(map[string][]*ast.FuncDecl), methods: make(map[string]map[string]*ast.FuncDecl),
 		types: make(map[string]dependencyCallbackType), typeSpecs: make(map[string]*ast.TypeSpec), funcTypes: make(map[string]bool), globals: make(map[string]bool), consts: make(map[string]bool), active: make(map[string]dependencyCallbackActiveFrame), done: make(map[string][]dependencyCallbackCompletedFrame),
+		stepLimit: dependencyCallbackProofStepBudget,
 	}
 	for _, file := range files {
 		for _, decl := range file.Decls {
@@ -432,6 +459,9 @@ func (p *dependencyCallbackProof) refuse(node ast.Node, reason string) bool {
 	line := fmt.Sprintf("%s: function=%s: %s", pos, function, reason)
 	if p.storeKind != "" {
 		line += fmt.Sprintf("; store=%s lhs=%s rhs=%s", p.storeKind, p.storeLHS, p.storeRHS)
+	}
+	if p.enumerate != nil {
+		return p.enumerate(dependencyCallbackRefusalSite{function: function, position: pos, reason: reason, store: p.storeKind, line: line})
 	}
 	if p.reason == "" {
 		p.reason = line
@@ -779,7 +809,7 @@ func dependencyCallbackBindArguments(fields *ast.FieldList, args []dependencyCal
 }
 
 func (p *dependencyCallbackProof) function(decl *ast.FuncDecl, supplied map[string]dependencyCallbackValue, receiver dependencyCallbackValue, depth int) bool {
-	if decl == nil || decl.Body == nil || depth > 64 || p.steps > 20000 {
+	if decl == nil || decl.Body == nil || depth > 64 || p.steps > p.stepLimit {
 		return p.refuse(decl, fmt.Sprintf("function unavailable or proof bounds exceeded depth=%d steps=%d", depth, p.steps))
 	}
 	key := decl.Name.Name
@@ -1159,7 +1189,7 @@ func (p *dependencyCallbackProof) recursiveBlockStoresCallback(block *ast.BlockS
 		if p.probe != nil {
 			p.probe(p)
 		}
-		if p.steps > 20000 {
+		if p.steps > p.stepLimit {
 			p.refuse(stmt, "proof step bound exceeded")
 			return true
 		}
@@ -1807,7 +1837,7 @@ func (p *dependencyCallbackProof) block(block *ast.BlockStmt, env map[string]dep
 	}
 	for _, stmt := range block.List {
 		p.steps++
-		if p.steps > 20000 {
+		if p.steps > p.stepLimit {
 			return p.refuse(stmt, "proof step bound exceeded")
 		}
 		if !p.statement(stmt, env, depth) {
@@ -1888,7 +1918,7 @@ func (p *dependencyCallbackProof) statementList(list []ast.Stmt, env map[string]
 		if p.probe != nil {
 			p.probe(p)
 		}
-		if p.steps > 20000 {
+		if p.steps > p.stepLimit {
 			return p.refuse(stmt, "proof step bound exceeded")
 		}
 		if labeled, ok := stmt.(*ast.LabeledStmt); ok {
@@ -2899,7 +2929,7 @@ func (p *dependencyCallbackProof) localSingleResult(call *ast.CallExpr, env map[
 }
 
 func (p *dependencyCallbackProof) singleResultFunction(call *ast.CallExpr, decl *ast.FuncDecl, args []dependencyCallbackValue, receiver dependencyCallbackValue, depth int) (dependencyCallbackValue, bool) {
-	if decl == nil || decl.Body == nil || depth > 64 || p.steps > 20000 {
+	if decl == nil || decl.Body == nil || depth > 64 || p.steps > p.stepLimit {
 		p.refuse(decl, "single-result factory unavailable or proof bounds exceeded")
 		return dependencyCallbackValue{}, false
 	}
@@ -2933,7 +2963,7 @@ func (p *dependencyCallbackProof) singleResultFunction(call *ast.CallExpr, decl 
 	}
 	for _, stmt := range list[:len(list)-1] {
 		p.steps++
-		if p.steps > 20000 {
+		if p.steps > p.stepLimit {
 			p.refuse(stmt, "proof step bound exceeded")
 			return dependencyCallbackValue{}, false
 		}
