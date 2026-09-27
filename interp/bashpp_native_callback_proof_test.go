@@ -60,11 +60,12 @@ func Parse(errh ErrorHandler) { var h holder; keep(&h); h.callback = errh }
 `,
 		},
 		{
-			name: "deferred callback",
+			name: "deferred callback runs before return",
 			source: `package dep
 type ErrorHandler func(error)
 func Parse(errh ErrorHandler) { defer errh(nil) }
 `,
+			want: true,
 		},
 		{
 			name: "unknown callee",
@@ -132,12 +133,63 @@ func Parse(cb func()) { h := &holder{f: cb}; go h.run() }
 `,
 		},
 		{
-			name: "nested deferred factory receiver",
+			name: "nested deferred local factory receiver",
 			source: `package dep
 type holder struct { f func() }
 func factory(h *holder) func() { return h.f }
 func Parse(cb func()) { h := &holder{f: cb}; defer factory(h)() }
 `,
+			want: true,
+		},
+		{
+			name: "deferred closure actual retention",
+			source: `package dep
+var saved func()
+func Parse(cb func()) { defer func() { saved = cb }() }
+`,
+		},
+		{
+			name: "deferred closure parameter actual retention",
+			source: `package dep
+var saved func()
+func Parse(cb func()) { defer func(f func()) { saved = f }(cb) }
+`,
+		},
+		{
+			name: "deferred closure parameter synchronous call",
+			source: `package dep
+func Parse(cb func()) { defer func(f func()) { f() }(cb) }
+`,
+			want: true,
+		},
+		{
+			name: "deferred unknown callee",
+			source: `package dep
+func Parse(cb func()) { defer external(cb) }
+`,
+		},
+		{
+			name: "deferred factory actual retention",
+			source: `package dep
+var saved func()
+func factory(cb func()) func() { saved = cb; return func() {} }
+func Parse(cb func()) { defer factory(cb)() }
+`,
+		},
+		{
+			name: "syntax parser trace-shaped defer",
+			source: `package dep
+const trace = false
+type source struct { errh func(error) }
+func (s *source) init(errh func(error)) { s.errh = errh }
+type scanner struct { source }
+type parser struct { scanner }
+func (p *parser) init(cb func(error)) { p.scanner.source.init(cb) }
+func (p *parser) trace(string) func() { _ = p.scanner.source.errh; return func() { _ = p } }
+func (p *parser) parse() { if trace { defer p.trace("file")() } }
+func Parse(cb func(error)) { var p parser; p.init(cb); p.parse() }
+`,
+			want: true,
 		},
 		{
 			name: "recursive callback substitution is unproved",

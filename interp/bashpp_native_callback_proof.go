@@ -484,7 +484,7 @@ func (p *dependencyCallbackProof) statement(stmt ast.Stmt, env map[string]depend
 	case *ast.GoStmt:
 		return !p.callTainted(stmt.Call, env)
 	case *ast.DeferStmt:
-		return !p.callTainted(stmt.Call, env)
+		return p.deferredCall(stmt.Call, env, depth)
 	case *ast.IfStmt:
 		branchBase := dependencyCallbackCloneEnv(env)
 		before := dependencyCallbackTaintSnapshot(env)
@@ -718,8 +718,129 @@ func (p *dependencyCallbackProof) callTainted(call *ast.CallExpr, env map[string
 	return dependencyCallbackNodeTainted(call, env, p)
 }
 
+// deferredCall proves the final invocation as an ordinary synchronous call:
+// Go runs it before the enclosing function returns, so defer alone is not
+// retention. A call-valued callee (for example, defer p.trace(msg)()) is
+// admitted only when its factory is a source-visible local function or method
+// with one explicit result. Unknown factories and any escape in the factory or
+// deferred body remain refusals.
+func (p *dependencyCallbackProof) deferredCall(call *ast.CallExpr, env map[string]dependencyCallbackValue, depth int) bool {
+	for _, arg := range call.Args {
+		if !p.expressionCalls(arg, env, depth) {
+			return false
+		}
+	}
+	callee := p.value(call.Fun, env)
+	if factory, ok := call.Fun.(*ast.CallExpr); ok {
+		var proved bool
+		callee, proved = p.localSingleResult(factory, env, depth)
+		if !proved {
+			return false
+		}
+	}
+	return p.callWithCallee(call, callee, env, depth)
+}
+
+func (p *dependencyCallbackProof) localSingleResult(call *ast.CallExpr, env map[string]dependencyCallbackValue, depth int) (dependencyCallbackValue, bool) {
+	args := make([]dependencyCallbackValue, len(call.Args))
+	for i, arg := range call.Args {
+		if !p.expressionCalls(arg, env, depth) {
+			return dependencyCallbackValue{}, false
+		}
+		args[i] = p.value(arg, env)
+	}
+	var decl *ast.FuncDecl
+	var receiver dependencyCallbackValue
+	switch fun := call.Fun.(type) {
+	case *ast.Ident:
+		decls := p.funcs[fun.Name]
+		if len(decls) != 1 {
+			return dependencyCallbackValue{}, false
+		}
+		decl = decls[0]
+	case *ast.SelectorExpr:
+		receiver = p.value(fun.X, env)
+		decl, receiver = p.method(receiver, fun.Sel.Name, map[string]bool{})
+		if decl == nil {
+			return dependencyCallbackValue{}, false
+		}
+	default:
+		return dependencyCallbackValue{}, false
+	}
+	return p.singleResultFunction(decl, args, receiver, depth+1)
+}
+
+func (p *dependencyCallbackProof) singleResultFunction(decl *ast.FuncDecl, args []dependencyCallbackValue, receiver dependencyCallbackValue, depth int) (dependencyCallbackValue, bool) {
+	if decl == nil || decl.Body == nil || depth > 64 || p.steps > 20000 {
+		return dependencyCallbackValue{}, false
+	}
+	names := dependencyCallbackFieldNames(decl.Type.Params)
+	if len(names) != len(args) || decl.Type.Results == nil || len(decl.Type.Results.List) != 1 || len(decl.Type.Results.List[0].Names) != 0 {
+		return dependencyCallbackValue{}, false
+	}
+	list := decl.Body.List
+	if len(list) == 0 {
+		return dependencyCallbackValue{}, false
+	}
+	ret, ok := list[len(list)-1].(*ast.ReturnStmt)
+	if !ok || len(ret.Results) != 1 {
+		return dependencyCallbackValue{}, false
+	}
+	for _, stmt := range list[:len(list)-1] {
+		if dependencyCallbackContainsReturn(stmt) {
+			return dependencyCallbackValue{}, false
+		}
+	}
+	env := make(map[string]dependencyCallbackValue)
+	for i, name := range names {
+		if name != "" {
+			env[name] = args[i]
+		}
+	}
+	if decl.Recv != nil && len(decl.Recv.List[0].Names) == 1 {
+		env[decl.Recv.List[0].Names[0].Name] = receiver
+	}
+	for _, stmt := range list[:len(list)-1] {
+		p.steps++
+		if p.steps > 20000 || !p.statement(stmt, env, depth) {
+			return dependencyCallbackValue{}, false
+		}
+	}
+	result := ret.Results[0]
+	if _, literal := result.(*ast.FuncLit); !literal && !p.expressionCalls(result, env, depth) {
+		return dependencyCallbackValue{}, false
+	}
+	return p.value(result, env), true
+}
+
+func dependencyCallbackContainsReturn(node ast.Node) bool {
+	found := false
+	ast.Inspect(node, func(node ast.Node) bool {
+		if found || node == nil {
+			return false
+		}
+		if _, nested := node.(*ast.FuncLit); nested {
+			return false
+		}
+		if _, ok := node.(*ast.ReturnStmt); ok {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
 func (p *dependencyCallbackProof) call(call *ast.CallExpr, env map[string]dependencyCallbackValue, depth int) bool {
 	callee := p.value(call.Fun, env)
+	return p.callWithCallee(call, callee, env, depth)
+}
+
+func (p *dependencyCallbackProof) callWithCallee(call *ast.CallExpr, callee dependencyCallbackValue, env map[string]dependencyCallbackValue, depth int) bool {
+	args := make([]dependencyCallbackValue, len(call.Args))
+	for i, arg := range call.Args {
+		args[i] = p.value(arg, env)
+	}
 	if callee.callback != nil {
 		if callee.callback.lit == nil {
 			return true
@@ -729,12 +850,20 @@ func (p *dependencyCallbackProof) call(call *ast.CallExpr, env map[string]depend
 			// refusal prevents a returned closure from being mistaken for clean.
 			return false
 		}
-		return p.block(callee.callback.lit.Body, dependencyCallbackCloneEnv(callee.callback.env), depth+1)
+		names := dependencyCallbackFieldNames(callee.callback.lit.Type.Params)
+		if len(names) != len(args) {
+			return false
+		}
+		closureEnv := dependencyCallbackCloneEnv(callee.callback.env)
+		for i, name := range names {
+			if name != "" {
+				closureEnv[name] = args[i]
+			}
+		}
+		return p.block(callee.callback.lit.Body, closureEnv, depth+1)
 	}
-	args := make([]dependencyCallbackValue, len(call.Args))
 	tainted := false
-	for i, arg := range call.Args {
-		args[i] = p.value(arg, env)
+	for i := range args {
 		tainted = tainted || args[i].tainted()
 	}
 	switch fun := call.Fun.(type) {
