@@ -23,6 +23,12 @@ const dependencyCallbackProofDiagnosticLimit = 48
 // raises it, and only to see past the first refusal it records.
 const dependencyCallbackProofStepBudget = 20000
 
+// dependencyCallbackProofDepthBound bounds the nesting of function bodies one
+// proof may descend through. Every proof starts at this bound; only the
+// test-only refusal enumeration raises it, and only to measure how deep the
+// walk would have had to go.
+const dependencyCallbackProofDepthBound = 64
+
 // dependencyFunctionCallbackLifetimeProof proves, from the exact package
 // sources selected for the dependency worker, that a package function cannot
 // retain or asynchronously invoke any original callback argument. A missing
@@ -276,6 +282,13 @@ type dependencyCallbackProof struct {
 	// dependencyCallbackProofStepBudget in production.
 	stepLimit int
 
+	// depthLimit is the body-nesting bound of this proof, always
+	// dependencyCallbackProofDepthBound in production. maxDepth records the
+	// deepest body the walk actually entered, which is what a measurement run
+	// reads back.
+	depthLimit int
+	maxDepth   int
+
 	// enumerate, when non-nil, replaces the verdict of every refusal with
 	// whatever it returns, so a measurement run can record a refusal site and
 	// then keep walking its siblings. Production leaves it nil, which is the
@@ -296,7 +309,7 @@ func newDependencyCallbackProof(files []*ast.File) *dependencyCallbackProof {
 	p := &dependencyCallbackProof{
 		funcs: make(map[string][]*ast.FuncDecl), methods: make(map[string]map[string]*ast.FuncDecl),
 		types: make(map[string]dependencyCallbackType), typeSpecs: make(map[string]*ast.TypeSpec), funcTypes: make(map[string]bool), globals: make(map[string]bool), consts: make(map[string]bool), active: make(map[string]dependencyCallbackActiveFrame), done: make(map[string][]dependencyCallbackCompletedFrame),
-		stepLimit: dependencyCallbackProofStepBudget,
+		stepLimit: dependencyCallbackProofStepBudget, depthLimit: dependencyCallbackProofDepthBound,
 	}
 	for _, file := range files {
 		for _, decl := range file.Decls {
@@ -809,8 +822,11 @@ func dependencyCallbackBindArguments(fields *ast.FieldList, args []dependencyCal
 }
 
 func (p *dependencyCallbackProof) function(decl *ast.FuncDecl, supplied map[string]dependencyCallbackValue, receiver dependencyCallbackValue, depth int) bool {
-	if decl == nil || decl.Body == nil || depth > 64 || p.steps > p.stepLimit {
+	if decl == nil || decl.Body == nil || depth > p.depthLimit || p.steps > p.stepLimit {
 		return p.refuse(decl, fmt.Sprintf("function unavailable or proof bounds exceeded depth=%d steps=%d", depth, p.steps))
+	}
+	if depth > p.maxDepth {
+		p.maxDepth = depth
 	}
 	key := decl.Name.Name
 	if decl.Recv != nil {
@@ -1126,8 +1142,11 @@ func (p *dependencyCallbackProof) recursiveBodyStoresCallback(decl *ast.FuncDecl
 	if decl == nil || decl.Body == nil {
 		return true
 	}
-	if depth > 64 {
+	if depth > p.depthLimit {
 		return true
+	}
+	if depth > p.maxDepth {
+		p.maxDepth = depth
 	}
 	frame := key + "\x00" + dependencyCallbackFrameSnapshot(supplied, receiver)
 	if stores, ok := p.summaries[frame]; ok {
@@ -3069,7 +3088,7 @@ func (p *dependencyCallbackProof) localSingleResult(call *ast.CallExpr, env map[
 }
 
 func (p *dependencyCallbackProof) singleResultFunction(call *ast.CallExpr, decl *ast.FuncDecl, args []dependencyCallbackValue, receiver dependencyCallbackValue, depth int) (dependencyCallbackValue, bool) {
-	if decl == nil || decl.Body == nil || depth > 64 || p.steps > p.stepLimit {
+	if decl == nil || decl.Body == nil || depth > p.depthLimit || p.steps > p.stepLimit {
 		p.refuse(decl, "single-result factory unavailable or proof bounds exceeded")
 		return dependencyCallbackValue{}, false
 	}
