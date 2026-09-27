@@ -103,6 +103,7 @@ func loadDependencyFunctionCallbackLifetimeProof(ctx context.Context, req bashPP
 
 type dependencyCallbackObject struct {
 	typ       string
+	lineage   *dependencyCallbackObject
 	owned     bool
 	escaped   bool
 	synthetic bool
@@ -113,12 +114,14 @@ type dependencyCallbackObject struct {
 
 type dependencyCallbackClosure struct {
 	lit      *ast.FuncLit
+	lineage  *dependencyCallbackClosure
 	env      map[string]dependencyCallbackValue
 	captures map[string]bool
 }
 
 type dependencyCallbackCell struct {
-	value dependencyCallbackValue
+	lineage *dependencyCallbackCell
+	value   dependencyCallbackValue
 }
 
 type dependencyCallbackDeferred struct {
@@ -815,7 +818,7 @@ func (p *dependencyCallbackProof) function(decl *ast.FuncDecl, supplied map[stri
 
 func dependencyCallbackSameFrame(active dependencyCallbackActiveFrame, supplied map[string]dependencyCallbackValue, receiver dependencyCallbackValue) (bool, bool, string) {
 	generalized := false
-	if dependencyCallbackSameValue(active.receiver, receiver) {
+	if dependencyCallbackSameValue(active.receiver, receiver) || dependencyCallbackSameLineageGraph(active.receiver, receiver) {
 		current := dependencyCallbackValueSnapshot(receiver)
 		if current != active.receiverSnapshot {
 			if active.receiver.tainted() {
@@ -841,7 +844,7 @@ func dependencyCallbackSameFrame(active dependencyCallbackActiveFrame, supplied 
 		if !ok {
 			return false, false, "argument " + name + " missing in recursive call"
 		}
-		if dependencyCallbackSameValue(value, other) {
+		if dependencyCallbackSameValue(value, other) || dependencyCallbackSameLineageGraph(value, other) {
 			current := dependencyCallbackValueSnapshot(other)
 			if current != active.argSnapshots[name] {
 				if value.tainted() {
@@ -865,9 +868,125 @@ func dependencyCallbackSameFrame(active dependencyCallbackActiveFrame, supplied 
 }
 
 func dependencyCallbackSameValue(left, right dependencyCallbackValue) bool {
+	if left.cell != nil || right.cell != nil {
+		return left.cell == right.cell && left.escaped == right.escaped
+	}
 	left = dependencyCallbackResolvedValue(left)
 	right = dependencyCallbackResolvedValue(right)
 	return left.callback == right.callback && left.object == right.object && left.callable == right.callable && left.escaped == right.escaped
+}
+
+type dependencyCallbackGraphPairing struct {
+	objectsLR  map[*dependencyCallbackObject]*dependencyCallbackObject
+	objectsRL  map[*dependencyCallbackObject]*dependencyCallbackObject
+	closuresLR map[*dependencyCallbackClosure]*dependencyCallbackClosure
+	closuresRL map[*dependencyCallbackClosure]*dependencyCallbackClosure
+	cellsLR    map[*dependencyCallbackCell]*dependencyCallbackCell
+	cellsRL    map[*dependencyCallbackCell]*dependencyCallbackCell
+	steps      int
+}
+
+func dependencyCallbackSameLineageGraph(left, right dependencyCallbackValue) bool {
+	pairing := dependencyCallbackGraphPairing{
+		objectsLR: make(map[*dependencyCallbackObject]*dependencyCallbackObject), objectsRL: make(map[*dependencyCallbackObject]*dependencyCallbackObject),
+		closuresLR: make(map[*dependencyCallbackClosure]*dependencyCallbackClosure), closuresRL: make(map[*dependencyCallbackClosure]*dependencyCallbackClosure),
+		cellsLR: make(map[*dependencyCallbackCell]*dependencyCallbackCell), cellsRL: make(map[*dependencyCallbackCell]*dependencyCallbackCell),
+	}
+	return pairing.value(left, right)
+}
+
+func dependencyCallbackObjectLineage(obj *dependencyCallbackObject) *dependencyCallbackObject {
+	if obj != nil && obj.lineage != nil {
+		return obj.lineage
+	}
+	return obj
+}
+
+func dependencyCallbackClosureLineage(closure *dependencyCallbackClosure) *dependencyCallbackClosure {
+	if closure != nil && closure.lineage != nil {
+		return closure.lineage
+	}
+	return closure
+}
+
+func dependencyCallbackCellLineage(cell *dependencyCallbackCell) *dependencyCallbackCell {
+	if cell != nil && cell.lineage != nil {
+		return cell.lineage
+	}
+	return cell
+}
+
+func (p *dependencyCallbackGraphPairing) value(left, right dependencyCallbackValue) bool {
+	p.steps++
+	if p.steps > 20000 || left.callable != right.callable || left.escaped != right.escaped {
+		return false
+	}
+	if left.cell != nil || right.cell != nil {
+		return p.cell(left.cell, right.cell)
+	}
+	if left.callback != nil || right.callback != nil {
+		return p.closure(left.callback, right.callback)
+	}
+	return p.object(left.object, right.object)
+}
+
+func (p *dependencyCallbackGraphPairing) cell(left, right *dependencyCallbackCell) bool {
+	if left == nil || right == nil || dependencyCallbackCellLineage(left) != dependencyCallbackCellLineage(right) {
+		return left == right
+	}
+	if paired, ok := p.cellsLR[left]; ok {
+		return paired == right
+	}
+	if paired, ok := p.cellsRL[right]; ok {
+		return paired == left
+	}
+	p.cellsLR[left], p.cellsRL[right] = right, left
+	return p.value(left.value, right.value)
+}
+
+func (p *dependencyCallbackGraphPairing) closure(left, right *dependencyCallbackClosure) bool {
+	if left == nil || right == nil || dependencyCallbackClosureLineage(left) != dependencyCallbackClosureLineage(right) || left.lit != right.lit || len(left.env) != len(right.env) || len(left.captures) != len(right.captures) {
+		return left == right
+	}
+	if paired, ok := p.closuresLR[left]; ok {
+		return paired == right
+	}
+	if paired, ok := p.closuresRL[right]; ok {
+		return paired == left
+	}
+	p.closuresLR[left], p.closuresRL[right] = right, left
+	for name, value := range left.env {
+		other, ok := right.env[name]
+		if !ok || !p.value(value, other) {
+			return false
+		}
+	}
+	for name, captured := range left.captures {
+		if right.captures[name] != captured {
+			return false
+		}
+	}
+	return true
+}
+
+func (p *dependencyCallbackGraphPairing) object(left, right *dependencyCallbackObject) bool {
+	if left == nil || right == nil || dependencyCallbackObjectLineage(left) != dependencyCallbackObjectLineage(right) || left.typ != right.typ || left.owned != right.owned || left.escaped != right.escaped || left.synthetic != right.synthetic || left.scalar != right.scalar || left.general != right.general || len(left.fields) != len(right.fields) {
+		return left == right
+	}
+	if paired, ok := p.objectsLR[left]; ok {
+		return paired == right
+	}
+	if paired, ok := p.objectsRL[right]; ok {
+		return paired == left
+	}
+	p.objectsLR[left], p.objectsRL[right] = right, left
+	for name, value := range left.fields {
+		other, ok := right.fields[name]
+		if !ok || !p.value(value, other) {
+			return false
+		}
+	}
+	return true
 }
 
 func (p *dependencyCallbackProof) recursiveBodyStoresCallback(decl *ast.FuncDecl, active dependencyCallbackActiveFrame) bool {
@@ -1510,6 +1629,10 @@ func (p *dependencyCallbackProof) block(block *ast.BlockStmt, env map[string]dep
 // Object facts stay monotonic: a nil or clean assignment cannot erase evidence
 // that an alias may still carry a callback.
 func (p *dependencyCallbackProof) scopedBlock(block *ast.BlockStmt, env map[string]dependencyCallbackValue, depth int) bool {
+	return p.scopedBlockWithCurrent(block, env, depth, nil)
+}
+
+func (p *dependencyCallbackProof) scopedBlockWithCurrent(block *ast.BlockStmt, env map[string]dependencyCallbackValue, depth int, current map[string]bool) bool {
 	if block == nil {
 		return true
 	}
@@ -1517,7 +1640,7 @@ func (p *dependencyCallbackProof) scopedBlock(block *ast.BlockStmt, env map[stri
 		value  dependencyCallbackValue
 		exists bool
 	}
-	declared := make(map[string]bool)
+	declared := dependencyCallbackCloneScope(current)
 	saved := make(map[string]savedBinding)
 	defer func() {
 		for name, binding := range saved {
@@ -1535,6 +1658,7 @@ func (p *dependencyCallbackProof) scopedBlock(block *ast.BlockStmt, env map[stri
 			}
 			value, exists := env[name]
 			saved[name] = savedBinding{value: value, exists: exists}
+			delete(env, name)
 			declared[name] = true
 		}
 		p.steps++
@@ -1913,7 +2037,7 @@ func (c *dependencyCallbackGraphCloner) cell(cell *dependencyCallbackCell) *depe
 	if clone := c.cells[cell]; clone != nil {
 		return clone
 	}
-	clone := &dependencyCallbackCell{}
+	clone := &dependencyCallbackCell{lineage: dependencyCallbackCellLineage(cell)}
 	c.cells[cell] = clone
 	clone.value = c.value(cell.value)
 	return clone
@@ -1928,6 +2052,7 @@ func (c *dependencyCallbackGraphCloner) object(obj *dependencyCallbackObject) *d
 	}
 	clone := &dependencyCallbackObject{
 		typ:       obj.typ,
+		lineage:   dependencyCallbackObjectLineage(obj),
 		owned:     obj.owned,
 		escaped:   obj.escaped,
 		synthetic: obj.synthetic,
@@ -1952,7 +2077,7 @@ func (c *dependencyCallbackGraphCloner) closure(closure *dependencyCallbackClosu
 	if clone := c.closures[closure]; clone != nil {
 		return clone
 	}
-	clone := &dependencyCallbackClosure{lit: closure.lit, captures: dependencyCallbackCloneScope(closure.captures)}
+	clone := &dependencyCallbackClosure{lit: closure.lit, lineage: dependencyCallbackClosureLineage(closure), captures: dependencyCallbackCloneScope(closure.captures)}
 	c.closures[closure] = clone
 	clone.env = c.env(closure.env)
 	return clone
@@ -2117,7 +2242,7 @@ func (p *dependencyCallbackProof) assign(lhs ast.Expr, value dependencyCallbackV
 		if value.tainted() && dependencyCallbackResolvedValue(env[lhs.Name]).escaped {
 			return p.refuse(lhs, "assignment stores callback-bearing value in escaped closure cell")
 		}
-		if existing := env[lhs.Name]; existing.cell != nil && !define {
+		if existing := env[lhs.Name]; existing.cell != nil {
 			existing.cell.value = value
 			return true
 		}
@@ -2472,16 +2597,21 @@ func (p *dependencyCallbackProof) callWithResolvedCallee(call *ast.CallExpr, cal
 			closureEnv[name] = value
 		}
 		results := make(map[string]bool)
+		current := make(map[string]bool, len(supplied))
+		for name := range supplied {
+			current[name] = true
+		}
 		for _, name := range dependencyCallbackFieldNames(callee.callback.lit.Type.Results) {
 			if name != "" {
 				results[name] = true
+				current[name] = true
 				closureEnv[name] = dependencyCallbackValue{}
 			}
 		}
 		p.results = append(p.results, results)
 		defer func() { p.results = p.results[:len(p.results)-1] }()
 		p.defers = append(p.defers, nil)
-		ok := p.block(callee.callback.lit.Body, closureEnv, depth+1) && p.runDeferred(closureEnv, depth+1)
+		ok := p.scopedBlockWithCurrent(callee.callback.lit.Body, closureEnv, depth+1, current) && p.runDeferred(closureEnv, depth+1)
 		p.defers = p.defers[:len(p.defers)-1]
 		if ok {
 			dependencyCallbackJoinClosureEnvTaint(callee.callback.env, closureEnv, callee.callback.captures)
@@ -2714,9 +2844,14 @@ func (p *dependencyCallbackProof) field(receiver dependencyCallbackValue, name s
 // place a callback-bearing value in an enclosing binding, a later LIFO defer
 // must observe that binding as tainted. Clean writes never erase the fact.
 func dependencyCallbackJoinEnvTaint(dst, src map[string]dependencyCallbackValue) {
-	for name, value := range src {
-		if _, captured := dst[name]; captured && value.tainted() && !dst[name].tainted() {
-			dst[name] = value
+	for _, value := range src {
+		if value.cell == nil || !value.tainted() {
+			continue
+		}
+		for _, target := range dst {
+			if target.cell == value.cell && !target.tainted() {
+				target.cell.value = value.cell.value
+			}
 		}
 	}
 }
@@ -2724,8 +2859,9 @@ func dependencyCallbackJoinEnvTaint(dst, src map[string]dependencyCallbackValue)
 func dependencyCallbackJoinClosureEnvTaint(dst, src map[string]dependencyCallbackValue, captures map[string]bool) {
 	for name := range captures {
 		value := src[name]
-		if _, captured := dst[name]; captured && value.tainted() && !dst[name].tainted() {
-			dst[name] = value
+		target, captured := dst[name]
+		if captured && target.cell != nil && target.cell == value.cell && value.tainted() && !target.tainted() {
+			target.cell.value = value.cell.value
 		}
 	}
 }

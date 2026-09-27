@@ -1157,6 +1157,53 @@ func Parse(cb func()) {
 `,
 			want: true,
 		},
+		{
+			name: "mixed short declaration reuses same block captured cell",
+			source: `package dep
+var saved func()
+func Parse(cb func()) {
+	var f func()
+	getter := func() { saved = f }
+	f, n := cb, 1
+	_ = n
+	getter()
+}
+`,
+		},
+		{
+			name: "mixed short declaration shadows outer captured cell",
+			source: `package dep
+var saved func()
+func Parse(cb func()) {
+	var f func()
+	getter := func() { saved = f }
+	{
+		f, n := cb, 1
+		_ = n
+		f()
+	}
+	getter()
+}
+`,
+			want: true,
+		},
+		{
+			name: "caller join keeps distinct shadow capture cell",
+			source: `package dep
+var saved func()
+func Parse(cb func()) {
+	var f func()
+	var invoke func()
+	{
+		var f func() = cb
+		invoke = func() { f() }
+	}
+	invoke()
+	saved = f
+}
+`,
+			want: true,
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			file, err := parser.ParseFile(token.NewFileSet(), "dep.go", test.source, parser.SkipObjectResolution)
@@ -1168,6 +1215,49 @@ func Parse(cb func()) {
 				t.Fatalf("proof=%v, want %v", got, test.want)
 			}
 		})
+	}
+}
+
+// Sprint: #281; Story: #810; Story-ID: 48c1146a3ab0
+func TestDependencyCallbackProofRecursiveCloneLineage(t *testing.T) {
+	callback := dependencyCallbackValue{callback: &dependencyCallbackClosure{}}
+	shared := &dependencyCallbackCell{value: callback}
+	receiver := dependencyCallbackValue{object: &dependencyCallbackObject{
+		typ: "parser", owned: true,
+		fields: map[string]dependencyCallbackValue{
+			"left":  {cell: shared},
+			"right": {cell: shared},
+		},
+	}}
+	active := dependencyCallbackActiveFrame{
+		receiver:         receiver,
+		receiverSnapshot: dependencyCallbackValueSnapshot(receiver),
+	}
+
+	clone := newDependencyCallbackGraphCloner().value(receiver)
+	if same, generalized, rejection := dependencyCallbackSameFrame(active, nil, clone); !same || generalized || rejection != "" {
+		t.Fatalf("lineage-preserving clone = (%v, %v, %q), want (true, false, empty)", same, generalized, rejection)
+	}
+
+	distinctCell := &dependencyCallbackCell{value: callback}
+	distinct := dependencyCallbackValue{object: &dependencyCallbackObject{
+		typ: "parser", owned: true,
+		fields: map[string]dependencyCallbackValue{
+			"left":  {cell: distinctCell},
+			"right": {cell: distinctCell},
+		},
+	}}
+	if same, _, _ := dependencyCallbackSameFrame(active, nil, distinct); same {
+		t.Fatal("structurally similar distinct receiver was admitted without clone lineage")
+	}
+
+	brokenAlias := newDependencyCallbackGraphCloner().value(receiver)
+	brokenAlias.object.fields["right"] = dependencyCallbackValue{cell: &dependencyCallbackCell{
+		lineage: shared,
+		value:   callback,
+	}}
+	if same, _, _ := dependencyCallbackSameFrame(active, nil, brokenAlias); same {
+		t.Fatal("clone with changed cell alias identity was admitted")
 	}
 }
 
