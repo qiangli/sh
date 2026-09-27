@@ -97,8 +97,10 @@ func main() {
 }
 
 // TestS281NativeNilTupleCollectionField keeps a dependency-produced typed nil
-// slice on the same tuple-to-field path. A synthetic empty DWARF entry returns
-// without consulting an ELF section, so the control remains source-only.
+// slice on the same tuple-to-field path. A synthetic DWARF entry with a typed,
+// non-range field returns nil without consulting an ELF section, so the control
+// remains source-only. Materializing a zero-valued imported struct composite
+// such as &dwarf.Entry{} remains a separate unchanged Story 809 baseline defect.
 func TestS281NativeNilTupleCollectionField(t *testing.T) {
 	const source = `package main
 import (
@@ -109,7 +111,7 @@ type Scope struct { ranges [][2]uint64 }
 func main() {
 	var scope Scope
 	var err error
-	scope.ranges, err = new(dwarf.Data).Ranges(&dwarf.Entry{Field: nil})
+	scope.ranges, err = new(dwarf.Data).Ranges(&dwarf.Entry{Field: []dwarf.Field{{Attr: dwarf.AttrName, Val: "no-ranges"}}})
 	fmt.Println(err, scope.ranges == nil, len(scope.ranges))
 }`
 	differGoSource(t, source, nil, "")

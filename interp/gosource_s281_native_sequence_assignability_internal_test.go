@@ -97,7 +97,7 @@ import (
 	"strings"
 )
 func main() {
-	empty, emptyErr := new(dwarf.Data).Ranges(&dwarf.Entry{Field: nil})
+	empty, emptyErr := new(dwarf.Data).Ranges(&dwarf.Entry{Field: []dwarf.Field{{Attr: dwarf.AttrName, Val: "no-ranges"}}})
 	ranges, rangesErr := new(dwarf.Data).Ranges(&dwarf.Entry{Field: []dwarf.Field{
 		{Attr: dwarf.AttrLowpc, Val: uint64(10)},
 		{Attr: dwarf.AttrHighpc, Class: dwarf.ClassAddress, Val: uint64(20)},
