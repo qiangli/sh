@@ -4,6 +4,8 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -177,6 +179,27 @@ func Parse(cb func()) { defer factory(cb)() }
 `,
 		},
 		{
+			name: "deferred late variable retention",
+			source: `package dep
+var saved func()
+func Parse(cb func()) { var f func(); defer func() { saved = f }(); f = cb }
+`,
+		},
+		{
+			name: "deferred late field retention",
+			source: `package dep
+var saved func()
+func Parse(cb func()) { h := &struct{ f func() }{}; defer func() { saved = h.f }(); h.f = cb }
+`,
+		},
+		{
+			name: "deferred lifo mutation retention",
+			source: `package dep
+var saved func()
+func Parse(cb func()) { var f func(); defer func() { saved = f }(); defer func() { f = cb }() }
+`,
+		},
+		{
 			name: "syntax parser trace-shaped defer",
 			source: `package dep
 const trace = false
@@ -245,6 +268,44 @@ func Parse(cb func(), choose bool) { for choose { cb(); choose = false } }
 			got := newDependencyCallbackProof([]*ast.File{file}).prove("Parse", []int{0})
 			if got != test.want {
 				t.Fatalf("proof=%v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestDependencyCallbackProofCompilerSyntaxSource(t *testing.T) {
+	dir := filepath.Join(runtime.GOROOT(), "src", "cmd", "compile", "internal", "syntax")
+	selected := []string{
+		"syntax.go",
+		"parser.go",
+		"scanner.go",
+		"source.go",
+		"branches.go",
+		"tokens.go",
+	}
+	fset := token.NewFileSet()
+	files := make([]*ast.File, 0, len(selected))
+	for _, name := range selected {
+		path := filepath.Join(dir, name)
+		file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse %s: %v", path, err)
+		}
+		files = append(files, file)
+	}
+	for _, test := range []struct {
+		name string
+		fn   string
+		args []int
+	}{
+		{name: "Parse", fn: "Parse", args: []int{2}},
+		{name: "ParseFile", fn: "ParseFile", args: []int{1}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			proof := newDependencyCallbackProof(files)
+			proof.fset = fset
+			if !proof.prove(test.fn, test.args) {
+				t.Fatalf("%s callback proof refused: %s", test.fn, proof.reason)
 			}
 		})
 	}

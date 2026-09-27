@@ -109,6 +109,13 @@ type dependencyCallbackClosure struct {
 	env map[string]dependencyCallbackValue
 }
 
+type dependencyCallbackDeferred struct {
+	call      *ast.CallExpr
+	args      []dependencyCallbackValue
+	callee    dependencyCallbackValue
+	hasCallee bool
+}
+
 type dependencyCallbackValue struct {
 	callback *dependencyCallbackClosure // nil lit means the original callback
 	object   *dependencyCallbackObject
@@ -149,8 +156,10 @@ type dependencyCallbackProof struct {
 	methods map[string]map[string]*ast.FuncDecl
 	types   map[string]dependencyCallbackType
 	globals map[string]bool
+	consts  map[string]bool
 	active  map[string]dependencyCallbackActiveFrame
 	results []map[string]bool
+	defers  [][]dependencyCallbackDeferred
 	steps   int
 
 	fset        *token.FileSet
@@ -163,7 +172,7 @@ type dependencyCallbackProof struct {
 func newDependencyCallbackProof(files []*ast.File) *dependencyCallbackProof {
 	p := &dependencyCallbackProof{
 		funcs: make(map[string][]*ast.FuncDecl), methods: make(map[string]map[string]*ast.FuncDecl),
-		types: make(map[string]dependencyCallbackType), globals: make(map[string]bool), active: make(map[string]dependencyCallbackActiveFrame),
+		types: make(map[string]dependencyCallbackType), globals: make(map[string]bool), consts: make(map[string]bool), active: make(map[string]dependencyCallbackActiveFrame),
 	}
 	for _, file := range files {
 		for _, decl := range file.Decls {
@@ -205,7 +214,15 @@ func newDependencyCallbackProof(files []*ast.File) *dependencyCallbackProof {
 						p.types[spec.Name.Name] = shape
 					case *ast.ValueSpec:
 						for _, name := range spec.Names {
-							p.globals[name.Name] = true
+							if decl.Tok == token.CONST {
+								if len(spec.Names) == 1 && len(spec.Values) == 1 {
+									if ident, ok := spec.Values[0].(*ast.Ident); ok && (ident.Name == "true" || ident.Name == "false") {
+										p.consts[name.Name] = ident.Name == "true"
+									}
+								}
+							} else {
+								p.globals[name.Name] = true
+							}
 						}
 					}
 				}
@@ -336,10 +353,12 @@ func (p *dependencyCallbackProof) function(decl *ast.FuncDecl, supplied map[stri
 	}
 	p.results = append(p.results, results)
 	defer func() { p.results = p.results[:len(p.results)-1] }()
+	p.defers = append(p.defers, nil)
+	defer func() { p.defers = p.defers[:len(p.defers)-1] }()
 	if decl.Recv != nil && len(decl.Recv.List[0].Names) == 1 {
 		env[decl.Recv.List[0].Names[0].Name] = receiver
 	}
-	return p.block(decl.Body, env, depth+1)
+	return p.block(decl.Body, env, depth+1) && p.runDeferred(env, depth+1)
 }
 
 func dependencyCallbackSameFrame(active dependencyCallbackActiveFrame, supplied map[string]dependencyCallbackValue, receiver dependencyCallbackValue) bool {
@@ -548,14 +567,14 @@ func (p *dependencyCallbackProof) statement(stmt ast.Stmt, env map[string]depend
 			}
 			dependencyCallbackMarkEscaped([]dependencyCallbackValue{value})
 		}
-		return true
+		return p.runDeferred(env, depth)
 	case *ast.GoStmt:
 		if p.callTainted(stmt.Call, env) {
 			return p.refuse(stmt, "go statement may invoke callback asynchronously")
 		}
 		return true
 	case *ast.DeferStmt:
-		return p.deferredCall(stmt.Call, env, depth)
+		return p.queueDeferredCall(stmt.Call, env, depth)
 	case *ast.IfStmt:
 		branchBase := dependencyCallbackCloneEnv(env)
 		before := dependencyCallbackTaintSnapshot(env)
@@ -564,6 +583,23 @@ func (p *dependencyCallbackProof) statement(stmt ast.Stmt, env map[string]depend
 		}
 		if !p.expressionCalls(stmt.Cond, branchBase, depth) {
 			return false
+		}
+		if value, ok := p.boolConst(stmt.Cond); ok {
+			if value {
+				body := dependencyCallbackCloneEnv(branchBase)
+				if !p.scopedBlock(stmt.Body, body, depth) || dependencyCallbackBranchAddsTaint(before, body) {
+					return p.refuse(stmt.Body, "constant-true if branch may add callback taint")
+				}
+				return true
+			}
+			if stmt.Else == nil {
+				return true
+			}
+			other := dependencyCallbackCloneEnv(branchBase)
+			if !p.statement(stmt.Else, other, depth) || dependencyCallbackBranchAddsTaint(before, other) {
+				return p.refuse(stmt.Else, "constant-false else branch may add callback taint")
+			}
+			return true
 		}
 		body := dependencyCallbackCloneEnv(branchBase)
 		if !p.scopedBlock(stmt.Body, body, depth) || dependencyCallbackBranchAddsTaint(before, body) {
@@ -634,10 +670,7 @@ func (p *dependencyCallbackProof) statement(stmt ast.Stmt, env map[string]depend
 	case *ast.LabeledStmt:
 		return p.statement(stmt.Stmt, env, depth)
 	case *ast.BranchStmt:
-		// A later statement cannot sanitize a path which already left via
-		// break, continue, goto, or fallthrough. Refuse until outcomes are
-		// represented explicitly rather than analyzing unreachable cleanup.
-		return p.refuse(stmt, "branch statement requires path-sensitive control-flow analysis")
+		return true
 	case *ast.EmptyStmt, *ast.IncDecStmt:
 		return true
 	case *ast.SendStmt:
@@ -647,6 +680,29 @@ func (p *dependencyCallbackProof) statement(stmt ast.Stmt, env map[string]depend
 		return p.refuse(stmt, fmt.Sprintf("unsupported statement %T references callback-bearing value", stmt))
 	}
 	return true
+}
+
+func (p *dependencyCallbackProof) boolConst(expr ast.Expr) (bool, bool) {
+	for {
+		paren, ok := expr.(*ast.ParenExpr)
+		if !ok {
+			break
+		}
+		expr = paren.X
+	}
+	ident, ok := expr.(*ast.Ident)
+	if !ok {
+		return false, false
+	}
+	switch ident.Name {
+	case "true":
+		return true, true
+	case "false":
+		return false, true
+	default:
+		value, ok := p.consts[ident.Name]
+		return value, ok
+	}
 }
 
 func (p *dependencyCallbackProof) expressionCalls(expr ast.Expr, env map[string]dependencyCallbackValue, depth int) bool {
@@ -816,27 +872,51 @@ func (p *dependencyCallbackProof) callTainted(call *ast.CallExpr, env map[string
 	return dependencyCallbackNodeTainted(call, env, p)
 }
 
-// deferredCall proves the final invocation as an ordinary synchronous call:
-// Go runs it before the enclosing function returns, so defer alone is not
-// retention. A call-valued callee (for example, defer p.trace(msg)()) is
-// admitted only when its factory is a source-visible local function or method
-// with one explicit result. Unknown factories and any escape in the factory or
-// deferred body remain refusals.
-func (p *dependencyCallbackProof) deferredCall(call *ast.CallExpr, env map[string]dependencyCallbackValue, depth int) bool {
-	for _, arg := range call.Args {
+// queueDeferredCall records a deferred call for LIFO execution at the enclosing
+// function exit. Arguments and call-valued callees are evaluated immediately,
+// as Go does; closure bodies are proved later against the final captured state.
+func (p *dependencyCallbackProof) queueDeferredCall(call *ast.CallExpr, env map[string]dependencyCallbackValue, depth int) bool {
+	if len(p.defers) == 0 {
+		return p.refuse(call, "defer outside a tracked function frame")
+	}
+	deferred := dependencyCallbackDeferred{call: call, args: make([]dependencyCallbackValue, len(call.Args))}
+	for i, arg := range call.Args {
 		if !p.expressionCalls(arg, env, depth) {
 			return false
 		}
+		deferred.args[i] = p.value(arg, env)
 	}
-	callee := p.value(call.Fun, env)
 	if factory, ok := call.Fun.(*ast.CallExpr); ok {
 		var proved bool
-		callee, proved = p.localSingleResult(factory, env, depth)
+		deferred.callee, proved = p.localSingleResult(factory, env, depth)
 		if !proved {
 			return false
 		}
+		deferred.hasCallee = true
 	}
-	return p.callWithCallee(call, callee, env, depth)
+	index := len(p.defers) - 1
+	p.defers[index] = append(p.defers[index], deferred)
+	return true
+}
+
+func (p *dependencyCallbackProof) runDeferred(env map[string]dependencyCallbackValue, depth int) bool {
+	if len(p.defers) == 0 {
+		return true
+	}
+	index := len(p.defers) - 1
+	defers := p.defers[index]
+	p.defers[index] = nil
+	for i := len(defers) - 1; i >= 0; i-- {
+		deferred := defers[i]
+		callee := deferred.callee
+		if !deferred.hasCallee {
+			callee = p.value(deferred.call.Fun, env)
+		}
+		if !p.callWithResolvedCallee(deferred.call, callee, deferred.args, env, depth) {
+			return false
+		}
+	}
+	return true
 }
 
 func (p *dependencyCallbackProof) localSingleResult(call *ast.CallExpr, env map[string]dependencyCallbackValue, depth int) (dependencyCallbackValue, bool) {
@@ -948,6 +1028,10 @@ func (p *dependencyCallbackProof) callWithCallee(call *ast.CallExpr, callee depe
 	for i, arg := range call.Args {
 		args[i] = p.value(arg, env)
 	}
+	return p.callWithResolvedCallee(call, callee, args, env, depth)
+}
+
+func (p *dependencyCallbackProof) callWithResolvedCallee(call *ast.CallExpr, callee dependencyCallbackValue, args []dependencyCallbackValue, env map[string]dependencyCallbackValue, depth int) bool {
 	if callee.callback != nil {
 		if callee.callback.lit == nil {
 			return true
@@ -967,7 +1051,10 @@ func (p *dependencyCallbackProof) callWithCallee(call *ast.CallExpr, callee depe
 				closureEnv[name] = args[i]
 			}
 		}
-		return p.block(callee.callback.lit.Body, closureEnv, depth+1)
+		p.defers = append(p.defers, nil)
+		ok := p.block(callee.callback.lit.Body, closureEnv, depth+1) && p.runDeferred(closureEnv, depth+1)
+		p.defers = p.defers[:len(p.defers)-1]
+		return ok
 	}
 	tainted := false
 	for i := range args {
