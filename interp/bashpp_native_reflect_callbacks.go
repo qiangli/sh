@@ -91,8 +91,8 @@ func (r *Runner) bashPPReflectValueSnapshot(req bashPPEvalRequest, arg bashPPBri
 		return nil
 	}
 	typeName := strings.TrimPrefix(arg.Type, "main.")
-	for _, local := range req.LocalTypes {
-		if (local.Name != typeName && local.WireType != typeName) || len(local.Methods) == 0 {
+	for _, local := range req.localTypePlan().transported(typeName) {
+		if len(local.Methods) == 0 {
 			continue
 		}
 		named := &syntax.BashPPNamedType{Name: &syntax.Lit{Value: typeName}}

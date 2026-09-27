@@ -266,8 +266,8 @@ func (r *Runner) bashPPReflectValueReceiver(req bashPPEvalRequest, call *syntax.
 	if elem == nil && typeName != "" {
 		elem = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: typeName}}
 	}
-	for _, local := range req.LocalTypes {
-		if (local.Name == typeName || local.WireType == typeName) && len(local.Methods) > 0 {
+	for _, local := range req.localTypePlan().transported(typeName) {
+		if len(local.Methods) > 0 {
 			origin := bashPPTransportOrigin(req.Bridge, &bashPPPointer{target: cell, elem: elem})
 			q.Args[0].Origin, q.Args[0].Session = origin, req.Bridge.id
 			return

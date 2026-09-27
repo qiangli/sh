@@ -1732,6 +1732,9 @@ func New(opts ...RunnerOption) (*Runner, error) {
 		readDirHandler:  DefaultReadDirHandler2(),
 		statHandler:     DefaultStatHandler(),
 	}
+	// Shared by every Runner copied from this one, so the instrument counts
+	// one program's native request path; see bashpp_s281_request_plan.go.
+	r.bashPPTools.requestScans = new(atomic.Int64)
 	r.execReplacement.owner = r
 	r.dirStack = r.dirBootstrap[:0]
 	// turn "on" the default Bash options

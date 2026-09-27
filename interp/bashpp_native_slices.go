@@ -165,19 +165,7 @@ func fmtReachesCallbacks(req bashPPEvalRequest, q bashPPBridgeRequest) bool {
 	if q.Receiver != nil && retained(*q.Receiver) {
 		return true
 	}
-	for _, typ := range req.LocalTypes {
-		for _, m := range typ.Methods {
-			if fmtProtocolMethod(m.Name) {
-				return true
-			}
-		}
-		for _, name := range typ.OmittedMethods {
-			if fmtProtocolMethod(name) {
-				return true
-			}
-		}
-	}
-	return false
+	return req.localTypePlan().fmtFormatting
 }
 
 // fmtProtocolMethod names the methods fmt's verbs look up on an operand:

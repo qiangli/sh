@@ -29,10 +29,7 @@ func validateLocalTransport(req bashPPEvalRequest, q bashPPBridgeRequest) error 
 	}
 	alias, name, selected := strings.Cut(q.Selector, ".")
 	nativeWriterFormat := selected && req.Imports[alias] == "fmt" && (name == "Fprint" || name == "Fprintln" || name == "Fprintf")
-	local := map[string]bashPPLocalType{}
-	for _, typ := range req.LocalTypes {
-		local[typ.Name] = typ
-	}
+	local := req.localTypePlan()
 	functionCallbacks := false
 	// identity reports that this value is reachable through an original pointer
 	// the dependency can name, so a method callback on it binds to the original
@@ -58,7 +55,7 @@ func validateLocalTransport(req bashPPEvalRequest, q bashPPBridgeRequest) error 
 		// mirrored method raised on it runs the original body with a nil
 		// receiver, which is exactly how native Go invokes it.
 		name := strings.TrimPrefix(v.Type, "main.")
-		typ, isLocal := local[name]
+		typ, isLocal := local.declared(name)
 		if len(typ.OmittedMethods) > 0 {
 			alias, _, _ := strings.Cut(q.Selector, ".")
 			for _, method := range typ.OmittedMethods {
@@ -699,39 +696,16 @@ func reflectValueCall(q bashPPBridgeRequest) bool {
 // localMethodsMirrored reports whether the helper mirrors any original method
 // at all; without one no dependency call can reach an original body.
 func localMethodsMirrored(req bashPPEvalRequest) bool {
-	for _, typ := range req.LocalTypes {
-		if len(typ.Methods) > 0 {
-			return true
-		}
-	}
-	return false
+	return req.localTypePlan().methodsMirrored
 }
 
 // Only requests carrying a local interface callback acquire the gate. Native
 // blocking synchronization must remain available to other interpreted tasks.
 func requestHasCallbacks(req bashPPEvalRequest, q bashPPBridgeRequest) bool {
-	local := map[string]bool{}
-	for _, typ := range req.LocalTypes {
-		if len(typ.Methods) == 0 {
-			continue
-		}
-		local[typ.Name] = true
-		// An instantiated generic type is materialised under a generated name
-		// but transported under its instantiation spelling; recognise both, so
-		// a value carrying its mirrored method is still seen as a callback.
-		if typ.WireType != "" {
-			local[typ.WireType] = true
-			// The helper spells type arguments without separator spaces, while
-			// WireType preserves the source spelling. Match both forms so a
-			// generic method callback keeps its owning request parked.
-			if parsed := syntax.BashPPTypeExprFromText(typ.WireType); parsed != nil {
-				local[bashPPBridgeTypeText(parsed)] = true
-			}
-		}
-	}
+	local := req.localTypePlan()
 	var check func(bashPPBridgeValue) bool
 	check = func(v bashPPBridgeValue) bool {
-		if v.Callbacks || local[strings.TrimPrefix(strings.TrimPrefix(v.Type, "*"), "main.")] {
+		if v.Callbacks || local.localMethodCallbackName(v.Type) {
 			return true
 		}
 		for _, c := range v.Elements {

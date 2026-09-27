@@ -23,6 +23,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
@@ -107,6 +108,13 @@ type bashPPEvalRequest struct {
 	// See [GoSourceIdentity].
 	ImportPath string
 	TestMain   bool
+	// identity is the session drift fingerprint of the program-derived
+	// descriptor sets above, and localPlan the derivation of LocalTypes the
+	// request path performs lookups against. Both are derived once per program
+	// revision by [Runner.bashPPNativeRequestShape]; a request assembled
+	// without one derives it on demand. See bashpp_s281_request_plan.go.
+	identity  *bashPPSessionIdentity
+	localPlan *bashPPLocalTypePlan
 }
 
 func (req bashPPEvalRequest) internalBuildGo() string {
@@ -185,6 +193,14 @@ type bashPPToolchain struct {
 	// lexical-scope and bridge-metadata planning. Its file key invalidates it.
 	localTypeDecls *bashPPLocalTypeDeclCache
 	localTypes     *bashPPLocalTypeCache
+	// requestPlan is the program-derived part of a native eval request, its
+	// session fingerprint and its local type lookups, derived once per
+	// revision of the inputs it reads; see bashpp_s281_request_plan.go.
+	requestPlan *bashPPNativeRequestPlan
+	// requestScans counts the local type descriptor entries that program's
+	// request path examined. It is the Story #811 instrument, shared by copied
+	// Runners; nil for a Runner assembled without [New].
+	requestScans *atomic.Int64
 	// bridgeMetadata is immutable after publication and shared safely by
 	// subshell copies. Its file and import-map identity keep source replacement
 	// and import rebinding from reusing stale generic types or selectors.
@@ -692,21 +708,16 @@ func (r *Runner) bashPPEvalRequest() (bashPPEvalRequest, error) {
 	if r.bashPPGoSource && !connected {
 		r.bashPPTools.requestEnv, r.bashPPTools.buildEnv, r.bashPPTools.runtimeEnv = env, buildEnv, runtimeEnv
 	}
-	embedDecls, sourceDir := r.bashPPGoSourceEmbedRequest()
-	if r.bashPPGoSource && sourceDir == "" {
-		sourceDir = r.bashPPGoSourceSourceDir()
+	// Every field below is a function of the loaded program, its imports and
+	// its directories; deriving them per request cost O(program size) per
+	// native call. See bashpp_s281_request_plan.go.
+	plan := r.bashPPNativeRequestShape()
+	if plan.err != nil {
+		return bashPPEvalRequest{}, plan.err
 	}
-	sourceFile := r.bashPPGoSourceSourceFile()
-	companionFiles, nativeFuncs, trampolines, unmappedFrames, err := r.bashPPGoSourceNativeCompanions(sourceDir)
-	if err != nil {
-		return bashPPEvalRequest{}, err
-	}
-	mappedCompanions, err := r.bashPPGoSourceMappedCompanions()
-	if err != nil {
-		return bashPPEvalRequest{}, err
-	}
-	return bashPPEvalRequest{CallbackOwner: r, CallbackDepth: r.bashPPTools.callbackDepth, PanicOnFault: r.bashPPTools.panicOnFault, LocalTypes: r.bashPPLocalTypeDescriptors(), Instances: r.bashPPImportedInstances(), GenericTypes: r.bashPPGenericBridgeTypes(), Selectors: r.bashPPReferencedSelectors(), RuntimeEnv: runtimeEnv, ModuleDir: moduleDir, ImportPath: importPath, TestMain: testMain, Argv: append([]string{r.goSourceReexecArgv0()}, r.Params...), Bridge: r.bashPPTools.bridge, Go: r.bashPPTools.goBinary, BuildGo: r.bashPPTools.buildGoBinary, BuildEnv: buildEnv, Dir: r.Dir, Env: env, Stdin: r.stdin,
-		Stdout: r.bashPPWriter(r.stdout), Stderr: r.bashPPWriter(r.stderr), Imports: r.bashPPImports, SourceDir: sourceDir, SourceFile: sourceFile, EmbedDecls: embedDecls, CompanionFiles: companionFiles, NativeFuncs: nativeFuncs, MappedCompanions: mappedCompanions, CompanionTrampolines: trampolines, CompanionUnmappedFrames: unmappedFrames, RootFiles: r.bashPPGoSourceRootFiles(), CgoPackages: r.bashPPGoSourceCgoPackages()}, nil
+	return bashPPEvalRequest{CallbackOwner: r, CallbackDepth: r.bashPPTools.callbackDepth, PanicOnFault: r.bashPPTools.panicOnFault, LocalTypes: plan.localTypes, Instances: plan.instances, GenericTypes: plan.genericTypes, Selectors: plan.selectors, RuntimeEnv: runtimeEnv, ModuleDir: moduleDir, ImportPath: importPath, TestMain: testMain, Argv: append([]string{r.goSourceReexecArgv0()}, r.Params...), Bridge: r.bashPPTools.bridge, Go: r.bashPPTools.goBinary, BuildGo: r.bashPPTools.buildGoBinary, BuildEnv: buildEnv, Dir: r.Dir, Env: env, Stdin: r.stdin,
+		Stdout: r.bashPPWriter(r.stdout), Stderr: r.bashPPWriter(r.stderr), Imports: r.bashPPImports, SourceDir: plan.sourceDir, SourceFile: plan.sourceFile, EmbedDecls: plan.embedDecls, CompanionFiles: plan.companionFiles, NativeFuncs: plan.nativeFuncs, MappedCompanions: plan.mapped, CompanionTrampolines: plan.trampolines, CompanionUnmappedFrames: plan.unmappedFrames, RootFiles: plan.rootFiles, CgoPackages: plan.cgo,
+		identity: &plan.identity, localPlan: plan.localPlan}, nil
 }
 
 func (r *Runner) bashPPBridgeMetadata() *bashPPBridgeMetadataCache {

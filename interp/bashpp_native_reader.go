@@ -97,12 +97,10 @@ func synchronousReaderCallback(req bashPPEvalRequest, q bashPPBridgeRequest) boo
 	if reader.Kind == "pointer" && len(reader.Elements) == 1 {
 		name = strings.TrimPrefix(reader.Elements[0].Type, "main.")
 	}
-	for _, typ := range req.LocalTypes {
-		if typ.Name == name {
-			for _, method := range typ.Methods {
-				if method.Name == "Read" {
-					return true
-				}
+	for _, typ := range req.localTypePlan().named(name) {
+		for _, method := range typ.Methods {
+			if method.Name == "Read" {
+				return true
 			}
 		}
 	}

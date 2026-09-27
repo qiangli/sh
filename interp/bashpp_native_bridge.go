@@ -376,25 +376,29 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 	s.start.Lock()
 	defer s.start.Unlock()
 	if s.conn != nil {
-		if s.imports != bridgeImportIdentity(req.Imports) {
+		// The fingerprints this compares against are derived once per program
+		// revision, so refusing namespace drift costs the same on a program of
+		// any size; see bashpp_s281_request_plan.go.
+		identity := req.sessionIdentity()
+		if s.imports != identity.imports {
 			return errors.New("gosource: imports changed after native dependency initialization")
 		}
-		if s.locals != bashPPLocalTypeIdentity(req.LocalTypes) {
+		if s.locals != identity.locals {
 			return errors.New("gosource: local types changed after native dependency initialization")
 		}
-		if s.embeds != bashPPEmbedIdentity(req.EmbedDecls) {
+		if s.embeds != identity.embeds {
 			return errors.New("gosource: embed declarations changed after native dependency initialization")
 		}
-		if s.companions != bashPPNativeCompanionIdentity(req.CompanionFiles, req.NativeFuncs, req.MappedCompanions, req.CompanionTrampolines, req.CompanionUnmappedFrames) {
+		if s.companions != identity.companions {
 			return errors.New("gosource: native companions changed after native dependency initialization")
 		}
-		if s.cgo != bashPPCgoIdentity(req.CgoPackages) {
+		if s.cgo != identity.cgo {
 			return errors.New("gosource: cgo packages changed after native dependency initialization")
 		}
-		if s.instances != bashPPImportedInstanceIdentity(req.Instances) {
+		if s.instances != identity.instances {
 			return errors.New("gosource: imported instantiations changed after native dependency initialization")
 		}
-		if s.genericTypes != bashPPGenericTypeIdentity(req.GenericTypes) {
+		if s.genericTypes != identity.generics {
 			return errors.New("gosource: generic bridge types changed after native dependency initialization")
 		}
 		return nil
@@ -705,13 +709,10 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 	s.mu.Lock()
 	s.conn = conn
 	s.mu.Unlock()
-	s.imports = bridgeImportIdentity(req.Imports)
-	s.locals = bashPPLocalTypeIdentity(req.LocalTypes)
-	s.embeds = bashPPEmbedIdentity(req.EmbedDecls)
-	s.companions = bashPPNativeCompanionIdentity(req.CompanionFiles, req.NativeFuncs, req.MappedCompanions, req.CompanionTrampolines, req.CompanionUnmappedFrames)
-	s.cgo = bashPPCgoIdentity(req.CgoPackages)
-	s.instances = bashPPImportedInstanceIdentity(req.Instances)
-	s.genericTypes = bashPPGenericTypeIdentity(req.GenericTypes)
+	identity := req.sessionIdentity()
+	s.imports, s.locals, s.embeds = identity.imports, identity.locals, identity.embeds
+	s.companions, s.cgo = identity.companions, identity.cgo
+	s.instances, s.genericTypes = identity.instances, identity.generics
 	go func() {
 		for {
 			var reply bashPPBridgeResponse

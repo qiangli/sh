@@ -34,10 +34,7 @@ func synchronousImageCallback(req bashPPEvalRequest, q bashPPBridgeRequest) bool
 		name = strings.TrimPrefix(value.Elements[0].Type, "main.")
 	}
 	name = strings.TrimPrefix(name, "*")
-	for _, typ := range req.LocalTypes {
-		if typ.Name != name {
-			continue
-		}
+	for _, typ := range req.localTypePlan().named(name) {
 		// The whole method set must be mirrored: a value serving only part of
 		// image.Image is not an image.Image.
 		mirrored := map[string]bool{}

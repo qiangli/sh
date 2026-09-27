@@ -267,8 +267,8 @@ func (r *Runner) goSourceLocalReflectValueOf(ctx context.Context, req bashPPEval
 	}
 	typeName = bashPPLocalTypeName(typeName)
 	plain := false
-	for _, local := range req.LocalTypes {
-		if local.Name == typeName && !local.Alias && local.WireType == "" && local.PublicType == "" && local.GenericDecl == "" {
+	for _, local := range req.localTypePlan().named(typeName) {
+		if !local.Alias && local.WireType == "" && local.PublicType == "" && local.GenericDecl == "" {
 			plain = true
 			break
 		}
