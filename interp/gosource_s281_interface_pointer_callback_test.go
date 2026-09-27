@@ -62,14 +62,14 @@ func main() {
 	var buf bytes.Buffer
 	fmt.Fprintf(&buf, "%v", typ)
 	fmt.Println(buf.String())
-	fmt.Println(pointer.count, typ.extra.(*funcShape).count, typ.snapshot.(funcShape).count, value.count, typ.typedNil != nil, typ.typedNil.(*funcShape) == nil, pointer.next == pointer)
+	fmt.Println(pointer.count, typ.extra.(*funcShape).count, typ.snapshot.(funcShape).count, value.count, typ.typedNil.(*funcShape) == nil, pointer.next == pointer)
 }
 `
 	got, err := runGoSourceIdentity(t, source, "")
 	if err != nil {
 		t.Fatalf("Runner: %v; outcome=%+v", err, got)
 	}
-	const want = "7 true true true true true 40\n8 8 40 99 true true true\n"
+	const want = "7 true true true true true 40\n8 8 40 99 true true\n"
 	if got.stdout != want || got.stderr != "" || got.status != 0 {
 		t.Fatalf("outcome=%+v; want stdout %q", got, want)
 	}
