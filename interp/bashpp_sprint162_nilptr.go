@@ -411,7 +411,7 @@ func (r *Runner) goSourceValueSwitchScalarCase(tv bashPPComparableValue, expr sy
 		return false, err
 	}
 	cv := bashPPComparableValue{value: bashPPScalarAny(scalar.value)}
-	tv.value = r.bashPPComparablePayloadDiag(tv.value, tv.meta)
+	tv.value = bashPPComparablePayload(tv.value, tv.meta)
 	if equal, handled, err := r.goSourceInterfaceEqual(tv, cv); handled {
 		return equal, err
 	}

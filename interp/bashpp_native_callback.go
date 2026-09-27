@@ -608,12 +608,8 @@ func bashPPStringResult(results []bashPPParam) bool {
 // SDK storage is never reflected into an interpreter-owned imitation.
 func (r *Runner) bashPPBridgeContents(v bashPPBridgeValue, typ syntax.BashPPTypeExpr) (any, *bashPPCollectionMeta, error) {
 	_, interfaceType := r.bashPPInterfaceType(typ)
-	if v.Kind == "nil" || interfaceType {
-		r.bashPPTypedNilDiag("bridge-decode/enter", nil, &bashPPCollectionMeta{typ: typ}, v)
-	}
 	if interfaceType {
 		if bashPPBridgeValueNilInterface(v) {
-			r.bashPPTypedNilDiag("bridge-decode/nil-interface", nil, &bashPPCollectionMeta{kind: "interface", typ: typ}, v)
 			return "", &bashPPCollectionMeta{kind: "interface", typ: typ, interfaceValue: &bashPPInterfaceValue{nilIface: true}}, nil
 		}
 		dynamic := bashPPBridgeValueDynamicType(v)
@@ -621,7 +617,6 @@ func (r *Runner) bashPPBridgeContents(v bashPPBridgeValue, typ syntax.BashPPType
 			return nil, nil, fmt.Errorf("dynamic type %s of an interface value is not materialised", v.Type)
 		}
 		if v.Kind == "nil" {
-			r.bashPPTypedNilDiag("bridge-decode/typed-nil-interface", nil, &bashPPCollectionMeta{kind: "interface", typ: typ}, v)
 			if _, _, err := r.goSourceNativeAssignedValue(v, typ); err != nil {
 				return nil, nil, err
 			}

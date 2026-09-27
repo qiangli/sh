@@ -1272,8 +1272,6 @@ func (r *Runner) bashPPCompareExpr(left syntax.BashPPExpr, op token.Token, right
 	// Native values retain their authenticated dynamic payload and comparison
 	// semantics. Local scalar boxing must not intercept that transport path.
 	if r.bashPPGoSource && (r.bashPPNativeExpr(left) || r.bashPPNativeExpr(right)) {
-		r.bashPPTypedNilDiag("compare/native-dispatch-left", left, nil)
-		r.bashPPTypedNilDiag("compare/native-dispatch-right", right, nil)
 		return r.bashPPNativeCompare(left, op, right)
 	}
 	if equal, handled, err := r.goSourceInterfaceScalarComparison(left, op, right); handled {
@@ -1311,8 +1309,8 @@ func (r *Runner) bashPPCompareExpr(left syntax.BashPPExpr, op token.Token, right
 
 func (r *Runner) bashPPCompareComparableValues(lv bashPPComparableValue, op token.Token, rv bashPPComparableValue) (bool, error) {
 	if r.bashPPGoSource {
-		lv.value = r.bashPPComparablePayloadDiag(lv.value, lv.meta)
-		rv.value = r.bashPPComparablePayloadDiag(rv.value, rv.meta)
+		lv.value = bashPPComparablePayload(lv.value, lv.meta)
+		rv.value = bashPPComparablePayload(rv.value, rv.meta)
 		// Indexed aggregate reads can carry native typed nils even when the
 		// containing aggregate is local. Reuse the evaluated operands.
 		if l, lok := goSourceNativeComparable(lv); lok {
@@ -1535,7 +1533,7 @@ func bashPPCompareValuesWithRunner(r *Runner, left any, leftMeta *bashPPCollecti
 			value, meta = right, rightMeta
 		}
 		if r != nil && r.bashPPGoSource {
-			value = r.bashPPComparablePayloadDiag(value, meta)
+			value = bashPPComparablePayload(value, meta)
 		}
 		if bashPPPointerComparable(meta) || bashPPNilComparable(meta) {
 			return bashPPNilComparableValue(value) || bashPPNilComparableZero(value, meta), nil

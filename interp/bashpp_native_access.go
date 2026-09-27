@@ -557,7 +557,6 @@ func (r *Runner) bashPPNativeLocalBase(expr syntax.BashPPExpr) (any, *bashPPColl
 			return nil, nil, false
 		}
 	}
-	r.bashPPTypedNilDiag("local-field/extract", value, meta)
 	return value, meta, true
 }
 

@@ -150,8 +150,8 @@ func (r *Runner) goSourceInterfaceEqual(left, right bashPPComparableValue) (bool
 	if !r.bashPPGoSource || left.nilLiteral || right.nilLiteral {
 		return false, false, nil
 	}
-	li, lok := r.bashPPComparablePayloadDiag(left.value, left.meta).(*bashPPInterfaceValue)
-	ri, rok := r.bashPPComparablePayloadDiag(right.value, right.meta).(*bashPPInterfaceValue)
+	li, lok := bashPPComparablePayload(left.value, left.meta).(*bashPPInterfaceValue)
+	ri, rok := bashPPComparablePayload(right.value, right.meta).(*bashPPInterfaceValue)
 	if !lok && !rok {
 		return false, false, nil
 	}
