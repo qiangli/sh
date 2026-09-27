@@ -99,10 +99,11 @@ func loadDependencyFunctionCallbackLifetimeProof(ctx context.Context, req bashPP
 }
 
 type dependencyCallbackObject struct {
-	typ    string
-	owned  bool
-	escaped bool
-	fields map[string]dependencyCallbackValue
+	typ       string
+	owned     bool
+	escaped   bool
+	synthetic bool
+	fields    map[string]dependencyCallbackValue
 }
 
 type dependencyCallbackClosure struct {
@@ -582,6 +583,9 @@ func (s *dependencyCallbackSnapshot) object(b *strings.Builder, obj *dependencyC
 	fmt.Fprintf(b, "O#%d{%s,owned=%t,escaped=%t", id, obj.typ, obj.owned, obj.escaped)
 	names := make([]string, 0, len(obj.fields))
 	for name := range obj.fields {
+		if dependencyCallbackSnapshotOmitField(obj.fields[name]) {
+			continue
+		}
 		names = append(names, name)
 	}
 	sort.Strings(names)
@@ -592,6 +596,13 @@ func (s *dependencyCallbackSnapshot) object(b *strings.Builder, obj *dependencyC
 		s.value(b, obj.fields[name])
 	}
 	b.WriteByte('}')
+}
+
+func dependencyCallbackSnapshotOmitField(value dependencyCallbackValue) bool {
+	if value.callback != nil || value.callable || value.object == nil {
+		return false
+	}
+	return value.object.synthetic && value.object.owned && !value.object.escaped && !value.tainted()
 }
 
 func (p *dependencyCallbackProof) block(block *ast.BlockStmt, env map[string]dependencyCallbackValue, depth int) bool {
@@ -995,6 +1006,13 @@ func (p *dependencyCallbackProof) assign(lhs ast.Expr, value dependencyCallbackV
 		if !value.tainted() {
 			if base.object == nil || !base.object.owned || base.object.escaped {
 				dependencyCallbackMarkEscaped([]dependencyCallbackValue{value})
+				return true
+			}
+			if value.object != nil || value.callable {
+				if base.object.fields == nil {
+					base.object.fields = make(map[string]dependencyCallbackValue)
+				}
+				base.object.fields[lhs.Sel.Name] = value
 			}
 			return true
 		}
@@ -1355,7 +1373,7 @@ func (p *dependencyCallbackProof) method(receiver dependencyCallbackValue, name 
 	for _, embedded := range p.types[receiver.object.typ].embedded {
 		child := receiver.object.fields[embedded]
 		if child.object == nil {
-			child = dependencyCallbackValue{object: &dependencyCallbackObject{typ: embedded, owned: receiver.object.owned, fields: make(map[string]dependencyCallbackValue)}}
+			child = dependencyCallbackValue{object: &dependencyCallbackObject{typ: embedded, owned: receiver.object.owned, synthetic: true, fields: make(map[string]dependencyCallbackValue)}}
 			receiver.object.fields[embedded] = child
 		}
 		if decl, actual := p.method(child, name, seen); decl != nil {
@@ -1385,14 +1403,14 @@ func (p *dependencyCallbackProof) field(receiver dependencyCallbackValue, name s
 		if field.callable {
 			return dependencyCallbackValue{callable: true}
 		}
-		child := dependencyCallbackValue{object: &dependencyCallbackObject{typ: field.typ, owned: receiver.object.owned, fields: make(map[string]dependencyCallbackValue)}}
+		child := dependencyCallbackValue{object: &dependencyCallbackObject{typ: field.typ, owned: receiver.object.owned, synthetic: true, fields: make(map[string]dependencyCallbackValue)}}
 		receiver.object.fields[name] = child
 		return child
 	}
 	for _, embedded := range shape.embedded {
 		child := receiver.object.fields[embedded]
 		if child.object == nil {
-			child = dependencyCallbackValue{object: &dependencyCallbackObject{typ: embedded, owned: receiver.object.owned, fields: make(map[string]dependencyCallbackValue)}}
+			child = dependencyCallbackValue{object: &dependencyCallbackObject{typ: embedded, owned: receiver.object.owned, synthetic: true, fields: make(map[string]dependencyCallbackValue)}}
 			receiver.object.fields[embedded] = child
 		}
 		if embedded == name {

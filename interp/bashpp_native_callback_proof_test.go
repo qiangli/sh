@@ -313,6 +313,29 @@ func Parse(cb func(), choose bool) {
 `,
 		},
 		{
+			name: "recursive actual callback field mutation is unproved",
+			source: `package dep
+var saved func()
+type holder struct{ f func() }
+func mutate(h *holder, cb func(), choose bool) {
+	h.f = cb
+	if choose {
+		mutate(h, cb, false)
+	}
+}
+func inspect(h *holder) {
+	if h.f != nil {
+		saved = h.f
+	}
+}
+func Parse(cb func(), choose bool) {
+	h := &holder{}
+	mutate(h, cb, choose)
+	inspect(h)
+}
+`,
+		},
+		{
 			name: "recursive captured environment mutation is unproved",
 			source: `package dep
 var saved func()
@@ -333,6 +356,59 @@ func Parse(cb func(), choose bool) {
 		}
 	}
 	run(invoke, h, cb, choose)
+}
+`,
+		},
+		{
+			name: "recursive closure capture is unproved",
+			source: `package dep
+var saved func()
+func run(invoke func(), cb func(), choose bool) {
+	next := func() { invoke(); cb() }
+	if choose {
+		run(next, cb, false)
+		return
+	}
+	next()
+}
+func Parse(cb func(), choose bool) {
+	run(func(){}, cb, choose)
+}
+`,
+		},
+		{
+			name: "alias topology can introduce callback reachability",
+			source: `package dep
+var saved func()
+type H struct{ dst *H; f func() }
+func Retain(cb func()) {
+	h := &H{}
+	other := &H{}
+	h.dst = other
+	other.f = cb
+	saved = h.dst.f
+}
+func Parse(cb func()) { Retain(cb) }
+`,
+		},
+		{
+			name: "escaped clean child cannot later receive callback",
+			source: `package dep
+var saved *child
+type child struct{ f func() }
+type holder struct{ child *child }
+func keep(c *child) { saved = c }
+func (h *holder) walk(cb func(), choose bool) {
+	keep(h.child)
+	if choose {
+		h.walk(cb, false)
+		return
+	}
+	h.child.f = cb
+}
+func Parse(cb func(), choose bool) {
+	h := &holder{}
+	h.walk(cb, choose)
 }
 `,
 		},
