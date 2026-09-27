@@ -840,6 +840,9 @@ func (r *Runner) goSourceSlicesCollect(ctx context.Context, req bashPPEvalReques
 	if r.bashPPPanicking() || r.exit.exiting || r.exit.fatalExit || r.exit.err != nil || r.bashPPShortFailureSeq != failure {
 		return nil, errBashPPScalarInterrupted
 	}
+	if len(collected) == 0 {
+		return []bashPPBridgeValue{{Kind: "nil", Type: "[]" + bashPPTypeText(yieldParams[0].typ)}}, nil
+	}
 	return []bashPPBridgeValue{{
 		Kind:     "slice",
 		Type:     "[]" + bashPPTypeText(yieldParams[0].typ),

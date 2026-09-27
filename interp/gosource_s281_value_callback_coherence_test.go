@@ -152,7 +152,8 @@ func Bug70035(s1, s2, s3 []string) string {
 func main() {
 	fmt.Println(Bug70035([]string{"1", "2", "3"}, []string{"a", "b", "c"}, []string{"A", "B", "C"}))
 	fmt.Println(slices.Collect(slices.Values([]string{"x", "y"})))
-	fmt.Println(slices.Collect(slices.Values([]string{})))
+	fmt.Println(slices.Collect(slices.Values([]int{})) == nil)
+	fmt.Println(slices.Collect(slices.Values([]string{"x"})) != nil)
 	it := slices.Values([]int{7, 8})
 	fmt.Println(slices.Collect(it))
 	var named iter.Seq[int] = slices.Values([]int{9, 10})
@@ -169,7 +170,7 @@ func main() {
 	if err != nil {
 		t.Fatalf("Runner: %v; outcome=%+v", err, got)
 	}
-	const want = "1aABCbABCcABC2aABCbABCcABC3aABCbABCcABC\n[x y]\n[]\n[7 8]\n[9 10]\n[stop]\n"
+	const want = "1aABCbABCcABC2aABCbABCcABC3aABCbABCcABC\n[x y]\ntrue\ntrue\n[7 8]\n[9 10]\n[stop]\n"
 	if got.stdout != want || got.stderr != "" || got.status != 0 {
 		t.Fatalf("outcome=%+v; want native stdout %q", got, want)
 	}
@@ -186,7 +187,8 @@ import (
 
 func main() {
 	fmt.Println(slices.Collect(slices.Values([]string{"a", "b"})))
-	fmt.Println(slices.Collect(slices.Values([]string{})))
+	fmt.Println(slices.Collect(slices.Values([]int{})) == nil)
+	fmt.Println(slices.Collect(slices.Values([]string{"a"})) != nil)
 	it := slices.Values([]int{7, 8})
 	fmt.Println(slices.Collect(it))
 	var named iter.Seq[int] = slices.Values([]int{9, 10})
