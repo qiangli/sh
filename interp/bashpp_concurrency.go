@@ -249,10 +249,10 @@ type bashPPHandleProvenance struct {
 // sync.WaitGroup, registration remains safe while the owner is joining; only
 // reaching zero permanently quiesces the group.
 type bashPPConcurrent struct {
-	mu         sync.Mutex
-	changed    *sync.Cond
-	ctx        context.Context
-	cancel     context.CancelFunc
+	mu      sync.Mutex
+	changed *sync.Cond
+	ctx     context.Context
+	cancel  context.CancelFunc
 	// fileRunOwner is stamped only by bashPPConcurrency while its Runner is
 	// inside Run(*syntax.File). Callback templates retain this group pointer,
 	// so the stamp is the capability which lets a verified testing callback
