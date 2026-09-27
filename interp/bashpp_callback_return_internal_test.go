@@ -3,6 +3,7 @@
 package interp
 
 import (
+	"context"
 	"testing"
 
 	"mvdan.cc/sh/v3/expand"
@@ -51,6 +52,7 @@ func TestBashPPTestingCallbackFrameOwnership(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer parent.closeDirFile()
+	parent.Reset()
 	scope := newBashPPScope(nil)
 	shared := &bashPPCell{}
 	scope.entries["shared"] = shared
@@ -59,6 +61,8 @@ func TestBashPPTestingCallbackFrameOwnership(t *testing.T) {
 	parent.bashPPGoSource = true
 	parent.bashPPScope = scope
 	parent.bashPPFuncs = map[string]*bashPPFunc{"callback": fn}
+	parent.bashPPConcurrent = newBashPPConcurrent(context.Background())
+	defer parent.bashPPConcurrent.cancel()
 	parent.bashPPTools.callbackDepth = 1
 	parent.bashPPTools.routedDepth = 1
 
@@ -88,6 +92,9 @@ func TestBashPPTestingCallbackFrameOwnership(t *testing.T) {
 	}
 	if child.bashPPTools.callbackDepth != 0 || child.bashPPTools.routedDepth != 0 {
 		t.Fatalf("testing callback inherited active stack depths: callback=%d routed=%d", child.bashPPTools.callbackDepth, child.bashPPTools.routedDepth)
+	}
+	if !child.bashPPGoTask || child.bashPPChanBoundary || child.bashPPConcurrent == nil || child.bashPPConcurrent != parent.bashPPConcurrent {
+		t.Fatal("testing callback lost its Go task-group capabilities")
 	}
 	if parent.bashPPTools.testingCallbackFrames != nil || parent.bashPPTools.callbackDepth != 1 || parent.bashPPTools.routedDepth != 1 {
 		t.Fatal("testing callback changed parent frame ownership")

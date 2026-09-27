@@ -89,6 +89,10 @@ func (registered *bashPPCallbackFunction) bashPPTestingCallbackFrame(group *bash
 	template := registered.template
 	child := template.subshell(true)
 	child.bashPPGoSourceCapture = nil
+	// A testing callback is another Go execution frame in the registering
+	// task group, not a shell-copy boundary. It owns its stacks and scopes but
+	// retains the group's channels and cancellation capability.
+	child.bashPPConcurrent, child.bashPPGoTask, child.bashPPChanBoundary = template.bashPPConcurrent, true, false
 	child.bashPPTools.callbackDepth = 0
 	child.bashPPTools.routedDepth = 0
 	child.bashPPTools.callbackDescendant = true
