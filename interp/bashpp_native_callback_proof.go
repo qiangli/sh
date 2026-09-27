@@ -191,6 +191,26 @@ type dependencyCallbackFormal struct {
 	variadic bool
 }
 
+// dependencyCallbackLabel records one label declared directly by a statement
+// list. index is the label's position in list; declared and scoped are the
+// scope facts that list walks with, so a goto edge can re-run the suffix the
+// label starts under the same lexical rules.
+type dependencyCallbackLabel struct {
+	list     []ast.Stmt
+	index    int
+	declared map[string]bool
+	scoped   bool
+	entered  bool
+}
+
+// dependencyCallbackLabelCheck is the back-edge obligation of one label that a
+// backward goto jumps to: the taint of every binding live where the label
+// starts, to be compared once the region the label heads has been walked.
+type dependencyCallbackLabelCheck struct {
+	labeled *ast.LabeledStmt
+	before  map[string]bool
+}
+
 type dependencyCallbackActiveFrame struct {
 	supplied         map[string]dependencyCallbackValue
 	receiver         dependencyCallbackValue
@@ -217,6 +237,24 @@ type dependencyCallbackProof struct {
 	results   []map[string]bool
 	defers    [][]dependencyCallbackDeferred
 	steps     int
+
+	// labels holds every label declared by a statement list currently being
+	// walked, so that a goto nested inside it resolves to an edge. Go forbids
+	// a goto from leaving the function that declares its label, so the map is
+	// saved and cleared whenever a new function body is entered.
+	labels map[string]*dependencyCallbackLabel
+
+	// summarizing counts the functions whose generalized recursive body is
+	// being summarized right now; summaries caches the verdict of every
+	// summary already charged to the budget. A generalized recursive edge is a
+	// fixpoint, so re-entering the summary of a function already on the
+	// summary stack would re-walk the same statements under the same
+	// generalized frame: the enclosing walk already carries that obligation.
+	summarizing map[string]int
+	summaries   map[string]bool
+
+	funcSteps map[string]int
+	probe     func(*dependencyCallbackProof)
 
 	fset        *token.FileSet
 	currentFunc string
@@ -752,7 +790,7 @@ func (p *dependencyCallbackProof) function(decl *ast.FuncDecl, supplied map[stri
 		// A recursive edge may only preserve callback-bearing state exactly or
 		// grow callback-free regions that are then forbidden to receive callbacks.
 		if same, generalized, rejection := dependencyCallbackSameFrame(active, supplied, receiver); same {
-			if generalized && p.recursiveBodyStoresCallback(decl, supplied, receiver) {
+			if generalized && p.recursiveBodyStoresCallback(decl, key, supplied, receiver, depth+1) {
 				return p.refuse(decl, "generalized recursive body may store callback-bearing value")
 			}
 			return true
@@ -777,7 +815,12 @@ func (p *dependencyCallbackProof) function(decl *ast.FuncDecl, supplied map[stri
 	defer delete(p.active, key)
 	savedFunc := p.currentFunc
 	p.currentFunc = key
-	defer func() { p.currentFunc = savedFunc }()
+	savedLabels := p.labels
+	p.labels = nil
+	defer func() {
+		p.currentFunc = savedFunc
+		p.labels = savedLabels
+	}()
 	env := make(map[string]dependencyCallbackValue)
 	for _, name := range dependencyCallbackFieldNames(decl.Type.Params) {
 		if name != "" {
@@ -1041,9 +1084,22 @@ func (p *dependencyCallbackGraphPairing) object(left, right *dependencyCallbackO
 	return true
 }
 
-func (p *dependencyCallbackProof) recursiveBodyStoresCallback(decl *ast.FuncDecl, supplied map[string]dependencyCallbackValue, receiver dependencyCallbackValue) bool {
+func (p *dependencyCallbackProof) recursiveBodyStoresCallback(decl *ast.FuncDecl, key string, supplied map[string]dependencyCallbackValue, receiver dependencyCallbackValue, depth int) bool {
 	if decl == nil || decl.Body == nil {
 		return true
+	}
+	if depth > 64 {
+		return true
+	}
+	if p.summarizing[key] > 0 {
+		// Already summarizing this function: the enclosing walk covers the
+		// same body under the same generalized frame, so re-walking it here
+		// would only re-derive its obligation at exponential cost.
+		return false
+	}
+	frame := key + "\x00" + dependencyCallbackFrameSnapshot(supplied, receiver)
+	if stores, ok := p.summaries[frame]; ok {
+		return stores
 	}
 	// The active frame is an immutable entry snapshot used only for the
 	// recursion comparison. Build this isolated effect graph from the current
@@ -1061,10 +1117,20 @@ func (p *dependencyCallbackProof) recursiveBodyStoresCallback(decl *ast.FuncDecl
 		env[name] = receiver
 		scope[name] = true
 	}
-	return p.recursiveBlockStoresCallback(decl.Body, env, scope, scope)
+	if p.summarizing == nil {
+		p.summarizing = make(map[string]int)
+	}
+	p.summarizing[key]++
+	stores := p.recursiveBlockStoresCallback(decl.Body, env, scope, scope, depth)
+	p.summarizing[key]--
+	if p.summaries == nil {
+		p.summaries = make(map[string]bool)
+	}
+	p.summaries[frame] = stores
+	return stores
 }
 
-func (p *dependencyCallbackProof) recursiveBlockStoresCallback(block *ast.BlockStmt, env map[string]dependencyCallbackValue, scope, current map[string]bool) bool {
+func (p *dependencyCallbackProof) recursiveBlockStoresCallback(block *ast.BlockStmt, env map[string]dependencyCallbackValue, scope, current map[string]bool, depth int) bool {
 	if block == nil {
 		return false
 	}
@@ -1085,6 +1151,18 @@ func (p *dependencyCallbackProof) recursiveBlockStoresCallback(block *ast.BlockS
 		}
 	}()
 	for _, stmt := range block.List {
+		p.steps++
+		if p.funcSteps == nil {
+			p.funcSteps = make(map[string]int)
+		}
+		p.funcSteps[p.currentFunc]++
+		if p.probe != nil {
+			p.probe(p)
+		}
+		if p.steps > 20000 {
+			p.refuse(stmt, "proof step bound exceeded")
+			return true
+		}
 		for _, name := range dependencyCallbackStatementDeclarations(stmt) {
 			if name == "_" || currentLocal[name] {
 				continue
@@ -1094,7 +1172,7 @@ func (p *dependencyCallbackProof) recursiveBlockStoresCallback(block *ast.BlockS
 				saved[name] = savedBinding{value: value, exists: exists}
 			}
 		}
-		if p.recursiveStatementStoresCallback(stmt, env, local, currentLocal) {
+		if p.recursiveStatementStoresCallback(stmt, env, local, currentLocal, depth) {
 			return true
 		}
 		for _, name := range dependencyCallbackStatementDeclarations(stmt) {
@@ -1107,12 +1185,12 @@ func (p *dependencyCallbackProof) recursiveBlockStoresCallback(block *ast.BlockS
 	return false
 }
 
-func (p *dependencyCallbackProof) recursiveStatementStoresCallback(stmt ast.Stmt, env map[string]dependencyCallbackValue, scope, current map[string]bool) bool {
+func (p *dependencyCallbackProof) recursiveStatementStoresCallback(stmt ast.Stmt, env map[string]dependencyCallbackValue, scope, current map[string]bool, depth int) bool {
 	switch stmt := stmt.(type) {
 	case *ast.AssignStmt:
 		values := make([]dependencyCallbackValue, len(stmt.Rhs))
 		for i, rhs := range stmt.Rhs {
-			if !p.expressionCalls(rhs, env, 0) {
+			if !p.expressionCalls(rhs, env, depth) {
 				return true
 			}
 			values[i] = p.value(rhs, env)
@@ -1150,7 +1228,7 @@ func (p *dependencyCallbackProof) recursiveStatementStoresCallback(stmt ast.Stmt
 					value.object = &dependencyCallbackObject{typ: dependencyCallbackTypeName(spec.Type), owned: true, fields: make(map[string]dependencyCallbackValue)}
 				}
 				if i < len(spec.Values) {
-					if !p.expressionCalls(spec.Values[i], env, 0) {
+					if !p.expressionCalls(spec.Values[i], env, depth) {
 						return true
 					}
 					value = p.value(spec.Values[i], env)
@@ -1172,7 +1250,7 @@ func (p *dependencyCallbackProof) recursiveStatementStoresCallback(stmt ast.Stmt
 				return false
 			}
 			if !p.withStoreContext("call", call.Fun, call, func() bool {
-				return p.callWithCallee(call, callee, env, 0)
+				return p.callWithCallee(call, callee, env, depth)
 			}) {
 				return true
 			}
@@ -1184,57 +1262,57 @@ func (p *dependencyCallbackProof) recursiveStatementStoresCallback(stmt ast.Stmt
 		}
 	case *ast.SendStmt:
 		if !p.withStoreContext("send", stmt.Chan, stmt.Value, func() bool {
-			return p.statement(stmt, env, 0)
+			return p.statement(stmt, env, depth)
 		}) {
 			return true
 		}
 	case *ast.BlockStmt:
-		return p.recursiveBlockStoresCallback(stmt, env, dependencyCallbackCloneScope(scope), nil)
+		return p.recursiveBlockStoresCallback(stmt, env, dependencyCallbackCloneScope(scope), nil, depth)
 	case *ast.IfStmt:
-		if stmt.Init != nil && p.recursiveStatementStoresCallback(stmt.Init, env, scope, current) {
+		if stmt.Init != nil && p.recursiveStatementStoresCallback(stmt.Init, env, scope, current, depth) {
 			return true
 		}
-		if p.recursiveBlockStoresCallback(stmt.Body, env, dependencyCallbackCloneScope(scope), nil) {
+		if p.recursiveBlockStoresCallback(stmt.Body, env, dependencyCallbackCloneScope(scope), nil, depth) {
 			return true
 		}
-		if stmt.Else != nil && p.recursiveStatementStoresCallback(stmt.Else, env, dependencyCallbackCloneScope(scope), nil) {
+		if stmt.Else != nil && p.recursiveStatementStoresCallback(stmt.Else, env, dependencyCallbackCloneScope(scope), nil, depth) {
 			return true
 		}
 	case *ast.ForStmt:
 		loop := dependencyCallbackCloneScope(scope)
 		loopCurrent := make(map[string]bool)
-		if stmt.Init != nil && p.recursiveStatementStoresCallback(stmt.Init, env, loop, loopCurrent) {
+		if stmt.Init != nil && p.recursiveStatementStoresCallback(stmt.Init, env, loop, loopCurrent, depth) {
 			return true
 		}
-		if p.recursiveBlockStoresCallback(stmt.Body, env, loop, nil) {
+		if p.recursiveBlockStoresCallback(stmt.Body, env, loop, nil, depth) {
 			return true
 		}
-		if stmt.Post != nil && p.recursiveStatementStoresCallback(stmt.Post, env, loop, loopCurrent) {
+		if stmt.Post != nil && p.recursiveStatementStoresCallback(stmt.Post, env, loop, loopCurrent, depth) {
 			return true
 		}
 	case *ast.RangeStmt:
-		return p.recursiveBlockStoresCallback(stmt.Body, env, dependencyCallbackCloneScope(scope), nil)
+		return p.recursiveBlockStoresCallback(stmt.Body, env, dependencyCallbackCloneScope(scope), nil, depth)
 	case *ast.SwitchStmt:
 		next := dependencyCallbackCloneScope(scope)
 		nextCurrent := make(map[string]bool)
-		if stmt.Init != nil && p.recursiveStatementStoresCallback(stmt.Init, env, next, nextCurrent) {
+		if stmt.Init != nil && p.recursiveStatementStoresCallback(stmt.Init, env, next, nextCurrent, depth) {
 			return true
 		}
-		return p.recursiveCaseClausesStoreCallback(stmt.Body, env, next)
+		return p.recursiveCaseClausesStoreCallback(stmt.Body, env, next, depth)
 	case *ast.TypeSwitchStmt:
 		next := dependencyCallbackCloneScope(scope)
 		nextCurrent := make(map[string]bool)
-		if stmt.Init != nil && p.recursiveStatementStoresCallback(stmt.Init, env, next, nextCurrent) {
+		if stmt.Init != nil && p.recursiveStatementStoresCallback(stmt.Init, env, next, nextCurrent, depth) {
 			return true
 		}
-		if stmt.Assign != nil && p.recursiveStatementStoresCallback(stmt.Assign, env, next, nextCurrent) {
+		if stmt.Assign != nil && p.recursiveStatementStoresCallback(stmt.Assign, env, next, nextCurrent, depth) {
 			return true
 		}
-		return p.recursiveCaseClausesStoreCallback(stmt.Body, env, next)
+		return p.recursiveCaseClausesStoreCallback(stmt.Body, env, next, depth)
 	case *ast.SelectStmt:
-		return p.recursiveCommClausesStoreCallback(stmt.Body, env, dependencyCallbackCloneScope(scope))
+		return p.recursiveCommClausesStoreCallback(stmt.Body, env, dependencyCallbackCloneScope(scope), depth)
 	case *ast.LabeledStmt:
-		return p.recursiveStatementStoresCallback(stmt.Stmt, env, scope, current)
+		return p.recursiveStatementStoresCallback(stmt.Stmt, env, scope, current, depth)
 	}
 	return false
 }
@@ -1258,7 +1336,7 @@ func (p *dependencyCallbackProof) recursiveCallTargetsActive(call *ast.CallExpr,
 	return false
 }
 
-func (p *dependencyCallbackProof) recursiveCaseClausesStoreCallback(body *ast.BlockStmt, env map[string]dependencyCallbackValue, scope map[string]bool) bool {
+func (p *dependencyCallbackProof) recursiveCaseClausesStoreCallback(body *ast.BlockStmt, env map[string]dependencyCallbackValue, scope map[string]bool, depth int) bool {
 	if body == nil {
 		return false
 	}
@@ -1268,14 +1346,14 @@ func (p *dependencyCallbackProof) recursiveCaseClausesStoreCallback(body *ast.Bl
 			return true
 		}
 		next := dependencyCallbackCloneScope(scope)
-		if p.recursiveBlockStoresCallback(&ast.BlockStmt{List: clause.Body}, env, next, nil) {
+		if p.recursiveBlockStoresCallback(&ast.BlockStmt{List: clause.Body}, env, next, nil, depth) {
 			return true
 		}
 	}
 	return false
 }
 
-func (p *dependencyCallbackProof) recursiveCommClausesStoreCallback(body *ast.BlockStmt, env map[string]dependencyCallbackValue, scope map[string]bool) bool {
+func (p *dependencyCallbackProof) recursiveCommClausesStoreCallback(body *ast.BlockStmt, env map[string]dependencyCallbackValue, scope map[string]bool, depth int) bool {
 	if body == nil {
 		return false
 	}
@@ -1285,10 +1363,10 @@ func (p *dependencyCallbackProof) recursiveCommClausesStoreCallback(body *ast.Bl
 			return true
 		}
 		next := dependencyCallbackCloneScope(scope)
-		if clause.Comm != nil && p.recursiveStatementStoresCallback(clause.Comm, env, next, make(map[string]bool)) {
+		if clause.Comm != nil && p.recursiveStatementStoresCallback(clause.Comm, env, next, make(map[string]bool), depth) {
 			return true
 		}
-		if p.recursiveBlockStoresCallback(&ast.BlockStmt{List: clause.Body}, env, next, nil) {
+		if p.recursiveBlockStoresCallback(&ast.BlockStmt{List: clause.Body}, env, next, nil, depth) {
 			return true
 		}
 	}
@@ -1715,57 +1793,67 @@ func (p *dependencyCallbackProof) blockWithCurrent(block *ast.BlockStmt, env map
 	if block == nil {
 		return true
 	}
-	declared := dependencyCallbackCloneScope(current)
-	for _, stmt := range block.List {
-		p.steps++
-		if p.steps > 20000 {
-			return p.refuse(stmt, "proof step bound exceeded")
-		}
-		if !p.statementWithCurrent(stmt, env, depth, declared) {
-			if p.reason == "" {
-				p.refuse(stmt, fmt.Sprintf("statement %T refused", stmt))
-			}
-			return false
-		}
-		for _, name := range dependencyCallbackStatementDeclarations(stmt) {
-			if name != "_" {
-				declared[name] = true
-			}
-		}
-	}
-	return true
+	return p.statementList(block.List, env, depth, dependencyCallbackCloneScope(current), false)
 }
 
 func (p *dependencyCallbackProof) scopedBlockWithCurrent(block *ast.BlockStmt, env map[string]dependencyCallbackValue, depth int, current map[string]bool) bool {
 	if block == nil {
 		return true
 	}
-	type savedBinding struct {
-		value  dependencyCallbackValue
-		exists bool
+	return p.statementList(block.List, env, depth, dependencyCallbackCloneScope(current), true)
+}
+
+type dependencyCallbackSavedBinding struct {
+	value  dependencyCallbackValue
+	exists bool
+}
+
+// statementList walks one lexical statement list. declared carries the names
+// already bound where the list starts, so that := on such a name assigns
+// instead of shadowing; scoped restores the bindings the list declares when it
+// ends. Labels declared directly by the list are published for the duration of
+// the walk so that a goto nested anywhere inside it resolves to an edge.
+func (p *dependencyCallbackProof) statementList(list []ast.Stmt, env map[string]dependencyCallbackValue, depth int, declared map[string]bool, scoped bool) bool {
+	defer p.registerLabels(list, declared, scoped)()
+	var pending []dependencyCallbackLabelCheck
+	var saved map[string]dependencyCallbackSavedBinding
+	if scoped {
+		saved = make(map[string]dependencyCallbackSavedBinding)
+		defer func() {
+			for name, binding := range saved {
+				if binding.exists {
+					env[name] = binding.value
+				} else {
+					delete(env, name)
+				}
+			}
+		}()
 	}
-	declared := dependencyCallbackCloneScope(current)
-	saved := make(map[string]savedBinding)
-	defer func() {
-		for name, binding := range saved {
-			if binding.exists {
-				env[name] = binding.value
-			} else {
-				delete(env, name)
+	for index, stmt := range list {
+		if scoped {
+			for _, name := range dependencyCallbackStatementDeclarations(stmt) {
+				if name == "_" || declared[name] {
+					continue
+				}
+				value, exists := env[name]
+				saved[name] = dependencyCallbackSavedBinding{value: value, exists: exists}
 			}
-		}
-	}()
-	for _, stmt := range block.List {
-		for _, name := range dependencyCallbackStatementDeclarations(stmt) {
-			if name == "_" || declared[name] {
-				continue
-			}
-			value, exists := env[name]
-			saved[name] = savedBinding{value: value, exists: exists}
 		}
 		p.steps++
+		if p.funcSteps == nil {
+			p.funcSteps = make(map[string]int)
+		}
+		p.funcSteps[p.currentFunc]++
+		if p.probe != nil {
+			p.probe(p)
+		}
 		if p.steps > 20000 {
 			return p.refuse(stmt, "proof step bound exceeded")
+		}
+		if labeled, ok := stmt.(*ast.LabeledStmt); ok {
+			if check, backward := p.enterLabel(labeled, list, index, env); backward {
+				pending = append(pending, check)
+			}
 		}
 		if !p.statementWithCurrent(stmt, env, depth, declared) {
 			if p.reason == "" {
@@ -1779,7 +1867,131 @@ func (p *dependencyCallbackProof) scopedBlockWithCurrent(block *ast.BlockStmt, e
 			}
 		}
 	}
+	for _, check := range pending {
+		if dependencyCallbackBranchAddsTaint(check.before, env) {
+			return p.refuse(check.labeled, "goto back-edge region may add callback taint")
+		}
+	}
 	return true
+}
+
+// registerLabels publishes every label declared directly by a statement list
+// and returns the function that takes them back down again.
+func (p *dependencyCallbackProof) registerLabels(list []ast.Stmt, declared map[string]bool, scoped bool) func() {
+	var restore []func()
+	for index, stmt := range list {
+		labeled, ok := stmt.(*ast.LabeledStmt)
+		if !ok || labeled.Label == nil || labeled.Label.Name == "_" {
+			continue
+		}
+		name := labeled.Label.Name
+		if p.labels == nil {
+			p.labels = make(map[string]*dependencyCallbackLabel)
+		}
+		previous, existed := p.labels[name]
+		p.labels[name] = &dependencyCallbackLabel{
+			list:     list,
+			index:    index,
+			declared: declared,
+			scoped:   scoped,
+		}
+		restore = append(restore, func() {
+			if existed {
+				p.labels[name] = previous
+			} else {
+				delete(p.labels, name)
+			}
+		})
+	}
+	if len(restore) == 0 {
+		return func() {}
+	}
+	return func() {
+		for _, undo := range restore {
+			undo()
+		}
+	}
+}
+
+// enterLabel reaches a label in the statement list that declares it. A label
+// that a goto at or after its own position jumps back to is a loop header, and
+// the region it heads is the loop body. The back-edge is discharged with the
+// same fixpoint condition every other loop in this proof uses: one pass over
+// the region may not add callback taint to a binding that was clean where the
+// region starts. Because the region is also the straight-line continuation of
+// the list, that one pass is the walk already in progress; enterLabel only has
+// to record the taint the region starts from.
+func (p *dependencyCallbackProof) enterLabel(labeled *ast.LabeledStmt, list []ast.Stmt, index int, env map[string]dependencyCallbackValue) (dependencyCallbackLabelCheck, bool) {
+	if labeled.Label == nil {
+		return dependencyCallbackLabelCheck{}, false
+	}
+	label := p.labels[labeled.Label.Name]
+	if label == nil || label.entered {
+		return dependencyCallbackLabelCheck{}, false
+	}
+	label.entered = true
+	if !dependencyCallbackHasGoto(list[index:], labeled.Label.Name) {
+		return dependencyCallbackLabelCheck{}, false
+	}
+	return dependencyCallbackLabelCheck{labeled: labeled, before: dependencyCallbackTaintSnapshot(env)}, true
+}
+
+// gotoEdge models a goto. A jump to a label already entered is a backward
+// back-edge whose loop region was modeled where the label was reached, so the
+// jump itself carries no new facts. A jump to a label not yet entered is a
+// forward edge that skips the statements in between: the suffix the label
+// starts is executed over a clone of the env graph as it stands at the jump,
+// and, like every other non-linear edge in this proof, it may not add callback
+// taint to a binding that was clean.
+func (p *dependencyCallbackProof) gotoEdge(stmt *ast.BranchStmt, env map[string]dependencyCallbackValue, depth int) bool {
+	if stmt.Label == nil {
+		return p.refuse(stmt, "goto without a label is not modeled")
+	}
+	label := p.labels[stmt.Label.Name]
+	if label == nil {
+		return p.refuse(stmt, fmt.Sprintf("goto target %s is not declared by an enclosing statement list", stmt.Label.Name))
+	}
+	if label.entered {
+		return true
+	}
+	before := dependencyCallbackTaintSnapshot(env)
+	jump := dependencyCallbackCloneEnvGraph(env)
+	if !p.statementList(label.list[label.index:], jump, depth, dependencyCallbackCloneScope(label.declared), label.scoped) {
+		return false
+	}
+	if dependencyCallbackBranchAddsTaint(before, jump) {
+		return p.refuse(stmt, "forward goto edge may add callback taint")
+	}
+	return true
+}
+
+// dependencyCallbackHasGoto reports whether any goto targeting name appears in
+// the statements. Nested function literals are skipped: Go forbids a goto from
+// leaving the function that declares its label.
+func dependencyCallbackHasGoto(stmts []ast.Stmt, name string) bool {
+	found := false
+	visit := func(node ast.Node) bool {
+		if found || node == nil {
+			return false
+		}
+		switch node := node.(type) {
+		case *ast.FuncLit:
+			return false
+		case *ast.BranchStmt:
+			if node.Tok == token.GOTO && node.Label != nil && node.Label.Name == name {
+				found = true
+			}
+			return false
+		}
+		return true
+	}
+	for _, stmt := range stmts {
+		ast.Inspect(stmt, visit)
+		if found {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *dependencyCallbackProof) statementWithCurrent(stmt ast.Stmt, env map[string]dependencyCallbackValue, depth int, current map[string]bool) bool {
@@ -2034,7 +2246,7 @@ func (p *dependencyCallbackProof) statement(stmt ast.Stmt, env map[string]depend
 		return p.statement(stmt.Stmt, env, depth)
 	case *ast.BranchStmt:
 		if stmt.Tok == token.GOTO {
-			return p.refuse(stmt, "goto control flow is not modeled")
+			return p.gotoEdge(stmt, env, depth)
 		}
 		return true
 	case *ast.EmptyStmt, *ast.IncDecStmt:
@@ -2754,7 +2966,10 @@ func (p *dependencyCallbackProof) callWithResolvedCallee(call *ast.CallExpr, cal
 		p.results = append(p.results, results)
 		defer func() { p.results = p.results[:len(p.results)-1] }()
 		p.defers = append(p.defers, nil)
+		savedLabels := p.labels
+		p.labels = nil
 		ok := p.blockWithCurrent(callee.callback.lit.Body, closureEnv, depth+1, current) && p.runDeferred(closureEnv, depth+1)
+		p.labels = savedLabels
 		p.defers = p.defers[:len(p.defers)-1]
 		if ok {
 			dependencyCallbackJoinClosureEnvTaint(callee.callback.env, closureEnv, callee.callback.captures)

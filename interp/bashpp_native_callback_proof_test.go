@@ -1430,7 +1430,7 @@ func walk(h *holder, cb func()) { h.f = cb }
 		},
 	}
 	before := dependencyCallbackFrameSnapshot(active.supplied, dependencyCallbackValue{})
-	if !proof.recursiveBodyStoresCallback(proof.funcs["walk"][0], active.supplied, active.receiver) {
+	if !proof.recursiveBodyStoresCallback(proof.funcs["walk"][0], "walk", active.supplied, active.receiver, 0) {
 		t.Fatal("recursive store scan did not observe the callback store")
 	}
 	after := dependencyCallbackFrameSnapshot(active.supplied, dependencyCallbackValue{})
