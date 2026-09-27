@@ -50,8 +50,8 @@ type converter struct {
 	// written, so an import without a binding (blank) can still be matched
 	// against mapped.
 	resolveImport func(string) (string, error)
-	syntheticPos token.Pos
-	prefix       string
+	syntheticPos  token.Pos
+	prefix        string
 
 	// mappedTypePattern recognizes the marker qualifier types.TypeString emits
 	// for a package linked into the flat file. The prefix is immutable once
@@ -59,11 +59,11 @@ type converter struct {
 	// converter instead of once per checked type.
 	mappedTypePattern *regexp.Regexp
 
-	fset          *token.FileSet
-	files         []*ast.File
-	sources       []Source
-	info          *types.Info
-	renames       map[types.Object]string
+	fset    *token.FileSet
+	files   []*ast.File
+	sources []Source
+	info    *types.Info
+	renames map[types.Object]string
 	// checkerNames restores identifiers hygienically renamed solely to model
 	// cmd/cgo's non-binding pseudo-package C during go/types checking.
 	checkerNames map[string]string
