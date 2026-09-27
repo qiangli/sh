@@ -41,15 +41,25 @@ func (g *bashPPTestingCallbackFrames) add(r *Runner) {
 }
 
 func (g *bashPPTestingCallbackFrames) finish(r *Runner) {
-	if r == nil || !(r.exit.exiting || r.exit.fatalExit || r.exit.err != nil) {
+	if r == nil {
 		return
 	}
 	g.mu.Lock()
-	if g.status == nil {
+	if g.status == nil && (r.exit.exiting || r.exit.fatalExit || r.exit.err != nil) {
 		status := r.exit
 		g.status = &status
 	}
+	for i, frame := range g.frames {
+		if frame == r {
+			last := len(g.frames) - 1
+			g.frames[i] = g.frames[last]
+			g.frames[last] = nil
+			g.frames = g.frames[:last]
+			break
+		}
+	}
 	g.mu.Unlock()
+	r.closeDirFile()
 }
 
 func (g *bashPPTestingCallbackFrames) adopt(r *Runner) error {
@@ -91,7 +101,7 @@ func (registered *bashPPCallbackFunction) bashPPTestingCallbackFrame(group *bash
 	if !concurrent.ownsActiveFileRun() {
 		return nil, nil, fmt.Errorf("callback has no active owning File Run")
 	}
-	child := template.subshell(true)
+	child := template.subshellWithBashPPCapture(true, registered.capture)
 	child.bashPPGoSourceCapture = nil
 	// A testing callback is another Go execution frame in the registering
 	// task group, not a shell-copy boundary. It owns its stacks and scopes but
@@ -113,6 +123,7 @@ func (registered *bashPPCallbackFunction) bashPPTestingCallbackFrame(group *bash
 	// unrelated frame and foreign-package storage.
 	cloner.shared = registered.capture
 	cloner.goSourceTask = true
+	cloner.exactCapture = true
 	return child, registered.templateFn.cloned(cloner), nil
 }
 

@@ -108,6 +108,10 @@ type bashPPBridgeValue struct {
 	// a slice of dependency handles, rebuilt on the dependency side on return.
 	// Host-only; only a non-retaining result consumer may carry it.
 	copiedResults bool
+	// newCallback is local request ownership metadata. It never crosses JSON:
+	// a synchronous request releases a callback registered solely for that
+	// call once the dependency has returned.
+	newCallback bool
 }
 
 func bashPPBridgeString(text string) bashPPBridgeValue {
@@ -748,6 +752,14 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest, q bashPPBridgeRequest) ([]bashPPBridgeValue, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	// A synchronous consumer cannot retain a callback after its reply. Drop
+	// registrations created solely while preparing this request at that exact
+	// ownership boundary; retained and result-owned consumers keep their
+	// session registrations until their documented later lifetime ends.
+	if synchronousFunctionCallback(req, q) {
+		handles := bashPPNewCallbackHandles(q)
+		defer s.releaseCallbackFunctions(handles)
 	}
 	// The package sort ordering entry points run over the interpreter's own
 	// storage when they carry original callbacks, so the callbacks and the

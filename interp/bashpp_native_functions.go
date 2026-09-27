@@ -146,7 +146,7 @@ func (r *Runner) bashPPBridgeFunction(fn *bashPPFunc) (bashPPBridgeValue, error)
 	id := s.functionNext
 	s.functions[id] = fn
 	s.functionOwners[id] = registered
-	return bashPPBridgeValue{Kind: "callback", Handle: id, Session: s.id, Callbacks: true, copiedResults: copiedResults, callRefusal: callRefusal, localRefusal: localRefusal}, nil
+	return bashPPBridgeValue{Kind: "callback", Handle: id, Session: s.id, Callbacks: true, copiedResults: copiedResults, callRefusal: callRefusal, localRefusal: localRefusal, newCallback: true}, nil
 }
 
 func (r *Runner) bashPPCallbackFunctionTemplate(fn *bashPPFunc) (*bashPPCallbackFunction, error) {
@@ -170,7 +170,7 @@ func (r *Runner) bashPPCallbackFunctionTemplate(fn *bashPPFunc) (*bashPPCallback
 	// that runner: it may be paused in another callback frame by then.
 	saved := r.bashPPGoSourceCapture
 	r.bashPPGoSourceCapture = capture
-	template := r.subshell(true)
+	template := r.subshellWithBashPPCapture(true, capture)
 	r.bashPPGoSourceCapture = saved
 	// This is immutable template configuration, not live invocation state.
 	// Every later frame clone reads it without touching the registering runner.
@@ -184,6 +184,7 @@ func (r *Runner) bashPPCallbackFunctionTemplate(fn *bashPPFunc) (*bashPPCallback
 	cloner := newBashPPClonerFor(template)
 	cloner.shared = capture
 	cloner.goSourceTask = true
+	cloner.exactCapture = true
 	return &bashPPCallbackFunction{
 		templateFn: fn.cloned(cloner),
 		template:   template,
@@ -202,8 +203,10 @@ func (r *Runner) bashPPCallbackFunctionCapture(fn *bashPPFunc) (map[*bashPPCell]
 	}
 	capture := make(map[*bashPPCell]bool)
 	for name := range free {
-		if cell := fn.scope.lookup(name); cell != nil && r.bashPPGoSourceSharable(cell) {
-			capture[cell] = true
+		if cell := fn.scope.lookup(name); cell != nil {
+			if cell.constant || r.bashPPGoSourceSharable(cell) {
+				capture[cell] = true
+			}
 		}
 	}
 	if fn.receiver != nil && r.bashPPGoSourceSharable(fn.receiver) {
@@ -280,6 +283,58 @@ func (s *bashPPNativeSession) closeCallbackFunctionTemplates() {
 	s.mu.Unlock()
 	for _, callback := range registered {
 		if callback != nil && callback.template != nil {
+			callback.template.closeDirFile()
+		}
+	}
+}
+
+func bashPPNewCallbackHandles(q bashPPBridgeRequest) []uint64 {
+	seen := make(map[uint64]bool)
+	var visit func(bashPPBridgeValue)
+	visit = func(value bashPPBridgeValue) {
+		if value.Kind == "callback" && value.newCallback && value.Handle != 0 {
+			seen[value.Handle] = true
+		}
+		for _, child := range value.Elements {
+			visit(child)
+		}
+		for _, child := range value.Fields {
+			visit(child)
+		}
+		for _, entry := range value.Entries {
+			visit(entry.Key)
+			visit(entry.Value)
+		}
+	}
+	if q.Receiver != nil {
+		visit(*q.Receiver)
+	}
+	for _, arg := range q.Args {
+		visit(arg)
+	}
+	handles := make([]uint64, 0, len(seen))
+	for handle := range seen {
+		handles = append(handles, handle)
+	}
+	return handles
+}
+
+func (s *bashPPNativeSession) releaseCallbackFunctions(handles []uint64) {
+	if s == nil || len(handles) == 0 {
+		return
+	}
+	callbacks := make([]*bashPPCallbackFunction, 0, len(handles))
+	s.mu.Lock()
+	for _, handle := range handles {
+		delete(s.functions, handle)
+		if callback := s.functionOwners[handle]; callback != nil {
+			callbacks = append(callbacks, callback)
+			delete(s.functionOwners, handle)
+		}
+	}
+	s.mu.Unlock()
+	for _, callback := range callbacks {
+		if callback.template != nil {
 			callback.template.closeDirFile()
 		}
 	}

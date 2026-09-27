@@ -488,6 +488,13 @@ func bridgeScalar(value bashPPScalar) (bashPPBridgeValue, error) {
 	return out, nil
 }
 func (r *Runner) bashPPBridgeExpr(expr syntax.BashPPExpr) (bashPPBridgeValue, error) {
+	if lit, ok := expr.(*syntax.BashPPFuncLit); ok && r.bashPPGoSource {
+		// A literal used only as a native-call argument needs no shell-visible
+		// closure handle. The dependency session owns it for exactly as long as
+		// its callback registration; appending it to the Runner's lifetime-long
+		// closure registry made loops of t.Run retain every completed subtest.
+		return r.bashPPBridgeFunction(r.bashPPNewClosure(lit))
+	}
 	callable := false
 	switch x := expr.(type) {
 	case *syntax.BashPPFuncLit, *syntax.BashPPIdent:

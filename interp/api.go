@@ -3877,6 +3877,14 @@ func (r *Runner) Subshell() *Runner {
 // when creating subshells which will not be used concurrently with the parent shell.
 // TODO(v4): we should expose this, e.g. SubshellForeground and SubshellBackground.
 func (r *Runner) subshell(background bool) *Runner {
+	return r.subshellWithBashPPCapture(background, nil)
+}
+
+// subshellWithBashPPCapture makes an ordinary shell copy when capture is nil.
+// A non-nil capture denotes a native callback execution snapshot: its mutable
+// cells are the exact set already authenticated by lexical capture analysis,
+// while Go-source declarations and function bodies are immutable and shared.
+func (r *Runner) subshellWithBashPPCapture(background bool, capture map[*bashPPCell]bool) *Runner {
 	if !r.didReset {
 		r.Reset()
 	}
@@ -4032,7 +4040,11 @@ func (r *Runner) subshell(background bool) *Runner {
 	r2.bashPPForeignModules = append([]*polyglot.Module(nil), r.bashPPForeignModules...)
 	r2.bashPPForeignImports = maps.Clone(r.bashPPForeignImports)
 	r2.bashPPSeededImports = maps.Clone(r.bashPPSeededImports)
-	r2.bashPPTypes = maps.Clone(r.bashPPTypes)
+	if capture != nil {
+		r2.bashPPTypes = r.bashPPTypes
+	} else {
+		r2.bashPPTypes = maps.Clone(r.bashPPTypes)
+	}
 	// The bindings map is read-only once installed, but a subshell may enter
 	// its own frames, so it gets its own map rather than sharing this one.
 	r2.bashPPTypeParamArgs = maps.Clone(r.bashPPTypeParamArgs)
@@ -4051,6 +4063,11 @@ func (r *Runner) subshell(background bool) *Runner {
 		cloner := newBashPPClonerFor(r2)
 		cloner.shared = r.bashPPGoSourceCapture
 		cloner.goSourceTask = r.bashPPGoSource && r.bashPPGoSourceCapture != nil
+		if capture != nil {
+			cloner.shared = capture
+			cloner.goSourceTask = true
+			cloner.exactCapture = true
+		}
 		// The GoSource capture-ownership record travels with the copy. It is
 		// the superset of every cell ever shared, so a nested launch inside
 		// this copy answers a shared cell from the record instead of reading a
@@ -4059,19 +4076,28 @@ func (r *Runner) subshell(background bool) *Runner {
 		// two runners never write one map.
 		r2.bashPPGoSourceSharableCells = maps.Clone(r.bashPPGoSourceSharableCells)
 		r2.bashPPScope = cloner.clone(r.bashPPScope)
-		if r.bashPPFuncScopes != nil {
+		if capture != nil {
+			// Go-source declarations, bodies, and their package-level lexical
+			// environments are fixed before execution. Calls create bound copies
+			// for receivers and type arguments, so callback frames can safely
+			// share these descriptors instead of cloning the entire program.
+			r2.bashPPFuncScopes = r.bashPPFuncScopes
+			r2.bashPPFuncs = r.bashPPFuncs
+			r2.bashPPMethods = r.bashPPMethods
+			r2.bashPPClosures = r.bashPPClosures
+		} else if r.bashPPFuncScopes != nil {
 			r2.bashPPFuncScopes = make(map[string]*bashPPScope, len(r.bashPPFuncScopes))
 			for name, scope := range r.bashPPFuncScopes {
 				r2.bashPPFuncScopes[name] = cloner.clone(scope)
 			}
 		}
-		if r.bashPPFuncs != nil {
+		if capture == nil && r.bashPPFuncs != nil {
 			r2.bashPPFuncs = make(map[string]*bashPPFunc, len(r.bashPPFuncs))
 			for name, fn := range r.bashPPFuncs {
 				r2.bashPPFuncs[name] = fn.cloned(cloner)
 			}
 		}
-		if r.bashPPMethods != nil {
+		if capture == nil && r.bashPPMethods != nil {
 			r2.bashPPMethods = make(map[string]map[string]*bashPPFunc, len(r.bashPPMethods))
 			for typ, methods := range r.bashPPMethods {
 				copyMethods := make(map[string]*bashPPFunc, len(methods))
@@ -4085,7 +4111,7 @@ func (r *Runner) subshell(background bool) *Runner {
 		// held in a variable the subshell inherited must keep naming the same
 		// function, and the same cloner keeps each closure's captured cells
 		// aliased to the subshell's copy of the scope rather than the parent's.
-		if len(r.bashPPClosures) > 0 {
+		if capture == nil && len(r.bashPPClosures) > 0 {
 			r2.bashPPClosures = make([]*bashPPFunc, len(r.bashPPClosures))
 			for i, fn := range r.bashPPClosures {
 				r2.bashPPClosures[i] = fn.cloned(cloner)

@@ -216,6 +216,11 @@ type bashPPCloner struct {
 	// nil for every classic Bash++ clone, so the deep copy is unchanged there.
 	shared       map[*bashPPCell]bool
 	goSourceTask bool
+	// exactCapture is used by native callback frames whose lexical capture was
+	// proved before the dependency scheduler took ownership. Cells outside that
+	// set are neither readable nor writable by the callback, so retaining them
+	// would turn every callback into an O(program) snapshot.
+	exactCapture bool
 }
 
 func newBashPPCloner() *bashPPCloner { return newBashPPClonerFor(nil) }
@@ -265,7 +270,9 @@ func (c *bashPPCloner) clone(s *bashPPScope) *bashPPScope {
 	c.scopes[s] = out
 	out.parent = c.clone(s.parent)
 	for name, cell := range s.entries {
-		out.entries[name] = c.cloneCell(cell)
+		if cloned := c.cloneCell(cell); cloned != nil || !c.exactCapture {
+			out.entries[name] = cloned
+		}
 	}
 	if len(s.linknames) > 0 {
 		out.linknames = make(map[string]*bashPPCell, len(s.linknames))
@@ -290,6 +297,13 @@ func (c *bashPPCloner) cloneCell(cell *bashPPCell) *bashPPCell {
 		// lands on the same shared cell rather than forking a copy.
 		c.cells[cell] = cell
 		return cell
+	}
+	if c.exactCapture {
+		// Callback capture analysis authenticated every cell the body can
+		// reach. Do not copy the rest of the linked program into each testing
+		// callback frame.
+		c.cells[cell] = nil
+		return nil
 	}
 	if c.goSourceTask && !cell.constant {
 		// Exact Go lexical capture has already selected every outer binding
