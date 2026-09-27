@@ -153,7 +153,6 @@ func (r *Runner) bashPPNativeInterfaceCompareOperand(value any, meta *bashPPColl
 // answers from the decoded reflect.Value directly, so uncomparable nilable
 // values never pass through reflect.Value.Equal.
 func (r *Runner) goSourceNativeHandleIsNil(value bashPPBridgeValue) (bool, error) {
-	value.Interface = ""
 	if value.Kind == "nil" {
 		return true, nil
 	}
