@@ -842,12 +842,23 @@ func (r *Runner) goSourceSlicesCollect(ctx context.Context, req bashPPEvalReques
 	return []bashPPBridgeValue{{Kind: "slice", Type: "[]" + bashPPTypeText(yieldParams[0].typ), Elements: collected}}, nil
 }
 
-// nativeSliceElements returns the element values of a transported slice, treating
-// a nil slice as empty so slices.Equal(nil, []T{}) is true as native Go reports.
+// nativeSliceElements returns the visible element values of a transported
+// slice, treating a nil slice as empty so slices.Equal(nil, []T{}) is true as
+// native Go reports. Interpreter-owned slices carry Elements through Capacity
+// so mutation writeback can preserve aliases, but read-only helpers must stop
+// at Length. Older synthetic carriers have no header and keep their historical
+// Elements-only meaning.
 func nativeSliceElements(v bashPPBridgeValue) ([]bashPPBridgeValue, error) {
 	switch v.Kind {
 	case "slice":
-		return v.Elements, nil
+		hasHeader := v.Storage != 0 || v.Offset != 0 || v.Length != 0 || v.Capacity != 0
+		if !hasHeader {
+			return v.Elements, nil
+		}
+		if v.Offset < 0 || v.Length < 0 || v.Capacity < v.Length || v.Capacity != len(v.Elements) {
+			return nil, fmt.Errorf("gosource: malformed slice header offset=%d len=%d cap=%d elements=%d", v.Offset, v.Length, v.Capacity, len(v.Elements))
+		}
+		return v.Elements[:v.Length], nil
 	case "nil":
 		return nil, nil
 	}
