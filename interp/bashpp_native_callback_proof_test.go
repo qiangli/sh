@@ -1079,6 +1079,26 @@ func Parse(cb func(), choose bool) { Retain(cb, choose) }
 `,
 		},
 		{
+			name: "nested helper closure write taints captured cell observed later",
+			source: `package dep
+var saved func()
+func run(fn func()) { fn() }
+func Retain(cb func(), choose bool) {
+	var f func()
+	setter := func() {
+		inner := func() { f = cb }
+		inner()
+	}
+	getter := func() { saved = f }
+	if choose {
+		run(setter)
+	}
+	getter()
+}
+func Parse(cb func(), choose bool) { Retain(cb, choose) }
+`,
+		},
+		{
 			name: "direct helper callback invocation remains synchronous",
 			source: `package dep
 func run(fn func()) { fn() }
@@ -1098,6 +1118,26 @@ func Parse(cb func()) {
 		f()
 	}
 	run(func() { setter(func() {}) })
+	_ = f
+}
+`,
+			want: true,
+		},
+		{
+			name: "nested helper parameter and local shadow captured names",
+			source: `package dep
+func run(fn func()) { fn() }
+func Parse(cb func()) {
+	var f func()
+	setter := func() {
+		inner := func(cb func()) {
+			var f func()
+			f = cb
+			f()
+		}
+		inner(func() {})
+	}
+	run(setter)
 	_ = f
 }
 `,

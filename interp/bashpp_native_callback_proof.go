@@ -613,6 +613,7 @@ func dependencyCallbackCaptureExpr(expr ast.Expr, scope map[string]bool, env map
 		}
 		switch node := node.(type) {
 		case *ast.FuncLit:
+			dependencyCallbackCaptureFuncLit(node, scope, env, captures)
 			return false
 		case *ast.SelectorExpr:
 			dependencyCallbackCaptureExpr(node.X, scope, env, captures)
@@ -627,6 +628,24 @@ func dependencyCallbackCaptureExpr(expr ast.Expr, scope map[string]bool, env map
 		}
 		return true
 	})
+}
+
+func dependencyCallbackCaptureFuncLit(lit *ast.FuncLit, scope map[string]bool, env map[string]dependencyCallbackValue, captures map[string]bool) {
+	if lit == nil || lit.Body == nil {
+		return
+	}
+	nested := dependencyCallbackCloneScope(scope)
+	for _, name := range dependencyCallbackFieldNames(lit.Type.Params) {
+		if name != "" {
+			nested[name] = true
+		}
+	}
+	for _, name := range dependencyCallbackFieldNames(lit.Type.Results) {
+		if name != "" {
+			nested[name] = true
+		}
+	}
+	dependencyCallbackCaptureBlock(lit.Body, nested, env, captures)
 }
 
 func dependencyCallbackFormals(fields *ast.FieldList) ([]dependencyCallbackFormal, bool) {
