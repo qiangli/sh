@@ -801,7 +801,11 @@ func (p *dependencyCallbackProof) function(decl *ast.FuncDecl, supplied map[stri
 	if decl.Recv != nil && len(decl.Recv.List[0].Names) == 1 {
 		env[decl.Recv.List[0].Names[0].Name] = receiver
 	}
-	ok := p.block(decl.Body, env, depth+1) && p.runDeferred(env, depth+1)
+	current := make(map[string]bool, len(env))
+	for name := range env {
+		current[name] = true
+	}
+	ok := p.blockWithCurrent(decl.Body, env, depth+1, current) && p.runDeferred(env, depth+1)
 	if ok {
 		after := dependencyCallbackFrameSnapshot(supplied, receiver)
 		if after == before {
@@ -1083,7 +1087,7 @@ func (p *dependencyCallbackProof) recursiveStatementStoresCallback(stmt ast.Stmt
 				continue
 			}
 			if !p.withStoreContext("assign", lhs, dependencyCallbackExprAt(stmt.Rhs, i), func() bool {
-				return p.assign(lhs, value, env, stmt.Tok == token.DEFINE)
+				return p.assign(lhs, value, env, false)
 			}) {
 				return true
 			}
@@ -1112,11 +1116,11 @@ func (p *dependencyCallbackProof) recursiveStatementStoresCallback(stmt ast.Stmt
 						value.object.owned = true
 					}
 				}
-				if !p.withStoreContext("decl", name, dependencyCallbackExprAt(spec.Values, i), func() bool {
-					return p.assign(name, value, env, true)
-				}) {
-					return true
+				value = dependencyCallbackResolvedValue(value)
+				if value.object != nil {
+					value.object.owned = true
 				}
+				env[name.Name] = value
 			}
 		}
 	case *ast.ExprStmt:
@@ -1663,6 +1667,33 @@ func (p *dependencyCallbackProof) scopedBlock(block *ast.BlockStmt, env map[stri
 	return p.scopedBlockWithCurrent(block, env, depth, nil)
 }
 
+// blockWithCurrent executes a function body without restoring its bindings;
+// deferred calls run after the body and must still be able to resolve locals.
+func (p *dependencyCallbackProof) blockWithCurrent(block *ast.BlockStmt, env map[string]dependencyCallbackValue, depth int, current map[string]bool) bool {
+	if block == nil {
+		return true
+	}
+	declared := dependencyCallbackCloneScope(current)
+	for _, stmt := range block.List {
+		p.steps++
+		if p.steps > 20000 {
+			return p.refuse(stmt, "proof step bound exceeded")
+		}
+		if !p.statementWithCurrent(stmt, env, depth, declared) {
+			if p.reason == "" {
+				p.refuse(stmt, fmt.Sprintf("statement %T refused", stmt))
+			}
+			return false
+		}
+		for _, name := range dependencyCallbackStatementDeclarations(stmt) {
+			if name != "_" {
+				declared[name] = true
+			}
+		}
+	}
+	return true
+}
+
 func (p *dependencyCallbackProof) scopedBlockWithCurrent(block *ast.BlockStmt, env map[string]dependencyCallbackValue, depth int, current map[string]bool) bool {
 	if block == nil {
 		return true
@@ -1689,17 +1720,57 @@ func (p *dependencyCallbackProof) scopedBlockWithCurrent(block *ast.BlockStmt, e
 			}
 			value, exists := env[name]
 			saved[name] = savedBinding{value: value, exists: exists}
-			delete(env, name)
-			declared[name] = true
 		}
 		p.steps++
 		if p.steps > 20000 {
 			return p.refuse(stmt, "proof step bound exceeded")
 		}
-		if !p.statement(stmt, env, depth) {
+		if !p.statementWithCurrent(stmt, env, depth, declared) {
 			if p.reason == "" {
 				p.refuse(stmt, fmt.Sprintf("statement %T refused", stmt))
 			}
+			return false
+		}
+		for _, name := range dependencyCallbackStatementDeclarations(stmt) {
+			if name != "_" {
+				declared[name] = true
+			}
+		}
+	}
+	return true
+}
+
+func (p *dependencyCallbackProof) statementWithCurrent(stmt ast.Stmt, env map[string]dependencyCallbackValue, depth int, current map[string]bool) bool {
+	if assign, ok := stmt.(*ast.AssignStmt); ok {
+		return p.assignment(assign, env, depth, current)
+	}
+	return p.statement(stmt, env, depth)
+}
+
+func (p *dependencyCallbackProof) assignment(stmt *ast.AssignStmt, env map[string]dependencyCallbackValue, depth int, current map[string]bool) bool {
+	values := make([]dependencyCallbackValue, len(stmt.Rhs))
+	for i, expr := range stmt.Rhs {
+		if !p.expressionCalls(expr, env, depth) {
+			return false
+		}
+		values[i] = p.value(expr, env)
+	}
+	for i, lhs := range stmt.Lhs {
+		value := dependencyCallbackValue{}
+		if len(values) == len(stmt.Lhs) {
+			value = values[i]
+		} else if len(values) == 1 {
+			value = values[0]
+		}
+		if ident, ok := lhs.(*ast.Ident); ok && ident.Name != "_" && stmt.Tok == token.DEFINE && !current[ident.Name] {
+			value = dependencyCallbackResolvedValue(value)
+			if value.object != nil {
+				value.object.owned = true
+			}
+			env[ident.Name] = value
+			continue
+		}
+		if !p.assign(lhs, value, env, stmt.Tok == token.DEFINE) {
 			return false
 		}
 	}
@@ -1766,25 +1837,7 @@ func (p *dependencyCallbackProof) currentResultTainted(env map[string]dependency
 func (p *dependencyCallbackProof) statement(stmt ast.Stmt, env map[string]dependencyCallbackValue, depth int) bool {
 	switch stmt := stmt.(type) {
 	case *ast.AssignStmt:
-		values := make([]dependencyCallbackValue, len(stmt.Rhs))
-		for i, expr := range stmt.Rhs {
-			if !p.expressionCalls(expr, env, depth) {
-				return false
-			}
-			values[i] = p.value(expr, env)
-		}
-		for i, lhs := range stmt.Lhs {
-			value := dependencyCallbackValue{}
-			if len(values) == len(stmt.Lhs) {
-				value = values[i]
-			} else if len(values) == 1 {
-				value = values[0]
-			}
-			if !p.assign(lhs, value, env, stmt.Tok == token.DEFINE) {
-				return false
-			}
-		}
-		return true
+		return p.assignment(stmt, env, depth, nil)
 	case *ast.DeclStmt:
 		decl, ok := stmt.Decl.(*ast.GenDecl)
 		if !ok {
@@ -2642,7 +2695,7 @@ func (p *dependencyCallbackProof) callWithResolvedCallee(call *ast.CallExpr, cal
 		p.results = append(p.results, results)
 		defer func() { p.results = p.results[:len(p.results)-1] }()
 		p.defers = append(p.defers, nil)
-		ok := p.scopedBlockWithCurrent(callee.callback.lit.Body, closureEnv, depth+1, current) && p.runDeferred(closureEnv, depth+1)
+		ok := p.blockWithCurrent(callee.callback.lit.Body, closureEnv, depth+1, current) && p.runDeferred(closureEnv, depth+1)
 		p.defers = p.defers[:len(p.defers)-1]
 		if ok {
 			dependencyCallbackJoinClosureEnvTaint(callee.callback.env, closureEnv, callee.callback.captures)

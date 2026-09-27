@@ -1188,6 +1188,30 @@ func Parse(cb func()) {
 			want: true,
 		},
 		{
+			name: "short declaration shadow initializer retains callback",
+			source: `package dep
+var saved func()
+func Parse(cb func()) {
+	{
+		cb := cb
+		saved = cb
+	}
+}
+`,
+		},
+		{
+			name: "var declaration shadow initializer retains callback",
+			source: `package dep
+var saved func()
+func Parse(cb func()) {
+	{
+		var cb = cb
+		saved = cb
+	}
+}
+`,
+		},
+		{
 			name: "caller join keeps distinct shadow capture cell",
 			source: `package dep
 var saved func()
