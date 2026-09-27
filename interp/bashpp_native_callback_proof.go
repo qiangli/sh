@@ -8,6 +8,7 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -156,6 +157,11 @@ type dependencyCallbackActiveFrame struct {
 	receiver dependencyCallbackValue
 }
 
+type dependencyCallbackCompletedFrame struct {
+	before string
+	after  string
+}
+
 type dependencyCallbackProof struct {
 	funcs   map[string][]*ast.FuncDecl
 	methods map[string]map[string]*ast.FuncDecl
@@ -163,6 +169,7 @@ type dependencyCallbackProof struct {
 	globals map[string]bool
 	consts  map[string]bool
 	active  map[string]dependencyCallbackActiveFrame
+	done    map[string][]dependencyCallbackCompletedFrame
 	results []map[string]bool
 	defers  [][]dependencyCallbackDeferred
 	steps   int
@@ -177,7 +184,7 @@ type dependencyCallbackProof struct {
 func newDependencyCallbackProof(files []*ast.File) *dependencyCallbackProof {
 	p := &dependencyCallbackProof{
 		funcs: make(map[string][]*ast.FuncDecl), methods: make(map[string]map[string]*ast.FuncDecl),
-		types: make(map[string]dependencyCallbackType), globals: make(map[string]bool), consts: make(map[string]bool), active: make(map[string]dependencyCallbackActiveFrame),
+		types: make(map[string]dependencyCallbackType), globals: make(map[string]bool), consts: make(map[string]bool), active: make(map[string]dependencyCallbackActiveFrame), done: make(map[string][]dependencyCallbackCompletedFrame),
 	}
 	for _, file := range files {
 		for _, decl := range file.Decls {
@@ -407,6 +414,12 @@ func (p *dependencyCallbackProof) function(decl *ast.FuncDecl, supplied map[stri
 		}
 		return p.refuse(decl, "recursive call changes callback capture state")
 	}
+	before := dependencyCallbackFrameSnapshot(supplied, receiver)
+	for _, frame := range p.done[key] {
+		if frame.before == before && frame.after == before {
+			return true
+		}
+	}
 	p.active[key] = dependencyCallbackActiveFrame{supplied: dependencyCallbackCloneEnv(supplied), receiver: receiver}
 	defer delete(p.active, key)
 	savedFunc := p.currentFunc
@@ -435,7 +448,14 @@ func (p *dependencyCallbackProof) function(decl *ast.FuncDecl, supplied map[stri
 	if decl.Recv != nil && len(decl.Recv.List[0].Names) == 1 {
 		env[decl.Recv.List[0].Names[0].Name] = receiver
 	}
-	return p.block(decl.Body, env, depth+1) && p.runDeferred(env, depth+1)
+	ok := p.block(decl.Body, env, depth+1) && p.runDeferred(env, depth+1)
+	if ok {
+		after := dependencyCallbackFrameSnapshot(supplied, receiver)
+		if after == before {
+			p.done[key] = append(p.done[key], dependencyCallbackCompletedFrame{before: before, after: after})
+		}
+	}
+	return ok
 }
 
 func dependencyCallbackSameFrame(active dependencyCallbackActiveFrame, supplied map[string]dependencyCallbackValue, receiver dependencyCallbackValue) bool {
@@ -453,6 +473,95 @@ func dependencyCallbackSameFrame(active dependencyCallbackActiveFrame, supplied 
 
 func dependencyCallbackSameValue(left, right dependencyCallbackValue) bool {
 	return left.callback == right.callback && left.object == right.object
+}
+
+func dependencyCallbackFrameSnapshot(supplied map[string]dependencyCallbackValue, receiver dependencyCallbackValue) string {
+	s := &dependencyCallbackSnapshot{
+		objects:  make(map[*dependencyCallbackObject]int),
+		closures: make(map[*dependencyCallbackClosure]int),
+	}
+	var b strings.Builder
+	b.WriteString("recv=")
+	s.value(&b, receiver)
+	b.WriteString(";args=")
+	names := make([]string, 0, len(supplied))
+	for name := range supplied {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		b.WriteString(name)
+		b.WriteByte('=')
+		s.value(&b, supplied[name])
+		b.WriteByte(';')
+	}
+	return b.String()
+}
+
+type dependencyCallbackSnapshot struct {
+	objects  map[*dependencyCallbackObject]int
+	closures map[*dependencyCallbackClosure]int
+}
+
+func (s *dependencyCallbackSnapshot) value(b *strings.Builder, value dependencyCallbackValue) {
+	if value.callback != nil {
+		s.closure(b, value.callback)
+		return
+	}
+	if value.object != nil {
+		s.object(b, value.object)
+		return
+	}
+	b.WriteByte('_')
+}
+
+func (s *dependencyCallbackSnapshot) closure(b *strings.Builder, closure *dependencyCallbackClosure) {
+	if id, ok := s.closures[closure]; ok {
+		fmt.Fprintf(b, "C#%d", id)
+		return
+	}
+	id := len(s.closures) + 1
+	s.closures[closure] = id
+	fmt.Fprintf(b, "C#%d{", id)
+	if closure.lit == nil {
+		b.WriteString("original")
+	} else {
+		fmt.Fprintf(b, "lit:%d", closure.lit.Pos())
+	}
+	names := make([]string, 0, len(closure.env))
+	for name := range closure.env {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		b.WriteByte(';')
+		b.WriteString(name)
+		b.WriteByte('=')
+		s.value(b, closure.env[name])
+	}
+	b.WriteByte('}')
+}
+
+func (s *dependencyCallbackSnapshot) object(b *strings.Builder, obj *dependencyCallbackObject) {
+	if id, ok := s.objects[obj]; ok {
+		fmt.Fprintf(b, "O#%d", id)
+		return
+	}
+	id := len(s.objects) + 1
+	s.objects[obj] = id
+	fmt.Fprintf(b, "O#%d{%s,owned=%t,escaped=%t", id, obj.typ, obj.owned, obj.escaped)
+	names := make([]string, 0, len(obj.fields))
+	for name := range obj.fields {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		b.WriteByte(';')
+		b.WriteString(name)
+		b.WriteByte('=')
+		s.value(b, obj.fields[name])
+	}
+	b.WriteByte('}')
 }
 
 func (p *dependencyCallbackProof) block(block *ast.BlockStmt, env map[string]dependencyCallbackValue, depth int) bool {

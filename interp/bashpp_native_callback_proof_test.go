@@ -299,6 +299,23 @@ func Parse(cb func(), choose bool) { for choose { cb(); choose = false } }
 `,
 			want: true,
 		},
+		{
+			name: "completed frame later object taint",
+			source: `package dep
+var saved func()
+type holder struct { f func() }
+func inspect(h *holder) { if h.f != nil { saved = h.f } }
+func Parse(cb func()) { h := &holder{f: func(){}}; inspect(h); h.f = cb; inspect(h) }
+`,
+		},
+		{
+			name: "completed frame later closure capture",
+			source: `package dep
+var saved func()
+func inspect(f func()) { if f != nil { saved = f } }
+func Parse(cb func()) { inspect(func(){}); inspect(func(){ cb() }) }
+`,
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			file, err := parser.ParseFile(token.NewFileSet(), "dep.go", test.source, parser.SkipObjectResolution)
