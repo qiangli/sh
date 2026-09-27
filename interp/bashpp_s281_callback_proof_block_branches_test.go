@@ -25,6 +25,7 @@ type Stmt struct {
 type block struct {
 	parent *block
 	lstmt  *Stmt
+	h      ErrorHandler
 }
 
 type label struct {
@@ -200,6 +201,24 @@ func (ls *labelScope) blockBranches(parent *block, lstmt *Stmt, body []*Stmt) []
 		lstmt = nil
 		ls.declare(b, s, "x")
 		innerBlock(s.list)
+	}
+	return fwdGotos
+}
+`,
+		"recursion_stores_callback_into_the_generalized_parent": `
+func (ls *labelScope) blockBranches(parent *block, lstmt *Stmt, body []*Stmt) []*Stmt {
+	b := &block{parent: parent, lstmt: lstmt}
+	var fwdGotos []*Stmt
+	innerBlock := func(body []*Stmt) {
+		fwdGotos = append(fwdGotos, ls.blockBranches(b, lstmt, body)...)
+	}
+	for _, s := range body {
+		lstmt = nil
+		ls.declare(b, s, "x")
+		innerBlock(s.list)
+	}
+	if parent != nil {
+		parent.h = ls.errh
 	}
 	return fwdGotos
 }
