@@ -1398,6 +1398,20 @@ func (r *Runner) bashPPInterfaceOperand(x syntax.BashPPExpr, what string) (*bash
 	if err != nil {
 		return nil, err
 	}
+	// The same dependency-owned dynamic value, reached by a spelling the
+	// native reader above cannot claim because the path crosses interpreter
+	// storage: go/types' `check.objMap[tname].tdecl.Type` reads an interface
+	// field of a native *ast.TypeSpec that an interpreted map entry holds. The
+	// generic reader returns the worker's bare handle, with no interface
+	// metadata of its own, so the operand is that interface holding the
+	// reported dynamic value — exactly as for the named-local spelling.
+	if native, ok := value.(*bashPPBridgeValue); ok && native != nil && (meta == nil || meta.interfaceValue == nil) {
+		bridge := *native
+		if bridge.Interface == "" {
+			bridge.Interface = "any"
+		}
+		return r.goSourceNativeValueCell(bridge), nil
+	}
 	if meta == nil || meta.interfaceValue == nil {
 		return nil, r.bashPPOperandErrf(x, "BASHPP-EASSERT-OPERAND", "%s operand must be an interface", what)
 	}
