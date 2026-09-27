@@ -15,9 +15,100 @@ import (
 	"go/constant"
 	"strconv"
 	"strings"
+	"sync"
 
 	"mvdan.cc/sh/v3/syntax"
 )
+
+// bashPPTestingCallbackFrames owns independent interpreter frames which native
+// package testing may suspend at T.Parallel. The native M.Run request is the
+// bounded lifetime root: it cannot return until all test, subtest and cleanup
+// callbacks have returned, and the host joins the same frames before accepting
+// its reply.
+type bashPPTestingCallbackFrames struct {
+	sync.WaitGroup
+	mu     sync.Mutex
+	status *exitStatus
+	frames []*Runner
+	close  sync.Once
+}
+
+func (g *bashPPTestingCallbackFrames) add(r *Runner) {
+	g.mu.Lock()
+	g.frames = append(g.frames, r)
+	g.Add(1)
+	g.mu.Unlock()
+}
+
+func (g *bashPPTestingCallbackFrames) finish(r *Runner) {
+	if r == nil || !(r.exit.exiting || r.exit.fatalExit || r.exit.err != nil) {
+		return
+	}
+	g.mu.Lock()
+	if g.status == nil {
+		status := r.exit
+		g.status = &status
+	}
+	g.mu.Unlock()
+}
+
+func (g *bashPPTestingCallbackFrames) adopt(r *Runner) error {
+	g.Wait()
+	g.mu.Lock()
+	status := g.status
+	g.mu.Unlock()
+	if status == nil {
+		return nil
+	}
+	r.exit = *status
+	if status.exiting {
+		return &bashPPNativeExit{status: int(status.code)}
+	}
+	return status.err
+}
+
+func (g *bashPPTestingCallbackFrames) closeFrames() {
+	g.Wait()
+	g.close.Do(func() {
+		g.mu.Lock()
+		frames := append([]*Runner(nil), g.frames...)
+		g.mu.Unlock()
+		for _, frame := range frames {
+			frame.closeDirFile()
+		}
+	})
+}
+
+func (r *Runner) bashPPTestingCallbackFrame(group *bashPPTestingCallbackFrames, capture map[*bashPPCell]bool) (*Runner, error) {
+	if r == nil {
+		return nil, fmt.Errorf("callback has no original owner")
+	}
+	saved := r.bashPPGoSourceCapture
+	r.bashPPGoSourceCapture = capture
+	child := r.subshell(true)
+	r.bashPPGoSourceCapture = saved
+	child.bashPPGoSourceCapture = nil
+	child.bashPPTools.callbackDepth = 0
+	child.bashPPTools.routedDepth = 0
+	child.bashPPTools.callbackDescendant = true
+	child.bashPPTools.testingCallbackFrames = group
+	child.exit = exitStatus{}
+	child.lastExit = exitStatus{}
+	return child, nil
+}
+
+func nativeTestingCallbackBarrier(q bashPPBridgeRequest) (testingM bool, ok bool) {
+	if q.Op != "call" || q.Selector != "Run" || q.Receiver == nil {
+		return false, false
+	}
+	switch q.Receiver.NativeType {
+	case "testing.M", "*testing.M":
+		return true, true
+	case "testing.T", "*testing.T":
+		return false, true
+	}
+	return false, false
+}
 
 // enterCallbacks serializes callback-capable outer requests. Nested imports from
 // the active callback may reenter; an unrelated Runner never borrows its state.
@@ -82,6 +173,17 @@ func (s *bashPPNativeSession) callbackAnswer(ctx context.Context, owner *Runner,
 	var coherence *goSourceCopyCoherence
 	if outer != nil {
 		coherence = outer.coherence
+	}
+	var callback *bashPPCallbackFunction
+	if q.Receiver != nil && q.Receiver.Kind == "callback" {
+		callback = s.callbackFunction(q.Receiver.Handle)
+		if callback == nil || callback.fn == nil || callback.owner == nil {
+			answer.Error = "gosource: original callback handle expired"
+			return answer
+		}
+		if owner == nil {
+			owner = callback.owner
+		}
 	}
 	if owner != nil && outer != nil && outer.sliceCallbackSync {
 		for i := range q.SliceUpdates {

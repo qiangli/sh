@@ -3,10 +3,17 @@ package interp
 import (
 	"context"
 	"fmt"
+	"maps"
 	"strings"
 
 	"mvdan.cc/sh/v3/syntax"
 )
+
+type bashPPCallbackFunction struct {
+	fn      *bashPPFunc
+	owner   *Runner
+	capture map[*bashPPCell]bool
+}
 
 // Function handles name interpreted closures in one dependency session. Only
 // the typed trampoline is native; the body and captured cells stay here.
@@ -111,21 +118,74 @@ func (r *Runner) bashPPBridgeFunction(fn *bashPPFunc) (bashPPBridgeValue, error)
 	if err != nil {
 		return bashPPBridgeValue{}, err
 	}
+	capture := r.bashPPCallbackFunctionCapture(fn)
 	s := req.Bridge
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.functions == nil {
 		s.functions = map[uint64]*bashPPFunc{}
 	}
+	if s.functionOwners == nil {
+		s.functionOwners = map[uint64]*bashPPCallbackFunction{}
+	}
 	for id, existing := range s.functions {
-		if existing == fn {
+		if existing == fn && s.functionOwners[id].owner == r {
 			return bashPPBridgeValue{Kind: "callback", Handle: id, Session: s.id, Callbacks: true, copiedResults: copiedResults, callRefusal: callRefusal, localRefusal: localRefusal}, nil
 		}
 	}
 	s.functionNext++
 	id := s.functionNext
 	s.functions[id] = fn
+	s.functionOwners[id] = &bashPPCallbackFunction{fn: fn, owner: r, capture: capture}
 	return bashPPBridgeValue{Kind: "callback", Handle: id, Session: s.id, Callbacks: true, copiedResults: copiedResults, callRefusal: callRefusal, localRefusal: localRefusal}, nil
+}
+
+func (r *Runner) bashPPCallbackFunctionCapture(fn *bashPPFunc) map[*bashPPCell]bool {
+	if fn == nil || fn.scope == nil || fn.body() == nil {
+		return nil
+	}
+	bound := make(map[string]bool)
+	for _, param := range bashppParams(fn.params()) {
+		if param.name != "" {
+			bound[param.name] = true
+		}
+	}
+	for _, result := range bashppParams(fn.bodyResults()) {
+		if result.name != "" {
+			bound[result.name] = true
+		}
+	}
+	free, exact := bashPPGoSourceFreeNames(fn.body(), bound)
+	if !exact {
+		return nil
+	}
+	capture := make(map[*bashPPCell]bool)
+	for name := range free {
+		if cell := fn.scope.lookup(name); cell != nil && r.bashPPGoSourceSharable(cell) {
+			capture[cell] = true
+		}
+	}
+	if len(capture) == 0 {
+		return nil
+	}
+	return capture
+}
+
+func (s *bashPPNativeSession) callbackFunction(id uint64) *bashPPCallbackFunction {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if cb := s.functionOwners[id]; cb != nil {
+		copy := *cb
+		copy.capture = maps.Clone(cb.capture)
+		return &copy
+	}
+	if fn := s.functions[id]; fn != nil {
+		return &bashPPCallbackFunction{fn: fn}
+	}
+	return nil
 }
 
 // goSourceReflectValueOfOperand reports the operand of a reflect.ValueOf
@@ -236,13 +296,14 @@ func (r *Runner) bashPPNativeFunctionCallback(ctx context.Context, id uint64, ar
 		}
 	}()
 	s := r.bashPPTools.bridge
-	s.mu.Lock()
-	fn := s.functions[id]
-	s.mu.Unlock()
-	if fn == nil {
+	cb := s.callbackFunction(id)
+	if cb == nil || cb.fn == nil {
 		return nil, fmt.Errorf("gosource: original callback handle expired")
 	}
-	return r.bashPPRunCallbackFunc(ctx, fn, args)
+	if cb.owner != nil && cb.owner != r && r.bashPPTools.testingCallbackFrames == nil {
+		return nil, fmt.Errorf("gosource: original callback handle belongs to another interpreter frame")
+	}
+	return r.bashPPRunCallbackFunc(ctx, cb.fn, args)
 }
 
 // bashPPRunCallbackFunc executes one original function body on behalf of the
