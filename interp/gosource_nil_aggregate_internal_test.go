@@ -45,7 +45,7 @@ func TestGoSourceTypedNilNativeInterfaceFieldCompare(t *testing.T) {
 	}
 	cell := &bashPPCell{declType: shape}
 	bashPPStoreCellValue(cell, map[string]any{"I": ""}, &bashPPCollectionMeta{kind: "struct", typ: shape, mapping: map[string]*bashPPCollectionMeta{
-		"I": &bashPPCollectionMeta{kind: "interface", typ: &syntax.BashPPInterfaceType{}, interfaceValue: typedNil},
+		"I": {kind: "interface", typ: &syntax.BashPPInterfaceType{}, interfaceValue: typedNil},
 	}})
 	r.bashPPScope.entries["box"] = cell
 
