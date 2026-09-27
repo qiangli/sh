@@ -1763,6 +1763,9 @@ func (p *dependencyCallbackProof) statementWithCurrent(stmt ast.Stmt, env map[st
 	if assign, ok := stmt.(*ast.AssignStmt); ok {
 		return p.assignment(assign, env, depth, current)
 	}
+	if labeled, ok := stmt.(*ast.LabeledStmt); ok {
+		return p.statementWithCurrent(labeled.Stmt, env, depth, current)
+	}
 	return p.statement(stmt, env, depth)
 }
 
@@ -1820,6 +1823,8 @@ func dependencyCallbackStatementDeclarations(stmt ast.Stmt) []string {
 				}
 			}
 		}
+	case *ast.LabeledStmt:
+		return dependencyCallbackStatementDeclarations(stmt.Stmt)
 	}
 	return names
 }
@@ -2005,6 +2010,9 @@ func (p *dependencyCallbackProof) statement(stmt ast.Stmt, env map[string]depend
 	case *ast.LabeledStmt:
 		return p.statement(stmt.Stmt, env, depth)
 	case *ast.BranchStmt:
+		if stmt.Tok == token.GOTO {
+			return p.refuse(stmt, "goto control flow is not modeled")
+		}
 		return true
 	case *ast.EmptyStmt, *ast.IncDecStmt:
 		return true

@@ -1222,6 +1222,34 @@ func Parse(cb func()) {
 `,
 		},
 		{
+			name: "labeled mixed short declaration reuses same block captured cell",
+			source: `package dep
+var saved func()
+func Parse(cb func()) {
+	var f func()
+	getter := func() { saved = f }
+	goto L
+L:
+	f, n := cb, 1
+	_ = n
+	getter()
+}
+`,
+		},
+		{
+			name: "goto cannot skip callback clear",
+			source: `package dep
+var saved func()
+func Parse(cb func()) {
+	f := cb
+	goto L
+	f = nil
+L:
+	saved = f
+}
+`,
+		},
+		{
 			name: "mixed short declaration shadows outer captured cell",
 			source: `package dep
 var saved func()
