@@ -170,6 +170,7 @@ type dependencyCallbackActiveFrame struct {
 	receiver         dependencyCallbackValue
 	argSnapshots     map[string]string
 	receiverSnapshot string
+	diagnosticFrame  map[string]string
 }
 
 type dependencyCallbackCompletedFrame struct {
@@ -345,7 +346,7 @@ func (p *dependencyCallbackProof) diagnoseRecursiveFrameDifference(key string, a
 		return
 	}
 	p.addDiagnostic("recursive frame difference for " + key)
-	left := dependencyCallbackDiagnosticFrame(active.supplied, active.receiver)
+	left := dependencyCallbackCloneDiagnosticFrame(active.diagnosticFrame)
 	right := dependencyCallbackDiagnosticFrame(supplied, receiver)
 	for _, path := range dependencyCallbackDiagnosticDifferingPaths(left, right, 12) {
 		p.addDiagnostic("  " + path + " active=" + left[path] + " current=" + right[path])
@@ -462,11 +463,13 @@ func (p *dependencyCallbackProof) function(decl *ast.FuncDecl, supplied map[stri
 	if active, ok := p.active[key]; ok {
 		// A recursive edge may only preserve callback-bearing state exactly or
 		// grow callback-free regions that are then forbidden to receive callbacks.
-		if same, generalized := dependencyCallbackSameFrame(active, supplied, receiver); same {
+		if same, generalized, rejection := dependencyCallbackSameFrame(active, supplied, receiver); same {
 			if generalized && p.recursiveBodyStoresCallback(decl, active) {
 				return p.refuse(decl, "generalized recursive body may store callback-bearing value")
 			}
 			return true
+		} else if rejection != "" {
+			p.addDiagnostic("same-frame rejection: " + rejection)
 		}
 		p.diagnoseRecursiveFrameDifference(key, active, supplied, receiver)
 		return p.refuse(decl, "recursive call changes callback capture state")
@@ -477,7 +480,13 @@ func (p *dependencyCallbackProof) function(decl *ast.FuncDecl, supplied map[stri
 			return true
 		}
 	}
-	p.active[key] = dependencyCallbackActiveFrame{supplied: dependencyCallbackCloneEnv(supplied), receiver: receiver, argSnapshots: dependencyCallbackEnvSnapshots(supplied), receiverSnapshot: dependencyCallbackValueSnapshot(receiver)}
+	p.active[key] = dependencyCallbackActiveFrame{
+		supplied:         dependencyCallbackCloneEnv(supplied),
+		receiver:         receiver,
+		argSnapshots:     dependencyCallbackEnvSnapshots(supplied),
+		receiverSnapshot: dependencyCallbackValueSnapshot(receiver),
+		diagnosticFrame:  dependencyCallbackDiagnosticFrame(supplied, receiver),
+	}
 	defer delete(p.active, key)
 	savedFunc := p.currentFunc
 	p.currentFunc = key
@@ -515,13 +524,13 @@ func (p *dependencyCallbackProof) function(decl *ast.FuncDecl, supplied map[stri
 	return ok
 }
 
-func dependencyCallbackSameFrame(active dependencyCallbackActiveFrame, supplied map[string]dependencyCallbackValue, receiver dependencyCallbackValue) (bool, bool) {
+func dependencyCallbackSameFrame(active dependencyCallbackActiveFrame, supplied map[string]dependencyCallbackValue, receiver dependencyCallbackValue) (bool, bool, string) {
 	generalized := false
 	if dependencyCallbackSameValue(active.receiver, receiver) {
 		current := dependencyCallbackValueSnapshot(receiver)
 		if current != active.receiverSnapshot {
 			if active.receiver.tainted() {
-				return false, false
+				return false, false, "receiver snapshot changed after entry and active receiver is tainted"
 			}
 			dependencyCallbackMarkGeneralized([]dependencyCallbackValue{receiver})
 			generalized = true
@@ -530,24 +539,24 @@ func dependencyCallbackSameFrame(active dependencyCallbackActiveFrame, supplied 
 			generalized = true
 		}
 	} else if active.receiver.tainted() || receiver.tainted() {
-		return false, false
+		return false, false, "receiver identity changed across tainted state"
 	} else {
 		dependencyCallbackMarkGeneralized([]dependencyCallbackValue{active.receiver, receiver})
 		generalized = true
 	}
 	if len(active.supplied) != len(supplied) {
-		return false, false
+		return false, false, "argument count changed"
 	}
 	for name, value := range active.supplied {
 		other, ok := supplied[name]
 		if !ok {
-			return false, false
+			return false, false, "argument " + name + " missing in recursive call"
 		}
 		if dependencyCallbackSameValue(value, other) {
 			current := dependencyCallbackValueSnapshot(other)
 			if current != active.argSnapshots[name] {
 				if value.tainted() {
-					return false, false
+					return false, false, "argument " + name + " snapshot changed after entry and active argument is tainted"
 				}
 				dependencyCallbackMarkGeneralized([]dependencyCallbackValue{other})
 				generalized = true
@@ -558,12 +567,12 @@ func dependencyCallbackSameFrame(active dependencyCallbackActiveFrame, supplied 
 			continue
 		}
 		if value.tainted() || other.tainted() {
-			return false, false
+			return false, false, "argument " + name + " identity changed across tainted state"
 		}
 		dependencyCallbackMarkGeneralized([]dependencyCallbackValue{value, other})
 		generalized = true
 	}
-	return true, generalized
+	return true, generalized, ""
 }
 
 func dependencyCallbackSameValue(left, right dependencyCallbackValue) bool {
@@ -759,6 +768,14 @@ func dependencyCallbackDiagnosticFrame(supplied map[string]dependencyCallbackVal
 		g.value("arg."+name, supplied[name])
 	}
 	return g.out
+}
+
+func dependencyCallbackCloneDiagnosticFrame(frame map[string]string) map[string]string {
+	clone := make(map[string]string, len(frame))
+	for path, summary := range frame {
+		clone[path] = summary
+	}
+	return clone
 }
 
 func (g *dependencyCallbackDiagnosticGraph) value(path string, value dependencyCallbackValue) {

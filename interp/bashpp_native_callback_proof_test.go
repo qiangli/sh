@@ -761,6 +761,44 @@ func Parse(cb func()) { walk(cb) }
 	}
 }
 
+// Sprint: #281; Story: #810; Story-ID: 48c1146a3ab0
+func TestDependencyCallbackProofRecursiveDiagnosticUsesEntryGraph(t *testing.T) {
+	source := `package dep
+type holder struct { f func() }
+func walk(h *holder, cb func()) { h.f = cb; walk(h, cb) }
+func Parse(cb func()) { h := &holder{}; walk(h, cb) }
+`
+	file, err := parser.ParseFile(token.NewFileSet(), "dep.go", source, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof := newDependencyCallbackProof([]*ast.File{file})
+	proof.diagnostics = true
+	if proof.prove("Parse", []int{0}) {
+		t.Fatal("proof unexpectedly accepted recursive object mutation")
+	}
+	joined := strings.Join(proof.diagnostic, "\n")
+	for _, want := range []string{
+		"same-frame rejection: argument h snapshot changed after entry and active argument is tainted",
+		"recursive frame difference for walk",
+		"arg.h active=object#",
+		"current=object#",
+		"taint=false",
+		"taint=true",
+		"arg.h.f active=<missing> current=closure#",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("diagnostic missing %q:\n%s", want, joined)
+		}
+	}
+	if strings.Contains(joined, "<no graph path difference>") {
+		t.Fatalf("diagnostic reported no graph path difference:\n%s", joined)
+	}
+	if len(proof.diagnostic) > dependencyCallbackProofDiagnosticLimit {
+		t.Fatalf("diagnostic has %d lines, limit %d", len(proof.diagnostic), dependencyCallbackProofDiagnosticLimit)
+	}
+}
+
 func TestDependencyCallbackProofCompilerSyntaxSource(t *testing.T) {
 	dir := filepath.Join(runtime.GOROOT(), "src", "cmd", "compile", "internal", "syntax")
 	selected := []string{
