@@ -120,7 +120,6 @@ func (o *goSourceSharedOrder) isSorted() (sorted bool, err error) {
 type goSourceSharedSlice struct {
 	view []any
 	meta *bashPPCollectionMeta
-	elem syntax.BashPPTypeExpr
 }
 
 // goSourceSharedSliceOf binds the original storage behind a transported slice
@@ -142,7 +141,7 @@ func (r *Runner) goSourceSharedSliceOf(v bashPPBridgeValue) (goSourceSharedSlice
 	if capture.meta != nil && len(capture.meta.sequence) < len(capture.view) {
 		return goSourceSharedSlice{}, false
 	}
-	return goSourceSharedSlice{view: capture.view, meta: capture.meta, elem: collection.Element}, true
+	return goSourceSharedSlice{view: capture.view, meta: capture.meta}, true
 }
 
 func (s goSourceSharedSlice) swap(i, j int) error {
@@ -154,15 +153,6 @@ func (s goSourceSharedSlice) swap(i, j int) error {
 		s.meta.sequence[i], s.meta.sequence[j] = s.meta.sequence[j], s.meta.sequence[i]
 	}
 	return nil
-}
-
-// element reads one element from live storage at its declared type.
-func (r *Runner) goSourceSharedElement(s goSourceSharedSlice, i int) (bashPPBridgeValue, error) {
-	var child *bashPPCollectionMeta
-	if s.meta != nil {
-		child = s.meta.sequence[i]
-	}
-	return r.bashPPBridgeCollection(s.view[i], child, s.elem)
 }
 
 // goSourceSharedOrdering answers the package sort ordering entry points over

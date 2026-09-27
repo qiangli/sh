@@ -363,7 +363,8 @@ func (r *Runner) goSourceEqualFuncOperand(ctx context.Context, req bashPPEvalReq
 
 func (o goSourceEqualFuncOperand) callbackCell(ctx context.Context, req bashPPEvalRequest, r *Runner, i int, param bashPPParam) (*bashPPCell, string, error) {
 	if o.shared != nil {
-		return o.shared.elementCell(i, param), "", nil
+		cell, text := o.shared.callbackArg(i, param)
+		return cell, text, nil
 	}
 	var value bashPPBridgeValue
 	if o.handle != nil {
@@ -426,7 +427,7 @@ func (r *Runner) goSourceSharedReadSliceOf(v bashPPBridgeValue) (goSourceSharedS
 	if capture.meta != nil && len(capture.meta.sequence) < len(capture.view) {
 		return goSourceSharedSlice{}, false
 	}
-	return goSourceSharedSlice{view: capture.view, meta: capture.meta, elem: collection.Element}, true
+	return goSourceSharedSlice{view: capture.view, meta: capture.meta}, true
 }
 
 // goSourceSlicesSortFunc reorders the original backing array in place with
@@ -447,7 +448,6 @@ func (r *Runner) goSourceSlicesSortFunc(ctx context.Context, req bashPPEvalReque
 	if err != nil {
 		return err
 	}
-	pointerParams := q.Args[1].localRefusal != ""
 	shared, ok := r.goSourceSharedSliceOf(bashPPBridgeValue{Kind: "slice", sliceView: q.sliceTargets[0]})
 	if !ok {
 		return fmt.Errorf("gosource: %s cannot share the original slice storage", name)
@@ -455,31 +455,22 @@ func (r *Runner) goSourceSlicesSortFunc(ctx context.Context, req bashPPEvalReque
 	order := &goSourceSharedOrder{
 		n: len(shared.view),
 		less: func(i, j int) (bool, error) {
-			if pointerParams {
-				// Pointer parameters: Go copies each element — the pointer —
-				// into the comparison, which then shares its pointee with the
-				// slice. Bind exactly that pointer from live storage.
-				params := bashppParams(fn.params())
-				if len(params) != 2 {
-					return false, fmt.Errorf("gosource: %s comparison wants two parameters", name)
-				}
-				cells := []*bashPPCell{shared.elementCell(i, params[0]), shared.elementCell(j, params[1])}
-				results, err := r.goSourceInvokeCallbackCells(ctx, fn, cells, []string{"", ""})
-				if err != nil {
-					return false, err
-				}
-				n, err := r.goSourceCallbackIntResult(results)
-				return n < 0, err
+			// Bind every element from live interpreter storage. Function-call
+			// binding then applies Go's own value/reference copy rules: scalars
+			// and aggregates copy, while pointers and interface dynamic values
+			// retain identity.
+			params := bashppParams(fn.params())
+			if len(params) != 2 {
+				return false, fmt.Errorf("gosource: %s comparison wants two parameters", name)
 			}
-			a, err := r.goSourceSharedElement(shared, i)
+			left, leftText := shared.callbackArg(i, params[0])
+			right, rightText := shared.callbackArg(j, params[1])
+			cells := []*bashPPCell{left, right}
+			results, err := r.goSourceInvokeCallbackCells(ctx, fn, cells, []string{leftText, rightText})
 			if err != nil {
 				return false, err
 			}
-			b, err := r.goSourceSharedElement(shared, j)
-			if err != nil {
-				return false, err
-			}
-			n, err := r.goSourceCallbackInt(ctx, fn, []bashPPBridgeValue{a, b})
+			n, err := r.goSourceCallbackIntResult(results)
 			return n < 0, err
 		},
 		swap: shared.swap,
@@ -499,6 +490,32 @@ func (r *Runner) goSourceSlicesSearchFunc(ctx context.Context, req bashPPEvalReq
 	fn, err := goSourceCallbackFunc(req, q.Args[1])
 	if err != nil {
 		return nil, true, err
+	}
+	params := bashppParams(fn.params())
+	if len(params) != 1 {
+		return nil, true, fmt.Errorf("gosource: %s predicate wants one parameter", nativeSliceCallable(req, *q))
+	}
+	if shared, ok := r.goSourceSharedReadSliceOf(q.Args[0]); ok {
+		index := -1
+		for i := range shared.view {
+			cell, text := shared.callbackArg(i, params[0])
+			results, err := r.goSourceInvokeCallbackCells(ctx, fn, []*bashPPCell{cell}, []string{text})
+			if err != nil {
+				return nil, true, err
+			}
+			match, err := r.goSourceCallbackBoolResult(results)
+			if err != nil {
+				return nil, true, err
+			}
+			if match {
+				index = i
+				break
+			}
+		}
+		if contains {
+			return []bashPPBridgeValue{{Kind: "bool", Type: "bool", Text: strconv.FormatBool(index >= 0)}}, true, nil
+		}
+		return []bashPPBridgeValue{{Kind: "int", Type: "int", Text: strconv.Itoa(index)}}, true, nil
 	}
 	elements, err := goSourceSequenceElements(q.Args[0])
 	if err != nil {
@@ -680,4 +697,12 @@ func (s goSourceSharedSlice) elementCell(i int, param bashPPParam) *bashPPCell {
 	cell := &bashPPCell{declType: param.typ, typeName: param.declared}
 	bashPPStoreCellValue(cell, s.view[i], child)
 	return cell
+}
+
+// callbackArg carries both representations used by ordinary function binding:
+// the typed cell preserves reference identity and aggregate metadata, while
+// the text keeps scalar positional arguments usable by the existing evaluator.
+func (s goSourceSharedSlice) callbackArg(i int, param bashPPParam) (*bashPPCell, string) {
+	cell := s.elementCell(i, param)
+	return cell, cell.vr.String()
 }

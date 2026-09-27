@@ -363,13 +363,16 @@ func (r *Runner) bashPPPrepareNativeCall(ctx context.Context, call *syntax.BashP
 			}
 		}
 	}
-	localOrdering := false
+	localCallback := false
 	if alias, name, ok := strings.Cut(q.Selector, "."); ok && q.Receiver == nil && r.bashPPImports[alias] == "slices" {
-		localOrdering = name == "SortFunc" || name == "SortStableFunc"
+		switch name {
+		case "SortFunc", "SortStableFunc", "EqualFunc", "IndexFunc", "ContainsFunc":
+			localCallback = true
+		}
 	}
 	for i, expr := range call.ArgExprs {
 		r.goSourceReflectingFunction = len(call.ArgExprs) == 1 && goSourceReflectValueOfOperand(r.bashPPImports, q, expr)
-		r.goSourceLocalCallbackArg = localOrdering && i == 1
+		r.goSourceLocalCallbackArg = localCallback && i == len(call.ArgExprs)-1
 		value, err := r.bashPPBridgeExpr(expr)
 		r.goSourceReflectingFunction = false
 		r.goSourceLocalCallbackArg = false

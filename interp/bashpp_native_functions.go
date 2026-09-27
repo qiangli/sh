@@ -27,7 +27,7 @@ func (r *Runner) bashPPBridgeFunction(fn *bashPPFunc) (bashPPBridgeValue, error)
 	callRefusal := ""
 	reflecting := r.goSourceReflectingFunction
 	r.goSourceReflectingFunction = false
-	localOrdering := r.goSourceLocalCallbackArg
+	localCallback := r.goSourceLocalCallbackArg
 	r.goSourceLocalCallbackArg = false
 	localRefusal := ""
 	for group, fields := range [][]*syntax.BashPPField{fn.params(), fn.results()} {
@@ -102,10 +102,13 @@ func (r *Runner) bashPPBridgeFunction(fn *bashPPFunc) (bashPPBridgeValue, error)
 				}
 				continue
 			}
-			// slices.SortFunc is answered in this process over the original
-			// backing array: a pointer element is handed to the comparison as
-			// the very pointer the slice holds (goSourceSlicesSortFunc).
-			if localOrdering && group == 0 {
+			// The generic slices callback helpers are answered in this process
+			// over the original backing array. A pointer parameter receives the
+			// pointer from a live element cell, so its pointee identity remains
+			// shared without transporting it to the dependency. Interfaces were
+			// admitted above and use the same live-cell path. Keep the refusal in
+			// case this pointer callback is ever routed outside that path.
+			if localCallback && group == 0 {
 				if _, pointer := field.FieldTypeExpr.(*syntax.BashPPPointerType); pointer {
 					localRefusal = refusal
 					continue

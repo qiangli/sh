@@ -833,9 +833,9 @@ type Runner struct {
 	// goSourceReflectingFunction is set while the operand of reflect.ValueOf
 	// is bridged; see bashPPBridgeFunction.
 	goSourceReflectingFunction bool
-	// goSourceLocalCallbackArg is set while the comparison operand of an
-	// interpreter-answered ordering helper (slices.SortFunc) is bridged; see
-	// bashPPBridgeFunction and goSourceSlicesSortFunc.
+	// goSourceLocalCallbackArg is set while the callback operand of an
+	// interpreter-answered generic slices helper is bridged; see
+	// bashPPBridgeFunction and gosource_callback_bridge.go.
 	goSourceLocalCallbackArg bool
 
 	// exitTrapCallStack preserves the function stack for an EXIT trap
