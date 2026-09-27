@@ -21,7 +21,7 @@ type s249GoSourceOutcome struct {
 	status int
 }
 
-func runS249PackageTestMain(t *testing.T, sources []gosource.Source, packages []gosource.PackageSpec) (s249GoSourceOutcome, error) {
+func runS249PackageTestMain(t *testing.T, sources []gosource.Source, packages []gosource.PackageSpec, args ...string) (s249GoSourceOutcome, error) {
 	t.Helper()
 	program, err := gosource.Load(sources, gosource.Options{
 		RunMain: true, ImportPath: s249PackageTestMainIdentity, TestMain: true, Packages: packages,
@@ -30,11 +30,15 @@ func runS249PackageTestMain(t *testing.T, sources []gosource.Source, packages []
 		return s249GoSourceOutcome{}, err
 	}
 	var stdout, stderr bytes.Buffer
-	runner, err := interp.New(
+	options := []interp.RunnerOption{
 		interp.Lang(syntax.LangBashPP),
 		interp.StdIO(nil, &stdout, &stderr),
 		interp.GoSourceIdentity(s249PackageTestMainIdentity, true),
-	)
+	}
+	if len(args) > 0 {
+		options = append(options, interp.Params(append([]string{"--"}, args...)...))
+	}
+	runner, err := interp.New(options...)
 	if err != nil {
 		t.Fatal(err)
 	}
