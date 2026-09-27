@@ -654,6 +654,57 @@ func Parse(cb func()) { Retain(cb) }
 `,
 		},
 		{
+			name: "recursive current aliases expose lazy descendant store",
+			source: `package dep
+type C struct{ f func() }
+type H struct{ child C }
+var saved func()
+func walk(a, b *H, cb func(), n int) {
+	if n > 0 {
+		walk(a, a, cb, n-1)
+	}
+	a.child.f = cb
+	saved = b.child.f
+}
+func Parse(cb func()) { walk(&H{}, &H{}, cb, 1) }
+`,
+		},
+		{
+			name: "recursive current aliases expose rhs call store",
+			source: `package dep
+type C struct{ f func() }
+type H struct{ child C }
+var saved func()
+func store(c *C, cb func()) int { c.f = cb; return 0 }
+func walk(a, b *H, cb func(), n int) {
+	if n > 0 {
+		walk(a, a, cb, n-1)
+	}
+	x := store(&a.child, cb)
+	_ = x
+	saved = b.child.f
+}
+func Parse(cb func()) { walk(&H{}, &H{}, cb, 1) }
+`,
+		},
+		{
+			name: "recursive current aliases expose local closure store",
+			source: `package dep
+type C struct{ f func() }
+type H struct{ child C }
+var saved func()
+func walk(a, b *H, cb func(), n int) {
+	if n > 0 {
+		walk(a, a, cb, n-1)
+	}
+	store := func() { a.child.f = cb }
+	store()
+	saved = b.child.f
+}
+func Parse(cb func()) { walk(&H{}, &H{}, cb, 1) }
+`,
+		},
+		{
 			name: "recursive fresh local helper closure",
 			source: `package dep
 type labelScope struct { errh func(error) }
@@ -1259,8 +1310,12 @@ func TestDependencyCallbackProofRecursiveCloneLineage(t *testing.T) {
 	}
 
 	clone := newDependencyCallbackGraphCloner().value(receiver)
+	clone.object.fields["offset"] = dependencyCallbackValue{object: &dependencyCallbackObject{
+		typ: "uint", owned: true, synthetic: true, scalar: true,
+		fields: make(map[string]dependencyCallbackValue),
+	}}
 	if same, generalized, rejection := dependencyCallbackSameFrame(active, nil, clone); !same || generalized || rejection != "" {
-		t.Fatalf("lineage-preserving clone = (%v, %v, %q), want (true, false, empty)", same, generalized, rejection)
+		t.Fatalf("lineage-preserving clone with clean lazy scalar = (%v, %v, %q), want (true, false, empty)", same, generalized, rejection)
 	}
 
 	distinctCell := &dependencyCallbackCell{value: callback}
@@ -1310,6 +1365,26 @@ func TestDependencyCallbackProofActiveFrameFreezesAliasedEntryGraph(t *testing.T
 }
 
 // Sprint: #281; Story: #810; Story-ID: 48c1146a3ab0
+func TestDependencyCallbackProofRecursiveGeneralizationUsesCurrentAliases(t *testing.T) {
+	a := dependencyCallbackValue{object: &dependencyCallbackObject{typ: "H", owned: true, fields: make(map[string]dependencyCallbackValue)}}
+	b := dependencyCallbackValue{object: &dependencyCallbackObject{typ: "H", owned: true, fields: make(map[string]dependencyCallbackValue)}}
+	active := dependencyCallbackNewActiveFrame(map[string]dependencyCallbackValue{"a": a, "b": b}, dependencyCallbackValue{})
+	before := dependencyCallbackFrameSnapshot(active.supplied, active.receiver)
+	current := map[string]dependencyCallbackValue{"a": a, "b": a}
+
+	same, generalized, rejection := dependencyCallbackSameFrame(active, current, dependencyCallbackValue{})
+	if !same || !generalized || rejection != "" {
+		t.Fatalf("recursive alias generalization = (%v, %v, %q), want (true, true, empty)", same, generalized, rejection)
+	}
+	if after := dependencyCallbackFrameSnapshot(active.supplied, active.receiver); after != before {
+		t.Fatalf("same-frame comparison mutated immutable entry graph:\nbefore %s\nafter  %s", before, after)
+	}
+	if !current["a"].object.general || current["a"].object != current["b"].object {
+		t.Fatal("current recursive aliases did not retain identity and generalization")
+	}
+}
+
+// Sprint: #281; Story: #810; Story-ID: 48c1146a3ab0
 func TestDependencyCallbackProofRecursiveStoreScanDoesNotMutateActiveGraph(t *testing.T) {
 	source := `package dep
 type holder struct { f func() }
@@ -1327,7 +1402,7 @@ func walk(h *holder, cb func()) { h.f = cb }
 		},
 	}
 	before := dependencyCallbackFrameSnapshot(active.supplied, dependencyCallbackValue{})
-	if !proof.recursiveBodyStoresCallback(proof.funcs["walk"][0], active) {
+	if !proof.recursiveBodyStoresCallback(proof.funcs["walk"][0], active.supplied, active.receiver) {
 		t.Fatal("recursive store scan did not observe the callback store")
 	}
 	after := dependencyCallbackFrameSnapshot(active.supplied, dependencyCallbackValue{})

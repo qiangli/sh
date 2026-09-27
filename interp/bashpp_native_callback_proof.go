@@ -752,7 +752,7 @@ func (p *dependencyCallbackProof) function(decl *ast.FuncDecl, supplied map[stri
 		// A recursive edge may only preserve callback-bearing state exactly or
 		// grow callback-free regions that are then forbidden to receive callbacks.
 		if same, generalized, rejection := dependencyCallbackSameFrame(active, supplied, receiver); same {
-			if generalized && p.recursiveBodyStoresCallback(decl, active) {
+			if generalized && p.recursiveBodyStoresCallback(decl, supplied, receiver) {
 				return p.refuse(decl, "generalized recursive body may store callback-bearing value")
 			}
 			return true
@@ -847,7 +847,7 @@ func dependencyCallbackSameFrame(active dependencyCallbackActiveFrame, supplied 
 	} else if active.receiver.tainted() || receiver.tainted() {
 		return false, false, "receiver identity changed across tainted state"
 	} else {
-		dependencyCallbackMarkGeneralized([]dependencyCallbackValue{active.receiver, receiver})
+		dependencyCallbackMarkGeneralized([]dependencyCallbackValue{receiver})
 		generalized = true
 	}
 	if len(active.supplied) != len(supplied) {
@@ -875,7 +875,7 @@ func dependencyCallbackSameFrame(active dependencyCallbackActiveFrame, supplied 
 		if value.tainted() || other.tainted() {
 			return false, false, "argument " + name + " identity changed across tainted state"
 		}
-		dependencyCallbackMarkGeneralized([]dependencyCallbackValue{value, other})
+		dependencyCallbackMarkGeneralized([]dependencyCallbackValue{other})
 		generalized = true
 	}
 	return true, generalized, ""
@@ -984,7 +984,7 @@ func (p *dependencyCallbackGraphPairing) closure(left, right *dependencyCallback
 }
 
 func (p *dependencyCallbackGraphPairing) object(left, right *dependencyCallbackObject) bool {
-	if left == nil || right == nil || dependencyCallbackObjectLineage(left) != dependencyCallbackObjectLineage(right) || left.typ != right.typ || left.owned != right.owned || left.escaped != right.escaped || left.synthetic != right.synthetic || left.scalar != right.scalar || left.general != right.general || len(left.fields) != len(right.fields) {
+	if left == nil || right == nil || dependencyCallbackObjectLineage(left) != dependencyCallbackObjectLineage(right) || left.typ != right.typ || left.owned != right.owned || left.escaped != right.escaped || left.synthetic != right.synthetic || left.scalar != right.scalar || left.general != right.general {
 		return left == right
 	}
 	if paired, ok := p.objectsLR[left]; ok {
@@ -995,21 +995,40 @@ func (p *dependencyCallbackGraphPairing) object(left, right *dependencyCallbackO
 	}
 	p.objectsLR[left], p.objectsRL[right] = right, left
 	for name, value := range left.fields {
+		if dependencyCallbackSnapshotOmitField(value) {
+			if other, ok := right.fields[name]; ok && !dependencyCallbackSnapshotOmitField(other) {
+				return false
+			}
+			continue
+		}
 		other, ok := right.fields[name]
-		if !ok || !p.value(value, other) {
+		if !ok || dependencyCallbackSnapshotOmitField(other) || !p.value(value, other) {
+			return false
+		}
+	}
+	for name, value := range right.fields {
+		if dependencyCallbackSnapshotOmitField(value) {
+			continue
+		}
+		other, ok := left.fields[name]
+		if !ok || dependencyCallbackSnapshotOmitField(other) {
 			return false
 		}
 	}
 	return true
 }
 
-func (p *dependencyCallbackProof) recursiveBodyStoresCallback(decl *ast.FuncDecl, active dependencyCallbackActiveFrame) bool {
+func (p *dependencyCallbackProof) recursiveBodyStoresCallback(decl *ast.FuncDecl, supplied map[string]dependencyCallbackValue, receiver dependencyCallbackValue) bool {
 	if decl == nil || decl.Body == nil {
 		return true
 	}
+	// The active frame is an immutable entry snapshot used only for the
+	// recursion comparison. Build this isolated effect graph from the current
+	// recursive actuals, whose aliases and generalized regions describe the
+	// invocation being summarized.
 	cloner := newDependencyCallbackGraphCloner()
-	env := cloner.env(active.supplied)
-	receiver := cloner.value(active.receiver)
+	env := cloner.env(supplied)
+	receiver = cloner.value(receiver)
 	scope := make(map[string]bool, len(env)+1)
 	for name := range env {
 		scope[name] = true
