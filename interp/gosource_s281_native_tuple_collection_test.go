@@ -87,7 +87,7 @@ type Scope struct { ranges [][2]uint64 }
 func main() {
 	var scope Scope
 	var err error
-	scope.ranges, err = new(dwarf.Data).Ranges(&dwarf.Entry{})
+	scope.ranges, err = new(dwarf.Data).Ranges(&dwarf.Entry{Field: nil})
 	fmt.Println(err, scope.ranges == nil, len(scope.ranges))
 }`
 	differGoSource(t, source, nil, "")
