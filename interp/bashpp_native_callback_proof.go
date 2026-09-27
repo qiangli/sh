@@ -768,12 +768,7 @@ func (p *dependencyCallbackProof) function(decl *ast.FuncDecl, supplied map[stri
 			return true
 		}
 	}
-	p.active[key] = dependencyCallbackActiveFrame{
-		supplied:         dependencyCallbackCloneEnv(supplied),
-		receiver:         receiver,
-		argSnapshots:     dependencyCallbackEnvSnapshots(supplied),
-		receiverSnapshot: dependencyCallbackValueSnapshot(receiver),
-	}
+	p.active[key] = dependencyCallbackNewActiveFrame(supplied, receiver)
 	if p.diagnostics {
 		active := p.active[key]
 		active.diagnosticFrame = dependencyCallbackDiagnosticFrame(supplied, receiver)
@@ -814,6 +809,21 @@ func (p *dependencyCallbackProof) function(decl *ast.FuncDecl, supplied map[stri
 		}
 	}
 	return ok
+}
+
+func dependencyCallbackNewActiveFrame(supplied map[string]dependencyCallbackValue, receiver dependencyCallbackValue) dependencyCallbackActiveFrame {
+	// Freeze the entire entry graph with one cloner. Recursive evaluation may
+	// mutate the live graph, and receiver/argument aliases must remain visible
+	// in the immutable entry facts used by the same-frame check.
+	cloner := newDependencyCallbackGraphCloner()
+	frozenSupplied := cloner.env(supplied)
+	frozenReceiver := cloner.value(receiver)
+	return dependencyCallbackActiveFrame{
+		supplied:         frozenSupplied,
+		receiver:         frozenReceiver,
+		argSnapshots:     dependencyCallbackEnvSnapshots(frozenSupplied),
+		receiverSnapshot: dependencyCallbackValueSnapshot(frozenReceiver),
+	}
 }
 
 func dependencyCallbackSameFrame(active dependencyCallbackActiveFrame, supplied map[string]dependencyCallbackValue, receiver dependencyCallbackValue) (bool, bool, string) {

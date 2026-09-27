@@ -1262,6 +1262,30 @@ func TestDependencyCallbackProofRecursiveCloneLineage(t *testing.T) {
 }
 
 // Sprint: #281; Story: #810; Story-ID: 48c1146a3ab0
+func TestDependencyCallbackProofActiveFrameFreezesAliasedEntryGraph(t *testing.T) {
+	callback := dependencyCallbackValue{callback: &dependencyCallbackClosure{}}
+	shared := &dependencyCallbackCell{value: callback}
+	receiver := dependencyCallbackValue{object: &dependencyCallbackObject{
+		typ: "parser", owned: true,
+		fields: map[string]dependencyCallbackValue{"callback": {cell: shared}},
+	}}
+	supplied := map[string]dependencyCallbackValue{"callback": {cell: shared}}
+
+	active := dependencyCallbackNewActiveFrame(supplied, receiver)
+	frozenReceiverCell := active.receiver.object.fields["callback"].cell
+	if frozenReceiverCell == shared {
+		t.Fatal("active receiver retained the mutable live cell")
+	}
+	if frozenReceiverCell != active.supplied["callback"].cell {
+		t.Fatal("active frame clone lost receiver/argument cell alias")
+	}
+	shared.value = dependencyCallbackValue{}
+	if !active.receiver.tainted() || !active.supplied["callback"].tainted() {
+		t.Fatal("live mutation changed immutable active-frame callback facts")
+	}
+}
+
+// Sprint: #281; Story: #810; Story-ID: 48c1146a3ab0
 func TestDependencyCallbackProofRecursiveStoreScanDoesNotMutateActiveGraph(t *testing.T) {
 	source := `package dep
 type holder struct { f func() }
