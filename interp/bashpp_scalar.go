@@ -1251,6 +1251,12 @@ type bashPPComparableValue struct {
 	value      any
 	meta       *bashPPCollectionMeta
 	nilLiteral bool
+	// scalarType names the declared type of a bare scalar payload, which the
+	// rendered constant alone does not carry: `A(1)` and `B(1)` both render 1.
+	// Boxing the scalar against an interface needs that name as the dynamic
+	// type, or every defined scalar type would box as its default type and
+	// compare equal to any other type sharing it.
+	scalarType string
 }
 
 // bashPPExprIsReceive reports whether expr is a channel receive (`<-ch`),

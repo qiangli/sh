@@ -173,7 +173,10 @@ func (r *Runner) goSourceInterfaceEqual(left, right bashPPComparableValue) (bool
 			}}
 		}
 		constantValue := bashPPScalarConstant(cv.value)
-		typ := bashPPDefaultScalarTypeName(constantValue.Kind())
+		typ := cv.scalarType
+		if typ == "" {
+			typ = bashPPDefaultScalarTypeName(constantValue.Kind())
+		}
 		decl := &syntax.BashPPNamedType{Name: &syntax.Lit{Value: typ}}
 		return &bashPPInterfaceValue{dynamic: decl, cell: &bashPPCell{
 			vr:          expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarString(constantValue)},

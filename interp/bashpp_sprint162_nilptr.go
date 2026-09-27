@@ -404,13 +404,17 @@ func (r *Runner) goSourceNilInterfaceSource(expr syntax.BashPPExpr) (*bashPPCell
 // goSourceValueSwitchScalarCase compares a non-scalar tag with a scalar case
 // — `switch any(nil) { case int(0): }` — where the case has no comparable
 // spelling of its own. An interface tag compares by dynamic type and value,
-// as Go does; any other tag has no scalar equal and never matches.
+// as Go does; any other tag has no scalar equal and never matches. The case's
+// own declared type travels with its value: boxing it against the interface
+// needs the type the case is written at, not the default type of the constant
+// it renders to, or `case A(1)` would box as int and so both miss an interface
+// holding an A and match one holding a B.
 func (r *Runner) goSourceValueSwitchScalarCase(tv bashPPComparableValue, expr syntax.BashPPExpr) (bool, error) {
 	scalar, err := r.bashPPEvalScalarExpr(expr)
 	if err != nil {
 		return false, err
 	}
-	cv := bashPPComparableValue{value: bashPPScalarAny(scalar.value)}
+	cv := bashPPComparableValue{value: bashPPScalarAny(scalar.value), scalarType: r.bashPPCanonicalScalarType(scalar.typ)}
 	tv.value = bashPPComparablePayload(tv.value, tv.meta)
 	if equal, handled, err := r.goSourceInterfaceEqual(tv, cv); handled {
 		return equal, err
