@@ -7,9 +7,12 @@ import (
 	"encoding/json"
 	"go/ast"
 	"go/parser"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"weak"
 
 	"mvdan.cc/sh/v3/syntax"
 )
@@ -95,56 +98,178 @@ func (r *Runner) bashPPImportedInstances() []bashPPImportedInstance {
 // renders declarations with, built from the same declarations under the
 // same ambiguity rule, for rendering a type expression outside a declaration.
 func (r *Runner) bashPPLocalTypeRenderer() *bashPPLocalTypeSet {
-	cache := r.bashPPTools.localTypeDecls
-	if cache == nil || cache.file != r.bashPPGoSourceFile {
-		cache = bashPPScanLocalTypeDecls(r.bashPPGoSourceFile)
-		r.bashPPTools.localTypeDecls = cache
-	}
+	cache := r.bashPPLocalTypeDeclarationIndex()
 	// A renderer carries request-local refs and substitution state, so only
 	// the immutable declaration index is shared. In particular, use the
 	// Runner's current import map rather than pinning the map from the scan.
 	return &bashPPLocalTypeSet{declared: cache.declared, imports: r.bashPPImports, generics: cache.generics}
 }
 
-// bashPPLocalTypeDeclCache is the immutable result of scanning one source
-// file's declarations. Go-source execution does not rewrite its syntax tree:
-// generic body substitution clones nodes before changing them. File identity
-// therefore invalidates the scan while allowing copied Runners to share a hit.
+// bashPPLocalTypeDeclCache is the immutable result of scanning one source file
+// for declarations, lexical scopes and bridge metadata candidates. Go-source
+// execution does not rewrite its syntax tree: generic body substitution clones
+// nodes before changing them. File identity therefore invalidates the scan
+// while allowing copied Runners to share a hit.
 type bashPPLocalTypeDeclCache struct {
-	file     *syntax.File
-	declared map[string]syntax.BashPPTypeExpr
-	generics map[string]*syntax.BashPPDecl
+	file               *syntax.File
+	declared           map[string]syntax.BashPPTypeExpr
+	generics           map[string]*syntax.BashPPDecl
+	typeDecls          []*syntax.BashPPDecl
+	topDecls           map[*syntax.BashPPDecl]bool
+	inGeneric          map[*syntax.BashPPDecl]bool
+	packageGenerics    map[string]*syntax.BashPPDecl
+	methods            map[string][]*syntax.BashPPFuncDecl
+	spelled            []*syntax.BashPPNamedType
+	anonymous          []syntax.BashPPTypeExpr
+	genericBridgeTypes []*syntax.BashPPNamedType
+	selectorRefs       [][2]string
+	reservedNames      []string
+	reservedDecls      map[string]*syntax.BashPPDecl
+	localTypes         *goSourceLocalTypeIndex
+	// fullScans is a scan-count instrument. A non-nil file is traversed once,
+	// regardless of how many descriptor and metadata consumers use the index.
+	fullScans int
+}
+
+type bashPPLocalTypeDeclCacheEntry struct {
+	mu    sync.Mutex
+	index weak.Pointer[bashPPLocalTypeDeclCache]
+}
+
+var bashPPLocalTypeDeclCaches sync.Map // weak.Pointer[syntax.File] -> *bashPPLocalTypeDeclCacheEntry
+
+func (r *Runner) bashPPLocalTypeDeclarationIndex() *bashPPLocalTypeDeclCache {
+	cache := r.bashPPTools.localTypeDecls
+	if cache == nil || cache.file != r.bashPPGoSourceFile {
+		cache = bashPPScanLocalTypeDecls(r.bashPPGoSourceFile)
+		r.bashPPTools.localTypeDecls = cache
+	}
+	return cache
 }
 
 func bashPPScanLocalTypeDecls(file *syntax.File) *bashPPLocalTypeDeclCache {
+	if file == nil {
+		return bashPPBuildLocalTypeDeclCache(nil)
+	}
+	key := weak.Make(file)
+	value, loaded := bashPPLocalTypeDeclCaches.LoadOrStore(key, new(bashPPLocalTypeDeclCacheEntry))
+	if !loaded {
+		runtime.AddCleanup(file, func(key weak.Pointer[syntax.File]) {
+			bashPPLocalTypeDeclCaches.Delete(key)
+		}, key)
+	}
+	entry := value.(*bashPPLocalTypeDeclCacheEntry)
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+	if index := entry.index.Value(); index != nil {
+		return index
+	}
+	index := bashPPBuildLocalTypeDeclCache(file)
+	entry.index = weak.Make(index)
+	return index
+}
+
+func bashPPBuildLocalTypeDeclCache(file *syntax.File) *bashPPLocalTypeDeclCache {
 	declared := map[string]syntax.BashPPTypeExpr{}
 	generics := map[string]*syntax.BashPPDecl{}
 	ambiguous := map[string]bool{}
-	if file != nil {
-		syntax.Walk(file, func(node syntax.Node) bool {
-			d, ok := node.(*syntax.BashPPDecl)
-			if !ok || d.Site != syntax.StartTypeDecl || d.DeclTypeExpr == nil || d.Name == nil {
-				return true
+	cache := &bashPPLocalTypeDeclCache{
+		file: file, declared: declared, generics: generics,
+		topDecls: map[*syntax.BashPPDecl]bool{}, inGeneric: map[*syntax.BashPPDecl]bool{},
+		packageGenerics: map[string]*syntax.BashPPDecl{}, methods: map[string][]*syntax.BashPPFuncDecl{},
+		reservedDecls: map[string]*syntax.BashPPDecl{},
+	}
+	if file == nil {
+		cache.localTypes = &goSourceLocalTypeIndex{decls: make(map[string][]goSourceLocalTypeDecl)}
+		return cache
+	}
+	genericTop := map[*syntax.Stmt]bool{}
+	for _, stmt := range file.Stmts {
+		switch d := stmt.Cmd.(type) {
+		case *syntax.BashPPDecl:
+			cache.topDecls[d] = true
+			if d.Site == syntax.StartTypeDecl && d.Name != nil && len(d.TypeParams) > 0 && !d.Alias {
+				cache.packageGenerics[d.Name.Value] = d
 			}
-			if len(d.TypeParams) == 0 {
-				if _, exists := declared[d.Name.Value]; exists {
-					ambiguous[d.Name.Value] = true
+			if d.Site == syntax.StartTypeDecl && d.Name != nil && bashPPHelperReserved[d.Name.Value] && len(d.TypeParams) == 0 && !d.Alias && d.DeclTypeExpr != nil {
+				if _, dup := cache.reservedDecls[d.Name.Value]; !dup {
+					cache.reservedNames = append(cache.reservedNames, d.Name.Value)
 				}
-				declared[d.Name.Value] = d.DeclTypeExpr
-			} else if !d.Alias {
-				if _, exists := generics[d.Name.Value]; exists {
-					ambiguous[d.Name.Value] = true
+				cache.reservedDecls[d.Name.Value] = d
+			}
+		case *syntax.BashPPFuncDecl:
+			genericTop[stmt] = len(d.TypeParams) > 0 || d.Receiver != nil && len(d.Receiver.TypeParams) > 0
+			if d.Receiver != nil && d.Receiver.RecvType != nil && d.Name != nil && d.Name.Value != "_" {
+				owner := d.Receiver.RecvType.Value
+				cache.methods[owner] = append(cache.methods[owner], d)
+			}
+		}
+	}
+	sort.Strings(cache.reservedNames)
+	typeParams := map[string]bool{}
+	stmtsByTop := make(map[*syntax.Stmt][]*syntax.Stmt, len(file.Stmts))
+	cache.fullScans = 1
+	for _, top := range file.Stmts {
+		syntax.Walk(top, func(node syntax.Node) bool {
+			if stmt, ok := node.(*syntax.Stmt); ok {
+				stmtsByTop[top] = append(stmtsByTop[top], stmt)
+			}
+			d, ok := node.(*syntax.BashPPDecl)
+			if ok && d.Site == syntax.StartTypeDecl && d.DeclTypeExpr != nil && d.Name != nil {
+				cache.typeDecls = append(cache.typeDecls, d)
+				if genericTop[top] {
+					cache.inGeneric[d] = true
 				}
-				generics[d.Name.Value] = d
+				if len(d.TypeParams) == 0 {
+					if _, exists := declared[d.Name.Value]; exists {
+						ambiguous[d.Name.Value] = true
+					}
+					declared[d.Name.Value] = d.DeclTypeExpr
+				} else if !d.Alias {
+					if _, exists := generics[d.Name.Value]; exists {
+						ambiguous[d.Name.Value] = true
+					}
+					generics[d.Name.Value] = d
+				}
+			}
+			switch n := node.(type) {
+			case *syntax.BashPPNamedType:
+				if n.Name != nil && len(n.TypeArgs) > 0 {
+					cache.spelled = append(cache.spelled, n)
+				}
+			case *syntax.BashPPStructType:
+				cache.anonymous = append(cache.anonymous, n)
+			case *syntax.BashPPInterfaceType:
+				if len(n.Methods) > 0 {
+					cache.anonymous = append(cache.anonymous, n)
+				}
+			case *syntax.BashPPTypeParam:
+				for _, name := range n.Names {
+					typeParams[name.Value] = true
+				}
+			case *syntax.BashPPCall:
+				if len(n.Fun) >= 2 {
+					cache.selectorRefs = append(cache.selectorRefs, [2]string{n.Fun[0].Value, n.Fun[1].Value})
+				}
+			case *syntax.BashPPSelectorExpr:
+				if id, ok := n.X.(*syntax.BashPPIdent); ok && id.Name != nil && n.Sel != nil {
+					cache.selectorRefs = append(cache.selectorRefs, [2]string{id.Name.Value, n.Sel.Value})
+				}
 			}
 			return true
 		})
+	}
+	for _, named := range cache.spelled {
+		if !bashPPTypeExprMentionsNames(named, typeParams) {
+			cache.genericBridgeTypes = append(cache.genericBridgeTypes, named)
+		}
 	}
 	for name := range ambiguous {
 		delete(declared, name)
 		delete(generics, name)
 	}
-	return &bashPPLocalTypeDeclCache{file: file, declared: declared, generics: generics}
+	cache.localTypes = goSourceBuildLocalTypeIndex(file, stmtsByTop)
+	return cache
 }
 
 // bashPPImportedInstanceIdentity is the session identity contribution of the

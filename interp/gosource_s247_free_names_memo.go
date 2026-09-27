@@ -57,28 +57,3 @@ func bashPPGoSourceFreeNamesMemo(body *syntax.Block, bound map[string]bool) (map
 	entry.mu.Unlock()
 	return free, exact
 }
-
-// goSourceLocalTypeIndexCache shares a file's function-local type index
-// across every runner of the program (task snapshots do not inherit the
-// per-runner slot), held weakly by the parsed file.
-var goSourceLocalTypeIndexCache sync.Map // weak.Pointer[syntax.File] -> *goSourceLocalTypeIndex
-
-func goSourceLocalTypeIndexShared(file *syntax.File) *goSourceLocalTypeIndex {
-	if value, ok := goSourceLocalTypeIndexCache.Load(weak.Make(file)); ok {
-		return value.(*goSourceLocalTypeIndex)
-	}
-	return nil
-}
-
-// goSourceLocalTypeIndexPublish records a freshly built index and returns the
-// one every runner shares (a concurrent builder's, when it won the race).
-func goSourceLocalTypeIndexPublish(file *syntax.File, index *goSourceLocalTypeIndex) *goSourceLocalTypeIndex {
-	key := weak.Make(file)
-	value, loaded := goSourceLocalTypeIndexCache.LoadOrStore(key, index)
-	if !loaded {
-		runtime.AddCleanup(file, func(key weak.Pointer[syntax.File]) {
-			goSourceLocalTypeIndexCache.Delete(key)
-		}, key)
-	}
-	return value.(*goSourceLocalTypeIndex)
-}

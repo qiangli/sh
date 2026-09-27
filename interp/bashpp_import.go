@@ -181,6 +181,8 @@ type bashPPToolchain struct {
 	// instantiations is the per-file closure of reached generic
 	// instantiations; see bashpp_sprint165_runtime_instantiations.go.
 	instantiations *bashPPInstantiationIndex
+	// localTypeDecls is the immutable source index shared by descriptor,
+	// lexical-scope and bridge-metadata planning. Its file key invalidates it.
 	localTypeDecls *bashPPLocalTypeDeclCache
 	localTypes     *bashPPLocalTypeCache
 	// bridgeMetadata is immutable after publication and shared safely by
@@ -730,29 +732,15 @@ func (r *Runner) bashPPBuildGenericBridgeTypes() []string {
 	if r.bashPPGoSourceFile == nil {
 		return nil
 	}
-	typeParams := map[string]bool{}
-	syntax.Walk(r.bashPPGoSourceFile, func(n syntax.Node) bool {
-		if param, ok := n.(*syntax.BashPPTypeParam); ok {
-			for _, name := range param.Names {
-				typeParams[name.Value] = true
-			}
-		}
-		return true
-	})
 	seen := map[string]bool{}
 	var out []string
-	syntax.Walk(r.bashPPGoSourceFile, func(n syntax.Node) bool {
-		named, ok := n.(*syntax.BashPPNamedType)
-		if !ok || len(named.TypeArgs) == 0 || bashPPTypeExprMentionsNames(named, typeParams) {
-			return true
-		}
+	for _, named := range r.bashPPLocalTypeDeclarationIndex().genericBridgeTypes {
 		text := r.bashPPBridgeTypeIdentity(named)
 		if !seen[text] {
 			seen[text] = true
 			out = append(out, text)
 		}
-		return true
-	})
+	}
 	sort.Strings(out)
 	return out
 }
@@ -796,19 +784,9 @@ func (r *Runner) bashPPBuildReferencedSelectors() []string {
 		}
 		seen[alias+"."+name] = true
 	}
-	syntax.Walk(r.bashPPGoSourceFile, func(n syntax.Node) bool {
-		switch x := n.(type) {
-		case *syntax.BashPPCall:
-			if len(x.Fun) >= 2 {
-				add(x.Fun[0].Value, x.Fun[1].Value)
-			}
-		case *syntax.BashPPSelectorExpr:
-			if id, ok := x.X.(*syntax.BashPPIdent); ok && id.Name != nil && x.Sel != nil {
-				add(id.Name.Value, x.Sel.Value)
-			}
-		}
-		return true
-	})
+	for _, ref := range r.bashPPLocalTypeDeclarationIndex().selectorRefs {
+		add(ref[0], ref[1])
+	}
 	if len(seen) == 0 {
 		return nil
 	}

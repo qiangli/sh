@@ -60,53 +60,31 @@ func bashPPScopedLocalName(key string) string {
 // distinct type per instantiation of the enclosing function, spelled with
 // that function's type arguments (`main.T[int;int]`), and one lexical
 // identity cannot be that type.
-func bashPPScopedLocalDecls(file *syntax.File, ambiguous map[string]bool) (scoped map[string]bashPPScopedLocalDecl, packageLevel map[string]*syntax.BashPPDecl) {
+func bashPPScopedLocalDecls(index *bashPPLocalTypeDeclCache, ambiguous map[string]bool) (scoped map[string]bashPPScopedLocalDecl, packageLevel map[string]*syntax.BashPPDecl) {
 	scoped = map[string]bashPPScopedLocalDecl{}
 	packageLevel = map[string]*syntax.BashPPDecl{}
-	if file == nil || len(ambiguous) == 0 {
+	if index == nil || index.file == nil || len(ambiguous) == 0 {
 		return scoped, packageLevel
 	}
-	top := map[*syntax.BashPPDecl]bool{}
-	inGeneric := map[*syntax.BashPPDecl]bool{}
-	for _, stmt := range file.Stmts {
-		switch d := stmt.Cmd.(type) {
-		case *syntax.BashPPDecl:
-			top[d] = true
-		case *syntax.BashPPFuncDecl:
-			if len(d.TypeParams) > 0 || (d.Receiver != nil && len(d.Receiver.TypeParams) > 0) {
-				syntax.Walk(d, func(node syntax.Node) bool {
-					if local, ok := node.(*syntax.BashPPDecl); ok {
-						inGeneric[local] = true
-					}
-					return true
-				})
-			}
-		}
-	}
-	syntax.Walk(file, func(node syntax.Node) bool {
-		d, ok := node.(*syntax.BashPPDecl)
-		if !ok || d.Site != syntax.StartTypeDecl || d.Name == nil || d.DeclTypeExpr == nil {
-			return true
-		}
+	for _, d := range index.typeDecls {
 		name := d.Name.Value
 		if !ambiguous[name] || name == "_" {
-			return true
+			continue
 		}
-		if top[d] {
+		if index.topDecls[d] {
 			packageLevel[name] = d
-			return true
+			continue
 		}
-		if len(d.TypeParams) > 0 && inGeneric[d] {
-			return true
+		if len(d.TypeParams) > 0 && index.inGeneric[d] {
+			continue
 		}
 		pos := d.Pos()
 		if !pos.IsValid() {
-			return true
+			continue
 		}
 		scope := strconv.FormatUint(uint64(pos.Offset()), 10)
 		scoped[bashPPScopedLocalKey(name, scope)] = bashPPScopedLocalDecl{decl: d, scope: scope}
-		return true
-	})
+	}
 	return scoped, packageLevel
 }
 
