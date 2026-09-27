@@ -220,6 +220,11 @@ func (r *Runner) goSourceStaticExprType(expr syntax.BashPPExpr) (syntax.BashPPTy
 			return nil, false
 		}
 		sel := r.bashPPResolveField(parent, x.Sel.Value)
+		if sel.fieldType == nil && !sel.ambiguous {
+			// The parent may be the dependency's own struct, whose fields
+			// this program never declared; see [Runner.goSourceNativeFieldType].
+			return r.goSourceNativeFieldType(parent, x.Sel.Value)
+		}
 		return sel.fieldType, !sel.ambiguous && sel.fieldType != nil
 	case *syntax.BashPPIndexExpr:
 		parent, ok := r.goSourceStaticExprType(x.X)
