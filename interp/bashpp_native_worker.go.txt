@@ -296,7 +296,9 @@ func encode(v reflect.Value) value {
 }
 // structural encodes a value by shape rather than by handle. A callback
 // receiver crosses back into the interpreter, which owns the original method
-// body and needs the field names, element values and defined type name.
+// body and needs the field names, element values and defined type name. A
+// pointer held in an interface keeps the pointer type even though its pointee
+// supplies the structural payload; that type is the interface's dynamic type.
 // structural walks a value graph; a pointer met again on its own path is a
 // cycle and is encoded as a back-reference to its origin (no pointee) — the
 // shape the interpreter rebuilds as the original pointer that origin names.
@@ -307,7 +309,7 @@ func structuralPath(v reflect.Value,path map[uintptr]bool) value {
  registerType(v.Type())
  result:=value{Type:typeID(v.Type()),Interface:static}
  switch v.Kind(){
- case reflect.Pointer:if pkg:=v.Type().Elem().PkgPath();pkg!=""&&pkg!="main"{encoded:=encode(v);encoded.Interface=static;return encoded};if v.IsNil(){return value{Kind:"nil",Type:result.Type,Interface:static}};originalPointers.Lock();origin:=originalPointers.ids[v.Pointer()];originalPointers.Unlock();if path[v.Pointer()]{return value{Kind:"pointer",Type:result.Type,Interface:static,Origin:origin,Session:bridgeAuth[:16]}};path[v.Pointer()]=true;inner:=structuralPath(v.Elem(),path);delete(path,v.Pointer());inner.Interface=static;inner.Origin=origin;return inner
+ case reflect.Pointer:if pkg:=v.Type().Elem().PkgPath();pkg!=""&&pkg!="main"{encoded:=encode(v);encoded.Interface=static;return encoded};if v.IsNil(){return value{Kind:"nil",Type:result.Type,Interface:static}};originalPointers.Lock();origin:=originalPointers.ids[v.Pointer()];originalPointers.Unlock();if path[v.Pointer()]{return value{Kind:"pointer",Type:result.Type,Interface:static,Origin:origin,Session:bridgeAuth[:16]}};path[v.Pointer()]=true;inner:=structuralPath(v.Elem(),path);delete(path,v.Pointer());inner.Interface=static;if static!=""{inner.Type=result.Type};inner.Origin=origin;return inner
  case reflect.Struct:if codec,ok:=localStructCodecs[v.Type()];ok{encoded:=codec.structural(v,path);encoded.Interface=static;return encoded};if v.Type().PkgPath()!=""{encoded:=encode(v);encoded.Interface=static;return encoded};result.Kind="struct";result.Fields=map[string]value{};for i:=range v.NumField(){f:=v.Type().Field(i);if !f.IsExported(){continue};result.Fields[f.Name]=structuralPath(v.Field(i),path)};return result
  case reflect.Slice,reflect.Array:if v.Kind()==reflect.Slice&&v.IsNil(){return value{Kind:"nil",Type:result.Type,Interface:static}};result.Kind="slice";if v.Kind()==reflect.Array{result.Kind="array"};for i:=range v.Len(){result.Elements=append(result.Elements,structuralPath(v.Index(i),path))};return result
  case reflect.Map:if v.IsNil(){return value{Kind:"nil",Type:result.Type,Interface:static}};result.Kind="map";for iter:=v.MapRange();iter.Next();{result.Entries=append(result.Entries,bppProtocolEntry{Key:structuralPath(iter.Key(),path),Value:structuralPath(iter.Value(),path)})};return result
