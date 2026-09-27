@@ -16,7 +16,8 @@ import (
 	"debug/dwarf"
 	"fmt"
 )
-type Scope struct { ranges [][2]uint64 }
+type Ranges [][2]uint64
+type Scope struct { ranges Ranges }
 func main() {
 	entry := &dwarf.Entry{Field: []dwarf.Field{
 		{Attr: dwarf.AttrLowpc, Val: uint64(10)},
@@ -73,9 +74,28 @@ func main() {
 	differGoSource(t, source, nil, "")
 }
 
-// TestS281NativeTupleCollectionRejectsIncompatibleTarget is the negative
-// control: a failed comma-ok assertion must not materialize a native tuple
-// result as an incompatible local collection.
+// TestS281NativeNilTupleCollectionField keeps a dependency-produced typed nil
+// slice on the same tuple-to-field path. A synthetic empty DWARF entry returns
+// without consulting an ELF section, so the control remains source-only.
+func TestS281NativeNilTupleCollectionField(t *testing.T) {
+	const source = `package main
+import (
+	"debug/dwarf"
+	"fmt"
+)
+type Scope struct { ranges [][2]uint64 }
+func main() {
+	var scope Scope
+	var err error
+	scope.ranges, err = new(dwarf.Data).Ranges(&dwarf.Entry{})
+	fmt.Println(err, scope.ranges == nil, len(scope.ranges))
+}`
+	differGoSource(t, source, nil, "")
+}
+
+// TestS281NativeTupleCollectionRejectsIncompatibleTarget keeps comma-ok
+// assertion failure behavior adjacent to the direct native-carrier controls
+// in TestS281NativeSequenceMaterializationChecksSourceType.
 func TestS281NativeTupleCollectionRejectsIncompatibleTarget(t *testing.T) {
 	const source = `package main
 import (

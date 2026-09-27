@@ -454,6 +454,14 @@ func (r *Runner) goSourceNativeSequenceContents(native *bashPPBridgeValue, expec
 	if !ok || shape.Kind == "map" || !strings.HasPrefix(native.Type, "[") {
 		return nil, nil, false, nil
 	}
+	// Materialisation replaces the native carrier's type metadata with the
+	// local destination's collection metadata. Authenticate assignability
+	// first, while the dependency handle still names its actual Go type; an
+	// empty slice has no elements to expose a mismatch, and equal element
+	// types alone cannot distinguish arrays of different lengths.
+	if _, _, err := r.goSourceNativeAssignedValue(*native, expected); err != nil {
+		return nil, nil, true, fmt.Errorf("BASHPP-ECOLLECTION-ELEMENT: %v", err)
+	}
 	length, err := r.bashPPNativeAccess(r.ectx, "len", *native, "")
 	if err != nil {
 		return nil, nil, true, err
