@@ -52,11 +52,18 @@ type converter struct {
 	resolveImport func(string) (string, error)
 	syntheticPos  token.Pos
 	prefix        string
-	fset          *token.FileSet
-	files         []*ast.File
-	sources       []Source
-	info          *types.Info
-	renames       map[types.Object]string
+
+	// mappedTypePattern recognizes the marker qualifier types.TypeString emits
+	// for a package linked into the flat file. The prefix is immutable once
+	// conversion starts, so compile its Unicode-aware pattern at most once per
+	// converter instead of once per checked type.
+	mappedTypePattern *regexp.Regexp
+
+	fset    *token.FileSet
+	files   []*ast.File
+	sources []Source
+	info    *types.Info
+	renames map[types.Object]string
 	// checkerNames restores identifiers hygienically renamed solely to model
 	// cmd/cgo's non-binding pseudo-package C during go/types checking.
 	checkerNames map[string]string
@@ -353,10 +360,17 @@ func (c *converter) typeString(t types.Type) string {
 	if len(c.mapped) == 0 || !strings.Contains(text, c.prefix+"pkg_") {
 		return text
 	}
-	pattern := regexp.MustCompile(regexp.QuoteMeta(c.prefix+"pkg_") + `([0-9]+)\.([\pL\pN_]+)`)
+	return c.rewriteMappedTypeNames(text)
+}
+
+func (c *converter) rewriteMappedTypeNames(text string) string {
+	pattern := c.mappedTypeNamePattern()
 	return pattern.ReplaceAllStringFunc(text, func(match string) string {
 		sub := pattern.FindStringSubmatch(match)
-		index, _ := strconv.Atoi(sub[1])
+		index, err := strconv.Atoi(sub[1])
+		if err != nil || index >= len(c.mappedPkgs) {
+			return match
+		}
 		if obj := c.mappedPkgs[index].Scope().Lookup(sub[2]); obj != nil {
 			if rename := c.renames[obj]; rename != "" {
 				return rename
@@ -364,6 +378,13 @@ func (c *converter) typeString(t types.Type) string {
 		}
 		return sub[2]
 	})
+}
+
+func (c *converter) mappedTypeNamePattern() *regexp.Regexp {
+	if c.mappedTypePattern == nil {
+		c.mappedTypePattern = regexp.MustCompile(regexp.QuoteMeta(c.prefix+"pkg_") + `([0-9]+)\.([\pL\pN_]+)`)
+	}
+	return c.mappedTypePattern
 }
 func (c *converter) text(n ast.Node) string {
 	var b bytes.Buffer
