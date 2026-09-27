@@ -64,11 +64,11 @@ func bashPPCallbackSourcePos(fn *bashPPFunc) syntax.Pos {
 	if fn.decl != nil {
 		return fn.decl.Pos()
 	}
-	if fn.lit != nil && fn.lit.Kw != nil {
-		return fn.lit.Pos()
-	}
 	if fn.rangeYield != nil && fn.rangeYield.rng != nil {
 		return fn.rangeYield.rng.Pos()
+	}
+	if fn.lit != nil && fn.lit.Kw != nil {
+		return fn.lit.Pos()
 	}
 	return syntax.Pos{}
 }
