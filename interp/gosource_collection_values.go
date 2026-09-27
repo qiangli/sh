@@ -4,6 +4,7 @@ package interp
 import (
 	"fmt"
 	"go/constant"
+	"go/token"
 	"strconv"
 	"strings"
 
@@ -470,8 +471,18 @@ func (r *Runner) goSourceNativeSequenceContents(native *bashPPBridgeValue, expec
 	if err != nil || n < 0 {
 		return nil, nil, true, fmt.Errorf("BASHPP-ECOLLECTION-ELEMENT: native length %q is not a length", length.Text)
 	}
-	out := make([]any, 0, n)
 	meta := &bashPPCollectionMeta{kind: shape.Kind, typ: expected}
+	if n == 0 && shape.Kind == "slice" {
+		typedNil := bashPPBridgeValue{Kind: "nil", Type: r.bashPPBridgeTypeIdentity(expected)}
+		nilSlice, err := r.bashPPNativeCompareValues(*native, token.EQL, typedNil)
+		if err != nil {
+			return nil, nil, true, err
+		}
+		if nilSlice {
+			return nil, meta, true, nil
+		}
+	}
+	out := make([]any, 0, n)
 	for i := range n {
 		element, err := r.bashPPNativeAccess(r.ectx, "index", *native, "", bashPPBridgeValue{Kind: "int", Type: "int", Text: strconv.Itoa(i)})
 		if err != nil {

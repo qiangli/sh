@@ -104,7 +104,7 @@ func main() {
 	}})
 	records, recordsErr := csv.NewReader(strings.NewReader("a,b\nc,d\n")).ReadAll()
 	fields := (&dwarf.Entry{Field: []dwarf.Field{{Attr: dwarf.AttrLowpc, Val: uint64(10)}}}).Field
-	array := reflect.New(reflect.ArrayOf(32, reflect.TypeOf(byte(0)))).Elem().Interface().([32]byte)
+	array := reflect.New(reflect.ArrayOf(32, reflect.TypeOf(byte(0)))).Elem().Interface()
 	println("probe")
 	fmt.Fprintf(io.Discard, "%v %v %v %v %v %v %v %v", empty, emptyErr, ranges, rangesErr, records, recordsErr, fields, array)
 }`

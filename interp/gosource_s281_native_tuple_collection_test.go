@@ -108,6 +108,7 @@ import (
 	"fmt"
 )
 type Scope struct { ranges [][2]uint64 }
+func localEmpty() [][2]uint64 { return [][2]uint64{} }
 func check(entry *dwarf.Entry) {
 	var scope Scope
 	var err error
@@ -118,6 +119,8 @@ func main() {
 	check(&dwarf.Entry{})
 	check(&dwarf.Entry{Field: nil})
 	check(&dwarf.Entry{Field: []dwarf.Field{{Attr: dwarf.AttrName, Val: "no-ranges"}}})
+	empty := localEmpty()
+	fmt.Println(empty == nil, len(empty))
 }`
 	differGoSource(t, source, nil, "")
 }
