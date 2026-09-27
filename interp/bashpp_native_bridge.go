@@ -1867,6 +1867,7 @@ func (r *Runner) bashPPBridgeRegisterScalarTypes(ctx context.Context, req bashPP
 	if err != nil {
 		return err
 	}
+	r.bashPPUnshareTypes()
 	if r.bashPPTypes == nil {
 		r.bashPPTypes = map[string]bashPPType{}
 	}

@@ -319,6 +319,8 @@ func (r *Runner) bashPPShadowPredeclaredCall(name string) {
 	if name != bashPPDecoratorCallType || !r.bashPPPredeclaredCall {
 		return
 	}
+	r.bashPPUnshareTypes()
+	r.bashPPUnshareMethods()
 	delete(r.bashPPTypes, name)
 	delete(r.bashPPMethods, name)
 	r.bashPPPredeclaredCall = false

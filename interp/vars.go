@@ -3053,6 +3053,7 @@ func (r *Runner) setFunc(name string, body *syntax.Stmt) {
 	// function sees later WRITES to what it closed over and never sees later
 	// DECLARATIONS beside it; see [bashPPScope.snapshot].
 	if r.bashPPScope != nil {
+		r.bashPPUnshareFuncScopes()
 		if r.bashPPFuncScopes == nil {
 			r.bashPPFuncScopes = make(map[string]*bashPPScope, 4)
 		}

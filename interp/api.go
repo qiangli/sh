@@ -195,6 +195,10 @@ type Runner struct {
 	// They persist with the session and are cloned for subshell isolation.
 	bashPPTypes   map[string]bashPPType
 	bashPPMethods map[string]map[string]*bashPPFunc
+	// bashPPShared marks the program tables a native callback frame still
+	// holds by reference instead of owning. They are copy-on-write; see
+	// [bashPPSharedTables].
+	bashPPShared bashPPSharedTables
 	// bashPPSelectionCache memoizes breadth-first Go selector resolution
 	// ([Runner.bashPPResolveSelectionIn]). The lookup is a pure function of
 	// the runner's static type and method tables and the selector inputs, but
@@ -3148,6 +3152,11 @@ func (r *Runner) Reset() {
 		// sideband is the supported provenance across that boundary.
 		r.restoreBridgedStartupIgnores()
 	}
+	if len(r.bashPPGoSourceDecls) > 0 {
+		r.bashPPUnshareFuncs()
+		r.bashPPUnshareTypes()
+		r.bashPPUnshareMethods()
+	}
 	for name := range r.bashPPGoSourceDecls {
 		delete(r.bashPPFuncs, name)
 		delete(r.bashPPTypes, name)
@@ -4041,6 +4050,11 @@ func (r *Runner) subshellWithBashPPCapture(background bool, capture map[*bashPPC
 	r2.bashPPForeignImports = maps.Clone(r.bashPPForeignImports)
 	r2.bashPPSeededImports = maps.Clone(r.bashPPSeededImports)
 	if capture != nil {
+		// Shared by reference, copy-on-write: see [bashPPSharedTables]. The
+		// registering side is marked where it publishes the tables, in
+		// [Runner.bashPPCallbackFunctionTemplate], which runs on its own
+		// goroutine; r2 is not reachable by anyone else yet.
+		r2.bashPPShareTables()
 		r2.bashPPTypes = r.bashPPTypes
 	} else {
 		r2.bashPPTypes = maps.Clone(r.bashPPTypes)

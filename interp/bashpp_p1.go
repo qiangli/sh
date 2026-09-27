@@ -138,6 +138,7 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 	typeInstalled, keepType := false, false
 	defer func() {
 		if typeInstalled && !keepType {
+			r.bashPPUnshareTypes()
 			delete(r.bashPPTypes, name)
 		}
 	}()
@@ -174,6 +175,7 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 		return
 	}
 	if d.Site == syntax.StartTypeDecl {
+		r.bashPPUnshareTypes()
 		if r.bashPPTypes == nil {
 			r.bashPPTypes = make(map[string]bashPPType)
 		}
@@ -460,6 +462,7 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 		for i, member := range d.EnumMembers {
 			members[i] = member.Value
 		}
+		r.bashPPUnshareTypes()
 		r.bashPPTypes[name] = bashPPType{underlying: d.DeclType.Value, alias: d.Alias, typeParams: d.TypeParams, members: members, typeExpr: d.DeclTypeExpr, fields: d.StructFields}
 		r.bashPPInvalidateSelectionCache()
 		keepType = true

@@ -268,6 +268,7 @@ func bashPPFuncLitType(lit *syntax.BashPPFuncLit) *syntax.BashPPFuncType {
 }
 
 func (r *Runner) bashPPStoreFunc(fn *bashPPFunc) expand.Variable {
+	r.bashPPUnshareClosures()
 	r.bashPPClosures = append(r.bashPPClosures, fn)
 	return expand.Variable{
 		Set:  true,
@@ -376,6 +377,7 @@ func (r *Runner) bashPPFuncDecl(d *syntax.BashPPFuncDecl) {
 			return
 		}
 	}
+	r.bashPPUnshareFuncs()
 	if r.bashPPFuncs == nil {
 		r.bashPPFuncs = make(map[string]*bashPPFunc, 4)
 	}
@@ -527,6 +529,7 @@ func (r *Runner) bashPPMethodDecl(d *syntax.BashPPFuncDecl) {
 		// Blank methods are checked declarations, not entries in a method set.
 		return
 	}
+	r.bashPPUnshareMethods()
 	if r.bashPPMethods == nil {
 		r.bashPPMethods = make(map[string]map[string]*bashPPFunc)
 	}
@@ -2626,6 +2629,11 @@ func (r *Runner) bashPPShadowLocalType(name string) bool {
 	if existing, ok := r.bashPPTypes[name]; ok {
 		prev = &existing
 	}
+	// The declaration this answers for writes the flat registry, and
+	// [bashPPFrame.leave] writes it again to restore prev. Take ownership now
+	// so a parallel callback frame declaring its own local type cannot see
+	// either write; see [bashPPSharedTables].
+	r.bashPPUnshareTypes()
 	r.bashPPShadowedTypes = append(r.bashPPShadowedTypes, bashPPShadowedType{depth: len(r.callStack), name: name, prev: prev})
 	return true
 }
@@ -2644,6 +2652,7 @@ func (f *bashPPFrame) leave() {
 			break
 		}
 		r.bashPPShadowedTypes = r.bashPPShadowedTypes[:len(r.bashPPShadowedTypes)-1]
+		r.bashPPUnshareTypes()
 		if local.prev != nil {
 			r.bashPPTypes[local.name] = *local.prev
 		} else {

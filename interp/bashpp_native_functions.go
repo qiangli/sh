@@ -172,6 +172,13 @@ func (r *Runner) bashPPCallbackFunctionTemplate(fn *bashPPFunc) (*bashPPCallback
 	r.bashPPGoSourceCapture = capture
 	template := r.subshellWithBashPPCapture(true, capture)
 	r.bashPPGoSourceCapture = saved
+	// The template — and through it every frame of this callback — now holds
+	// the registering runner's own program tables. This runner keeps executing
+	// (it registers the remaining subtests and runs on), so it too becomes a
+	// copy-on-write holder rather than continuing to mutate tables a frame may
+	// be reading; see [bashPPSharedTables]. This is the publishing runner's own
+	// goroutine, which is what makes the flags safe to set without a lock.
+	r.bashPPShareTables()
 	// This is immutable template configuration, not live invocation state.
 	// Every later frame clone reads it without touching the registering runner.
 	template.bashPPGoSourceCapture = capture

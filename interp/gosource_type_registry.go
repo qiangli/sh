@@ -48,6 +48,7 @@ func (r *Runner) bashPPGoSourceRegisterTypes(file *syntax.File) {
 		if _, exists := r.bashPPTypes[name]; exists {
 			continue
 		}
+		r.bashPPUnshareTypes()
 		if r.bashPPTypes == nil {
 			r.bashPPTypes = make(map[string]bashPPType)
 		}
