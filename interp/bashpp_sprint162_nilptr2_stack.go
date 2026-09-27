@@ -168,7 +168,8 @@ func (r *Runner) goSourceLiteralIndex(fn *bashPPFunc, depth int) int {
 		if other == nil || other.lit == nil || other == fn {
 			continue
 		}
-		if other.lit.Pos().Offset() < fn.lit.Pos().Offset() {
+		otherPos, fnPos := bashPPCallbackSourcePos(other), bashPPCallbackSourcePos(fn)
+		if otherPos.IsValid() && fnPos.IsValid() && otherPos.Offset() < fnPos.Offset() {
 			index++
 		}
 	}

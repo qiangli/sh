@@ -64,6 +64,10 @@ func bashPPCallbackSourcePos(fn *bashPPFunc) syntax.Pos {
 	if fn.decl != nil {
 		return fn.decl.Pos()
 	}
+	// Synthetic callbacks, such as Go 1.23 range-yield closures, may carry a
+	// signature-only FuncLit with no `func` token or body. Authenticate them
+	// through their real source node; if that node is absent, leave the
+	// position invalid rather than inventing one.
 	if fn.rangeYield != nil && fn.rangeYield.rng != nil {
 		if pos := fn.rangeYield.rng.Pos(); pos.IsValid() {
 			return pos

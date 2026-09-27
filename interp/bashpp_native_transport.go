@@ -369,7 +369,11 @@ func (r *Runner) goSourceReflectedFunctionPointer(q bashPPBridgeRequest) (bashPP
 		if !ok {
 			return bashPPBridgeValue{}, false
 		}
-		name, pos = literal, fn.lit.Pos()
+		pos = bashPPCallbackSourcePos(fn)
+		if !pos.IsValid() {
+			return bashPPBridgeValue{}, false
+		}
+		name = literal
 	default:
 		return bashPPBridgeValue{}, false
 	}

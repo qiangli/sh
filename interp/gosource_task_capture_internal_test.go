@@ -106,7 +106,6 @@ func main() {
 	fn := &bashPPFunc{
 		rangeYield: &goSourceRangeYield{rng: rng},
 		lit: &syntax.BashPPFuncLit{
-			Kw:      &syntax.Lit{Value: "func"},
 			Params:  []*syntax.BashPPField{{FieldTypeExpr: bashPPRangeNamedType("int")}},
 			Results: []*syntax.BashPPField{{FieldTypeExpr: bashPPRangeNamedType("bool")}},
 		},
