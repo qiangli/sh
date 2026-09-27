@@ -59,3 +59,4 @@
 {"op":"update","slug":"isolate-interpreted-self-reexec-from-replacement-goroot-tools","id":"01a0da29-3775-7791-8e16-c097a66fa557","tool":"codex-gpt5.6-sol-d","host":"dragon","episode":"weave-issue-30","at":"2026-09-25T22:25:05.157199Z"}
 {"op":"add","slug":"sequence-worker-output-barriers-per-stream","id":"01a0daac-695b-7bbf-b7dd-74539169c0f4","tool":"codex-gpt-5.5-e","host":"dragon","episode":"weave-issue-31","at":"2026-09-25T22:25:27.389155Z"}
 {"op":"add","slug":"store-bridge-scalar-metadata-as-scalar-cells","id":"01a0e2c7-3821-7897-8338-8fed7431291c","tool":"codex-gpt-5.5-n","host":"dragon","episode":"weave-issue-170","at":"2026-09-27T12:11:41.98873Z"}
+{"op":"add","slug":"materialize-embedded-interface-graphs-for-native-reflect","id":"01a0e418-c80f-76ae-918e-0268c524b37b","tool":"aurelia-s88-a","host":"dragon","episode":"weave-issue-183","at":"2026-09-27T18:20:24.464782Z"}
