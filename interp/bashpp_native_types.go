@@ -112,10 +112,10 @@ func (r *Runner) bashPPNativeCompare(left syntax.BashPPExpr, op token.Token, rig
 	return r.bashPPNativeCompareValues(lv, op, rv)
 }
 
-// goSourceNativeHandleIsNil reports whether a dependency-owned pointer,
-// which the worker may hand over as a handle even when nil, is the nil
-// pointer. The interface marker is dropped first: the question is about the
-// dynamic value, and a typed nil inside an interface is not a nil interface.
+// goSourceNativeHandleIsNil reports whether a dependency-owned nilable value,
+// which the worker may hand over as a handle even when nil, is nil. The worker
+// answers from the decoded reflect.Value directly, so uncomparable nilable
+// values never pass through reflect.Value.Equal.
 func (r *Runner) goSourceNativeHandleIsNil(value bashPPBridgeValue) (bool, error) {
 	if value.Kind == "nil" {
 		return true, nil
@@ -123,12 +123,36 @@ func (r *Runner) goSourceNativeHandleIsNil(value bashPPBridgeValue) (bool, error
 	if value.Kind != "handle" {
 		return false, nil
 	}
-	value.Interface = ""
-	return r.bashPPNativeCompareValues(value, token.EQL, bashPPBridgeValue{Kind: "nil"})
+	req, err := r.bashPPEvalRequest()
+	if err != nil {
+		return false, err
+	}
+	values, err := r.bashPPNativeRequest(r.ectx, req, bashPPBridgeRequest{Op: "is-nil", Args: []bashPPBridgeValue{value}})
+	if err != nil {
+		return false, err
+	}
+	if len(values) != 1 || values[0].Kind != "bool" {
+		return false, fmt.Errorf("gosource: malformed native nil query")
+	}
+	return values[0].Text == "true", nil
 }
 
 func (r *Runner) bashPPNativeCompareValues(lv bashPPBridgeValue, op token.Token, rv bashPPBridgeValue) (bool, error) {
 	lv, rv = bashPPBridgeCompareOperands(lv, rv)
+	if lv.Kind == "nil" && rv.Kind == "handle" || rv.Kind == "nil" && lv.Kind == "handle" {
+		handle := lv
+		if handle.Kind == "nil" {
+			handle = rv
+		}
+		equal, err := r.goSourceNativeHandleIsNil(handle)
+		if err != nil {
+			return false, err
+		}
+		if op == token.NEQ {
+			equal = !equal
+		}
+		return equal, nil
+	}
 	if equal, handled := bashPPNativeScalarEqual(lv, rv); handled {
 		if op == token.NEQ {
 			equal = !equal
