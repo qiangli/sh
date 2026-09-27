@@ -404,6 +404,17 @@ func (r *Runner) bashPPAddress(expr syntax.BashPPExpr) (result *bashPPPointer, e
 		}
 		expr = paren.X
 	}
+	// The literal's imported target type establishes dependency ownership;
+	// zero values, nil fields and other interpreter-evaluated field expressions
+	// do not turn it into local struct storage. Keep the authenticated native
+	// pointer carrier used by every other imported composite boundary.
+	if lit, ok := expr.(*syntax.BashPPCompositeLit); ok && r.bashPPNativeType(lit.LitType) {
+		native, err := r.bashPPNativeComposite(lit, true)
+		if err != nil {
+			return nil, err
+		}
+		return nil, &bashPPNativePointerValueError{value: &native}
+	}
 	if r.goSourceNativeAddressable(expr) {
 		native, err := r.goSourceNativeAddress(expr)
 		if err != nil {

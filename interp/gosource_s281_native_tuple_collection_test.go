@@ -96,11 +96,11 @@ func main() {
 	differGoSource(t, source, nil, "")
 }
 
-// TestS281NativeNilTupleCollectionField keeps a dependency-produced typed nil
-// slice on the same tuple-to-field path. A synthetic DWARF entry with a typed,
-// non-range field returns nil without consulting an ELF section, so the control
-// remains source-only. Materializing a zero-valued imported struct composite
-// such as &dwarf.Entry{} remains a separate unchanged Story 809 baseline defect.
+// TestS281NativeNilTupleCollectionField keeps dependency-produced typed nil
+// slices on the same tuple-to-field path. Zero, explicit nil and all-local
+// imported composites must be recognized from dwarf.Entry itself; no field
+// value needs to establish native ownership. The non-range field is also the
+// plain native-Go oracle and returns without consulting an ELF section.
 func TestS281NativeNilTupleCollectionField(t *testing.T) {
 	const source = `package main
 import (
@@ -108,11 +108,41 @@ import (
 	"fmt"
 )
 type Scope struct { ranges [][2]uint64 }
-func main() {
+func check(entry *dwarf.Entry) {
 	var scope Scope
 	var err error
-	scope.ranges, err = new(dwarf.Data).Ranges(&dwarf.Entry{Field: []dwarf.Field{{Attr: dwarf.AttrName, Val: "no-ranges"}}})
+	scope.ranges, err = new(dwarf.Data).Ranges(entry)
 	fmt.Println(err, scope.ranges == nil, len(scope.ranges))
+}
+func main() {
+	check(&dwarf.Entry{})
+	check(&dwarf.Entry{Field: nil})
+	check(&dwarf.Entry{Field: []dwarf.Field{{Attr: dwarf.AttrName, Val: "no-ranges"}}})
+}`
+	differGoSource(t, source, nil, "")
+}
+
+// TestS281ImportedCompositeBoundaryControls keeps local struct construction
+// and imported scalar storage on their established interpreter paths while an
+// imported aggregate with only local field expressions crosses natively.
+func TestS281ImportedCompositeBoundaryControls(t *testing.T) {
+	const source = `package main
+import (
+	"debug/dwarf"
+	"fmt"
+)
+type localEntry struct { Field []string }
+func local(e *localEntry) { fmt.Println(e.Field == nil, len(e.Field)) }
+func imported(e *dwarf.Entry, off dwarf.Offset) {
+	fmt.Println(e.Offset, e.Children, e.Field == nil, len(e.Field), off)
+}
+func importedValue(e dwarf.Entry) { fmt.Println(e.Offset, len(e.Field)) }
+func main() {
+	local(&localEntry{})
+	local(&localEntry{Field: nil})
+	imported(&dwarf.Entry{}, dwarf.Offset(3))
+	imported(&dwarf.Entry{Offset: 7, Children: false, Field: nil}, dwarf.Offset(4))
+	importedValue(dwarf.Entry{})
 }`
 	differGoSource(t, source, nil, "")
 }
