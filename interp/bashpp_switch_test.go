@@ -68,12 +68,19 @@ main()
 }
 
 func TestBashPPSwitchLazyCaseEvaluation(t *testing.T) {
-	const src = `var calls int
+	const src = `package main
+
+import "fmt"
+
+type terms map[string]int
+
+func (t *terms) nonempty() bool { return len(*t) != 0 }
+
+var calls int
 
 func later() bool {
 	calls++
-	var p *int
-	return *p == 1
+	return true
 }
 
 func tag() int {
@@ -81,45 +88,45 @@ func tag() int {
 	return 2
 }
 
+func laterInt() int {
+	calls += 100
+	return 3
+}
+
 func main() {
+	var nilTerms *terms
 	switch {
 	case true:
-		echo first
-	case later():
-		echo wrong
+		fmt.Println("first")
+	case later(), nilTerms.nonempty():
+		fmt.Println("wrong")
 	}
-	echo "after-first:$calls"
+	fmt.Println("after-first", calls)
 	switch tag() {
 	default:
-		echo default
-	case 1, 2, later():
-		echo "matched:$calls"
+		fmt.Println("default")
+	case 1, 2, laterInt():
+		fmt.Println("matched", calls)
 	}
-	echo "after-tag:$calls"
+	fmt.Println("after-tag", calls)
 }
-main()
 `
-	f, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(src), "")
+	out, stderr, err := bashPPRunGoSource(t, t.TempDir(), "switch_lazy.go", src)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("run: %v; stderr: %s; output: %s", err, stderr, out)
 	}
-	var out strings.Builder
-	r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP))
-	if err := r.Run(context.Background(), f); err != nil {
-		t.Fatalf("run: %v; output: %s", err, out.String())
-	}
-	const want = "first\nafter-first:0\nmatched:1\nafter-tag:1\n"
-	if out.String() != want {
-		t.Fatalf("output = %q, want %q", out.String(), want)
+	const want = "first\nafter-first 0\nmatched 1\nafter-tag 1\n"
+	if out != want {
+		t.Fatalf("output = %q, want %q", out, want)
 	}
 }
 
 func TestBashPPSwitchTypeDiagnostics(t *testing.T) {
 	for _, test := range []struct{ src, want string }{
 		{"func main() { switch 1 { case \"1\": echo wrong } }\nmain()\n", "BASHPP-ESWITCH-TYPE: case expression type String does not match switch tag type Int\n"},
-		{"func main() { switch 1 { case 0: echo no; case \"later\": echo wrong } }\nmain()\n", "BASHPP-ESWITCH-TYPE: case expression type String does not match switch tag type Int\n"},
+		{"func main() { switch 1 { case 1: echo matched; case \"later\": echo wrong } }\nmain()\n", "BASHPP-ESWITCH-TYPE: case expression type String does not match switch tag type Int\n"},
 		{"func main() { switch { case 1: echo wrong } }\nmain()\n", "BASHPP-ESWITCH-TYPE: tagless switch case must be boolean, got Int\n"},
-		{"func main() { switch 2 { case 1: echo first; case 1.0: echo second } }\nmain()\n", "BASHPP-ESWITCH-DUPLICATE: duplicate case constant 1\n"},
+		{"func main() { switch 1 { case 1: echo first; case 1.0: echo second } }\nmain()\n", "BASHPP-ESWITCH-DUPLICATE: duplicate case constant 1\n"},
 	} {
 		for _, bytewise := range []bool{false, true} {
 			var rd interface{ Read([]byte) (int, error) } = strings.NewReader(test.src)

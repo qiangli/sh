@@ -2012,7 +2012,15 @@ func (r *Runner) bashPPSwitch(ctx context.Context, sw *syntax.BashPPSwitch) {
 			tag.typ = r.bashPPCanonicalScalarType(tag.typ)
 		}
 	}
-	selected, stopped := r.bashPPSwitchSelect(sw, tag)
+	staticCases, err := r.bashPPSwitchValidateStatic(sw, tag)
+	if err != nil {
+		if !errors.Is(err, errBashPPScalarInterrupted) {
+			r.errf("%v\n", err)
+			r.exit = exitStatus{code: 2}
+		}
+		return
+	}
+	selected, stopped := r.bashPPSwitchSelect(sw, tag, staticCases)
 	if stopped {
 		return
 	}
@@ -2049,8 +2057,7 @@ func (r *Runner) bashPPSwitchArms(ctx context.Context, sw *syntax.BashPPSwitch, 
 // first match. Earlier eager validation evaluated later cases even after an
 // earlier true guard, which is not Go switch semantics and can run side effects
 // or nil dereferences that the selected clause should suppress.
-func (r *Runner) bashPPSwitchSelect(sw *syntax.BashPPSwitch, tag bashPPScalar) (int, bool) {
-	var constants []bashPPScalar
+func (r *Runner) bashPPSwitchSelect(sw *syntax.BashPPSwitch, tag bashPPScalar, staticCases map[syntax.BashPPExpr]bashPPScalar) (int, bool) {
 	defaultArm := -1
 	for armIndex, arm := range sw.Arms {
 		if len(arm.Exprs) == 0 {
@@ -2058,7 +2065,11 @@ func (r *Runner) bashPPSwitchSelect(sw *syntax.BashPPSwitch, tag bashPPScalar) (
 			continue
 		}
 		for _, expr := range arm.Exprs {
-			candidate, err := r.bashPPSwitchCaseScalar(tag, expr)
+			var err error
+			candidate, folded := staticCases[expr]
+			if !folded {
+				candidate, err = r.bashPPSwitchCaseScalar(tag, expr)
+			}
 			if err != nil {
 				if !errors.Is(err, errBashPPScalarInterrupted) {
 					r.errf("%v\n", err)
@@ -2070,22 +2081,6 @@ func (r *Runner) bashPPSwitchSelect(sw *syntax.BashPPSwitch, tag bashPPScalar) (
 				r.errf("BASHPP-ESWITCH-TYPE: tagless switch case must be boolean, got %s\n", candidate.value.Kind())
 				r.exit = exitStatus{code: 2}
 				return -1, true
-			}
-			if err := r.bashPPSwitchComparable(tag, candidate); err != nil {
-				r.errf("%v\n", err)
-				r.exit = exitStatus{code: 2}
-				return -1, true
-			}
-			if r.bashPPSwitchConstantExpr(tag, expr) {
-				for _, previous := range constants {
-					equal, err := r.bashPPSwitchEqual(previous, candidate)
-					if err == nil && equal {
-						r.errf("BASHPP-ESWITCH-DUPLICATE: duplicate case constant %s\n", bashPPSwitchConstantText(candidate))
-						r.exit = exitStatus{code: 2}
-						return -1, true
-					}
-				}
-				constants = append(constants, candidate)
 			}
 			match, err := r.bashPPSwitchEqual(tag, candidate)
 			if err != nil {
@@ -2101,6 +2096,121 @@ func (r *Runner) bashPPSwitchSelect(sw *syntax.BashPPSwitch, tag bashPPScalar) (
 	return defaultArm, false
 }
 
+// bashPPSwitchValidateStatic diagnoses every case whose type or constant value
+// is knowable without running it. This pass deliberately precedes selection:
+// Go rejects an invalid or duplicate later case even when an earlier case
+// matches, but evaluating that later case could invoke a callback, receive from
+// a channel, or dereference a nil receiver. Runtime selection below therefore
+// remains lazy and evaluates each reached case exactly once.
+func (r *Runner) bashPPSwitchValidateStatic(sw *syntax.BashPPSwitch, tag bashPPScalar) (map[syntax.BashPPExpr]bashPPScalar, error) {
+	var constants []bashPPScalar
+	folded := make(map[syntax.BashPPExpr]bashPPScalar)
+	for _, arm := range sw.Arms {
+		for _, expr := range arm.Exprs {
+			candidate, known, constantExpr, err := r.bashPPSwitchStaticScalar(tag, expr)
+			if err != nil {
+				return nil, err
+			}
+			if known {
+				if sw.Tag == nil && candidate.value.Kind() != constant.Bool {
+					return nil, fmt.Errorf("BASHPP-ESWITCH-TYPE: tagless switch case must be boolean, got %s", candidate.value.Kind())
+				}
+				if err := r.bashPPSwitchComparable(tag, candidate); err != nil {
+					return nil, err
+				}
+			}
+			if !constantExpr {
+				continue
+			}
+			for _, previous := range constants {
+				equal, compareErr := r.bashPPSwitchEqual(previous, candidate)
+				if compareErr == nil && equal {
+					return nil, fmt.Errorf("BASHPP-ESWITCH-DUPLICATE: duplicate case constant %s", bashPPSwitchConstantText(candidate))
+				}
+			}
+			constants = append(constants, candidate)
+			folded[expr] = candidate
+		}
+	}
+	return folded, nil
+}
+
+func (r *Runner) bashPPSwitchStaticScalar(tag bashPPScalar, expr syntax.BashPPExpr) (bashPPScalar, bool, bool, error) {
+	if r.bashPPSwitchConstantExpr(tag, expr) {
+		candidate, err := r.bashPPSwitchCaseScalar(tag, expr)
+		return candidate, err == nil, true, err
+	}
+	typ, ok := r.bashPPSwitchStaticType(expr)
+	if !ok {
+		return bashPPScalar{}, false, false, nil
+	}
+	name := bashPPTypeText(typ)
+	underlying, ok := r.bashPPUnderlyingType(typ).(*syntax.BashPPNamedType)
+	if !ok || underlying.Name == nil {
+		return bashPPScalar{}, false, false, nil
+	}
+	var value constant.Value
+	switch underlying.Name.Value {
+	case "bool":
+		value = constant.MakeBool(false)
+	case "string":
+		value = constant.MakeString("")
+	case "float32", "float64":
+		value = constant.MakeFloat64(0)
+	case "complex64", "complex128":
+		value = constant.MakeImag(constant.MakeInt64(0))
+	default:
+		if !bashPPIntegerType(underlying.Name.Value) {
+			return bashPPScalar{}, false, false, nil
+		}
+		value = constant.MakeInt64(0)
+	}
+	if r.bashPPGoSource {
+		name = r.bashPPCanonicalScalarType(name)
+	}
+	return bashPPScalar{value: value, typ: name}, true, false, nil
+}
+
+// bashPPSwitchStaticType uses declarations and expression shape only. In
+// particular it never calls the scalar evaluator, whose reads and calls are
+// observable at runtime.
+func (r *Runner) bashPPSwitchStaticType(expr syntax.BashPPExpr) (syntax.BashPPTypeExpr, bool) {
+	if typ, ok := r.goSourceStaticExprType(expr); ok {
+		return typ, true
+	}
+	switch x := expr.(type) {
+	case *syntax.BashPPParenExpr:
+		return r.bashPPSwitchStaticType(x.X)
+	case *syntax.BashPPUnaryExpr:
+		if x.Op != nil && x.Op.Value == "!" {
+			return bashPPSwitchNamedType("bool"), true
+		}
+		return r.bashPPSwitchStaticType(x.X)
+	case *syntax.BashPPBinaryExpr:
+		switch x.Op.Value {
+		case "==", "!=", "<", "<=", ">", ">=", "&&", "||":
+			return bashPPSwitchNamedType("bool"), true
+		}
+		left, leftOK := r.bashPPSwitchStaticType(x.X)
+		right, rightOK := r.bashPPSwitchStaticType(x.Y)
+		leftConstant := r.bashPPSwitchConstantExpr(bashPPScalar{}, x.X)
+		rightConstant := r.bashPPSwitchConstantExpr(bashPPScalar{}, x.Y)
+		switch {
+		case leftConstant && !rightConstant && rightOK:
+			return right, true
+		case rightConstant && !leftConstant && leftOK:
+			return left, true
+		case leftOK && rightOK && bashPPTypeText(left) == bashPPTypeText(right):
+			return left, true
+		}
+	}
+	return nil, false
+}
+
+func bashPPSwitchNamedType(name string) syntax.BashPPTypeExpr {
+	return &syntax.BashPPNamedType{Name: &syntax.Lit{Value: name}}
+}
+
 func (r *Runner) bashPPSwitchConstantExpr(tag bashPPScalar, expr syntax.BashPPExpr) bool {
 	switch x := expr.(type) {
 	case *syntax.BashPPBasicLit:
@@ -2108,6 +2218,11 @@ func (r *Runner) bashPPSwitchConstantExpr(tag bashPPScalar, expr syntax.BashPPEx
 	case *syntax.BashPPIdent:
 		if x.Name.Value == "true" || x.Name.Value == "false" {
 			return true
+		}
+		if r.bashPPScope != nil {
+			if cell := r.bashPPScope.lookup(x.Name.Value); cell != nil && cell.constant {
+				return true
+			}
 		}
 		if tag.typ != "" {
 			for _, member := range r.bashPPTypes[tag.typ].members {
