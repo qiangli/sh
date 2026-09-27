@@ -826,16 +826,7 @@ func (p *dependencyCallbackProof) value(expr ast.Expr, env map[string]dependency
 		return p.value(expr.X, env)
 	case *ast.SelectorExpr:
 		base := p.value(expr.X, env)
-		if base.object == nil {
-			return dependencyCallbackValue{}
-		}
-		if value, ok := base.object.fields[expr.Sel.Name]; ok {
-			return value
-		}
-		typ := p.types[base.object.typ].fields[expr.Sel.Name]
-		child := dependencyCallbackValue{object: &dependencyCallbackObject{typ: typ, owned: base.object.owned, fields: make(map[string]dependencyCallbackValue)}}
-		base.object.fields[expr.Sel.Name] = child
-		return child
+		return p.field(base, expr.Sel.Name, map[string]bool{})
 	case *ast.FuncLit:
 		if dependencyCallbackNodeTainted(expr.Body, env, p) {
 			return dependencyCallbackValue{callback: &dependencyCallbackClosure{lit: expr, env: dependencyCallbackCloneEnv(env)}}
@@ -1054,6 +1045,9 @@ func (p *dependencyCallbackProof) callWithResolvedCallee(call *ast.CallExpr, cal
 		p.defers = append(p.defers, nil)
 		ok := p.block(callee.callback.lit.Body, closureEnv, depth+1) && p.runDeferred(closureEnv, depth+1)
 		p.defers = p.defers[:len(p.defers)-1]
+		if ok {
+			dependencyCallbackJoinEnvTaint(env, closureEnv)
+		}
 		return ok
 	}
 	tainted := false
@@ -1130,6 +1124,52 @@ func (p *dependencyCallbackProof) method(receiver dependencyCallbackValue, name 
 		}
 	}
 	return nil, dependencyCallbackValue{}
+}
+
+// field resolves both declared fields and fields reached through embedding.
+// An explicitly selected embedded field, such as p.scanner where scanner is
+// anonymous in parser, denotes the embedded object itself. Ownership follows
+// the containing object; no package- or type-specific exception is involved.
+func (p *dependencyCallbackProof) field(receiver dependencyCallbackValue, name string, seen map[string]bool) dependencyCallbackValue {
+	if receiver.object == nil || receiver.object.typ == "" || seen[receiver.object.typ] {
+		return dependencyCallbackValue{}
+	}
+	seen[receiver.object.typ] = true
+	if value, ok := receiver.object.fields[name]; ok {
+		return value
+	}
+	shape := p.types[receiver.object.typ]
+	if typ, ok := shape.fields[name]; ok {
+		child := dependencyCallbackValue{object: &dependencyCallbackObject{typ: typ, owned: receiver.object.owned, fields: make(map[string]dependencyCallbackValue)}}
+		receiver.object.fields[name] = child
+		return child
+	}
+	for _, embedded := range shape.embedded {
+		child := receiver.object.fields[embedded]
+		if child.object == nil {
+			child = dependencyCallbackValue{object: &dependencyCallbackObject{typ: embedded, owned: receiver.object.owned, fields: make(map[string]dependencyCallbackValue)}}
+			receiver.object.fields[embedded] = child
+		}
+		if embedded == name {
+			return child
+		}
+		if value := p.field(child, name, seen); value.object != nil || value.callback != nil {
+			return value
+		}
+	}
+	return dependencyCallbackValue{}
+}
+
+// dependencyCallbackJoinEnvTaint models the shared lexical cells captured by
+// a closure. The proof only needs a monotonic fact: once a deferred closure can
+// place a callback-bearing value in an enclosing binding, a later LIFO defer
+// must observe that binding as tainted. Clean writes never erase the fact.
+func dependencyCallbackJoinEnvTaint(dst, src map[string]dependencyCallbackValue) {
+	for name, value := range src {
+		if _, captured := dst[name]; captured && value.tainted() && !dst[name].tainted() {
+			dst[name] = value
+		}
+	}
 }
 
 func dependencyCallbackNodeTainted(node ast.Node, env map[string]dependencyCallbackValue, p *dependencyCallbackProof) bool {
