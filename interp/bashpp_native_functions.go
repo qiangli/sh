@@ -157,6 +157,11 @@ func (r *Runner) bashPPCallbackFunctionTemplate(fn *bashPPFunc) (*bashPPCallback
 			templateErr: "original callback capture contains an unsupported construct",
 		}, nil
 	}
+	// Package variables are shared Go storage even though they are not lexical
+	// captures. Resolve their exact cells while registration still owns the
+	// source frame; later native testing callbacks must not inspect the live
+	// Runner or reconstruct package ownership from names alone.
+	capture = r.bashPPCallbackSharedCells(fn, capture)
 	// Capture the execution environment while the registering runner is its
 	// sole owner. A later native scheduler callback must never clone or walk
 	// that runner: it may be paused in another callback frame by then.

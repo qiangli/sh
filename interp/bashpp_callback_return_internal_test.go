@@ -4,9 +4,11 @@ package interp
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"mvdan.cc/sh/v3/expand"
+	"mvdan.cc/sh/v3/gosource"
 	"mvdan.cc/sh/v3/syntax"
 )
 
@@ -61,7 +63,8 @@ func TestBashPPTestingCallbackFrameOwnership(t *testing.T) {
 	parent.bashPPGoSource = true
 	parent.bashPPScope = scope
 	parent.bashPPFuncs = map[string]*bashPPFunc{"callback": fn}
-	parent.bashPPConcurrent = newBashPPConcurrent(context.Background())
+	parent.bashPPFileRun = true
+	parent.bashPPConcurrent = parent.bashPPConcurrency(context.Background())
 	defer parent.bashPPConcurrent.cancel()
 	parent.bashPPTools.callbackDepth = 1
 	parent.bashPPTools.routedDepth = 1
@@ -93,7 +96,7 @@ func TestBashPPTestingCallbackFrameOwnership(t *testing.T) {
 	if child.bashPPTools.callbackDepth != 0 || child.bashPPTools.routedDepth != 0 {
 		t.Fatalf("testing callback inherited active stack depths: callback=%d routed=%d", child.bashPPTools.callbackDepth, child.bashPPTools.routedDepth)
 	}
-	if !child.bashPPGoTask || child.bashPPChanBoundary || child.bashPPConcurrent == nil || child.bashPPConcurrent != parent.bashPPConcurrent {
+	if !child.bashPPFileRun || !child.bashPPGoTask || child.bashPPChanBoundary || child.bashPPConcurrent == nil || child.bashPPConcurrent != parent.bashPPConcurrent {
 		t.Fatal("testing callback lost its Go task-group capabilities")
 	}
 	if parent.bashPPTools.testingCallbackFrames != nil || parent.bashPPTools.callbackDepth != 1 || parent.bashPPTools.routedDepth != 1 {
@@ -120,4 +123,108 @@ func TestBashPPTestingCallbackFrameOwnership(t *testing.T) {
 	if answer.Error != "gosource: original callback handle expired" {
 		t.Fatalf("unknown callback was not refused: %#v", answer)
 	}
+}
+
+func TestBashPPTestingCallbackSharesAuthenticatedPackageGlobalsOnly(t *testing.T) {
+	program, err := gosource.Parse(strings.NewReader(`package main
+
+var own int
+var nativeGlobal int
+const packageConstant = 3
+
+func main() {
+	_ = func() { own++ }
+}
+`), "callback-globals.go", gosource.Options{RunMain: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var lit *syntax.BashPPFuncLit
+	syntax.Walk(program.File, func(node syntax.Node) bool {
+		candidate, ok := node.(*syntax.BashPPFuncLit)
+		if ok && lit == nil {
+			lit = candidate
+		}
+		return true
+	})
+	if lit == nil {
+		t.Fatal("converted source has no callback literal")
+	}
+
+	outer := newBashPPScope(nil)
+	root := newBashPPScope(outer)
+	own := scalarCell("1")
+	native := &bashPPCell{vr: expand.Variable{Kind: expand.Object, Obj: &bashPPBridgeValue{Kind: "handle", Session: "source-session", Handle: 1}}}
+	foreign := scalarCell("2")
+	constant := scalarCell("3")
+	constant.constant = true
+	root.entries["own"] = own
+	root.entries["nativeGlobal"] = native
+	root.entries["__gosource_pkg_0_foreign"] = foreign
+	root.entries["packageConstant"] = constant
+	frame := newBashPPScope(root)
+	captured := scalarCell("4")
+	private := scalarCell("5")
+	shadow := scalarCell("6")
+	frame.entries["captured"] = captured
+	frame.entries["private"] = private
+	frame.entries["own"] = shadow
+
+	runner := &Runner{bashPPGoSource: true, bashPPGoSourceFile: program.File}
+	shared := runner.bashPPCallbackSharedCells(&bashPPFunc{lit: lit, scope: frame}, map[*bashPPCell]bool{captured: true})
+	if !shared[own] || !shared[native] || !shared[captured] {
+		t.Fatalf("authenticated cells missing: own=%v native=%v captured=%v", shared[own], shared[native], shared[captured])
+	}
+	if shared[foreign] || shared[private] || shared[constant] || shared[shadow] {
+		t.Fatalf("unowned cells leaked: foreign=%v private=%v constant=%v shadow=%v", shared[foreign], shared[private], shared[constant], shared[shadow])
+	}
+	if got := runner.bashPPGoSourceSharableCells; len(got) != 0 {
+		t.Fatalf("package provenance was replaced by payload classification: %#v", got)
+	}
+}
+
+func TestBashPPTestingCallbackFrameRequiresLiveFileOwner(t *testing.T) {
+	newRegistered := func(parent *Runner) *bashPPCallbackFunction {
+		t.Helper()
+		fn := &bashPPFunc{lit: parseGoStmt(t, "func main() {\n\tgo func() {}()\n}\n").Call.FuncLit, scope: newBashPPScope(nil)}
+		parent.bashPPGoSource = true
+		registered, err := parent.bashPPCallbackFunctionTemplate(fn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return registered
+	}
+
+	t.Run("outside File Run", func(t *testing.T) {
+		parent, err := New(Lang(syntax.LangBashPP), Env(expand.ListEnviron()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer parent.closeDirFile()
+		parent.Reset()
+		parent.bashPPConcurrent = newBashPPConcurrent(context.Background())
+		defer parent.bashPPConcurrent.cancel()
+		registered := newRegistered(parent)
+		defer registered.template.closeDirFile()
+		if child, _, err := registered.bashPPTestingCallbackFrame(new(bashPPTestingCallbackFrames)); err == nil || child != nil {
+			t.Fatalf("bare runner acquired File ownership: child=%p err=%v", child, err)
+		}
+	})
+
+	t.Run("owner canceled", func(t *testing.T) {
+		parent, err := New(Lang(syntax.LangBashPP), Env(expand.ListEnviron()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer parent.closeDirFile()
+		parent.Reset()
+		parent.bashPPFileRun = true
+		parent.bashPPConcurrency(context.Background())
+		registered := newRegistered(parent)
+		defer registered.template.closeDirFile()
+		parent.bashPPConcurrent.cancel()
+		if child, _, err := registered.bashPPTestingCallbackFrame(new(bashPPTestingCallbackFrames)); err == nil || child != nil {
+			t.Fatalf("canceled owner remained usable: child=%p err=%v", child, err)
+		}
+	})
 }
