@@ -505,6 +505,36 @@ func originalTypeString(t reflect.Type) string {
  }
  return t.String()
 }
+// originalTypeFormat keeps a materialised interpreted type's source package
+// spelling when it is itself formatted. The real reflect.Type remains the
+// value used for equality, assignability, fields, methods and every reflected
+// operation; this projection exists only at the fmt call boundary.
+type originalTypeFormat struct{ reflect.Type }
+func(t originalTypeFormat)String()string{return originalTypeString(t.Type)}
+func formatUsesTypeVerb(format string)bool{
+ for i:=0;i<len(format);i++ {if format[i]!='%'{continue};i++;if i<len(format)&&format[i]=='%'{continue};for ;i<len(format);i++ {c:=format[i];if c=='T'{return true};if c>='A'&&c<='Z'||c>='a'&&c<='z'{break}}}
+ return false
+}
+func originalFmtValue(v reflect.Value)reflect.Value{
+ if !v.IsValid(){return v}
+ if v.Kind()==reflect.Interface&&!v.IsNil(){v=v.Elem()}
+ if v.CanInterface(){if typ,ok:=v.Interface().(reflect.Type);ok&&hasOriginalTypeIdentity(typ){return reflect.ValueOf(originalTypeFormat{typ})}}
+ return v
+}
+func originalFmtArgs(fn reflect.Value,args []reflect.Value,spread bool)[]reflect.Value{
+ same:=func(target any)bool{return fn.IsValid()&&fn.Pointer()==reflect.ValueOf(target).Pointer()}
+ formatIndex,first:=-1,-1
+ switch {case same(fmt.Printf),same(fmt.Sprintf),same(fmt.Errorf):formatIndex,first=0,1;case same(fmt.Fprintf),same(fmt.Appendf):formatIndex,first=1,2;default:return args}
+ if formatIndex>=len(args)||args[formatIndex].Kind()!=reflect.String||formatUsesTypeVerb(args[formatIndex].String()){return args}
+ out:=append([]reflect.Value(nil),args...)
+ if spread&&len(out)>first&&len(out)==first+1&&out[first].Kind()==reflect.Slice {
+  src:=out[first];dst:=reflect.MakeSlice(src.Type(),src.Len(),src.Len());reflect.Copy(dst,src)
+  for i:=0;i<dst.Len();i++ {wrapped:=originalFmtValue(dst.Index(i));if wrapped.Type().AssignableTo(dst.Index(i).Type()){dst.Index(i).Set(wrapped)}else if dst.Index(i).Kind()==reflect.Interface&&wrapped.Type().Implements(dst.Index(i).Type()){dst.Index(i).Set(wrapped)}}
+  out[first]=dst;return out
+ }
+ for i:=first;i<len(out);i++ {out[i]=originalFmtValue(out[i])}
+ return out
+}
 func memberMethod(rv reflect.Value,name string) reflect.Value {
  for rv.IsValid()&&rv.Kind()==reflect.Interface&&!rv.IsNil(){rv=rv.Elem()}
  if !rv.IsValid(){return reflect.Value{}}
@@ -765,6 +795,7 @@ func dispatch(q request)(reply response){
  if companionGuarded(q.Selector+q.Instance) {companionEnterUnmapped();defer companionExitUnmapped();companionSink(companionGrowStack(companionStackDepth))}
  if q.Spread&&(!signature.IsVariadic()||len(args)!=n){reply.Error="invalid spread call";return}
  leaveCallbackSlices:=enterCallbackSliceFrame(q.SliceBuffers,args);defer leaveCallbackSlices()
+ args=originalFmtArgs(fn,args,q.Spread)
  returned=callDependency(fn,args,q.Spread)
  for _,v:=range returned{encoded:=encode(v);if encoded.Kind=="handle" {
    var ctx reflectedMethodContext;valid:=false

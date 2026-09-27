@@ -1212,29 +1212,79 @@ func (l *bashPPLocalTypeSet) source(typ syntax.BashPPTypeExpr, depth int) (strin
 		}
 		return "struct {\n" + strings.Join(fields, "\n") + "\n}", true
 	case *syntax.BashPPInterfaceType:
-		// Elems is the ordered element list; every method specification
-		// appears there as well as in Methods. Only an embedded element —
-		// including a union or constraint element, which parses as one — is
-		// outside the set the helper can reproduce faithfully.
-		for _, elem := range t.Elems {
-			if elem.Method == nil {
-				return "", false
-			}
-		}
-		if len(t.Methods) == 0 {
+		if len(t.Elems) == 0 && len(t.Methods) == 0 {
 			return "any", true
 		}
 		var specs []string
-		for _, spec := range t.Methods {
-			text, ok := l.signature(spec, depth+1)
-			if !ok {
-				return "", false
+		if len(t.Elems) > 0 {
+			for _, elem := range t.Elems {
+				if elem.Method != nil {
+					text, ok := l.signature(elem.Method, depth+1)
+					if !ok {
+						return "", false
+					}
+					specs = append(specs, elem.Method.Name.Value+text)
+					continue
+				}
+				if elem.Embedded == nil || !l.ordinaryInterface(elem.Embedded, map[string]bool{}) {
+					return "", false
+				}
+				text, ok := l.source(elem.Embedded, depth+1)
+				if !ok {
+					return "", false
+				}
+				specs = append(specs, text)
 			}
-			specs = append(specs, spec.Name.Value+text)
+		} else {
+			for _, spec := range t.Methods {
+				text, ok := l.signature(spec, depth+1)
+				if !ok {
+					return "", false
+				}
+				specs = append(specs, spec.Name.Value+text)
+			}
 		}
 		return "interface {\n" + strings.Join(specs, "\n") + "\n}", true
 	}
 	return "", false
+}
+
+// ordinaryInterface reports whether an embedded interface element is a local
+// method-set interface, rather than a union or another constraint-only type.
+// Following local aliases is cycle-safe; source records the same named-type
+// edge in refs, so the descriptor closure later keeps all embedded interfaces
+// and their users together.
+func (l *bashPPLocalTypeSet) ordinaryInterface(typ syntax.BashPPTypeExpr, seen map[string]bool) bool {
+	named, ok := typ.(*syntax.BashPPNamedType)
+	if !ok || named.Name == nil || len(named.TypeArgs) > 0 {
+		return false
+	}
+	name := named.Name.Value
+	if name == "any" || name == "interface{}" {
+		return true
+	}
+	if seen[name] {
+		return false
+	}
+	decl := l.declared[name]
+	if decl == nil {
+		return false
+	}
+	seen[name] = true
+	defer delete(seen, name)
+	if alias, ok := decl.(*syntax.BashPPNamedType); ok {
+		return l.ordinaryInterface(alias, seen)
+	}
+	iface, ok := decl.(*syntax.BashPPInterfaceType)
+	if !ok {
+		return false
+	}
+	for _, elem := range iface.Elems {
+		if elem.Method == nil && (elem.Embedded == nil || !l.ordinaryInterface(elem.Embedded, seen)) {
+			return false
+		}
+	}
+	return true
 }
 
 // signature renders one interface method specification.
