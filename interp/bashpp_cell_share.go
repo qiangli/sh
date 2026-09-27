@@ -82,6 +82,21 @@ func (c *bashPPCell) view() *bashPPCell {
 	return &dup
 }
 
+// viewConstant is [bashPPCell.view] for a caller that needs only the `const`
+// marker. The marker is written once at declaration and never republished, so
+// reading it alone still answers about a single store.
+func (c *bashPPCell) viewConstant() bool {
+	if c == nil {
+		return false
+	}
+	if c.guard == nil {
+		return c.constant
+	}
+	c.guard.Lock()
+	defer c.guard.Unlock()
+	return c.constant
+}
+
 // viewVar is [bashPPCell.view] for a caller that needs only the shell value,
 // without copying the whole cell.
 func (c *bashPPCell) viewVar() expand.Variable {

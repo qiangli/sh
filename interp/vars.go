@@ -2326,10 +2326,19 @@ func (r *Runner) setVar(name string, vr expand.Variable) {
 	// read the shell one.
 	if r.bashPPScope != nil {
 		if cell := r.bashPPScope.lookup(name); cell != nil {
-			if cell.constant {
+			if cell.viewConstant() {
+				// Diagnosed outside the guard: reporting writes to stderr,
+				// which may block, and a guarded region must not.
 				r.refuseConstantAssignment(name)
 				return
 			}
+			// The attribute merge reads the cell's current header and then
+			// republishes it together with the channel authority, so a cell an
+			// interpreted goroutine can also reach is read and written under
+			// one guard; see bashpp_cell_share.go. The region only moves
+			// fields.
+			cell.lock()
+			defer cell.unlock()
 			if vr.Kind == expand.KeepValue {
 				cell.vr.Exported = cell.vr.Exported || vr.Exported
 				cell.vr.ReadOnly = cell.vr.ReadOnly || vr.ReadOnly

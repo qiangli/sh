@@ -933,7 +933,23 @@ func (r *Runner) bashPPGoSourceObjectCarrier(value any, meta *bashPPCollectionMe
 	return r.bashPPGoSourceCollectionCarrier(value, meta)
 }
 
+// bashPPStoreCellValue publishes one value, with its shape, into cell.
+//
+// Every store below is part of ONE published value: the payload carrier, the
+// pointer triple, the meta edges and the scalar carrier flags have to change
+// together or a reader sees a value that was never assigned. So the whole body
+// runs under the cell's guard when the cell is one an interpreted goroutine can
+// also reach; see bashpp_cell_share.go. Nothing in here evaluates guest code or
+// blocks, and the one field belonging to a DIFFERENT cell — the interface
+// payload's shell value — is read before the guard is taken, so no region ever
+// holds two cell guards at once.
 func bashPPStoreCellValue(cell *bashPPCell, value any, meta *bashPPCollectionMeta) {
+	var innerVar expand.Variable
+	if meta != nil && meta.interfaceValue != nil && meta.interfaceValue.cell != nil {
+		innerVar = meta.interfaceValue.cell.viewVar()
+	}
+	cell.lock()
+	defer cell.unlock()
 	if meta != nil && meta.interfaceValue != nil {
 		cell.pointer, cell.pointerValue, cell.nilPointer = false, nil, false
 		cell.interfaceValue = meta.interfaceValue
@@ -942,7 +958,7 @@ func bashPPStoreCellValue(cell *bashPPCell, value any, meta *bashPPCollectionMet
 		if meta.interfaceValue.nilIface || meta.interfaceValue.cell == nil {
 			cell.vr = expand.Variable{Set: true, Kind: expand.String}
 		} else {
-			cell.vr = meta.interfaceValue.cell.vr
+			cell.vr = innerVar
 		}
 		return
 	}

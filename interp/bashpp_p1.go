@@ -2845,12 +2845,12 @@ func (r *Runner) bashPPForAssign(assign *syntax.BashPPForAssign) {
 		r.exit = exitStatus{code: 2}
 		return
 	}
-	if cell.constant {
+	if cell.viewConstant() {
 		r.errf("BASHPP-EASSIGN-CONST: cannot assign to constant %s\n", assign.Name.Value)
 		r.exit = exitStatus{code: 2}
 		return
 	}
-	if cell.vr.Kind == expand.Object {
+	if cell.viewVar().Kind == expand.Object {
 		r.errf("BASHPP-EASSIGN-TYPE: %s is not a scalar\n", assign.Name.Value)
 		r.exit = exitStatus{code: 2}
 		return
@@ -2864,10 +2864,16 @@ func (r *Runner) bashPPForAssign(assign *syntax.BashPPForAssign) {
 		r.exit = exitStatus{code: 2}
 		return
 	}
+	text := bashPPScalarString(value.value)
+	// The guest expression is evaluated above, OUTSIDE the guard: only the
+	// stores that publish one value belong inside it. See
+	// bashpp_cell_share.go.
+	cell.lock()
 	cell.vr.Set = true
 	cell.vr.Kind = expand.String
-	cell.vr.Str = bashPPScalarString(value.value)
+	cell.vr.Str = text
 	cell.vr.List, cell.vr.Map, cell.vr.ListMap, cell.vr.ListSet = nil, nil, nil, nil
+	cell.unlock()
 	r.exit.clear()
 }
 
@@ -2896,12 +2902,12 @@ func (r *Runner) bashPPIncDec(stmt *syntax.BashPPIncDec) {
 		r.exit = exitStatus{code: 2}
 		return
 	}
-	if cell.constant {
+	if cell.viewConstant() {
 		r.errf("BASHPP-EINCDEC-CONST: cannot assign to constant %s\n", stmt.Name.Value)
 		r.exit = exitStatus{code: 2}
 		return
 	}
-	value := bashPPScalarFromString(cell.vr.String())
+	value := bashPPScalarFromString(cell.viewVar().String())
 	if value.value.Kind() != constant.Int && value.value.Kind() != constant.Float {
 		r.errf("BASHPP-EINCDEC-TYPE: operator %s not defined on %s\n", stmt.Op.Value, value.value.Kind())
 		r.exit = exitStatus{code: 2}
@@ -2917,7 +2923,10 @@ func (r *Runner) bashPPIncDec(stmt *syntax.BashPPIncDec) {
 		r.exit = exitStatus{code: 2}
 		return
 	}
-	cell.vr.Set, cell.vr.Kind, cell.vr.Str = true, expand.String, bashPPScalarString(result)
+	text := bashPPScalarString(result)
+	cell.lock()
+	cell.vr.Set, cell.vr.Kind, cell.vr.Str = true, expand.String, text
+	cell.unlock()
 	r.exit.clear()
 }
 

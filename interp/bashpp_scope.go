@@ -98,10 +98,13 @@ func (c *bashPPCell) vrValue() any {
 	if c == nil {
 		return ""
 	}
-	if c.vr.Kind == expand.Object {
-		return c.vr.Obj
+	// The kind test and the payload it selects must see the same store, so a
+	// shared cell answers from one snapshot; see bashpp_cell_share.go.
+	vr := c.viewVar()
+	if vr.Kind == expand.Object {
+		return vr.Obj
 	}
-	return c.vr.String()
+	return vr.String()
 }
 
 // bashPPScope is one lexical block's declarations, linked to its enclosing
