@@ -103,6 +103,7 @@ type dependencyCallbackObject struct {
 	owned     bool
 	escaped   bool
 	synthetic bool
+	general   bool
 	fields    map[string]dependencyCallbackValue
 }
 
@@ -123,6 +124,8 @@ type dependencyCallbackValue struct {
 	object   *dependencyCallbackObject
 	callable bool // source declares this clean value to have function type
 }
+
+const dependencyCallbackElementField = "[]"
 
 func (v dependencyCallbackValue) tainted() bool {
 	if v.callback != nil {
@@ -160,9 +163,10 @@ type dependencyCallbackFormal struct {
 }
 
 type dependencyCallbackActiveFrame struct {
-	supplied map[string]dependencyCallbackValue
-	receiver dependencyCallbackValue
-	snapshot string
+	supplied         map[string]dependencyCallbackValue
+	receiver         dependencyCallbackValue
+	argSnapshots     map[string]string
+	receiverSnapshot string
 }
 
 type dependencyCallbackCompletedFrame struct {
@@ -433,10 +437,12 @@ func (p *dependencyCallbackProof) function(decl *ast.FuncDecl, supplied map[stri
 		key = dependencyCallbackTypeName(decl.Recv.List[0].Type) + "." + key
 	}
 	if active, ok := p.active[key]; ok {
-		// A recursive edge is proved only when it reaches the identical
-		// abstract frame. Different aliases or callback values require a
-		// fixed-point analysis and therefore remain a refusal.
-		if dependencyCallbackSameFrame(active, supplied, receiver) {
+		// A recursive edge may only preserve callback-bearing state exactly or
+		// grow callback-free regions that are then forbidden to receive callbacks.
+		if same, generalized := dependencyCallbackSameFrame(active, supplied, receiver); same {
+			if generalized && p.recursiveBodyStoresCallback(decl, active) {
+				return p.refuse(decl, "generalized recursive body may store callback-bearing value")
+			}
 			return true
 		}
 		return p.refuse(decl, "recursive call changes callback capture state")
@@ -447,7 +453,7 @@ func (p *dependencyCallbackProof) function(decl *ast.FuncDecl, supplied map[stri
 			return true
 		}
 	}
-	p.active[key] = dependencyCallbackActiveFrame{supplied: dependencyCallbackCloneEnv(supplied), receiver: receiver, snapshot: before}
+	p.active[key] = dependencyCallbackActiveFrame{supplied: dependencyCallbackCloneEnv(supplied), receiver: receiver, argSnapshots: dependencyCallbackEnvSnapshots(supplied), receiverSnapshot: dependencyCallbackValueSnapshot(receiver)}
 	defer delete(p.active, key)
 	savedFunc := p.currentFunc
 	p.currentFunc = key
@@ -485,21 +491,90 @@ func (p *dependencyCallbackProof) function(decl *ast.FuncDecl, supplied map[stri
 	return ok
 }
 
-func dependencyCallbackSameFrame(active dependencyCallbackActiveFrame, supplied map[string]dependencyCallbackValue, receiver dependencyCallbackValue) bool {
-	if !dependencyCallbackSameValue(active.receiver, receiver) || len(active.supplied) != len(supplied) {
-		return false
+func dependencyCallbackSameFrame(active dependencyCallbackActiveFrame, supplied map[string]dependencyCallbackValue, receiver dependencyCallbackValue) (bool, bool) {
+	generalized := false
+	if dependencyCallbackSameValue(active.receiver, receiver) {
+		current := dependencyCallbackValueSnapshot(receiver)
+		if current != active.receiverSnapshot {
+			if active.receiver.tainted() {
+				return false, false
+			}
+			dependencyCallbackMarkGeneralized([]dependencyCallbackValue{receiver})
+			generalized = true
+		} else if receiver.object != nil && !receiver.tainted() {
+			dependencyCallbackMarkGeneralized([]dependencyCallbackValue{receiver})
+			generalized = true
+		}
+	} else if active.receiver.tainted() || receiver.tainted() {
+		return false, false
+	} else {
+		dependencyCallbackMarkGeneralized([]dependencyCallbackValue{active.receiver, receiver})
+		generalized = true
+	}
+	if len(active.supplied) != len(supplied) {
+		return false, false
 	}
 	for name, value := range active.supplied {
 		other, ok := supplied[name]
-		if !ok || !dependencyCallbackSameValue(value, other) {
-			return false
+		if !ok {
+			return false, false
 		}
+		if dependencyCallbackSameValue(value, other) {
+			current := dependencyCallbackValueSnapshot(other)
+			if current != active.argSnapshots[name] {
+				if value.tainted() {
+					return false, false
+				}
+				dependencyCallbackMarkGeneralized([]dependencyCallbackValue{other})
+				generalized = true
+			} else if other.object != nil && !other.tainted() {
+				dependencyCallbackMarkGeneralized([]dependencyCallbackValue{other})
+				generalized = true
+			}
+			continue
+		}
+		if value.tainted() || other.tainted() {
+			return false, false
+		}
+		dependencyCallbackMarkGeneralized([]dependencyCallbackValue{value, other})
+		generalized = true
 	}
-	return active.snapshot == dependencyCallbackFrameSnapshot(supplied, receiver)
+	return true, generalized
 }
 
 func dependencyCallbackSameValue(left, right dependencyCallbackValue) bool {
 	return left.callback == right.callback && left.object == right.object && left.callable == right.callable
+}
+
+func (p *dependencyCallbackProof) recursiveBodyStoresCallback(decl *ast.FuncDecl, active dependencyCallbackActiveFrame) bool {
+	if decl == nil || decl.Body == nil {
+		return true
+	}
+	env := dependencyCallbackCloneEnv(active.supplied)
+	if decl.Recv != nil && len(decl.Recv.List[0].Names) == 1 {
+		env[decl.Recv.List[0].Names[0].Name] = active.receiver
+	}
+	stores := false
+	ast.Inspect(decl.Body, func(node ast.Node) bool {
+		if stores || node == nil {
+			return false
+		}
+		if _, nested := node.(*ast.FuncLit); nested {
+			return false
+		}
+		assign, ok := node.(*ast.AssignStmt)
+		if !ok {
+			return true
+		}
+		for _, rhs := range assign.Rhs {
+			if dependencyCallbackNodeTainted(rhs, env, p) {
+				stores = true
+				return false
+			}
+		}
+		return true
+	})
+	return stores
 }
 
 func dependencyCallbackFrameSnapshot(supplied map[string]dependencyCallbackValue, receiver dependencyCallbackValue) string {
@@ -522,6 +597,24 @@ func dependencyCallbackFrameSnapshot(supplied map[string]dependencyCallbackValue
 		s.value(&b, supplied[name])
 		b.WriteByte(';')
 	}
+	return b.String()
+}
+
+func dependencyCallbackEnvSnapshots(env map[string]dependencyCallbackValue) map[string]string {
+	snapshots := make(map[string]string, len(env))
+	for name, value := range env {
+		snapshots[name] = dependencyCallbackValueSnapshot(value)
+	}
+	return snapshots
+}
+
+func dependencyCallbackValueSnapshot(value dependencyCallbackValue) string {
+	s := &dependencyCallbackSnapshot{
+		objects:  make(map[*dependencyCallbackObject]int),
+		closures: make(map[*dependencyCallbackClosure]int),
+	}
+	var b strings.Builder
+	s.value(&b, value)
 	return b.String()
 }
 
@@ -580,7 +673,7 @@ func (s *dependencyCallbackSnapshot) object(b *strings.Builder, obj *dependencyC
 	}
 	id := len(s.objects) + 1
 	s.objects[obj] = id
-	fmt.Fprintf(b, "O#%d{%s,owned=%t,escaped=%t", id, obj.typ, obj.owned, obj.escaped)
+	fmt.Fprintf(b, "O#%d{%s,owned=%t,escaped=%t,general=%t", id, obj.typ, obj.owned, obj.escaped, obj.general)
 	names := make([]string, 0, len(obj.fields))
 	for name := range obj.fields {
 		if dependencyCallbackSnapshotOmitField(obj.fields[name]) {
@@ -599,10 +692,7 @@ func (s *dependencyCallbackSnapshot) object(b *strings.Builder, obj *dependencyC
 }
 
 func dependencyCallbackSnapshotOmitField(value dependencyCallbackValue) bool {
-	if value.callback != nil || value.callable || value.object == nil {
-		return false
-	}
-	return value.object.synthetic && value.object.owned && !value.object.escaped && !value.tainted()
+	return false
 }
 
 func (p *dependencyCallbackProof) block(block *ast.BlockStmt, env map[string]dependencyCallbackValue, depth int) bool {
@@ -976,6 +1066,44 @@ func dependencyCallbackCloneEnv(env map[string]dependencyCallbackValue) map[stri
 	return clone
 }
 
+func dependencyCallbackJoinValue(left, right dependencyCallbackValue) dependencyCallbackValue {
+	if !left.tainted() && right.tainted() {
+		return right
+	}
+	if left.object == nil && left.callback == nil && !left.callable {
+		return right
+	}
+	if right.object == nil && right.callback == nil && !right.callable {
+		return left
+	}
+	if left.object != nil && right.object != nil {
+		if left.object == right.object {
+			return left
+		}
+		dependencyCallbackMarkEscaped([]dependencyCallbackValue{left, right})
+		return dependencyCallbackValue{object: &dependencyCallbackObject{escaped: true, fields: make(map[string]dependencyCallbackValue)}}
+	}
+	if !right.tainted() {
+		dependencyCallbackMarkEscaped([]dependencyCallbackValue{right})
+	}
+	return left
+}
+
+func dependencyCallbackOverwriteObject(dst *dependencyCallbackObject, src dependencyCallbackValue) {
+	if dst == nil || src.object == nil {
+		return
+	}
+	if dst.typ == "" {
+		dst.typ = src.object.typ
+	}
+	if dst.fields == nil {
+		dst.fields = make(map[string]dependencyCallbackValue)
+	}
+	for name, value := range src.object.fields {
+		dst.fields[name] = dependencyCallbackJoinValue(dst.fields[name], value)
+	}
+}
+
 func (p *dependencyCallbackProof) assign(lhs ast.Expr, value dependencyCallbackValue, env map[string]dependencyCallbackValue, define bool) bool {
 	switch lhs := lhs.(type) {
 	case *ast.Ident:
@@ -1008,6 +1136,9 @@ func (p *dependencyCallbackProof) assign(lhs ast.Expr, value dependencyCallbackV
 				dependencyCallbackMarkEscaped([]dependencyCallbackValue{value})
 				return true
 			}
+			if base.object.general {
+				dependencyCallbackMarkGeneralized([]dependencyCallbackValue{value})
+			}
 			if value.object != nil || value.callable {
 				if base.object.fields == nil {
 					base.object.fields = make(map[string]dependencyCallbackValue)
@@ -1018,6 +1149,9 @@ func (p *dependencyCallbackProof) assign(lhs ast.Expr, value dependencyCallbackV
 		}
 		if base.object == nil || !base.object.owned || base.object.escaped {
 			return p.refuse(lhs, "selector assignment stores callback-bearing value in escaped or unowned object")
+		}
+		if base.object.general {
+			return p.refuse(lhs, "selector assignment stores callback-bearing value in generalized recursive region")
 		}
 		if base.object.fields == nil {
 			base.object.fields = make(map[string]dependencyCallbackValue)
@@ -1035,8 +1169,17 @@ func (p *dependencyCallbackProof) assign(lhs ast.Expr, value dependencyCallbackV
 		if base.object == nil || !base.object.owned || base.object.escaped {
 			dependencyCallbackMarkEscaped([]dependencyCallbackValue{value})
 		}
-		if value.tainted() && (base.object == nil || !base.object.owned) {
+		if value.tainted() && (base.object == nil || !base.object.owned || base.object.escaped) {
 			return p.refuse(lhs, "pointer assignment stores callback-bearing value through unowned pointer")
+		}
+		if value.tainted() && base.object != nil && base.object.general {
+			return p.refuse(lhs, "pointer assignment stores callback-bearing value in generalized recursive region")
+		}
+		if base.object != nil && base.object.general {
+			dependencyCallbackMarkGeneralized([]dependencyCallbackValue{value})
+		}
+		if base.object != nil && base.object.owned && !base.object.escaped {
+			dependencyCallbackOverwriteObject(base.object, value)
 		}
 		return true
 	}
@@ -1059,10 +1202,17 @@ func (p *dependencyCallbackProof) value(expr ast.Expr, env map[string]dependency
 	case *ast.UnaryExpr:
 		return p.value(expr.X, env)
 	case *ast.IndexExpr:
-		// An indexed element may carry every callback fact known for its
-		// container. A clean element cannot sanitize a callback-bearing
-		// variadic slice, map, or array.
-		return p.value(expr.X, env)
+		container := p.value(expr.X, env)
+		if container.object == nil {
+			if container.callback != nil || container.callable {
+				return container
+			}
+			return dependencyCallbackValue{}
+		}
+		if value, ok := container.object.fields[dependencyCallbackElementField]; ok {
+			return value
+		}
+		return dependencyCallbackValue{}
 	case *ast.SelectorExpr:
 		base := p.value(expr.X, env)
 		return p.field(base, expr.Sel.Name, map[string]bool{})
@@ -1076,15 +1226,15 @@ func (p *dependencyCallbackProof) value(expr ast.Expr, env map[string]dependency
 			kv, ok := elt.(*ast.KeyValueExpr)
 			if !ok {
 				value := p.value(elt, env)
-				if value.tainted() {
-					obj.fields["?"] = value
-				}
+				obj.fields[dependencyCallbackElementField] = dependencyCallbackJoinValue(obj.fields[dependencyCallbackElementField], value)
 				continue
 			}
 			key, ok := kv.Key.(*ast.Ident)
 			if ok {
 				obj.fields[key.Name] = p.value(kv.Value, env)
+				continue
 			}
+			obj.fields[dependencyCallbackElementField] = dependencyCallbackJoinValue(obj.fields[dependencyCallbackElementField], p.value(kv.Value, env))
 		}
 		return dependencyCallbackValue{object: obj}
 	case *ast.CallExpr:
@@ -1333,10 +1483,38 @@ func (p *dependencyCallbackProof) callWithResolvedCallee(call *ast.CallExpr, cal
 }
 
 func dependencyCallbackMarkEscaped(values []dependencyCallbackValue) {
+	seen := make(map[*dependencyCallbackObject]bool)
 	for _, value := range values {
-		if value.object != nil {
-			value.object.escaped = true
-		}
+		dependencyCallbackMarkObjectEscaped(value.object, seen)
+	}
+}
+
+func dependencyCallbackMarkObjectEscaped(obj *dependencyCallbackObject, seen map[*dependencyCallbackObject]bool) {
+	if obj == nil || seen[obj] {
+		return
+	}
+	seen[obj] = true
+	obj.escaped = true
+	for _, field := range obj.fields {
+		dependencyCallbackMarkObjectEscaped(field.object, seen)
+	}
+}
+
+func dependencyCallbackMarkGeneralized(values []dependencyCallbackValue) {
+	seen := make(map[*dependencyCallbackObject]bool)
+	for _, value := range values {
+		dependencyCallbackMarkObjectGeneralized(value.object, seen)
+	}
+}
+
+func dependencyCallbackMarkObjectGeneralized(obj *dependencyCallbackObject, seen map[*dependencyCallbackObject]bool) {
+	if obj == nil || seen[obj] {
+		return
+	}
+	seen[obj] = true
+	obj.general = true
+	for _, field := range obj.fields {
+		dependencyCallbackMarkObjectGeneralized(field.object, seen)
 	}
 }
 

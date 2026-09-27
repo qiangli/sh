@@ -392,6 +392,63 @@ func Parse(cb func()) { Retain(cb) }
 `,
 		},
 		{
+			name: "whole pointer overwrite preserves aliases",
+			source: `package dep
+var saved func()
+type holder struct{ f func() }
+func Retain(cb func()) {
+	h := &holder{}
+	alias := h
+	*alias = holder{f: cb}
+	saved = h.f
+}
+func Parse(cb func()) { Retain(cb) }
+`,
+		},
+		{
+			name: "slice element alias later taint",
+			source: `package dep
+var saved func()
+type holder struct{ f func() }
+func Retain(cb func()) {
+	h := &holder{}
+	xs := []*holder{h}
+	h.f = cb
+	saved = xs[0].f
+}
+func Parse(cb func()) { Retain(cb) }
+`,
+		},
+		{
+			name: "map element alias later taint",
+			source: `package dep
+var saved func()
+type holder struct{ f func() }
+func Retain(cb func()) {
+	h := &holder{}
+	xs := map[int]*holder{0: h}
+	h.f = cb
+	saved = xs[0].f
+}
+func Parse(cb func()) { Retain(cb) }
+`,
+		},
+		{
+			name: "escaped aggregate preserves reachable element",
+			source: `package dep
+var saved []*holder
+type holder struct{ f func() }
+func keep(xs []*holder) { saved = xs }
+func Retain(cb func()) {
+	h := &holder{}
+	xs := []*holder{h}
+	keep(xs)
+	h.f = cb
+}
+func Parse(cb func()) { Retain(cb) }
+`,
+		},
+		{
 			name: "escaped clean child cannot later receive callback",
 			source: `package dep
 var saved *child
