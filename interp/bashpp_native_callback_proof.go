@@ -1306,6 +1306,7 @@ func dependencyCallbackFrameSnapshot(supplied map[string]dependencyCallbackValue
 	s := &dependencyCallbackSnapshot{
 		objects:  make(map[*dependencyCallbackObject]int),
 		closures: make(map[*dependencyCallbackClosure]int),
+		cells:    make(map[*dependencyCallbackCell]int),
 	}
 	var b strings.Builder
 	b.WriteString("recv=")
@@ -1337,6 +1338,7 @@ func dependencyCallbackValueSnapshot(value dependencyCallbackValue) string {
 	s := &dependencyCallbackSnapshot{
 		objects:  make(map[*dependencyCallbackObject]int),
 		closures: make(map[*dependencyCallbackClosure]int),
+		cells:    make(map[*dependencyCallbackCell]int),
 	}
 	var b strings.Builder
 	s.value(&b, value)
@@ -1346,9 +1348,25 @@ func dependencyCallbackValueSnapshot(value dependencyCallbackValue) string {
 type dependencyCallbackSnapshot struct {
 	objects  map[*dependencyCallbackObject]int
 	closures map[*dependencyCallbackClosure]int
+	cells    map[*dependencyCallbackCell]int
 }
 
 func (s *dependencyCallbackSnapshot) value(b *strings.Builder, value dependencyCallbackValue) {
+	if value.cell != nil {
+		if id, ok := s.cells[value.cell]; ok {
+			fmt.Fprintf(b, "L#%d", id)
+			return
+		}
+		id := len(s.cells) + 1
+		s.cells[value.cell] = id
+		fmt.Fprintf(b, "L#%d{", id)
+		s.value(b, value.cell.value)
+		b.WriteByte('}')
+		if value.escaped {
+			b.WriteString("(escaped)")
+		}
+		return
+	}
 	value = dependencyCallbackResolvedValue(value)
 	if value.callback != nil {
 		s.closure(b, value.callback)
@@ -1431,6 +1449,9 @@ func (s *dependencyCallbackSnapshot) object(b *strings.Builder, obj *dependencyC
 }
 
 func dependencyCallbackSnapshotOmitField(value dependencyCallbackValue) bool {
+	if value.cell != nil {
+		return false
+	}
 	value = dependencyCallbackResolvedValue(value)
 	return value.callback == nil && !value.callable && !value.escaped &&
 		value.object != nil && value.object.synthetic && value.object.scalar && len(value.object.fields) == 0
