@@ -714,6 +714,7 @@ func dispatch(q request)(reply response){
   item:=value{Kind:"nil"};if received.IsValid(){item=encode(received)}
   reply.Values=[]value{encode(reflect.ValueOf(chosen)),item,encode(reflect.ValueOf(open))};return
  }
+ if q.Op=="is-nil" {if len(q.Args)!=1{reply.Error="nil query requires one value";return};v,err:=decode(q.Args[0],nil);if err!=nil{reply.Error=err.Error();return};isNil:=false;if !v.IsValid(){isNil=true}else if q.Args[0].Interface!=""&&v.Kind()!=reflect.Interface{isNil=false}else{switch v.Kind(){case reflect.Chan,reflect.Func,reflect.Interface,reflect.Map,reflect.Pointer,reflect.Slice,reflect.UnsafePointer:isNil=v.IsNil()}};reply.Values=[]value{encode(reflect.ValueOf(isNil))};return}
  if q.Op=="equal" {if len(q.Args)!=2{reply.Error="comparison requires two values";return};left,err:=decode(q.Args[0],nil);if err!=nil{reply.Error=err.Error();return};right,err:=decode(q.Args[1],nil);if err!=nil{reply.Error=err.Error();return};equal:=false
  // A nil interface crosses as an invalid value; a non-nil interface crosses
  // as its dynamic value with the Interface marker set. That marker decides

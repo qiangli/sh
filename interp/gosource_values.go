@@ -23,7 +23,7 @@ func goSourceNativeValueCell(value bashPPBridgeValue) *bashPPCell {
 			payload := bashPPCopyAssignmentCell(cell)
 			cell.declType = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.Interface}}
 			cell.interfaceValue = &bashPPInterfaceValue{
-				nilIface: value.Kind == "nil",
+				nilIface: bashPPBridgeValueNilInterface(value),
 				cell:     payload,
 				dynamic:  bashPPBridgeValueDynamicType(value),
 			}
@@ -43,7 +43,7 @@ func goSourceNativeValueCell(value bashPPBridgeValue) *bashPPCell {
 		concrete.Interface = ""
 		payload := &bashPPCell{vr: expand.NewObject(&concrete), typeName: value.Type, declType: dynamic}
 		cell.interfaceValue = &bashPPInterfaceValue{
-			nilIface: value.Kind == "nil",
+			nilIface: bashPPBridgeValueNilInterface(value),
 			cell:     payload,
 			dynamic:  dynamic,
 		}

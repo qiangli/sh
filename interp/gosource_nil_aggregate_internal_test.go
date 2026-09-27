@@ -4,6 +4,7 @@ import (
 	"go/token"
 	"testing"
 
+	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
 )
 
@@ -32,6 +33,30 @@ func TestGoSourceNilAggregateClassicBoundary(t *testing.T) {
 		t.Fatalf("Go metadata lost: equal=%v err=%v", equal, err)
 	}
 }
+
+func TestGoSourceTypedNilNativeInterfaceFieldCompare(t *testing.T) {
+	r := &Runner{bashPPGoSource: true, bashPPScope: newBashPPScope(nil)}
+	shape := &syntax.BashPPStructType{Fields: []*syntax.BashPPField{{Names: []*syntax.Lit{{Value: "I"}}, FieldTypeExpr: &syntax.BashPPInterfaceType{}}}}
+	dynamic := &syntax.BashPPPointerType{Element: &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "T"}}}
+	native := &bashPPBridgeValue{Kind: "nil", Type: "any", Interface: "any", NativeType: "*main.T"}
+	typedNil := &bashPPInterfaceValue{
+		dynamic: dynamic,
+		cell:    &bashPPCell{vr: expand.NewObject(native), declType: dynamic, typeName: "*main.T"},
+	}
+	cell := &bashPPCell{declType: shape}
+	bashPPStoreCellValue(cell, map[string]any{"I": ""}, &bashPPCollectionMeta{kind: "struct", typ: shape, mapping: map[string]*bashPPCollectionMeta{
+		"I": &bashPPCollectionMeta{kind: "interface", typ: &syntax.BashPPInterfaceType{}, interfaceValue: typedNil},
+	}})
+	r.bashPPScope.entries["box"] = cell
+
+	field := &syntax.BashPPSelectorExpr{X: &syntax.BashPPIdent{Name: &syntax.Lit{Value: "box"}}, Sel: &syntax.Lit{Value: "I"}}
+	nilExpr := &syntax.BashPPIdent{Name: &syntax.Lit{Value: "nil"}}
+	got, err := r.bashPPCompareExpr(field, token.EQL, nilExpr)
+	if err != nil || got {
+		t.Fatalf("typed nil native interface field compared as nil: equal=%v err=%v", got, err)
+	}
+}
+
 func TestGoSourceNilAggregateRejectInvalidElements(t *testing.T) {
 	r := &Runner{bashPPGoSource: true}
 	nilExpr := &syntax.BashPPIdent{Name: &syntax.Lit{Value: "nil"}}

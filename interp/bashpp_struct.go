@@ -533,6 +533,31 @@ func (r *Runner) bashPPEvalTypedValue(expr syntax.BashPPExpr, expected syntax.Ba
 	if id, ok := expr.(*syntax.BashPPIdent); ok {
 		if cell := r.bashPPScope.lookup(id.Name.Value); cell != nil && cell.vr.Kind == expand.Object {
 			meta := bashPPCellMeta(cell)
+			// A non-plain tuple assignment is lowered through result temporaries.
+			// A dependency result in one of those cells is still a native carrier,
+			// with no collection metadata of its own. Materialize that carrier only
+			// when it is being stored in an interpreter-owned collection target;
+			// imported/native targets keep their lazy handle and identity.
+			if native, ok := cell.vr.Obj.(*bashPPBridgeValue); ok && native != nil && meta == nil && !r.bashPPNativeType(expected) {
+				if _, collection := r.bashPPUnderlyingType(expected).(*syntax.BashPPCollectionType); collection {
+					var handled bool
+					value, materializedMeta, handled, err := r.goSourceNativeSequenceContents(native, expected)
+					if err != nil {
+						return nil, nil, err
+					}
+					if !handled && (native.Kind == "slice" || native.Kind == "array" || native.Kind == "map") {
+						value, materializedMeta, err = r.bashPPBridgeContents(*native, expected)
+						handled = true
+						if err != nil {
+							return nil, nil, err
+						}
+					}
+					if handled {
+						value, materializedMeta = bashPPCopyArrayValue(value, materializedMeta)
+						return value, materializedMeta, nil
+					}
+				}
+			}
 			if err := r.bashPPCheckTypedValue(cell.vr.Obj, meta, expected); err != nil {
 				return nil, nil, err
 			}

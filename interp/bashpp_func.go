@@ -1408,7 +1408,16 @@ func (r *Runner) bashPPStructuredArgCell(w *syntax.Word, expr syntax.BashPPExpr)
 		return cell, err
 	}
 	switch x := expr.(type) {
-	case *syntax.BashPPAddressExpr, *syntax.BashPPNewExpr:
+	case *syntax.BashPPAddressExpr:
+		ptr, err := r.bashPPPointerExprValue(expr)
+		if err != nil {
+			if native, ok := r.goSourceNativePointerError(err); ok {
+				return r.goSourceNativeValueCell(*native), nil
+			}
+			return nil, err
+		}
+		return bashPPPointerCell(ptr), nil
+	case *syntax.BashPPNewExpr:
 		ptr, err := r.bashPPPointerExprValue(expr)
 		if err != nil {
 			return nil, err
@@ -1443,6 +1452,13 @@ func (r *Runner) bashPPStructuredArgCell(w *syntax.Word, expr syntax.BashPPExpr)
 	case *syntax.BashPPCompositeLit:
 		if x.LitType == nil {
 			return nil, nil
+		}
+		if r.bashPPNativeType(x.LitType) {
+			value, err := r.bashPPNativeComposite(x, false)
+			if err != nil {
+				return nil, err
+			}
+			return r.goSourceNativeValueCell(value), nil
 		}
 		value, meta, err := r.bashPPEvalComposite(x, nil)
 		if err != nil {

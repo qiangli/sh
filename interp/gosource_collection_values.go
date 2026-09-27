@@ -4,6 +4,7 @@ package interp
 import (
 	"fmt"
 	"go/constant"
+	"go/token"
 	"strconv"
 	"strings"
 
@@ -454,6 +455,14 @@ func (r *Runner) goSourceNativeSequenceContents(native *bashPPBridgeValue, expec
 	if !ok || shape.Kind == "map" || !strings.HasPrefix(native.Type, "[") {
 		return nil, nil, false, nil
 	}
+	// Materialisation replaces the native carrier's type metadata with the
+	// local destination's collection metadata. Authenticate assignability
+	// first, while the dependency handle still names its actual Go type; an
+	// empty slice has no elements to expose a mismatch, and equal element
+	// types alone cannot distinguish arrays of different lengths.
+	if _, _, err := r.goSourceNativeAssignedValue(*native, expected); err != nil {
+		return nil, nil, true, fmt.Errorf("BASHPP-ECOLLECTION-ELEMENT: %v", err)
+	}
 	length, err := r.bashPPNativeAccess(r.ectx, "len", *native, "")
 	if err != nil {
 		return nil, nil, true, err
@@ -462,14 +471,30 @@ func (r *Runner) goSourceNativeSequenceContents(native *bashPPBridgeValue, expec
 	if err != nil || n < 0 {
 		return nil, nil, true, fmt.Errorf("BASHPP-ECOLLECTION-ELEMENT: native length %q is not a length", length.Text)
 	}
-	out := make([]any, 0, n)
 	meta := &bashPPCollectionMeta{kind: shape.Kind, typ: expected}
+	if n == 0 && shape.Kind == "slice" {
+		typedNil := bashPPBridgeValue{Kind: "nil", Type: r.bashPPBridgeTypeIdentity(expected)}
+		nilSlice, err := r.bashPPNativeCompareValues(*native, token.EQL, typedNil)
+		if err != nil {
+			return nil, nil, true, err
+		}
+		if nilSlice {
+			return nil, meta, true, nil
+		}
+	}
+	out := make([]any, 0, n)
 	for i := range n {
 		element, err := r.bashPPNativeAccess(r.ectx, "index", *native, "", bashPPBridgeValue{Kind: "int", Type: "int", Text: strconv.Itoa(i)})
 		if err != nil {
 			return nil, nil, true, err
 		}
-		value, child, err := r.bashPPBridgeContents(element, shape.Element)
+		// Native indexing encodes a nested array or slice as another handle.
+		// Re-enter this path so that handle is authenticated against its own
+		// destination type before local metadata replaces its native identity.
+		value, child, materialized, err := r.goSourceNativeSequenceContents(&element, shape.Element)
+		if !materialized && err == nil {
+			value, child, err = r.bashPPBridgeContents(element, shape.Element)
+		}
 		if err != nil {
 			return nil, nil, true, fmt.Errorf("BASHPP-ECOLLECTION-ELEMENT: %v", err)
 		}

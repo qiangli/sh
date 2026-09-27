@@ -1532,6 +1532,9 @@ func bashPPCompareValuesWithRunner(r *Runner, left any, leftMeta *bashPPCollecti
 		if leftNilLiteral {
 			value, meta = right, rightMeta
 		}
+		if r != nil && r.bashPPGoSource {
+			value = bashPPComparablePayload(value, meta)
+		}
 		if bashPPPointerComparable(meta) || bashPPNilComparable(meta) {
 			return bashPPNilComparableValue(value) || bashPPNilComparableZero(value, meta), nil
 		}
