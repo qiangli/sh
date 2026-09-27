@@ -185,6 +185,16 @@ func Load(sources []Source, options Options) (*Program, error) {
 	}
 	sources = append([]Source(nil), sources...)
 	sort.SliceStable(sources, func(i, j int) bool { return sources[i].Name < sources[j].Name })
+	prepared, err := openPreparedProgramCache(sources, options)
+	if err != nil {
+		return nil, err
+	}
+	if prepared != nil {
+		defer prepared.close()
+		if program := prepared.program(); program != nil {
+			return program, nil
+		}
+	}
 	// gc's own parser is the syntax verdict. A "syntax error" is the complete
 	// result, as it is for gc; after any other parser or scanner diagnostic
 	// gc still type-checks, and so does Load, on go/parser's recovered AST
@@ -566,6 +576,11 @@ func Load(sources []Source, options Options) (*Program, error) {
 	c.attachEmbedDirectives(p.File, linked)
 	p.File.Sources = append([]syntax.SourceFile(nil), p.Sources...)
 	c.attachFloatingDirectives(p.File)
+	if prepared != nil {
+		if err := prepared.store(p); err != nil {
+			return nil, err
+		}
+	}
 	return p, nil
 }
 

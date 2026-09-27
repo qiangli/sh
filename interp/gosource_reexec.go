@@ -56,6 +56,11 @@ func GoSourceReexecPlan(plan ...string) RunnerOption {
 // re-entry instead of falling back to the reconstructed source name.
 const reexecArgv0Env = "BASHPP_REEXEC_ARGV0"
 
+const (
+	reexecPreparedCacheEnv = "BASHPP_REEXEC_PREPARED_CACHE"
+	reexecInterpreterIDEnv = "BASHPP_REEXEC_INTERPRETER_ID"
+)
+
 // goSourceReexecArgv0 reports the argv[0] the Go-source program should observe.
 // A reexec launcher supplies its invoked identity through the Runner's own
 // environment; consulting the process environment here would leak one replay's
@@ -118,12 +123,22 @@ func (s *bashPPNativeSession) goSourceReexecLauncher(ctx context.Context, req ba
 		}
 		s.reexecDir = dir
 	}
+	preparedCache := filepath.Join(s.reexecDir, "prepared")
+	if err := os.MkdirAll(preparedCache, 0700); err != nil {
+		return "", fmt.Errorf("gosource: create reexec prepared cache: %w", err)
+	}
+	interpreterID, err := bashPPGoDigest(plan[0])
+	if err != nil {
+		return "", fmt.Errorf("gosource: authenticate reexec interpreter: %w", err)
+	}
 	var quoted []string
 	for _, arg := range plan {
 		quoted = append(quoted, strconv.Quote(arg))
 	}
 	quotedBuildGo := strconv.Quote(req.internalBuildGo())
 	quotedVersionCache := strconv.Quote(filepath.Join(s.reexecDir, "tool-version"))
+	quotedPreparedCache := strconv.Quote(preparedCache)
+	quotedInterpreterID := strconv.Quote(interpreterID)
 	source := `package main
 import (
 	"bytes"
@@ -150,9 +165,11 @@ func command(plan []string) *exec.Cmd {
 	cmd := exec.Command(plan[0], args...)
 	for _, entry := range os.Environ() {
 		name, _, _ := strings.Cut(entry, "=")
-		if !strings.EqualFold(name, "BASHPP_GO") && !strings.EqualFold(name, "BASHPP_REEXEC_ARGV0") { cmd.Env = append(cmd.Env, entry) }
+		if !strings.EqualFold(name, "BASHPP_GO") && !strings.EqualFold(name, "BASHPP_REEXEC_ARGV0") && !strings.EqualFold(name, "BASHPP_REEXEC_PREPARED_CACHE") && !strings.EqualFold(name, "BASHPP_REEXEC_INTERPRETER_ID") { cmd.Env = append(cmd.Env, entry) }
 	}
 	cmd.Env = append(cmd.Env, "BASHPP_GO=" + ` + quotedBuildGo + `)
+	cmd.Env = append(cmd.Env, "BASHPP_REEXEC_PREPARED_CACHE=" + ` + quotedPreparedCache + `)
+	cmd.Env = append(cmd.Env, "BASHPP_REEXEC_INTERPRETER_ID=" + ` + quotedInterpreterID + `)
 	// Propagate the launcher's own invoked argv[0] so the replayed program keeps
 	// the executable identity it was invoked under (e.g. go tool compile), rather
 	// than the interpreter's reconstructed source name. See goSourceReexecArgv0.

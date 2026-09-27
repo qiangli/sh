@@ -37,6 +37,9 @@ import (
 )
 func main() {
 	if os.Getenv("BASHPP_S281_REEXEC_CHILD") == "1" {
+		if os.Getenv("BASHPP_REEXEC_PREPARED_CACHE") != "" || os.Getenv("BASHPP_REEXEC_INTERPRETER_ID") != "" {
+			panic("reexec preparation environment leaked into interpreted program")
+		}
 		fmt.Println("interpreted-child", os.Args[1])
 		fmt.Println("child-goroot", os.Getenv("GOROOT"))
 		return
@@ -114,6 +117,12 @@ func TestGoSourceS281SelfReexecLauncher(t *testing.T) {
 	if len(args) >= 2 && args[1] == "payload" {
 		if got := os.Getenv(s281ReexecChild); got != "1" {
 			t.Fatalf("reexec child environment %s=%q, want 1", s281ReexecChild, got)
+		}
+		if cache := os.Getenv("BASHPP_REEXEC_PREPARED_CACHE"); !filepath.IsAbs(cache) {
+			t.Fatalf("reexec prepared cache = %q, want absolute path", cache)
+		}
+		if identity := os.Getenv("BASHPP_REEXEC_INTERPRETER_ID"); len(identity) != 64 {
+			t.Fatalf("reexec interpreter identity length = %d, want SHA-256", len(identity))
 		}
 		runS281ReexecProgram(t, os.Stdout, args[1:], nil)
 		return

@@ -2,6 +2,7 @@ package interp
 
 import (
 	"slices"
+	"strings"
 
 	"mvdan.cc/sh/v3/expand"
 )
@@ -14,7 +15,14 @@ import (
 // Reset retains this configuration; os.Setenv/Unsetenv in the Go program change
 // its persistent dependency process only, not this starting snapshot.
 func GoSourceEnv(env []string) RunnerOption {
-	snapshot := append([]string{}, env...)
+	snapshot := make([]string, 0, len(env))
+	for _, entry := range env {
+		name, _, _ := strings.Cut(entry, "=")
+		if strings.EqualFold(name, reexecPreparedCacheEnv) || strings.EqualFold(name, reexecInterpreterIDEnv) {
+			continue
+		}
+		snapshot = append(snapshot, entry)
+	}
 	return func(r *Runner) error { r.goSourceEnvironment = slices.Clone(snapshot); return nil }
 }
 
