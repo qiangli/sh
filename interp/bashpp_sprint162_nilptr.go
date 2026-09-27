@@ -316,6 +316,14 @@ func (r *Runner) goSourceValueSwitchTag(expr syntax.BashPPExpr) bool {
 // one is selected; with none, the default arm. It returns the arm index or
 // -1, and whether a diagnostic already stopped the statement.
 func (r *Runner) goSourceValueSwitch(sw *syntax.BashPPSwitch) (int, bool) {
+	tag, err := r.bashPPComparableExpr(sw.Tag)
+	if err != nil {
+		if !errors.Is(err, errBashPPScalarInterrupted) {
+			r.errf("%s%v\n", r.bashErrPrefix(sw.Tag.Pos()), err)
+			r.exit = exitStatus{code: 2}
+		}
+		return -1, true
+	}
 	defaultArm := -1
 	for armIndex, arm := range sw.Arms {
 		if len(arm.Exprs) == 0 {
@@ -323,9 +331,9 @@ func (r *Runner) goSourceValueSwitch(sw *syntax.BashPPSwitch) (int, bool) {
 			continue
 		}
 		for _, expr := range arm.Exprs {
-			match, err := r.bashPPCompareExpr(sw.Tag, token.EQL, expr)
+			match, err := r.goSourceValueSwitchCase(tag, expr)
 			if err != nil && bashPPComparableFallback(err) {
-				match, err = r.goSourceValueSwitchScalarCase(sw.Tag, expr)
+				match, err = r.goSourceValueSwitchScalarCase(tag, expr)
 			}
 			if err != nil {
 				if !errors.Is(err, errBashPPScalarInterrupted) {
@@ -340,6 +348,14 @@ func (r *Runner) goSourceValueSwitch(sw *syntax.BashPPSwitch) (int, bool) {
 		}
 	}
 	return defaultArm, false
+}
+
+func (r *Runner) goSourceValueSwitchCase(tag bashPPComparableValue, expr syntax.BashPPExpr) (bool, error) {
+	candidate, err := r.bashPPComparableExpr(expr)
+	if err != nil {
+		return false, err
+	}
+	return r.bashPPCompareComparableValues(tag, token.EQL, candidate)
 }
 
 // goSourceTypedNilBridgeValue is the native form of a typed nil spelled as a
@@ -389,11 +405,7 @@ func (r *Runner) goSourceNilInterfaceSource(expr syntax.BashPPExpr) (*bashPPCell
 // — `switch any(nil) { case int(0): }` — where the case has no comparable
 // spelling of its own. An interface tag compares by dynamic type and value,
 // as Go does; any other tag has no scalar equal and never matches.
-func (r *Runner) goSourceValueSwitchScalarCase(tag, expr syntax.BashPPExpr) (bool, error) {
-	tv, err := r.bashPPComparableExpr(tag)
-	if err != nil {
-		return false, err
-	}
+func (r *Runner) goSourceValueSwitchScalarCase(tv bashPPComparableValue, expr syntax.BashPPExpr) (bool, error) {
 	scalar, err := r.bashPPEvalScalarExpr(expr)
 	if err != nil {
 		return false, err

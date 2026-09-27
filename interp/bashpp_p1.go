@@ -2012,40 +2012,9 @@ func (r *Runner) bashPPSwitch(ctx context.Context, sw *syntax.BashPPSwitch) {
 			tag.typ = r.bashPPCanonicalScalarType(tag.typ)
 		}
 	}
-	cases, err := r.bashPPValidateSwitchCases(sw, tag)
-	if err != nil {
-		if errors.Is(err, errBashPPScalarInterrupted) {
-			return
-		}
-		r.errf("%v\n", err)
-		r.exit = exitStatus{code: 2}
+	selected, stopped := r.bashPPSwitchSelect(sw, tag)
+	if stopped {
 		return
-	}
-	selected := -1
-	defaultArm := -1
-	for armIndex, arm := range sw.Arms {
-		if len(arm.Exprs) == 0 {
-			defaultArm = armIndex
-			continue
-		}
-		for _, candidate := range cases[armIndex] {
-			match, compareErr := r.bashPPSwitchEqual(tag, candidate)
-			if compareErr != nil {
-				r.errf("%v\n", compareErr)
-				r.exit = exitStatus{code: 2}
-				return
-			}
-			if match {
-				selected = armIndex
-				break
-			}
-		}
-		if selected == armIndex {
-			break
-		}
-	}
-	if selected < 0 {
-		selected = defaultArm
 	}
 	if selected < 0 {
 		return
@@ -2076,38 +2045,60 @@ func (r *Runner) bashPPSwitchArms(ctx context.Context, sw *syntax.BashPPSwitch, 
 	}
 }
 
-// bashPPValidateSwitchCases is deliberately separate from arm selection.
-// Every case expression is evaluated and type-checked in source order before
-// an arm can run, while the returned values ensure selection never evaluates
-// an expression a second time.
-func (r *Runner) bashPPValidateSwitchCases(sw *syntax.BashPPSwitch, tag bashPPScalar) ([][]bashPPScalar, error) {
-	cases := make([][]bashPPScalar, len(sw.Arms))
+// bashPPSwitchSelect evaluates case expressions in source order until the
+// first match. Earlier eager validation evaluated later cases even after an
+// earlier true guard, which is not Go switch semantics and can run side effects
+// or nil dereferences that the selected clause should suppress.
+func (r *Runner) bashPPSwitchSelect(sw *syntax.BashPPSwitch, tag bashPPScalar) (int, bool) {
 	var constants []bashPPScalar
+	defaultArm := -1
 	for armIndex, arm := range sw.Arms {
+		if len(arm.Exprs) == 0 {
+			defaultArm = armIndex
+			continue
+		}
 		for _, expr := range arm.Exprs {
 			candidate, err := r.bashPPSwitchCaseScalar(tag, expr)
 			if err != nil {
-				return nil, err
+				if !errors.Is(err, errBashPPScalarInterrupted) {
+					r.errf("%v\n", err)
+					r.exit = exitStatus{code: 2}
+				}
+				return -1, true
 			}
 			if sw.Tag == nil && candidate.value.Kind() != constant.Bool {
-				return nil, fmt.Errorf("BASHPP-ESWITCH-TYPE: tagless switch case must be boolean, got %s", candidate.value.Kind())
+				r.errf("BASHPP-ESWITCH-TYPE: tagless switch case must be boolean, got %s\n", candidate.value.Kind())
+				r.exit = exitStatus{code: 2}
+				return -1, true
 			}
 			if err := r.bashPPSwitchComparable(tag, candidate); err != nil {
-				return nil, err
+				r.errf("%v\n", err)
+				r.exit = exitStatus{code: 2}
+				return -1, true
 			}
 			if r.bashPPSwitchConstantExpr(tag, expr) {
 				for _, previous := range constants {
 					equal, err := r.bashPPSwitchEqual(previous, candidate)
 					if err == nil && equal {
-						return nil, fmt.Errorf("BASHPP-ESWITCH-DUPLICATE: duplicate case constant %s", bashPPSwitchConstantText(candidate))
+						r.errf("BASHPP-ESWITCH-DUPLICATE: duplicate case constant %s\n", bashPPSwitchConstantText(candidate))
+						r.exit = exitStatus{code: 2}
+						return -1, true
 					}
 				}
 				constants = append(constants, candidate)
 			}
-			cases[armIndex] = append(cases[armIndex], candidate)
+			match, err := r.bashPPSwitchEqual(tag, candidate)
+			if err != nil {
+				r.errf("%v\n", err)
+				r.exit = exitStatus{code: 2}
+				return -1, true
+			}
+			if match {
+				return armIndex, false
+			}
 		}
 	}
-	return cases, nil
+	return defaultArm, false
 }
 
 func (r *Runner) bashPPSwitchConstantExpr(tag bashPPScalar, expr syntax.BashPPExpr) bool {

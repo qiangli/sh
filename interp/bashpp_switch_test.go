@@ -67,12 +67,59 @@ main()
 	}
 }
 
+func TestBashPPSwitchLazyCaseEvaluation(t *testing.T) {
+	const src = `var calls int
+
+func later() bool {
+	calls++
+	var p *int
+	return *p == 1
+}
+
+func tag() int {
+	calls++
+	return 2
+}
+
+func main() {
+	switch {
+	case true:
+		echo first
+	case later():
+		echo wrong
+	}
+	echo "after-first:$calls"
+	switch tag() {
+	default:
+		echo default
+	case 1, 2, later():
+		echo "matched:$calls"
+	}
+	echo "after-tag:$calls"
+}
+main()
+`
+	f, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(src), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out strings.Builder
+	r := bashPPRunner(t, &out, interp.Lang(syntax.LangBashPP))
+	if err := r.Run(context.Background(), f); err != nil {
+		t.Fatalf("run: %v; output: %s", err, out.String())
+	}
+	const want = "first\nafter-first:0\nmatched:1\nafter-tag:1\n"
+	if out.String() != want {
+		t.Fatalf("output = %q, want %q", out.String(), want)
+	}
+}
+
 func TestBashPPSwitchTypeDiagnostics(t *testing.T) {
 	for _, test := range []struct{ src, want string }{
 		{"func main() { switch 1 { case \"1\": echo wrong } }\nmain()\n", "BASHPP-ESWITCH-TYPE: case expression type String does not match switch tag type Int\n"},
-		{"func main() { switch 1 { case 1: echo matched; case \"later\": echo wrong } }\nmain()\n", "BASHPP-ESWITCH-TYPE: case expression type String does not match switch tag type Int\n"},
+		{"func main() { switch 1 { case 0: echo no; case \"later\": echo wrong } }\nmain()\n", "BASHPP-ESWITCH-TYPE: case expression type String does not match switch tag type Int\n"},
 		{"func main() { switch { case 1: echo wrong } }\nmain()\n", "BASHPP-ESWITCH-TYPE: tagless switch case must be boolean, got Int\n"},
-		{"func main() { switch 1 { case 1: echo first; case 1.0: echo second } }\nmain()\n", "BASHPP-ESWITCH-DUPLICATE: duplicate case constant 1\n"},
+		{"func main() { switch 2 { case 1: echo first; case 1.0: echo second } }\nmain()\n", "BASHPP-ESWITCH-DUPLICATE: duplicate case constant 1\n"},
 	} {
 		for _, bytewise := range []bool{false, true} {
 			var rd interface{ Read([]byte) (int, error) } = strings.NewReader(test.src)
