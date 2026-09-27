@@ -188,7 +188,13 @@ func TestBashPPTestingCallbackFrameRequiresLiveFileOwner(t *testing.T) {
 	}
 
 	t.Run("outside File Run", func(t *testing.T) {
-		parent := &Runner{didReset: true, bashPPConcurrent: newBashPPConcurrent(context.Background())}
+		parent, err := New(Lang(syntax.LangBashPP), Env(expand.ListEnviron()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer parent.closeDirFile()
+		parent.Reset()
+		parent.bashPPConcurrent = newBashPPConcurrent(context.Background())
 		defer parent.bashPPConcurrent.cancel()
 		registered := newRegistered(parent)
 		defer registered.template.closeDirFile()
@@ -198,7 +204,13 @@ func TestBashPPTestingCallbackFrameRequiresLiveFileOwner(t *testing.T) {
 	})
 
 	t.Run("owner canceled", func(t *testing.T) {
-		parent := &Runner{didReset: true, bashPPFileRun: true}
+		parent, err := New(Lang(syntax.LangBashPP), Env(expand.ListEnviron()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer parent.closeDirFile()
+		parent.Reset()
+		parent.bashPPFileRun = true
 		parent.bashPPConcurrency(context.Background())
 		registered := newRegistered(parent)
 		defer registered.template.closeDirFile()
