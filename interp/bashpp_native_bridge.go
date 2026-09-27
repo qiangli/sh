@@ -170,11 +170,11 @@ type bashPPBridgeRequest struct {
 	// immutable Go sources prove that every callback stays on this call's
 	// stack. It is host-only and deliberately absent from the wire protocol.
 	sourceSynchronousCallback bool
-	sourceProgram            bool   // the call site is in the program package itself
-	ID                       uint64 `json:"id"`
-	Op                       string `json:"op"`
-	PanicOnFault             bool   `json:"panic_on_fault,omitempty"`
-	Selector                 string `json:"selector"`
+	sourceProgram             bool   // the call site is in the program package itself
+	ID                        uint64 `json:"id"`
+	Op                        string `json:"op"`
+	PanicOnFault              bool   `json:"panic_on_fault,omitempty"`
+	Selector                  string `json:"selector"`
 	// Instance is the type-argument suffix of an instantiated imported
 	// generic function; the helper resolves Selector+Instance.
 	Instance   string              `json:"instance,omitempty"`
