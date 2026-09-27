@@ -1533,6 +1533,7 @@ func (r *Runner) bashPPStructuredArgCell(w *syntax.Word, expr syntax.BashPPExpr)
 // bashPPStructuredCell reports whether a binding holds a value with no scalar
 // spelling, so that passing or returning it has to carry the cell itself.
 func bashPPStructuredCell(cell *bashPPCell) bool {
+	cell = cell.view()
 	return cell != nil && (cell.pointer || cell.interfaceValue != nil || cell.vr.Kind == expand.Object)
 }
 

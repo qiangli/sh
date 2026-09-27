@@ -637,6 +637,10 @@ func bashPPCellMeta(cell *bashPPCell) *bashPPCollectionMeta {
 	if cell == nil {
 		return nil
 	}
+	// Three alternative meta edges of one value; a shared cell is read from a
+	// snapshot so a concurrent publish cannot make them disagree. See
+	// bashpp_cell_share.go.
+	cell = cell.view()
 	if cell.pointer {
 		return bashPPPointerMeta(cell.declType)
 	}

@@ -703,13 +703,18 @@ func (p *bashPPPointer) read() (any, *bashPPCollectionMeta, syntax.BashPPTypeExp
 		return nil, nil, nil, errBashPPNilDereference
 	}
 	var value any
-	meta := bashPPCellMeta(p.target)
-	if p.target.pointer {
-		value = p.target.pointerValue
-	} else if p.target.vr.Kind == expand.Object {
-		value = p.target.vr.Obj
+	// Head storage is four fields of one value (the pointer flag, the payload
+	// carrier, the meta edges). A cell shared with an interpreted goroutine is
+	// read through one snapshot so they cannot disagree; see
+	// bashpp_cell_share.go.
+	target := p.target.view()
+	meta := bashPPCellMeta(target)
+	if target.pointer {
+		value = target.pointerValue
+	} else if target.vr.Kind == expand.Object {
+		value = target.vr.Obj
 	} else {
-		value = bashPPScalarValue(p.target.vr.String())
+		value = bashPPScalarValue(target.vr.String())
 	}
 	for _, step := range p.path {
 		if step.deref {

@@ -761,7 +761,7 @@ func (r *Runner) lookupVarUnhosted(name string) expand.Variable {
 	// able to disagree with each other.
 	if r.bashPPScope != nil {
 		if cell := r.bashPPScope.lookup(name); cell != nil {
-			return cell.vr
+			return cell.viewVar()
 		}
 	}
 	var vr expand.Variable

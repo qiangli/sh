@@ -6,6 +6,7 @@ package interp
 import (
 	"fmt"
 	"go/constant"
+	"sync"
 
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
@@ -85,6 +86,12 @@ type bashPPCell struct {
 	// vr.ReadOnly drives, and the two answer to different owners: `declare -r`
 	// may set the latter, but only `const` sets this.
 	constant bool
+	// guard is non-nil once this cell has been aliased into an interpreted
+	// goroutine's snapshot, so that two host goroutines can reach its fields.
+	// It is a pointer, not an embedded mutex, because cells are copied by
+	// value here and in bashpp_send/bashpp_generic_body. See
+	// bashpp_cell_share.go for why an aliased cell needs a lock at all.
+	guard *sync.Mutex
 }
 
 func (c *bashPPCell) vrValue() any {
@@ -295,6 +302,11 @@ func (c *bashPPCloner) cloneCell(cell *bashPPCell) *bashPPCell {
 		// variable. Memoize the identity so every other edge which reaches
 		// this cell — an alias, a closure's captured scope, a pointer target —
 		// lands on the same shared cell rather than forking a copy.
+		//
+		// This is the one place a cell stops being owned by a single host
+		// goroutine, so it is also where its guard is armed; see
+		// bashpp_cell_share.go.
+		cell.shareGuard()
 		c.cells[cell] = cell
 		return cell
 	}
@@ -314,6 +326,9 @@ func (c *bashPPCloner) cloneCell(cell *bashPPCell) *bashPPCell {
 		return nil
 	}
 	dup := *cell
+	// A deep copy is private to the cloning goroutine, so it starts unaliased
+	// rather than contending on the guard of the cell it was copied from.
+	dup.guard = nil
 	copied := &dup
 	// Publish before following pointer edges, which may lead back here.
 	c.cells[cell] = copied

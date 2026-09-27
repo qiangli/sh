@@ -83,8 +83,12 @@ func (r *Runner) bashPPApplyUpdate(target syntax.BashPPExpr, op string, rhs synt
 		return
 	}
 	var left bashPPScalar
-	if len(ptr.path) == 0 && !ptr.target.pointer && ptr.target.vr.Kind == expand.String {
-		left = r.bashPPScalarFromCell(ptr.target)
+	// The carrier test and the scalar read must agree about which store they
+	// saw, so both run off one snapshot of a shared cell; see
+	// bashpp_cell_share.go.
+	targetCell := ptr.target.view()
+	if len(ptr.path) == 0 && !targetCell.pointer && targetCell.vr.Kind == expand.String {
+		left = r.bashPPScalarFromCell(targetCell)
 	} else {
 		left, err = r.bashPPUpdateScalar(current, expected)
 	}
@@ -415,16 +419,24 @@ func bashPPUpdateGoValue(value constant.Value) any {
 }
 
 func (r *Runner) bashPPWriteUpdatePointer(ptr *bashPPPointer, value any, kind constant.Kind) error {
-	if ptr.target.object != nil && ptr.target.object.readonly {
-		return fmt.Errorf("BASHPP-EREADONLY-MUTATION: cannot mutate readonly value %q", ptr.target.object.owner)
+	target := ptr.target.view()
+	if target.object != nil && target.object.readonly {
+		return fmt.Errorf("BASHPP-EREADONLY-MUTATION: cannot mutate readonly value %q", target.object.owner)
 	}
-	if ptr.target.constant || ptr.target.vr.ReadOnly {
+	if target.constant || target.vr.ReadOnly {
 		return fmt.Errorf("BASHPP-EREADONLY-MUTATION: cannot mutate readonly or constant value")
 	}
 	if len(ptr.path) == 0 {
+		text := fmt.Sprint(value)
+		// The whole scalar bundle is published as one, so a concurrent reader
+		// of this shared cell sees the value before or after this store and
+		// never a mixture of the two; see bashpp_cell_share.go. Nothing but
+		// the stores belongs inside the guarded region.
+		ptr.target.lock()
+		defer ptr.target.unlock()
 		ptr.target.vr.Set = true
 		ptr.target.vr.Kind = expand.String
-		ptr.target.vr.Str = fmt.Sprint(value)
+		ptr.target.vr.Str = text
 		ptr.target.vr.Obj = nil
 		ptr.target.vr.List, ptr.target.vr.Map = nil, nil
 		ptr.target.vr.ListMap, ptr.target.vr.ListSet = nil, nil

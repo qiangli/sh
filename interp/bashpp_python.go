@@ -15,7 +15,7 @@ func (r *Runner) bashPPPythonValue(expr syntax.BashPPExpr) (any, bool, error) {
 		if r.bashPPScope == nil {
 			return nil, false, nil
 		}
-		cell := r.bashPPScope.lookup(x.Name.Value)
+		cell := r.bashPPScope.lookup(x.Name.Value).view()
 		if cell == nil || cell.vr.Kind != expand.Object {
 			return nil, false, nil
 		}

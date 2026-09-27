@@ -104,9 +104,9 @@ func (r *Runner) bashPPNativeCellValue(name string) *bashPPBridgeValue {
 	if r.bashPPScope == nil {
 		return nil
 	}
-	cell := r.bashPPScope.lookup(name)
+	cell := r.bashPPScope.lookup(name).view()
 	for cell != nil && cell.interfaceValue != nil && !cell.interfaceValue.nilIface {
-		cell = cell.interfaceValue.cell
+		cell = cell.interfaceValue.cell.view()
 	}
 	if cell == nil || cell.vr.Kind != expand.Object {
 		return nil

@@ -78,7 +78,7 @@ func (r *Runner) goSourceCallableCell(expr syntax.BashPPExpr) (*bashPPCell, bool
 		return &bashPPCell{vr: v, declType: r.bashPPBindTypeExpr(bashPPFuncLitType(x))}, true, nil
 	case *syntax.BashPPIdent:
 		if cell := r.bashPPScope.lookup(x.Name.Value); cell != nil {
-			if _, ok := r.bashPPClosure(cell.vr.Str); ok {
+			if _, ok := r.bashPPClosure(cell.viewVar().Str); ok {
 				return bashPPCopyAssignmentCell(cell), true, nil
 			}
 			// A non-callable local binding shadows the package function too.

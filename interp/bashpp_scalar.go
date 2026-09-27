@@ -573,6 +573,10 @@ func (r *Runner) bashPPIdentScalar(name string) (bashPPScalar, error) {
 // considering its rendered shell text. Quoted "2" and "true" values must not
 // become numbers or booleans merely because their storage is textual.
 func (r *Runner) bashPPScalarFromCell(cell *bashPPCell) bashPPScalar {
+	// Every test below reads a different field of one value, so they must all
+	// see the same store; a cell shared with an interpreted goroutine is read
+	// from a snapshot. See bashpp_cell_share.go.
+	cell = cell.view()
 	// An interface whose dynamic value has no scalar cell (nil, or a native
 	// value such as a recovered runtime error) reads as its own storage.
 	if cell.interfaceValue != nil && cell.interfaceValue.cell != nil {
