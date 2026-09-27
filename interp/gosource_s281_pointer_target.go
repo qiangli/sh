@@ -108,7 +108,7 @@ func (r *Runner) goSourceNativePointee(err error) (any, bool, error) {
 	if accessErr != nil {
 		return nil, true, accessErr
 	}
-	read, err := bashPPNativeReadValue(value)
+	read, _, err := bashPPNativeReadValue(value)
 	return read, true, err
 }
 

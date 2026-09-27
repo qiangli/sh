@@ -6,6 +6,34 @@ package interp_test
 
 import "testing"
 
+// TestS281NativePopulatedIntFieldPreservesType exercises exported int and
+// int64 fields on pointers populated inside the dependency worker. The fields
+// must retain their declared identities when copied into ordinary scalars and
+// when used as interpreter-owned map keys.
+func TestS281NativePopulatedIntFieldPreservesType(t *testing.T) {
+	const source = `package main
+import (
+	"encoding/json"
+	"fmt"
+	"image"
+	"io"
+)
+func main() {
+	point := new(image.Point)
+	if err := json.Unmarshal([]byte("{\"X\":7524}"), point); err != nil { panic(err) }
+	var x int = point.X
+	seen := map[int]bool{}
+	seen[point.X] = true
+	reader := new(io.LimitedReader)
+	if err := json.Unmarshal([]byte("{\"N\":9007199254740993}"), reader); err != nil { panic(err) }
+	var n int64 = reader.N
+	wide := map[int64]bool{}
+	wide[reader.N] = true
+	fmt.Println(x, seen[7524], n, wide[9007199254740993])
+}`
+	differGoSource(t, source, nil, "")
+}
+
 // TestS281NativeTupleCollectionField compares the non-plain tuple assignment
 // shape from debug/dwarf's readScope with native Go. The synthetic entry makes
 // Data.Ranges return its literal low/high-PC pair before any optional DWARF
