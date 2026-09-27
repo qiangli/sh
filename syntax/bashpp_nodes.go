@@ -1357,8 +1357,16 @@ type BashPPFuncLit struct {
 	ResRparen Pos // ) closing a parenthesised result list, else invalid
 }
 
-func (l *BashPPFuncLit) Pos() Pos { return l.Kw.Pos() }
+func (l *BashPPFuncLit) Pos() Pos {
+	if l == nil || l.Kw == nil {
+		return Pos{}
+	}
+	return l.Kw.Pos()
+}
 func (l *BashPPFuncLit) End() Pos {
+	if l == nil {
+		return Pos{}
+	}
 	if l.Body != nil {
 		return l.Body.End()
 	}

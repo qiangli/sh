@@ -840,7 +840,13 @@ func (r *Runner) goSourceSlicesCollect(ctx context.Context, req bashPPEvalReques
 	if r.bashPPPanicking() || r.exit.exiting || r.exit.fatalExit || r.exit.err != nil || r.bashPPShortFailureSeq != failure {
 		return nil, errBashPPScalarInterrupted
 	}
-	return []bashPPBridgeValue{{Kind: "slice", Type: "[]" + bashPPTypeText(yieldParams[0].typ), Elements: collected}}, nil
+	return []bashPPBridgeValue{{
+		Kind:     "slice",
+		Type:     "[]" + bashPPTypeText(yieldParams[0].typ),
+		Length:   len(collected),
+		Capacity: len(collected),
+		Elements: collected,
+	}}, nil
 }
 
 func (r *Runner) goSourceSlicesCollectIterator(req bashPPEvalRequest, arg bashPPBridgeValue) (*bashPPFunc, error) {
@@ -856,7 +862,7 @@ func (r *Runner) goSourceSlicesCollectIterator(req bashPPEvalRequest, arg bashPP
 		}
 	}
 	if arg.Kind == "handle" {
-		if signature, ok := bashPPBridgeFuncType(arg); ok {
+		if signature, ok := r.bashPPBridgeFuncType(arg); ok {
 			native := arg
 			native.Callable = "range-iterator"
 			return &bashPPFunc{native: &native, lit: &syntax.BashPPFuncLit{Params: signature.Params, Results: signature.Results}}, nil
@@ -865,13 +871,19 @@ func (r *Runner) goSourceSlicesCollectIterator(req bashPPEvalRequest, arg bashPP
 	return nil, fmt.Errorf("gosource: slices.Collect requires one current iterator callback")
 }
 
-func bashPPBridgeFuncType(value bashPPBridgeValue) (*syntax.BashPPFuncType, bool) {
+func (r *Runner) bashPPBridgeFuncType(value bashPPBridgeValue) (*syntax.BashPPFuncType, bool) {
 	for _, text := range []string{value.Type, value.NativeType} {
 		if text == "" {
 			continue
 		}
-		signature, ok := syntax.BashPPTypeExprFromText(text).(*syntax.BashPPFuncType)
-		if ok {
+		typ := syntax.BashPPTypeExprFromText(text)
+		if typ == nil {
+			continue
+		}
+		if r != nil {
+			typ = r.bashPPUnderlyingType(typ)
+		}
+		if signature, ok := typ.(*syntax.BashPPFuncType); ok {
 			return signature, true
 		}
 	}

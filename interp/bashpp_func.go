@@ -176,8 +176,17 @@ func (f *bashPPFunc) cloned(c *bashPPCloner) *bashPPFunc {
 }
 
 func (f *bashPPFunc) body() *syntax.Block {
+	if f == nil {
+		return nil
+	}
+	if f.rangeYield != nil && f.rangeYield.rng != nil {
+		return f.rangeYield.rng.Body
+	}
 	if f.decl != nil {
 		return f.decl.Body
+	}
+	if f.lit == nil {
+		return nil
 	}
 	return f.lit.Body
 }
@@ -244,8 +253,11 @@ func (r *Runner) bashPPNewClosure(lit *syntax.BashPPFuncLit) *bashPPFunc {
 // parameter and result fields keeps its identity exactly the signature the
 // programmer wrote, which is what a recursive closure calling itself relies on.
 func bashPPFuncLitType(lit *syntax.BashPPFuncLit) *syntax.BashPPFuncType {
+	if lit == nil {
+		return &syntax.BashPPFuncType{}
+	}
 	return &syntax.BashPPFuncType{
-		Func:      lit.Kw.Pos(),
+		Func:      lit.Pos(),
 		Lparen:    lit.Lparen,
 		Rparen:    lit.Rparen,
 		Params:    lit.Params,
