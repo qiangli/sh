@@ -161,8 +161,12 @@ type bashPPToolchain struct {
 	callbackDescendant bool
 	// routedDepth counts callbacks this runner serves on a routed request;
 	// requests they raise are routed too (routedCallbackRequest).
-	routedDepth  int
-	panicOnFault bool
+	routedDepth int
+	// testingCallbackFrames is the lifetime shared by callback frames spawned
+	// beneath one native testing.M.Run. The native scheduler, not an arbitrary
+	// retained callback, owns this capability and joins it before M.Run returns.
+	testingCallbackFrames *bashPPTestingCallbackFrames
+	panicOnFault          bool
 
 	moduleDir  string
 	importPath string

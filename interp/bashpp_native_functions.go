@@ -8,6 +8,13 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
+type bashPPCallbackFunction struct {
+	templateFn  *bashPPFunc
+	template    *Runner
+	capture     map[*bashPPCell]bool
+	templateErr string
+}
+
 // Function handles name interpreted closures in one dependency session. Only
 // the typed trampoline is native; the body and captured cells stay here.
 func (r *Runner) bashPPBridgeFunction(fn *bashPPFunc) (bashPPBridgeValue, error) {
@@ -111,21 +118,136 @@ func (r *Runner) bashPPBridgeFunction(fn *bashPPFunc) (bashPPBridgeValue, error)
 	if err != nil {
 		return bashPPBridgeValue{}, err
 	}
+	registered, err := r.bashPPCallbackFunctionTemplate(fn)
+	if err != nil {
+		return bashPPBridgeValue{}, err
+	}
 	s := req.Bridge
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.functions == nil {
 		s.functions = map[uint64]*bashPPFunc{}
 	}
+	if s.functionOwners == nil {
+		s.functionOwners = map[uint64]*bashPPCallbackFunction{}
+	}
 	for id, existing := range s.functions {
 		if existing == fn {
+			if registered.template != nil {
+				registered.template.closeDirFile()
+			}
 			return bashPPBridgeValue{Kind: "callback", Handle: id, Session: s.id, Callbacks: true, copiedResults: copiedResults, callRefusal: callRefusal, localRefusal: localRefusal}, nil
 		}
 	}
 	s.functionNext++
 	id := s.functionNext
 	s.functions[id] = fn
+	s.functionOwners[id] = registered
 	return bashPPBridgeValue{Kind: "callback", Handle: id, Session: s.id, Callbacks: true, copiedResults: copiedResults, callRefusal: callRefusal, localRefusal: localRefusal}, nil
+}
+
+func (r *Runner) bashPPCallbackFunctionTemplate(fn *bashPPFunc) (*bashPPCallbackFunction, error) {
+	capture, exact := r.bashPPCallbackFunctionCapture(fn)
+	if !exact {
+		// Registration does not prove how the dependency will use this value.
+		// Keep the existing admission path authoritative: an unknown retained
+		// consumer still earns its established refusal, while a testing
+		// scheduler which needs an independent frame refuses below.
+		return &bashPPCallbackFunction{
+			templateErr: "original callback capture contains an unsupported construct",
+		}, nil
+	}
+	// Capture the execution environment while the registering runner is its
+	// sole owner. A later native scheduler callback must never clone or walk
+	// that runner: it may be paused in another callback frame by then.
+	saved := r.bashPPGoSourceCapture
+	r.bashPPGoSourceCapture = capture
+	template := r.subshell(true)
+	r.bashPPGoSourceCapture = saved
+	// This is immutable template configuration, not live invocation state.
+	// Every later frame clone reads it without touching the registering runner.
+	template.bashPPGoSourceCapture = capture
+	template.bashPPTools.callbackDepth = 0
+	template.bashPPTools.routedDepth = 0
+	template.bashPPTools.testingCallbackFrames = nil
+	template.exit = exitStatus{}
+	template.lastExit = exitStatus{}
+
+	cloner := newBashPPClonerFor(template)
+	cloner.shared = capture
+	cloner.goSourceTask = true
+	return &bashPPCallbackFunction{
+		templateFn: fn.cloned(cloner),
+		template:   template,
+		capture:    capture,
+	}, nil
+}
+
+func (r *Runner) bashPPCallbackFunctionCapture(fn *bashPPFunc) (map[*bashPPCell]bool, bool) {
+	if fn == nil || fn.scope == nil || fn.body() == nil {
+		return map[*bashPPCell]bool{}, true
+	}
+	bound := make(map[string]bool)
+	for _, param := range bashppParams(fn.params()) {
+		if param.name != "" {
+			bound[param.name] = true
+		}
+	}
+	for _, result := range bashppParams(fn.bodyResults()) {
+		if result.name != "" {
+			bound[result.name] = true
+		}
+	}
+	free, exact := bashPPGoSourceFreeNames(fn.body(), bound)
+	if !exact {
+		return nil, false
+	}
+	capture := make(map[*bashPPCell]bool)
+	for name := range free {
+		if cell := fn.scope.lookup(name); cell != nil && r.bashPPGoSourceSharable(cell) {
+			capture[cell] = true
+		}
+	}
+	if fn.receiver != nil && r.bashPPGoSourceSharable(fn.receiver) {
+		capture[fn.receiver] = true
+	}
+	return capture, true
+}
+
+func (s *bashPPNativeSession) callbackFunction(id uint64) *bashPPCallbackFunction {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if cb := s.functionOwners[id]; cb != nil {
+		return cb
+	}
+	return nil
+}
+
+func (s *bashPPNativeSession) originalCallbackFunction(id uint64) *bashPPFunc {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.functions[id]
+}
+
+func (s *bashPPNativeSession) closeCallbackFunctionTemplates() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	registered := s.functionOwners
+	s.functionOwners = nil
+	s.mu.Unlock()
+	for _, callback := range registered {
+		if callback != nil && callback.template != nil {
+			callback.template.closeDirFile()
+		}
+	}
 }
 
 // goSourceReflectValueOfOperand reports the operand of a reflect.ValueOf
@@ -228,7 +350,7 @@ func bashPPFunctionTypeText(fn *bashPPFunc) (string, bool) {
 	return text, true
 }
 
-func (r *Runner) bashPPNativeFunctionCallback(ctx context.Context, id uint64, args []bashPPBridgeValue) (values []bashPPBridgeValue, err error) {
+func (r *Runner) bashPPNativeFunctionCallback(ctx context.Context, id uint64, args []bashPPBridgeValue, frameFn *bashPPFunc) (values []bashPPBridgeValue, err error) {
 	defer func() {
 		if failure := recover(); failure != nil {
 			values = nil
@@ -236,13 +358,13 @@ func (r *Runner) bashPPNativeFunctionCallback(ctx context.Context, id uint64, ar
 		}
 	}()
 	s := r.bashPPTools.bridge
-	s.mu.Lock()
-	fn := s.functions[id]
-	s.mu.Unlock()
-	if fn == nil {
-		return nil, fmt.Errorf("gosource: original callback handle expired")
+	if frameFn == nil {
+		frameFn = s.originalCallbackFunction(id)
+		if frameFn == nil {
+			return nil, fmt.Errorf("gosource: original callback handle expired")
+		}
 	}
-	return r.bashPPRunCallbackFunc(ctx, fn, args)
+	return r.bashPPRunCallbackFunc(ctx, frameFn, args)
 }
 
 // bashPPRunCallbackFunc executes one original function body on behalf of the

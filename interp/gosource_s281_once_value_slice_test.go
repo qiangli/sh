@@ -173,6 +173,141 @@ func main() {
 	}
 }
 
+func TestS281TestingMainStartSequentialCopiedSliceCallbackBarrier(t *testing.T) {
+	driver := s249Source("_testmain.go", `package main
+
+import (
+	"fmt"
+	"os"
+	"testing"
+	"testing/internal/testdeps"
+)
+
+var sequentialParentContinued bool
+var sequentialEvents [3]string
+
+func TestSequentialBarrier(t *testing.T) {
+	sequentialEvents[0] = "seq parent start"
+	t.Run("child", func(t *testing.T) {
+		sequentialEvents[1] = fmt.Sprintf("seq child parentContinued=%v", sequentialParentContinued)
+	})
+	sequentialEvents[2] = fmt.Sprintf("seq parent after child=%q parentContinued=%v", sequentialEvents[1], sequentialParentContinued)
+	sequentialParentContinued = true
+	for _, event := range sequentialEvents {
+		fmt.Println(event)
+	}
+}
+
+var tests = []testing.InternalTest{{"TestSequentialBarrier", TestSequentialBarrier}}
+
+func main() {
+	m := testing.MainStart(testdeps.TestDeps{}, tests, nil, nil, nil)
+	os.Exit(m.Run())
+}
+`)
+	got, err := runS249PackageTestMain(t, []gosource.Source{driver}, nil)
+	const want = "seq parent start\nseq child parentContinued=false\nseq parent after child=\"seq child parentContinued=false\" parentContinued=false\nPASS\n"
+	if err != nil || got.stdout != want || got.stderr != "" || got.status != 0 {
+		t.Fatalf("run=%v outcome=%+v", err, got)
+	}
+}
+
+func TestS281TestingMainStartParallelCopiedSliceCallbackBarrier(t *testing.T) {
+	driver := s249Source("_testmain.go", `package main
+
+import (
+	"fmt"
+	"os"
+	"testing"
+	"testing/internal/testdeps"
+)
+
+var parallelParentContinued bool
+var parallelEvents [4]string
+
+func TestParallelBarrier(t *testing.T) {
+	parallelEvents[0] = "par parent start"
+	t.Run("child", func(t *testing.T) {
+		parallelEvents[1] = fmt.Sprintf("par child before parentContinued=%v", parallelParentContinued)
+		t.Parallel()
+		parallelEvents[3] = fmt.Sprintf("par child after parentContinued=%v parentSlot=%q", parallelParentContinued, parallelEvents[2])
+		fmt.Println(parallelEvents[3])
+	})
+	parallelEvents[2] = fmt.Sprintf("par parent after childBefore=%q", parallelEvents[1])
+	parallelParentContinued = true
+	fmt.Println(parallelEvents[0])
+	fmt.Println(parallelEvents[1])
+	fmt.Println(parallelEvents[2])
+}
+
+var tests = []testing.InternalTest{{"TestParallelBarrier", TestParallelBarrier}}
+
+func main() {
+	m := testing.MainStart(testdeps.TestDeps{}, tests, nil, nil, nil)
+	os.Exit(m.Run())
+}
+`)
+	got, err := runS249PackageTestMain(t, []gosource.Source{driver}, nil)
+	const want = "par parent start\npar child before parentContinued=false\npar parent after childBefore=\"par child before parentContinued=false\"\npar child after parentContinued=true parentSlot=\"par parent after childBefore=\\\"par child before parentContinued=false\\\"\"\nPASS\n"
+	if err != nil || got.stdout != want || got.stderr != "" || got.status != 0 {
+		t.Fatalf("run=%v outcome=%+v", err, got)
+	}
+}
+
+func TestS281TestingMainStartParallelFramesShareCaptures(t *testing.T) {
+	driver := s249Source("_testmain.go", `package main
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"testing"
+	"testing/internal/testdeps"
+)
+
+var parallelFrameEvents = []string{"", "", ""}
+
+func TestParallelFrames(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	alias := parallelFrameEvents[:]
+	t.Cleanup(func() {
+		fmt.Printf("cleanup %s %s %s\n", alias[0], alias[1], alias[2])
+	})
+	for i := 0; i < 2; i++ {
+		i := i
+		t.Run(fmt.Sprintf("child%d", i), func(t *testing.T) {
+			alias[i] = fmt.Sprintf("child%d-before", i)
+			t.Parallel()
+			<-ctx.Done()
+			func() {
+				defer func() {
+					if recover() != "frame-panic" {
+						t.Fatal("panic did not stay in child frame")
+					}
+				}()
+				panic("frame-panic")
+			}()
+			alias[i] = fmt.Sprintf("child%d-after", i)
+		})
+	}
+	alias[2] = "parent-continued"
+	cancel()
+}
+
+var tests = []testing.InternalTest{{"TestParallelFrames", TestParallelFrames}}
+
+func main() {
+	m := testing.MainStart(testdeps.TestDeps{}, tests, nil, nil, nil)
+	os.Exit(m.Run())
+}
+`)
+	got, err := runS249PackageTestMain(t, []gosource.Source{driver}, nil)
+	const want = "cleanup child0-after child1-after parent-continued\nPASS\n"
+	if err != nil || got.stdout != want || got.stderr != "" || got.status != 0 {
+		t.Fatalf("run=%v outcome=%+v", err, got)
+	}
+}
+
 func TestS281EqualFuncSynchronizesInterfaceSliceIdentities(t *testing.T) {
 	source := `package main
 
