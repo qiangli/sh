@@ -5,6 +5,7 @@ package interp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"go/constant"
 	"go/types"
@@ -1300,6 +1301,44 @@ func bashPPDefaultScalarTypeName(kind constant.Kind) string {
 	return ""
 }
 
+// bashPPOperandError is an operand diagnostic for a type assertion or a type
+// switch. It keeps the positional prefix, the error code and the message
+// apart so a caller can retag the code — a type switch reports
+// ETYPESWITCH-OPERAND where a bare assertion reports EASSERT-OPERAND —
+// without losing the source position of the offending expression.
+type bashPPOperandError struct {
+	prefix string // "file:line:col: " for Go source, "file: line N: " for bpp, "" when off
+	code   string
+	msg    string
+}
+
+func (e *bashPPOperandError) Error() string { return e.prefix + e.code + ": " + e.msg }
+
+// retag returns the same positioned diagnostic under a different error code.
+func (e *bashPPOperandError) retag(code string) *bashPPOperandError {
+	return &bashPPOperandError{prefix: e.prefix, code: code, msg: e.msg}
+}
+
+// bashPPOperandErrf reports an assertion-operand diagnostic carrying the
+// source position of the expression it is about, so it reads like every other
+// Bash++ diagnostic (file:line:col: CODE: …) rather than as bare text.
+func (r *Runner) bashPPOperandErrf(x syntax.BashPPExpr, code, format string, args ...any) *bashPPOperandError {
+	return &bashPPOperandError{prefix: r.bashPPExprErrPrefix(x), code: code, msg: fmt.Sprintf(format, args...)}
+}
+
+// bashPPExprErrPrefix is bashErrPrefix for an expression, tolerating the
+// synthesised nodes the interpreter builds without positions.
+func (r *Runner) bashPPExprErrPrefix(x syntax.BashPPExpr) string {
+	if x == nil {
+		return ""
+	}
+	pos := x.Pos()
+	if !pos.IsValid() {
+		return ""
+	}
+	return r.bashErrPrefix(pos)
+}
+
 func (r *Runner) bashPPTypeAssert(assert *syntax.BashPPTypeAssertExpr, commaOK bool) ([]string, *bashPPCell, error) {
 	cell, err := r.bashPPInterfaceOperand(assert.X, "type assertion")
 	if err != nil {
@@ -1336,7 +1375,7 @@ func (r *Runner) bashPPInterfaceOperand(x syntax.BashPPExpr, what string) (*bash
 			return nil, err
 		}
 		if cell == nil || cell.interfaceValue == nil {
-			return nil, fmt.Errorf("BASHPP-EASSERT-OPERAND: %s operand must be an interface", what)
+			return nil, r.bashPPOperandErrf(x, "BASHPP-EASSERT-OPERAND", "%s operand must be an interface", what)
 		}
 		return cell, nil
 	}
@@ -1360,7 +1399,7 @@ func (r *Runner) bashPPInterfaceOperand(x syntax.BashPPExpr, what string) (*bash
 		return nil, err
 	}
 	if meta == nil || meta.interfaceValue == nil {
-		return nil, fmt.Errorf("BASHPP-EASSERT-OPERAND: %s operand must be an interface", what)
+		return nil, r.bashPPOperandErrf(x, "BASHPP-EASSERT-OPERAND", "%s operand must be an interface", what)
 	}
 	cell := &bashPPCell{declType: meta.typ, interfaceValue: meta.interfaceValue}
 	if meta.interfaceValue.nilIface {
@@ -1375,7 +1414,7 @@ func (r *Runner) bashPPInterfaceOperand(x syntax.BashPPExpr, what string) (*bash
 
 func (r *Runner) bashPPTypeAssertCell(assert *syntax.BashPPTypeAssertExpr, commaOK bool, cell *bashPPCell) ([]string, *bashPPCell, error) {
 	if cell == nil || cell.interfaceValue == nil {
-		return nil, nil, fmt.Errorf("BASHPP-EASSERT-OPERAND: type assertion operand is not an interface")
+		return nil, nil, r.bashPPOperandErrf(assert.X, "BASHPP-EASSERT-OPERAND", "type assertion operand is not an interface")
 	}
 	iv := cell.interfaceValue
 	// The static impossibility check is the classic dialect's own guard. A
@@ -1392,7 +1431,7 @@ func (r *Runner) bashPPTypeAssertCell(assert *syntax.BashPPTypeAssertExpr, comma
 				return nil, nil, methodErr
 			}
 			if len(methods.order) > 0 && r.bashPPImplements(assert.Assert, iface) != nil {
-				return nil, nil, fmt.Errorf("BASHPP-EASSERT-IMPOSSIBLE: %s cannot be asserted from %s", bashPPTypeText(assert.Assert), bashPPTypeText(cell.declType))
+				return nil, nil, r.bashPPOperandErrf(assert.X, "BASHPP-EASSERT-IMPOSSIBLE", "%s cannot be asserted from %s", bashPPTypeText(assert.Assert), bashPPTypeText(cell.declType))
 			}
 		}
 	}
@@ -1580,12 +1619,17 @@ func (r *Runner) bashPPTypeSwitch(ctx context.Context, sw *syntax.BashPPSwitch) 
 	assert, _ := decl.Expr.(*syntax.BashPPTypeAssertExpr)
 	cell, err := r.bashPPInterfaceOperand(assert.X, "type switch")
 	if err != nil {
-		r.errf("BASHPP-ETYPESWITCH-OPERAND: %v\n", strings.TrimPrefix(err.Error(), "BASHPP-EASSERT-OPERAND: "))
+		var operand *bashPPOperandError
+		if errors.As(err, &operand) {
+			r.errf("%v\n", operand.retag("BASHPP-ETYPESWITCH-OPERAND"))
+		} else {
+			r.errf("%sBASHPP-ETYPESWITCH-OPERAND: %v\n", r.bashPPExprErrPrefix(assert.X), err)
+		}
 		r.exit = exitStatus{code: 2}
 		return
 	}
 	if cell == nil || cell.interfaceValue == nil {
-		r.errf("BASHPP-ETYPESWITCH-OPERAND: %s is not an interface\n", bashPPExprText(assert.X))
+		r.errf("%sBASHPP-ETYPESWITCH-OPERAND: %s is not an interface\n", r.bashPPExprErrPrefix(assert.X), bashPPExprText(assert.X))
 		r.exit = exitStatus{code: 2}
 		return
 	}
