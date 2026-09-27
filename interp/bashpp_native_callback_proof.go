@@ -2,6 +2,7 @@ package interp
 
 import (
 	"context"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -10,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 )
+
+const dependencyCallbackProofDiagnosticEnv = "BASHPP_CALLBACK_PROOF_DIAG"
 
 // dependencyFunctionCallbackLifetimeProof proves, from the exact package
 // sources selected for the dependency worker, that a package function cannot
@@ -84,7 +87,14 @@ func loadDependencyFunctionCallbackLifetimeProof(ctx context.Context, req bashPP
 		}
 		files = append(files, parsed)
 	}
-	return newDependencyCallbackProof(files).prove(name, callbackArgs)
+	proof := newDependencyCallbackProof(files)
+	proof.fset = fset
+	proof.diagnostics = os.Getenv(dependencyCallbackProofDiagnosticEnv) != ""
+	result := proof.prove(name, callbackArgs)
+	if !result && proof.diagnostics {
+		proof.writeDiagnostics(os.Stderr, path, name)
+	}
+	return result
 }
 
 type dependencyCallbackObject struct {
@@ -142,6 +152,12 @@ type dependencyCallbackProof struct {
 	active  map[string]dependencyCallbackActiveFrame
 	results []map[string]bool
 	steps   int
+
+	fset        *token.FileSet
+	currentFunc string
+	reason      string
+	diagnostics bool
+	diagnostic  []string
 }
 
 func newDependencyCallbackProof(files []*ast.File) *dependencyCallbackProof {
@@ -216,17 +232,51 @@ func dependencyCallbackTypeName(expr ast.Expr) string {
 func (p *dependencyCallbackProof) prove(name string, callbackArgs []int) bool {
 	decls := p.funcs[name]
 	if len(decls) != 1 || decls[0].Body == nil {
+		p.refuse(nil, fmt.Sprintf("expected exactly one function body for %s, found %d", name, len(decls)))
 		return false
 	}
 	env := make(map[string]dependencyCallbackValue)
 	params := dependencyCallbackFieldNames(decls[0].Type.Params)
 	for _, index := range callbackArgs {
 		if index < 0 || index >= len(params) || params[index] == "" {
+			p.refuse(decls[0], fmt.Sprintf("callback argument index %d has no named parameter", index))
 			return false
 		}
 		env[params[index]] = dependencyCallbackValue{callback: &dependencyCallbackClosure{}}
 	}
 	return p.function(decls[0], env, dependencyCallbackValue{}, 0)
+}
+
+func (p *dependencyCallbackProof) refuse(node ast.Node, reason string) bool {
+	function := p.currentFunc
+	if function == "" {
+		function = "<package>"
+	}
+	pos := "<unknown>"
+	if p.fset != nil && node != nil && node.Pos().IsValid() {
+		pos = p.fset.Position(node.Pos()).String()
+	}
+	line := fmt.Sprintf("%s: function=%s: %s", pos, function, reason)
+	if p.reason == "" {
+		p.reason = line
+	}
+	if p.diagnostics && len(p.diagnostic) < 100 {
+		p.diagnostic = append(p.diagnostic, line)
+	}
+	return false
+}
+
+func (p *dependencyCallbackProof) writeDiagnostics(out *os.File, path, name string) {
+	if p.reason == "" {
+		p.refuse(nil, "callback proof refused without a recorded inner reason")
+	}
+	fmt.Fprintf(out, "gosource callback proof refused %s.%s\n", path, name)
+	for _, line := range p.diagnostic {
+		fmt.Fprintln(out, line)
+	}
+	if len(p.diagnostic) == 0 {
+		fmt.Fprintln(out, p.reason)
+	}
 }
 
 func dependencyCallbackFieldNames(fields *ast.FieldList) []string {
@@ -248,7 +298,7 @@ func dependencyCallbackFieldNames(fields *ast.FieldList) []string {
 
 func (p *dependencyCallbackProof) function(decl *ast.FuncDecl, supplied map[string]dependencyCallbackValue, receiver dependencyCallbackValue, depth int) bool {
 	if decl == nil || decl.Body == nil || depth > 64 || p.steps > 20000 {
-		return false
+		return p.refuse(decl, fmt.Sprintf("function unavailable or proof bounds exceeded depth=%d steps=%d", depth, p.steps))
 	}
 	key := decl.Name.Name
 	if decl.Recv != nil {
@@ -258,10 +308,16 @@ func (p *dependencyCallbackProof) function(decl *ast.FuncDecl, supplied map[stri
 		// A recursive edge is proved only when it reaches the identical
 		// abstract frame. Different aliases or callback values require a
 		// fixed-point analysis and therefore remain a refusal.
-		return dependencyCallbackSameFrame(active, supplied, receiver)
+		if dependencyCallbackSameFrame(active, supplied, receiver) {
+			return true
+		}
+		return p.refuse(decl, "recursive call changes callback capture state")
 	}
 	p.active[key] = dependencyCallbackActiveFrame{supplied: dependencyCallbackCloneEnv(supplied), receiver: receiver}
 	defer delete(p.active, key)
+	savedFunc := p.currentFunc
+	p.currentFunc = key
+	defer func() { p.currentFunc = savedFunc }()
 	env := make(map[string]dependencyCallbackValue)
 	for _, name := range dependencyCallbackFieldNames(decl.Type.Params) {
 		if name != "" {
@@ -309,7 +365,13 @@ func (p *dependencyCallbackProof) block(block *ast.BlockStmt, env map[string]dep
 	}
 	for _, stmt := range block.List {
 		p.steps++
-		if p.steps > 20000 || !p.statement(stmt, env, depth) {
+		if p.steps > 20000 {
+			return p.refuse(stmt, "proof step bound exceeded")
+		}
+		if !p.statement(stmt, env, depth) {
+			if p.reason == "" {
+				p.refuse(stmt, fmt.Sprintf("statement %T refused", stmt))
+			}
 			return false
 		}
 	}
@@ -349,7 +411,13 @@ func (p *dependencyCallbackProof) scopedBlock(block *ast.BlockStmt, env map[stri
 			declared[name] = true
 		}
 		p.steps++
-		if p.steps > 20000 || !p.statement(stmt, env, depth) {
+		if p.steps > 20000 {
+			return p.refuse(stmt, "proof step bound exceeded")
+		}
+		if !p.statement(stmt, env, depth) {
+			if p.reason == "" {
+				p.refuse(stmt, fmt.Sprintf("statement %T refused", stmt))
+			}
 			return false
 		}
 	}
@@ -468,7 +536,7 @@ func (p *dependencyCallbackProof) statement(stmt ast.Stmt, env map[string]depend
 		return !ok || p.call(call, env, depth)
 	case *ast.ReturnStmt:
 		if len(stmt.Results) == 0 && p.currentResultTainted(env) {
-			return false
+			return p.refuse(stmt, "naked return exposes tainted named result")
 		}
 		for _, result := range stmt.Results {
 			if !p.expressionCalls(result, env, depth) {
@@ -476,42 +544,48 @@ func (p *dependencyCallbackProof) statement(stmt ast.Stmt, env map[string]depend
 			}
 			value := p.value(result, env)
 			if value.tainted() {
-				return false
+				return p.refuse(result, "return exposes callback-bearing value")
 			}
 			dependencyCallbackMarkEscaped([]dependencyCallbackValue{value})
 		}
 		return true
 	case *ast.GoStmt:
-		return !p.callTainted(stmt.Call, env)
+		if p.callTainted(stmt.Call, env) {
+			return p.refuse(stmt, "go statement may invoke callback asynchronously")
+		}
+		return true
 	case *ast.DeferStmt:
 		return p.deferredCall(stmt.Call, env, depth)
 	case *ast.IfStmt:
 		branchBase := dependencyCallbackCloneEnv(env)
 		before := dependencyCallbackTaintSnapshot(env)
 		if stmt.Init != nil && !p.statement(stmt.Init, branchBase, depth) {
-			return false
+			return p.refuse(stmt.Init, "if initializer refused")
 		}
 		if !p.expressionCalls(stmt.Cond, branchBase, depth) {
 			return false
 		}
 		body := dependencyCallbackCloneEnv(branchBase)
 		if !p.scopedBlock(stmt.Body, body, depth) || dependencyCallbackBranchAddsTaint(before, body) {
-			return false
+			return p.refuse(stmt.Body, "if branch may add callback taint")
 		}
 		if stmt.Else != nil {
 			other := dependencyCallbackCloneEnv(branchBase)
 			if !p.statement(stmt.Else, other, depth) || dependencyCallbackBranchAddsTaint(before, other) {
-				return false
+				return p.refuse(stmt.Else, "else branch may add callback taint")
 			}
 		}
-		return !dependencyCallbackBranchAddsTaint(before, branchBase)
+		if dependencyCallbackBranchAddsTaint(before, branchBase) {
+			return p.refuse(stmt, "if initializer may add callback taint")
+		}
+		return true
 	case *ast.BlockStmt:
 		return p.scopedBlock(stmt, env, depth)
 	case *ast.ForStmt:
 		before := dependencyCallbackTaintSnapshot(env)
 		loop := dependencyCallbackCloneEnv(env)
 		if stmt.Init != nil && !p.statement(stmt.Init, loop, depth) {
-			return false
+			return p.refuse(stmt.Init, "loop initializer refused")
 		}
 		if stmt.Cond != nil && !p.expressionCalls(stmt.Cond, loop, depth) {
 			return false
@@ -522,7 +596,10 @@ func (p *dependencyCallbackProof) statement(stmt ast.Stmt, env map[string]depend
 		if stmt.Post != nil && !p.statement(stmt.Post, loop, depth) {
 			return false
 		}
-		return !dependencyCallbackBranchAddsTaint(before, loop)
+		if dependencyCallbackBranchAddsTaint(before, loop) {
+			return p.refuse(stmt, "loop body may add callback taint")
+		}
+		return true
 	case *ast.RangeStmt:
 		if !p.expressionCalls(stmt.X, env, depth) || p.value(stmt.X, env).tainted() {
 			return false
@@ -532,7 +609,10 @@ func (p *dependencyCallbackProof) statement(stmt ast.Stmt, env map[string]depend
 		if !p.scopedBlock(stmt.Body, loop, depth) {
 			return false
 		}
-		return !dependencyCallbackBranchAddsTaint(before, loop)
+		if dependencyCallbackBranchAddsTaint(before, loop) {
+			return p.refuse(stmt, "range body may add callback taint")
+		}
+		return true
 	case *ast.SwitchStmt:
 		base := dependencyCallbackCloneEnv(env)
 		if stmt.Init != nil && !p.statement(stmt.Init, base, depth) {
@@ -557,13 +637,16 @@ func (p *dependencyCallbackProof) statement(stmt ast.Stmt, env map[string]depend
 		// A later statement cannot sanitize a path which already left via
 		// break, continue, goto, or fallthrough. Refuse until outcomes are
 		// represented explicitly rather than analyzing unreachable cleanup.
-		return false
+		return p.refuse(stmt, "branch statement requires path-sensitive control-flow analysis")
 	case *ast.EmptyStmt, *ast.IncDecStmt:
 		return true
 	case *ast.SendStmt:
 		return p.expressionCalls(stmt.Chan, env, depth) && p.expressionCalls(stmt.Value, env, depth) && !p.value(stmt.Value, env).tainted()
 	}
-	return !dependencyCallbackNodeTainted(stmt, env, p)
+	if dependencyCallbackNodeTainted(stmt, env, p) {
+		return p.refuse(stmt, fmt.Sprintf("unsupported statement %T references callback-bearing value", stmt))
+	}
+	return true
 }
 
 func (p *dependencyCallbackProof) expressionCalls(expr ast.Expr, env map[string]dependencyCallbackValue, depth int) bool {
@@ -596,7 +679,7 @@ func (p *dependencyCallbackProof) caseClauses(body *ast.BlockStmt, env map[strin
 			}
 		}
 		if !p.scopedBlock(&ast.BlockStmt{List: clause.Body}, branch, depth) || dependencyCallbackBranchAddsTaint(before, branch) {
-			return false
+			return p.refuse(clause, "case clause may add callback taint")
 		}
 	}
 	return true
@@ -614,15 +697,21 @@ func (p *dependencyCallbackProof) assign(lhs ast.Expr, value dependencyCallbackV
 	switch lhs := lhs.(type) {
 	case *ast.Ident:
 		if lhs.Name == "_" {
-			return !value.tainted()
+			if value.tainted() {
+				return p.refuse(lhs, "blank assignment discards callback-bearing value")
+			}
+			return true
 		}
 		if p.currentResultName(lhs.Name) && value.tainted() {
-			return false
+			return p.refuse(lhs, "assignment stores callback-bearing value in named result")
 		}
 		_, local := env[lhs.Name]
 		if p.globals[lhs.Name] && !define && !local {
 			dependencyCallbackMarkEscaped([]dependencyCallbackValue{value})
-			return !value.tainted()
+			if value.tainted() {
+				return p.refuse(lhs, "assignment stores callback-bearing value in package global")
+			}
+			return true
 		}
 		if value.object != nil && define {
 			value.object.owned = true
@@ -638,7 +727,7 @@ func (p *dependencyCallbackProof) assign(lhs ast.Expr, value dependencyCallbackV
 			return true
 		}
 		if base.object == nil || !base.object.owned || base.object.escaped {
-			return false
+			return p.refuse(lhs, "selector assignment stores callback-bearing value in escaped or unowned object")
 		}
 		if base.object.fields == nil {
 			base.object.fields = make(map[string]dependencyCallbackValue)
@@ -647,15 +736,24 @@ func (p *dependencyCallbackProof) assign(lhs ast.Expr, value dependencyCallbackV
 		return true
 	case *ast.IndexExpr:
 		dependencyCallbackMarkEscaped([]dependencyCallbackValue{value})
-		return !value.tainted()
+		if value.tainted() {
+			return p.refuse(lhs, "index assignment stores callback-bearing value")
+		}
+		return true
 	case *ast.StarExpr:
 		base := p.value(lhs.X, env)
 		if base.object == nil || !base.object.owned || base.object.escaped {
 			dependencyCallbackMarkEscaped([]dependencyCallbackValue{value})
 		}
-		return !value.tainted() || base.object != nil && base.object.owned
+		if value.tainted() && (base.object == nil || !base.object.owned) {
+			return p.refuse(lhs, "pointer assignment stores callback-bearing value through unowned pointer")
+		}
+		return true
 	}
-	return !value.tainted()
+	if value.tainted() {
+		return p.refuse(lhs, "assignment target cannot prove callback-bearing value local")
+	}
+	return true
 }
 
 func (p *dependencyCallbackProof) currentResultName(name string) bool {
@@ -765,6 +863,7 @@ func (p *dependencyCallbackProof) localSingleResult(call *ast.CallExpr, env map[
 			return dependencyCallbackValue{}, false
 		}
 	default:
+		p.refuse(call, "factory call did not resolve to a single local result")
 		return dependencyCallbackValue{}, false
 	}
 	return p.singleResultFunction(decl, args, receiver, depth+1)
@@ -772,14 +871,17 @@ func (p *dependencyCallbackProof) localSingleResult(call *ast.CallExpr, env map[
 
 func (p *dependencyCallbackProof) singleResultFunction(decl *ast.FuncDecl, args []dependencyCallbackValue, receiver dependencyCallbackValue, depth int) (dependencyCallbackValue, bool) {
 	if decl == nil || decl.Body == nil || depth > 64 || p.steps > 20000 {
+		p.refuse(decl, "single-result factory unavailable or proof bounds exceeded")
 		return dependencyCallbackValue{}, false
 	}
 	names := dependencyCallbackFieldNames(decl.Type.Params)
 	if len(names) != len(args) || decl.Type.Results == nil || len(decl.Type.Results.List) != 1 || len(decl.Type.Results.List[0].Names) != 0 {
+		p.refuse(decl, "deferred factory must have one unnamed result")
 		return dependencyCallbackValue{}, false
 	}
 	list := decl.Body.List
 	if len(list) == 0 {
+		p.refuse(decl, "deferred factory must end in one return")
 		return dependencyCallbackValue{}, false
 	}
 	ret, ok := list[len(list)-1].(*ast.ReturnStmt)
@@ -788,6 +890,7 @@ func (p *dependencyCallbackProof) singleResultFunction(decl *ast.FuncDecl, args 
 	}
 	for _, stmt := range list[:len(list)-1] {
 		if dependencyCallbackContainsReturn(stmt) {
+			p.refuse(stmt, "deferred factory has an earlier return")
 			return dependencyCallbackValue{}, false
 		}
 	}
@@ -802,7 +905,11 @@ func (p *dependencyCallbackProof) singleResultFunction(decl *ast.FuncDecl, args 
 	}
 	for _, stmt := range list[:len(list)-1] {
 		p.steps++
-		if p.steps > 20000 || !p.statement(stmt, env, depth) {
+		if p.steps > 20000 {
+			p.refuse(stmt, "proof step bound exceeded")
+			return dependencyCallbackValue{}, false
+		}
+		if !p.statement(stmt, env, depth) {
 			return dependencyCallbackValue{}, false
 		}
 	}
@@ -848,11 +955,11 @@ func (p *dependencyCallbackProof) callWithCallee(call *ast.CallExpr, callee depe
 		if callee.callback.lit.Type.Results != nil && len(callee.callback.lit.Type.Results.List) != 0 {
 			// Return-value propagation for closures is intentionally unsupported;
 			// refusal prevents a returned closure from being mistaken for clean.
-			return false
+			return p.refuse(callee.callback.lit, "callback closure returns values")
 		}
 		names := dependencyCallbackFieldNames(callee.callback.lit.Type.Params)
 		if len(names) != len(args) {
-			return false
+			return p.refuse(callee.callback.lit, "callback closure argument count mismatch")
 		}
 		closureEnv := dependencyCallbackCloneEnv(callee.callback.env)
 		for i, name := range names {
@@ -874,7 +981,7 @@ func (p *dependencyCallbackProof) callWithCallee(call *ast.CallExpr, callee depe
 		}
 		decls := p.funcs[fun.Name]
 		if len(decls) != 1 {
-			return false
+			return p.refuse(fun, "tainted call target is not exactly one local function")
 		}
 		return p.callFunction(decls[0], args, dependencyCallbackValue{}, depth)
 	case *ast.SelectorExpr:
@@ -885,11 +992,14 @@ func (p *dependencyCallbackProof) callWithCallee(call *ast.CallExpr, callee depe
 		}
 		decl, actual := p.method(receiver, fun.Sel.Name, map[string]bool{})
 		if decl == nil {
-			return false
+			return p.refuse(fun, "tainted method call target is not source-visible")
 		}
 		return p.callFunction(decl, args, actual, depth)
 	}
-	return !tainted
+	if tainted {
+		return p.refuse(call, "tainted call target is not source-visible")
+	}
+	return true
 }
 
 func dependencyCallbackMarkEscaped(values []dependencyCallbackValue) {
@@ -903,7 +1013,7 @@ func dependencyCallbackMarkEscaped(values []dependencyCallbackValue) {
 func (p *dependencyCallbackProof) callFunction(decl *ast.FuncDecl, args []dependencyCallbackValue, receiver dependencyCallbackValue, depth int) bool {
 	names := dependencyCallbackFieldNames(decl.Type.Params)
 	if len(names) != len(args) {
-		return false
+		return p.refuse(decl, "local function argument count mismatch")
 	}
 	supplied := make(map[string]dependencyCallbackValue)
 	for i, name := range names {
