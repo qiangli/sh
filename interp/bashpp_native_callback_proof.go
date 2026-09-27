@@ -146,6 +146,11 @@ type dependencyCallbackType struct {
 	embedded []string
 }
 
+type dependencyCallbackFormal struct {
+	name     string
+	variadic bool
+}
+
 type dependencyCallbackActiveFrame struct {
 	supplied map[string]dependencyCallbackValue
 	receiver dependencyCallbackValue
@@ -253,13 +258,22 @@ func (p *dependencyCallbackProof) prove(name string, callbackArgs []int) bool {
 		return false
 	}
 	env := make(map[string]dependencyCallbackValue)
-	params := dependencyCallbackFieldNames(decls[0].Type.Params)
+	params, valid := dependencyCallbackFormals(decls[0].Type.Params)
+	if !valid {
+		p.refuse(decls[0], fmt.Sprintf("function %s has invalid formal parameters %q", decls[0].Name.Name, dependencyCallbackFormalLabels(decls[0].Type.Params)))
+		return false
+	}
+	variadic := len(params) != 0 && params[len(params)-1].variadic
 	for _, index := range callbackArgs {
-		if index < 0 || index >= len(params) || params[index] == "" {
+		formal := index
+		if variadic && formal >= len(params)-1 {
+			formal = len(params) - 1
+		}
+		if formal < 0 || formal >= len(params) || params[formal].name == "" {
 			p.refuse(decls[0], fmt.Sprintf("callback argument index %d has no named parameter", index))
 			return false
 		}
-		env[params[index]] = dependencyCallbackValue{callback: &dependencyCallbackClosure{}}
+		env[params[formal].name] = dependencyCallbackValue{callback: &dependencyCallbackClosure{}}
 	}
 	return p.function(decls[0], env, dependencyCallbackValue{}, 0)
 }
@@ -297,20 +311,83 @@ func (p *dependencyCallbackProof) writeDiagnostics(out *os.File, path, name stri
 }
 
 func dependencyCallbackFieldNames(fields *ast.FieldList) []string {
-	if fields == nil {
-		return nil
+	formals, _ := dependencyCallbackFormals(fields)
+	names := make([]string, len(formals))
+	for i, formal := range formals {
+		names[i] = formal.name
 	}
-	var names []string
-	for _, field := range fields.List {
+	return names
+}
+
+func dependencyCallbackFormals(fields *ast.FieldList) ([]dependencyCallbackFormal, bool) {
+	if fields == nil {
+		return nil, true
+	}
+	var formals []dependencyCallbackFormal
+	for i, field := range fields.List {
+		_, variadic := field.Type.(*ast.Ellipsis)
+		if variadic && (i != len(fields.List)-1 || len(field.Names) > 1) {
+			return nil, false
+		}
 		if len(field.Names) == 0 {
-			names = append(names, "")
+			formals = append(formals, dependencyCallbackFormal{variadic: variadic})
 			continue
 		}
 		for _, name := range field.Names {
-			names = append(names, name.Name)
+			formals = append(formals, dependencyCallbackFormal{name: name.Name, variadic: variadic})
 		}
 	}
-	return names
+	return formals, true
+}
+
+func dependencyCallbackFormalLabels(fields *ast.FieldList) []string {
+	formals, ok := dependencyCallbackFormals(fields)
+	if !ok {
+		return []string{"<invalid>"}
+	}
+	labels := make([]string, len(formals))
+	for i, formal := range formals {
+		labels[i] = formal.name
+		if labels[i] == "" {
+			labels[i] = "<unnamed>"
+		}
+		if formal.variadic {
+			labels[i] += "..."
+		}
+	}
+	return labels
+}
+
+func dependencyCallbackBindArguments(fields *ast.FieldList, args []dependencyCallbackValue) (map[string]dependencyCallbackValue, bool) {
+	formals, ok := dependencyCallbackFormals(fields)
+	if !ok {
+		return nil, false
+	}
+	variadic := len(formals) != 0 && formals[len(formals)-1].variadic
+	fixed := len(formals)
+	if variadic {
+		fixed--
+		if len(args) < fixed {
+			return nil, false
+		}
+	} else if len(args) != fixed {
+		return nil, false
+	}
+	supplied := make(map[string]dependencyCallbackValue)
+	for i := 0; i < fixed; i++ {
+		if formals[i].name != "" {
+			supplied[formals[i].name] = args[i]
+		}
+	}
+	if variadic && formals[fixed].name != "" {
+		for _, value := range args[fixed:] {
+			if value.tainted() {
+				supplied[formals[fixed].name] = value
+				break
+			}
+		}
+	}
+	return supplied, true
 }
 
 func (p *dependencyCallbackProof) function(decl *ast.FuncDecl, supplied map[string]dependencyCallbackValue, receiver dependencyCallbackValue, depth int) bool {
@@ -824,6 +901,11 @@ func (p *dependencyCallbackProof) value(expr ast.Expr, env map[string]dependency
 		return p.value(expr.X, env)
 	case *ast.UnaryExpr:
 		return p.value(expr.X, env)
+	case *ast.IndexExpr:
+		// An indexed element may carry every callback fact known for its
+		// container. A clean element cannot sanitize a callback-bearing
+		// variadic slice, map, or array.
+		return p.value(expr.X, env)
 	case *ast.SelectorExpr:
 		base := p.value(expr.X, env)
 		return p.field(base, expr.Sel.Name, map[string]bool{})
@@ -937,16 +1019,20 @@ func (p *dependencyCallbackProof) localSingleResult(call *ast.CallExpr, env map[
 		p.refuse(call, "factory call did not resolve to a single local result")
 		return dependencyCallbackValue{}, false
 	}
-	return p.singleResultFunction(decl, args, receiver, depth+1)
+	return p.singleResultFunction(call, decl, args, receiver, depth+1)
 }
 
-func (p *dependencyCallbackProof) singleResultFunction(decl *ast.FuncDecl, args []dependencyCallbackValue, receiver dependencyCallbackValue, depth int) (dependencyCallbackValue, bool) {
+func (p *dependencyCallbackProof) singleResultFunction(call *ast.CallExpr, decl *ast.FuncDecl, args []dependencyCallbackValue, receiver dependencyCallbackValue, depth int) (dependencyCallbackValue, bool) {
 	if decl == nil || decl.Body == nil || depth > 64 || p.steps > 20000 {
 		p.refuse(decl, "single-result factory unavailable or proof bounds exceeded")
 		return dependencyCallbackValue{}, false
 	}
-	names := dependencyCallbackFieldNames(decl.Type.Params)
-	if len(names) != len(args) || decl.Type.Results == nil || len(decl.Type.Results.List) != 1 || len(decl.Type.Results.List[0].Names) != 0 {
+	supplied, bound := dependencyCallbackBindArguments(decl.Type.Params, args)
+	if !bound {
+		p.refuse(call, fmt.Sprintf("call to %s cannot bind actual=%d to formals=%q", dependencyCallbackFunctionName(decl), len(args), dependencyCallbackFormalLabels(decl.Type.Params)))
+		return dependencyCallbackValue{}, false
+	}
+	if decl.Type.Results == nil || len(decl.Type.Results.List) != 1 || len(decl.Type.Results.List[0].Names) != 0 {
 		p.refuse(decl, "deferred factory must have one unnamed result")
 		return dependencyCallbackValue{}, false
 	}
@@ -965,12 +1051,7 @@ func (p *dependencyCallbackProof) singleResultFunction(decl *ast.FuncDecl, args 
 			return dependencyCallbackValue{}, false
 		}
 	}
-	env := make(map[string]dependencyCallbackValue)
-	for i, name := range names {
-		if name != "" {
-			env[name] = args[i]
-		}
-	}
+	env := supplied
 	if decl.Recv != nil && len(decl.Recv.List[0].Names) == 1 {
 		env[decl.Recv.List[0].Names[0].Name] = receiver
 	}
@@ -1032,15 +1113,13 @@ func (p *dependencyCallbackProof) callWithResolvedCallee(call *ast.CallExpr, cal
 			// refusal prevents a returned closure from being mistaken for clean.
 			return p.refuse(callee.callback.lit, "callback closure returns values")
 		}
-		names := dependencyCallbackFieldNames(callee.callback.lit.Type.Params)
-		if len(names) != len(args) {
-			return p.refuse(callee.callback.lit, "callback closure argument count mismatch")
+		supplied, bound := dependencyCallbackBindArguments(callee.callback.lit.Type.Params, args)
+		if !bound {
+			return p.refuse(call, fmt.Sprintf("call to function literal cannot bind actual=%d to formals=%q", len(args), dependencyCallbackFormalLabels(callee.callback.lit.Type.Params)))
 		}
 		closureEnv := dependencyCallbackCloneEnv(callee.callback.env)
-		for i, name := range names {
-			if name != "" {
-				closureEnv[name] = args[i]
-			}
+		for name, value := range supplied {
+			closureEnv[name] = value
 		}
 		p.defers = append(p.defers, nil)
 		ok := p.block(callee.callback.lit.Body, closureEnv, depth+1) && p.runDeferred(closureEnv, depth+1)
@@ -1064,7 +1143,7 @@ func (p *dependencyCallbackProof) callWithResolvedCallee(call *ast.CallExpr, cal
 		if len(decls) != 1 {
 			return p.refuse(fun, "tainted call target is not exactly one local function")
 		}
-		return p.callFunction(decls[0], args, dependencyCallbackValue{}, depth)
+		return p.callFunction(call, decls[0], args, dependencyCallbackValue{}, depth)
 	case *ast.SelectorExpr:
 		receiver := p.value(fun.X, env)
 		if !tainted && !receiver.tainted() {
@@ -1075,7 +1154,7 @@ func (p *dependencyCallbackProof) callWithResolvedCallee(call *ast.CallExpr, cal
 		if decl == nil {
 			return p.refuse(fun, "tainted method call target is not source-visible")
 		}
-		return p.callFunction(decl, args, actual, depth)
+		return p.callFunction(call, decl, args, actual, depth)
 	}
 	if tainted {
 		return p.refuse(call, "tainted call target is not source-visible")
@@ -1091,18 +1170,26 @@ func dependencyCallbackMarkEscaped(values []dependencyCallbackValue) {
 	}
 }
 
-func (p *dependencyCallbackProof) callFunction(decl *ast.FuncDecl, args []dependencyCallbackValue, receiver dependencyCallbackValue, depth int) bool {
-	names := dependencyCallbackFieldNames(decl.Type.Params)
-	if len(names) != len(args) {
-		return p.refuse(decl, "local function argument count mismatch")
-	}
-	supplied := make(map[string]dependencyCallbackValue)
-	for i, name := range names {
-		if name != "" {
-			supplied[name] = args[i]
-		}
+func (p *dependencyCallbackProof) callFunction(call *ast.CallExpr, decl *ast.FuncDecl, args []dependencyCallbackValue, receiver dependencyCallbackValue, depth int) bool {
+	supplied, bound := dependencyCallbackBindArguments(decl.Type.Params, args)
+	if !bound {
+		return p.refuse(call, fmt.Sprintf("call to %s cannot bind actual=%d to formals=%q", dependencyCallbackFunctionName(decl), len(args), dependencyCallbackFormalLabels(decl.Type.Params)))
 	}
 	return p.function(decl, supplied, receiver, depth+1)
+}
+
+func dependencyCallbackFunctionName(decl *ast.FuncDecl) string {
+	if decl == nil || decl.Name == nil {
+		return "<unknown>"
+	}
+	if decl.Recv == nil || len(decl.Recv.List) == 0 {
+		return decl.Name.Name
+	}
+	receiver := dependencyCallbackTypeName(decl.Recv.List[0].Type)
+	if receiver == "" {
+		return decl.Name.Name
+	}
+	return receiver + "." + decl.Name.Name
 }
 
 func (p *dependencyCallbackProof) method(receiver dependencyCallbackValue, name string, seen map[string]bool) (*ast.FuncDecl, dependencyCallbackValue) {
@@ -1131,13 +1218,16 @@ func (p *dependencyCallbackProof) method(receiver dependencyCallbackValue, name 
 // anonymous in parser, denotes the embedded object itself. Ownership follows
 // the containing object; no package- or type-specific exception is involved.
 func (p *dependencyCallbackProof) field(receiver dependencyCallbackValue, name string, seen map[string]bool) dependencyCallbackValue {
-	if receiver.object == nil || receiver.object.typ == "" || seen[receiver.object.typ] {
+	if receiver.object == nil {
 		return dependencyCallbackValue{}
 	}
-	seen[receiver.object.typ] = true
 	if value, ok := receiver.object.fields[name]; ok {
 		return value
 	}
+	if receiver.object.typ == "" || seen[receiver.object.typ] {
+		return dependencyCallbackValue{}
+	}
+	seen[receiver.object.typ] = true
 	shape := p.types[receiver.object.typ]
 	if typ, ok := shape.fields[name]; ok {
 		child := dependencyCallbackValue{object: &dependencyCallbackObject{typ: typ, owned: receiver.object.owned, fields: make(map[string]dependencyCallbackValue)}}

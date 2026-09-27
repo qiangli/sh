@@ -200,6 +200,46 @@ func Parse(cb func()) { var f func(); defer func() { saved = f }(); defer func()
 `,
 		},
 		{
+			name: "variadic callback retention",
+			source: `package dep
+var saved func()
+func keep(prefix string, callbacks ...func()) { saved = callbacks[0] }
+func Parse(cb func()) { keep("callback", cb) }
+`,
+		},
+		{
+			name: "variadic synchronous callback",
+			source: `package dep
+func invoke(prefix string, callbacks ...func()) { callbacks[0]() }
+func Parse(cb func()) { invoke("callback", cb) }
+`,
+			want: true,
+		},
+		{
+			name: "unnamed callback parameter",
+			source: `package dep
+func discard(func()) {}
+func Parse(cb func()) { discard(cb) }
+`,
+			want: true,
+		},
+		{
+			name: "grouped callback parameters",
+			source: `package dep
+func invoke(first, second func()) { first(); second() }
+func Parse(cb func()) { invoke(cb, func() {}) }
+`,
+			want: true,
+		},
+		{
+			name: "grouped callback retention",
+			source: `package dep
+var saved func()
+func keep(first, second func()) { saved = second }
+func Parse(cb func()) { keep(func() {}, cb) }
+`,
+		},
+		{
 			name: "syntax parser trace-shaped defer",
 			source: `package dep
 const trace = false
