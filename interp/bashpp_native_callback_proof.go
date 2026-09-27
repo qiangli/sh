@@ -112,8 +112,9 @@ type dependencyCallbackObject struct {
 }
 
 type dependencyCallbackClosure struct {
-	lit *ast.FuncLit
-	env map[string]dependencyCallbackValue
+	lit      *ast.FuncLit
+	env      map[string]dependencyCallbackValue
+	captures map[string]bool
 }
 
 type dependencyCallbackDeferred struct {
@@ -420,6 +421,212 @@ func dependencyCallbackFieldNames(fields *ast.FieldList) []string {
 		names[i] = formal.name
 	}
 	return names
+}
+
+func dependencyCallbackFuncLitCaptures(lit *ast.FuncLit, env map[string]dependencyCallbackValue) map[string]bool {
+	if lit == nil || lit.Body == nil || len(env) == 0 {
+		return nil
+	}
+	scope := make(map[string]bool)
+	for _, name := range dependencyCallbackFieldNames(lit.Type.Params) {
+		if name != "" {
+			scope[name] = true
+		}
+	}
+	for _, name := range dependencyCallbackFieldNames(lit.Type.Results) {
+		if name != "" {
+			scope[name] = true
+		}
+	}
+	captures := make(map[string]bool)
+	dependencyCallbackCaptureBlock(lit.Body, scope, env, captures)
+	if len(captures) == 0 {
+		return nil
+	}
+	return captures
+}
+
+func dependencyCallbackCaptureBlock(block *ast.BlockStmt, scope map[string]bool, env map[string]dependencyCallbackValue, captures map[string]bool) {
+	if block == nil {
+		return
+	}
+	local := dependencyCallbackCloneScope(scope)
+	for _, stmt := range block.List {
+		dependencyCallbackCaptureStmt(stmt, local, env, captures)
+	}
+}
+
+func dependencyCallbackCaptureStmt(stmt ast.Stmt, scope map[string]bool, env map[string]dependencyCallbackValue, captures map[string]bool) {
+	switch stmt := stmt.(type) {
+	case *ast.AssignStmt:
+		for _, rhs := range stmt.Rhs {
+			dependencyCallbackCaptureExpr(rhs, scope, env, captures)
+		}
+		for _, lhs := range stmt.Lhs {
+			if stmt.Tok == token.DEFINE {
+				if _, ok := lhs.(*ast.Ident); ok {
+					continue
+				}
+			}
+			dependencyCallbackCaptureExpr(lhs, scope, env, captures)
+		}
+		if stmt.Tok == token.DEFINE {
+			for _, lhs := range stmt.Lhs {
+				if ident, ok := lhs.(*ast.Ident); ok && ident.Name != "_" {
+					scope[ident.Name] = true
+				}
+			}
+		}
+	case *ast.DeclStmt:
+		decl, ok := stmt.Decl.(*ast.GenDecl)
+		if !ok {
+			return
+		}
+		for _, item := range decl.Specs {
+			spec, ok := item.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for _, value := range spec.Values {
+				dependencyCallbackCaptureExpr(value, scope, env, captures)
+			}
+			for _, name := range spec.Names {
+				if name.Name != "_" {
+					scope[name.Name] = true
+				}
+			}
+		}
+	case *ast.ExprStmt:
+		dependencyCallbackCaptureExpr(stmt.X, scope, env, captures)
+	case *ast.ReturnStmt:
+		for _, result := range stmt.Results {
+			dependencyCallbackCaptureExpr(result, scope, env, captures)
+		}
+	case *ast.GoStmt:
+		dependencyCallbackCaptureExpr(stmt.Call, scope, env, captures)
+	case *ast.DeferStmt:
+		dependencyCallbackCaptureExpr(stmt.Call, scope, env, captures)
+	case *ast.SendStmt:
+		dependencyCallbackCaptureExpr(stmt.Chan, scope, env, captures)
+		dependencyCallbackCaptureExpr(stmt.Value, scope, env, captures)
+	case *ast.IfStmt:
+		next := dependencyCallbackCloneScope(scope)
+		if stmt.Init != nil {
+			dependencyCallbackCaptureStmt(stmt.Init, next, env, captures)
+		}
+		dependencyCallbackCaptureExpr(stmt.Cond, next, env, captures)
+		dependencyCallbackCaptureBlock(stmt.Body, next, env, captures)
+		if stmt.Else != nil {
+			dependencyCallbackCaptureStmt(stmt.Else, next, env, captures)
+		}
+	case *ast.BlockStmt:
+		dependencyCallbackCaptureBlock(stmt, scope, env, captures)
+	case *ast.ForStmt:
+		next := dependencyCallbackCloneScope(scope)
+		if stmt.Init != nil {
+			dependencyCallbackCaptureStmt(stmt.Init, next, env, captures)
+		}
+		if stmt.Cond != nil {
+			dependencyCallbackCaptureExpr(stmt.Cond, next, env, captures)
+		}
+		dependencyCallbackCaptureBlock(stmt.Body, next, env, captures)
+		if stmt.Post != nil {
+			dependencyCallbackCaptureStmt(stmt.Post, next, env, captures)
+		}
+	case *ast.RangeStmt:
+		dependencyCallbackCaptureExpr(stmt.X, scope, env, captures)
+		next := dependencyCallbackCloneScope(scope)
+		if stmt.Tok == token.DEFINE {
+			for _, expr := range []ast.Expr{stmt.Key, stmt.Value} {
+				if ident, ok := expr.(*ast.Ident); ok && ident.Name != "_" {
+					next[ident.Name] = true
+				}
+			}
+		} else {
+			dependencyCallbackCaptureExpr(stmt.Key, next, env, captures)
+			dependencyCallbackCaptureExpr(stmt.Value, next, env, captures)
+		}
+		dependencyCallbackCaptureBlock(stmt.Body, next, env, captures)
+	case *ast.SwitchStmt:
+		next := dependencyCallbackCloneScope(scope)
+		if stmt.Init != nil {
+			dependencyCallbackCaptureStmt(stmt.Init, next, env, captures)
+		}
+		if stmt.Tag != nil {
+			dependencyCallbackCaptureExpr(stmt.Tag, next, env, captures)
+		}
+		dependencyCallbackCaptureCaseClauses(stmt.Body, next, env, captures)
+	case *ast.TypeSwitchStmt:
+		next := dependencyCallbackCloneScope(scope)
+		if stmt.Init != nil {
+			dependencyCallbackCaptureStmt(stmt.Init, next, env, captures)
+		}
+		if stmt.Assign != nil {
+			dependencyCallbackCaptureStmt(stmt.Assign, next, env, captures)
+		}
+		dependencyCallbackCaptureCaseClauses(stmt.Body, next, env, captures)
+	case *ast.SelectStmt:
+		if stmt.Body != nil {
+			for _, item := range stmt.Body.List {
+				clause, ok := item.(*ast.CommClause)
+				if !ok {
+					continue
+				}
+				next := dependencyCallbackCloneScope(scope)
+				if clause.Comm != nil {
+					dependencyCallbackCaptureStmt(clause.Comm, next, env, captures)
+				}
+				dependencyCallbackCaptureBlock(&ast.BlockStmt{List: clause.Body}, next, env, captures)
+			}
+		}
+	case *ast.LabeledStmt:
+		dependencyCallbackCaptureStmt(stmt.Stmt, scope, env, captures)
+	case *ast.IncDecStmt:
+		dependencyCallbackCaptureExpr(stmt.X, scope, env, captures)
+	}
+}
+
+func dependencyCallbackCaptureCaseClauses(body *ast.BlockStmt, scope map[string]bool, env map[string]dependencyCallbackValue, captures map[string]bool) {
+	if body == nil {
+		return
+	}
+	for _, item := range body.List {
+		clause, ok := item.(*ast.CaseClause)
+		if !ok {
+			continue
+		}
+		next := dependencyCallbackCloneScope(scope)
+		for _, expr := range clause.List {
+			dependencyCallbackCaptureExpr(expr, next, env, captures)
+		}
+		dependencyCallbackCaptureBlock(&ast.BlockStmt{List: clause.Body}, next, env, captures)
+	}
+}
+
+func dependencyCallbackCaptureExpr(expr ast.Expr, scope map[string]bool, env map[string]dependencyCallbackValue, captures map[string]bool) {
+	if expr == nil {
+		return
+	}
+	ast.Inspect(expr, func(node ast.Node) bool {
+		if node == nil {
+			return false
+		}
+		switch node := node.(type) {
+		case *ast.FuncLit:
+			return false
+		case *ast.SelectorExpr:
+			dependencyCallbackCaptureExpr(node.X, scope, env, captures)
+			return false
+		case *ast.Ident:
+			if node.Name == "_" || scope[node.Name] {
+				return true
+			}
+			if _, ok := env[node.Name]; ok {
+				captures[node.Name] = true
+			}
+		}
+		return true
+	})
 }
 
 func dependencyCallbackFormals(fields *ast.FieldList) ([]dependencyCallbackFormal, bool) {
@@ -1673,7 +1880,7 @@ func (c *dependencyCallbackGraphCloner) closure(closure *dependencyCallbackClosu
 	if clone := c.closures[closure]; clone != nil {
 		return clone
 	}
-	clone := &dependencyCallbackClosure{lit: closure.lit}
+	clone := &dependencyCallbackClosure{lit: closure.lit, captures: dependencyCallbackCloneScope(closure.captures)}
 	c.closures[closure] = clone
 	clone.env = c.env(closure.env)
 	return clone
@@ -1943,7 +2150,7 @@ func (p *dependencyCallbackProof) value(expr ast.Expr, env map[string]dependency
 		base := p.value(expr.X, env)
 		return p.field(base, expr.Sel.Name, map[string]bool{})
 	case *ast.FuncLit:
-		return dependencyCallbackValue{callback: &dependencyCallbackClosure{lit: expr, env: env}}
+		return dependencyCallbackValue{callback: &dependencyCallbackClosure{lit: expr, env: env, captures: dependencyCallbackFuncLitCaptures(expr, env)}}
 	case *ast.CompositeLit:
 		obj := &dependencyCallbackObject{typ: dependencyCallbackTypeName(expr.Type), owned: true, fields: make(map[string]dependencyCallbackValue)}
 		fieldOrder, structLiteral := p.compositeFieldOrder(expr.Type)
@@ -2190,6 +2397,7 @@ func (p *dependencyCallbackProof) callWithResolvedCallee(call *ast.CallExpr, cal
 		ok := p.block(callee.callback.lit.Body, closureEnv, depth+1) && p.runDeferred(closureEnv, depth+1)
 		p.defers = p.defers[:len(p.defers)-1]
 		if ok {
+			dependencyCallbackJoinClosureEnvTaint(callee.callback.env, closureEnv, callee.callback.captures)
 			dependencyCallbackJoinEnvTaint(env, closureEnv)
 		}
 		return ok
@@ -2408,6 +2616,15 @@ func (p *dependencyCallbackProof) field(receiver dependencyCallbackValue, name s
 // must observe that binding as tainted. Clean writes never erase the fact.
 func dependencyCallbackJoinEnvTaint(dst, src map[string]dependencyCallbackValue) {
 	for name, value := range src {
+		if _, captured := dst[name]; captured && value.tainted() && !dst[name].tainted() {
+			dst[name] = value
+		}
+	}
+}
+
+func dependencyCallbackJoinClosureEnvTaint(dst, src map[string]dependencyCallbackValue, captures map[string]bool) {
+	for name := range captures {
+		value := src[name]
 		if _, captured := dst[name]; captured && value.tainted() && !dst[name].tainted() {
 			dst[name] = value
 		}

@@ -1055,6 +1055,69 @@ func Parse(cb func()) { inspect(func(){}); inspect(func(){ cb() }) }
 }
 
 // Sprint: #281; Story: #810; Story-ID: 48c1146a3ab0
+func TestS281ManagerCallbackProofHelperClosureCellEffect(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		source string
+		want   bool
+	}{
+		{
+			name: "helper closure write taints captured cell observed later",
+			source: `package dep
+var saved func()
+func run(fn func()) { fn() }
+func Retain(cb func(), choose bool) {
+	var f func()
+	setter := func() { f = cb }
+	getter := func() { saved = f }
+	if choose {
+		run(setter)
+	}
+	getter()
+}
+func Parse(cb func(), choose bool) { Retain(cb, choose) }
+`,
+		},
+		{
+			name: "direct helper callback invocation remains synchronous",
+			source: `package dep
+func run(fn func()) { fn() }
+func Parse(cb func()) { run(func() { cb() }) }
+`,
+			want: true,
+		},
+		{
+			name: "helper parameter and local shadow captured names",
+			source: `package dep
+func run(fn func()) { fn() }
+func Parse(cb func()) {
+	var f func()
+	setter := func(f func()) {
+		local := cb
+		f = local
+		f()
+	}
+	run(func() { setter(func() {}) })
+	_ = f
+}
+`,
+			want: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			file, err := parser.ParseFile(token.NewFileSet(), "dep.go", test.source, parser.SkipObjectResolution)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := newDependencyCallbackProof([]*ast.File{file}).prove("Parse", []int{0})
+			if got != test.want {
+				t.Fatalf("proof=%v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
+// Sprint: #281; Story: #810; Story-ID: 48c1146a3ab0
 func TestDependencyCallbackProofRecursiveStoreScanDoesNotMutateActiveGraph(t *testing.T) {
 	source := `package dep
 type holder struct { f func() }
