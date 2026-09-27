@@ -64,6 +64,69 @@ func TestGoSourceCaptureFreeVariablesOnly(t *testing.T) {
 	}
 }
 
+func TestGoSourceRangeYieldCallbackCaptureUsesRangeBody(t *testing.T) {
+	program, err := gosource.Parse(strings.NewReader(`package main
+
+var pkg int
+var values []int
+
+func main() {
+	var acc int
+	var v int
+	for _, v := range values {
+		acc += v
+		pkg += acc
+	}
+	_ = v
+}
+`), "range-yield.go", gosource.Options{RunMain: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rng *syntax.BashPPRange
+	syntax.Walk(program.File, func(node syntax.Node) bool {
+		if candidate, ok := node.(*syntax.BashPPRange); ok && rng == nil {
+			rng = candidate
+		}
+		return true
+	})
+	if rng == nil {
+		t.Fatal("converted source has no range statement")
+	}
+
+	scope := newBashPPScope(nil)
+	acc := scalarCell("0")
+	outerV := scalarCell("1")
+	pkg := scalarCell("2")
+	scope.entries["acc"] = acc
+	scope.entries["v"] = outerV
+	scope.entries["pkg"] = pkg
+
+	runner := &Runner{bashPPGoSource: true, bashPPGoSourceFile: program.File}
+	fn := &bashPPFunc{
+		rangeYield: &goSourceRangeYield{rng: rng},
+		lit: &syntax.BashPPFuncLit{
+			Params:  []*syntax.BashPPField{{FieldTypeExpr: bashPPRangeNamedType("int")}},
+			Results: []*syntax.BashPPField{{FieldTypeExpr: bashPPRangeNamedType("bool")}},
+		},
+		scope: scope,
+	}
+	if pos := bashPPCallbackSourcePos(fn); !pos.IsValid() || pos != rng.Pos() {
+		t.Fatalf("synthetic callback source position = %v, want range position %v", pos, rng.Pos())
+	}
+	capture, exact := runner.bashPPCallbackFunctionCapture(fn)
+	if !exact {
+		t.Fatal("range-yield callback capture was not exact")
+	}
+	capture = runner.bashPPCallbackSharedCells(fn, capture)
+	if !capture[acc] || !capture[pkg] {
+		t.Fatalf("range-yield callback lost outer cells: acc=%v pkg=%v", capture[acc], capture[pkg])
+	}
+	if capture[outerV] {
+		t.Fatal("range loop variable captured an outer shadow")
+	}
+}
+
 // TestGoSourceCaptureFlowsThroughCalledClosures is the combined
 // capture+WaitGroup regression (Sprint #118, Story #54) pinned at the
 // capture-set level.

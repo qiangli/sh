@@ -189,21 +189,11 @@ func (r *Runner) bashPPCallbackFunctionTemplate(fn *bashPPFunc) (*bashPPCallback
 }
 
 func (r *Runner) bashPPCallbackFunctionCapture(fn *bashPPFunc) (map[*bashPPCell]bool, bool) {
-	if fn == nil || fn.scope == nil || fn.body() == nil {
+	body, bound := bashPPCallbackFunctionBody(fn)
+	if fn == nil || fn.scope == nil || body == nil {
 		return map[*bashPPCell]bool{}, true
 	}
-	bound := make(map[string]bool)
-	for _, param := range bashppParams(fn.params()) {
-		if param.name != "" {
-			bound[param.name] = true
-		}
-	}
-	for _, result := range bashppParams(fn.bodyResults()) {
-		if result.name != "" {
-			bound[result.name] = true
-		}
-	}
-	free, exact := bashPPGoSourceFreeNames(fn.body(), bound)
+	free, exact := bashPPGoSourceFreeNames(body, bound)
 	if !exact {
 		return nil, false
 	}
@@ -217,6 +207,43 @@ func (r *Runner) bashPPCallbackFunctionCapture(fn *bashPPFunc) (map[*bashPPCell]
 		capture[fn.receiver] = true
 	}
 	return capture, true
+}
+
+func bashPPCallbackFunctionBody(fn *bashPPFunc) (*syntax.Block, map[string]bool) {
+	bound := make(map[string]bool)
+	if fn == nil {
+		return nil, bound
+	}
+	var params, results []*syntax.BashPPField
+	switch {
+	case fn.decl != nil || fn.lit != nil:
+		params, results = fn.params(), fn.bodyResults()
+	}
+	for _, param := range bashppParams(params) {
+		if param.name != "" {
+			bound[param.name] = true
+		}
+	}
+	for _, result := range bashppParams(results) {
+		if result.name != "" {
+			bound[result.name] = true
+		}
+	}
+	if fn.rangeYield != nil && fn.rangeYield.rng != nil {
+		for _, name := range fn.rangeYield.rng.Names {
+			if name != nil && name.Value != "_" {
+				bound[name.Value] = true
+			}
+		}
+		return fn.rangeYield.rng.Body, bound
+	}
+	if fn.decl != nil {
+		return fn.decl.Body, bound
+	}
+	if fn.lit != nil {
+		return fn.lit.Body, bound
+	}
+	return nil, bound
 }
 
 func (s *bashPPNativeSession) callbackFunction(id uint64) *bashPPCallbackFunction {
