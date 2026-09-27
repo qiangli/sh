@@ -75,8 +75,23 @@ func channelTypeKeys(t types.Type) []string {
 	return out
 }
 
+// channelTypeKeyMemo caches only completed top-level traversals. Keeping the
+// traversal-local seen set in channelTypeKeys avoids publishing an incomplete
+// result while walking a recursive type graph.
+type channelTypeKeyMemo map[types.Type][]string
+
+func (m channelTypeKeyMemo) keys(t types.Type) []string {
+	if keys, ok := m[t]; ok {
+		return keys
+	}
+	keys := channelTypeKeys(t)
+	m[t] = keys
+	return keys
+}
+
 func (c *converter) planLocalChannelTypes() {
 	parent, selected, boundary := map[string]string{}, map[string]bool{}, map[string]bool{}
+	typeKeys := channelTypeKeyMemo{}
 	var find func(string) string
 	find = func(x string) string {
 		if parent[x] == "" {
@@ -96,14 +111,15 @@ func (c *converter) planLocalChannelTypes() {
 		}
 	}
 	unionTypes := func(a, b types.Type) {
-		for _, x := range channelTypeKeys(a) {
-			for _, y := range channelTypeKeys(b) {
+		aKeys, bKeys := typeKeys.keys(a), typeKeys.keys(b)
+		for _, x := range aKeys {
+			for _, y := range bKeys {
 				union(x, y)
 			}
 		}
 	}
 	mark := func(t types.Type) {
-		for _, key := range channelTypeKeys(t) {
+		for _, key := range typeKeys.keys(t) {
 			boundary[key] = true
 		}
 	}
