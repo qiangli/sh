@@ -109,6 +109,18 @@ type bashPPBridgeValue struct {
 	// Host-only; only a non-retaining result consumer may carry it.
 	copiedResults bool
 }
+
+func bashPPBridgeString(text string) bashPPBridgeValue {
+	return bashPPBridgeValue{Kind: "string", Type: "string", Text: text, Bytes: []byte(text)}
+}
+
+func (v bashPPBridgeValue) stringText() string {
+	if v.Kind == "string" && v.Bytes != nil {
+		return string(v.Bytes)
+	}
+	return v.Text
+}
+
 type bashPPBridgeEntry struct {
 	Key   bashPPBridgeValue `json:"key"`
 	Value bashPPBridgeValue `json:"value"`
@@ -1709,7 +1721,9 @@ func bashPPBridgeLiteral(text string) (bashPPBridgeValue, error) {
 		return bashPPBridgeValue{Kind: "nil"}, nil
 	}
 	if str, err := strconv.Unquote(text); err == nil {
-		return bashPPBridgeValue{Kind: "string", Text: str, Bytes: []byte(str)}, nil
+		value := bashPPBridgeString(str)
+		value.Type = ""
+		return value, nil
 	}
 	if text == "true" || text == "false" {
 		return bashPPBridgeValue{Kind: "bool", Text: text}, nil

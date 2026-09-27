@@ -532,7 +532,7 @@ func bridgeZeroScalar(elem string) (bashPPBridgeValue, bool) {
 	case "complex64", "complex128":
 		return bashPPBridgeValue{Kind: "complex", Type: elem, Text: "(0+0i)"}, true
 	case "string":
-		return bashPPBridgeValue{Kind: "string", Type: elem, Text: ""}, true
+		return bashPPBridgeValue{Kind: "string", Type: elem, Text: "", Bytes: []byte{}}, true
 	case "bool":
 		return bashPPBridgeValue{Kind: "bool", Type: elem, Text: "false"}, true
 	}
@@ -544,7 +544,14 @@ func bridgeZeroScalar(elem string) (bashPPBridgeValue, bool) {
 // through its own reflect view and mints fresh handle ids, so type spellings
 // do not participate and a handle only matches its own id.
 func bridgeValueUnchanged(a, b bashPPBridgeValue) bool {
-	if a.Kind != b.Kind || a.Text != b.Text || a.Handle != b.Handle {
+	if a.Kind != b.Kind || a.Handle != b.Handle {
+		return false
+	}
+	if a.Kind == "string" {
+		if a.stringText() != b.stringText() {
+			return false
+		}
+	} else if a.Text != b.Text {
 		return false
 	}
 	if !bridgeElementsUnchanged(a.Elements, b.Elements) {
@@ -863,7 +870,7 @@ func nativeSliceScalarEqual(a, b bashPPBridgeValue) (bool, error) {
 	}
 	switch a.Kind {
 	case "string":
-		return a.Text == b.Text, nil
+		return a.stringText() == b.stringText(), nil
 	case "bool":
 		return a.Text == b.Text, nil
 	case "int":
@@ -945,7 +952,7 @@ func nativeSliceElementLess(a, b bashPPBridgeValue) (bool, error) {
 	}
 	switch a.Kind {
 	case "string":
-		return a.Text < b.Text, nil
+		return a.stringText() < b.stringText(), nil
 	case "int":
 		ai, err := strconv.ParseInt(a.Text, 10, 64)
 		if err != nil {

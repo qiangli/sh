@@ -437,7 +437,7 @@ func (r *Runner) bashPPNativeCallback(ctx context.Context, selector string, recv
 	if len(results) != 1 {
 		return nil, fmt.Errorf("gosource: original %s returned %d values, want 1", selector, len(results))
 	}
-	return []bashPPBridgeValue{{Kind: "string", Type: "string", Text: results[0]}}, nil
+	return []bashPPBridgeValue{bashPPBridgeString(results[0])}, nil
 }
 
 // bashPPStringResult reports the fixed String/Error protocol shape: exactly one
@@ -623,7 +623,7 @@ func bashPPBridgeValueDynamicType(v bashPPBridgeValue) syntax.BashPPTypeExpr {
 func bashPPBridgeScalarValue(v bashPPBridgeValue) (any, *bashPPCollectionMeta, error) {
 	switch v.Kind {
 	case "string":
-		return v.Text, nil, nil
+		return v.stringText(), nil, nil
 	case "bool":
 		return v.Text == "true", nil, nil
 	case "int", "uint":

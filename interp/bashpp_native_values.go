@@ -396,7 +396,7 @@ func (value bashPPBridgeValue) scalar() (bashPPScalar, error) {
 	scalar := bashPPScalar{typ: value.Type, runtime: true}
 	switch value.Kind {
 	case "string":
-		scalar.value = constant.MakeString(value.Text)
+		scalar.value = constant.MakeString(value.stringText())
 	case "bool":
 		scalar.value = constant.MakeBool(value.Text == "true")
 	case "int", "uint":
@@ -437,9 +437,8 @@ func bridgeScalar(value bashPPScalar) (bashPPBridgeValue, error) {
 	}
 	switch value.value.Kind() {
 	case constant.String:
-		out.Kind = "string"
-		out.Text = constant.StringVal(value.value)
-		out.Bytes = []byte(out.Text)
+		out = bashPPBridgeString(constant.StringVal(value.value))
+		out.Type = value.typ
 	case constant.Bool:
 		out.Kind = "bool"
 		out.Text = strconv.FormatBool(constant.BoolVal(value.value))
@@ -980,7 +979,7 @@ func (r *Runner) bashPPBridgeCollection(value any, meta *bashPPCollectionMeta, t
 			return bashPPBridgeValue{Kind: "nil"}, nil
 		}
 		if bashPPRuntimeErrorType(meta.interfaceValue.dynamic) {
-			return bashPPBridgeValue{Kind: "string", Text: bashPPRuntimeErrorText(meta.interfaceValue)}, nil
+			return bashPPBridgeString(bashPPRuntimeErrorText(meta.interfaceValue)), nil
 		}
 		if cell.pointer {
 			if r.bashPPGoSource {
@@ -992,7 +991,7 @@ func (r *Runner) bashPPBridgeCollection(value any, meta *bashPPCollectionMeta, t
 			return r.bashPPBridgeCollection(cell.vr.Obj, cell.valueMeta, cell.declType)
 		}
 		if bashPPRuntimeErrorType(cell.declType) {
-			return bashPPBridgeValue{Kind: "string", Text: cell.vr.String()}, nil
+			return bashPPBridgeString(cell.vr.String()), nil
 		}
 		scalar, err := bridgeScalar(r.bashPPScalarFromCell(cell))
 		return bashPPBridgeInstantiatedScalar(scalar, cell.declType), err
@@ -1102,6 +1101,7 @@ func (r *Runner) bashPPBridgeCollection(value any, meta *bashPPCollectionMeta, t
 				switch bashPPTypeText(r.bashPPUnderlyingType(shape.Key)) {
 				case "string":
 					keyValue.Kind = "string"
+					keyValue.Bytes = []byte(key)
 				case "bool":
 					keyValue.Kind = "bool"
 				default:
@@ -1168,6 +1168,9 @@ func (r *Runner) bashPPBridgeCollection(value any, meta *bashPPCollectionMeta, t
 			result.Kind = "string"
 		}
 		result.Text = value
+		if result.Kind == "string" {
+			result.Bytes = []byte(value)
+		}
 		var err error
 		result, err = r.bashPPBridgeDefinedScalar(result)
 		if err != nil {
@@ -1408,7 +1411,7 @@ func (r *Runner) bashPPBridgeCell(cell *bashPPCell) (bashPPBridgeValue, error) {
 			return bashPPBridgeValue{Kind: "nil"}, nil
 		}
 		if bashPPRuntimeErrorType(cell.interfaceValue.dynamic) {
-			return bashPPBridgeValue{Kind: "string", Text: bashPPRuntimeErrorText(cell.interfaceValue)}, nil
+			return bashPPBridgeString(bashPPRuntimeErrorText(cell.interfaceValue)), nil
 		}
 		value, err := r.bashPPBridgeCell(cell.interfaceValue.cell)
 		if err == nil && r.bashPPGoSource {
@@ -1453,7 +1456,7 @@ func (r *Runner) bashPPBridgeCell(cell *bashPPCell) (bashPPBridgeValue, error) {
 	// message string: the dependency has no such type to resolve, and the
 	// message is exactly what %v / %s / Error() print.
 	if bashPPRuntimeErrorType(cell.declType) {
-		return bashPPBridgeValue{Kind: "string", Text: cell.vr.String()}, nil
+		return bashPPBridgeString(cell.vr.String()), nil
 	}
 	scalar, err := bridgeScalar(r.bashPPScalarFromCell(cell))
 	if err != nil {
