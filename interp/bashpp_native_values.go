@@ -1429,6 +1429,9 @@ func bashPPBridgeFieldsTextIn(fields []*syntax.BashPPField, scope bashPPBridgeTy
 }
 
 func (r *Runner) bashPPBridgeCell(cell *bashPPCell) (bashPPBridgeValue, error) {
+	// The bridge value is chosen by testing carrier against carrier, so a
+	// shared cell is read from a snapshot; see bashpp_cell_share.go.
+	cell = cell.view()
 	if cell != nil {
 		if fn, ok := r.bashPPClosure(cell.vr.Str); ok {
 			return r.bashPPBridgeFunction(fn)

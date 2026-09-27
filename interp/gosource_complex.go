@@ -29,7 +29,7 @@ func (r *Runner) bashPPComplexShortDecl(d *syntax.BashPPShortDecl) bool {
 		}
 		r.bashPPDeclareName(d.Lhs[0].Value, cell.vr)
 		if target := r.bashPPScope.lookup(d.Lhs[0].Value); target != nil {
-			*target = *cell
+			target.publish(cell)
 		}
 		return true
 	}

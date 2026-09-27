@@ -328,10 +328,10 @@ func (c *bashPPCloner) cloneCell(cell *bashPPCell) *bashPPCell {
 		c.cells[cell] = nil
 		return nil
 	}
-	dup := *cell
-	// A deep copy is private to the cloning goroutine, so it starts unaliased
-	// rather than contending on the guard of the cell it was copied from.
-	dup.guard = nil
+	// A deep copy is private to the cloning goroutine, so it is read as one
+	// snapshot and starts unaliased rather than contending on the guard of the
+	// cell it was copied from; view() does both.
+	dup := *cell.view()
 	copied := &dup
 	// Publish before following pointer edges, which may lead back here.
 	c.cells[cell] = copied

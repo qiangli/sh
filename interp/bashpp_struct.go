@@ -949,6 +949,10 @@ func (r *Runner) bashPPReadCellValue(cell *bashPPCell) (any, *bashPPCollectionMe
 	if cell == nil {
 		return nil, nil, fmt.Errorf("Go value has no result")
 	}
+	// The carrier this picks and the payload it returns have to come from one
+	// store, so a shared cell answers from a snapshot; see
+	// bashpp_cell_share.go.
+	cell = cell.view()
 	if cell.pointer {
 		return cell.pointerValue, bashPPPointerMeta(cell.declType), nil
 	}

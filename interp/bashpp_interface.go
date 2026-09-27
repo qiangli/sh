@@ -892,7 +892,7 @@ func (r *Runner) bashPPAssertCandidate(expr syntax.BashPPExpr) (*bashPPCell, boo
 	if source == nil {
 		return &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: values[0]}}, true, nil
 	}
-	candidate := *source
+	candidate := *source.view()
 	return &candidate, true, nil
 }
 
@@ -998,7 +998,7 @@ func (r *Runner) bashPPInterfaceConversion(x syntax.BashPPExpr) (*bashPPCell, bo
 // Structs and arrays are values and therefore need their own payload, while
 // pointers, maps, and slices deliberately retain the identities they carry.
 func bashPPCopyInterfaceCell(cell *bashPPCell) *bashPPCell {
-	stored := *cell
+	stored := *cell.view()
 	stored.interfaceValue = nil
 	if cell.vr.Kind == expand.Object && bashPPValueMeta(bashPPCellMeta(cell)) {
 		value, meta := bashPPCopyArrayValue(cell.vr.Obj, bashPPCellMeta(cell))
@@ -1706,10 +1706,10 @@ func (r *Runner) bashPPTypeSwitch(ctx context.Context, sw *syntax.BashPPSwitch) 
 			r.bashPPDeclareName(name, vr)
 			target := r.bashPPScope.lookup(name)
 			if target != nil && source != nil {
-				bound := *source
+				bound := *source.view()
 				bound.vr.ReadOnly = false
 				bound.constant = false
-				*target = bound
+				target.publish(&bound)
 			}
 		}
 		r.stmts(ctx, sw.Arms[armIndex].Stmts)

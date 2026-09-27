@@ -443,9 +443,11 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 	}
 	if callableDeclCell != nil {
 		target := r.bashPPScope.lookup(name)
-		exported := target.vr.Exported
-		*target = *bashPPCopyAssignmentCell(callableDeclCell)
-		target.vr.Exported = exported
+		// Merge the retained attribute before storing, so the binding is
+		// republished once; see bashpp_cell_share.go.
+		merged := *bashPPCopyAssignmentCell(callableDeclCell)
+		merged.vr.Exported = target.view().vr.Exported
+		target.publish(&merged)
 	}
 	if typedScalarKind != constant.Unknown {
 		r.bashPPScope.lookup(name).scalarKind = typedScalarKind
@@ -984,7 +986,7 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 			}
 			r.bashPPDeclareName(d.Lhs[0].Value, cell.vr)
 			if target := r.bashPPScope.lookup(d.Lhs[0].Value); target != nil {
-				*target = *cell
+				target.publish(cell)
 			}
 			return
 		}
@@ -997,7 +999,7 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 			}
 			r.bashPPDeclareName(d.Lhs[0].Value, cell.vr)
 			if target := r.bashPPScope.lookup(d.Lhs[0].Value); target != nil {
-				*target = *cell
+				target.publish(cell)
 			}
 			return
 		}
@@ -1046,7 +1048,7 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 					}
 					r.bashPPDeclareName(name.Value, cells[i].vr)
 					if target := r.bashPPScope.lookup(name.Value); target != nil {
-						*target = *cells[i]
+						target.publish(cells[i])
 					}
 				}
 				return
@@ -1112,7 +1114,7 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 			}
 			r.bashPPDeclareName(d.Lhs[0].Value, cell.vr)
 			if target := r.bashPPScope.lookup(d.Lhs[0].Value); target != nil {
-				*target = *cell
+				target.publish(cell)
 			}
 			return
 		}
@@ -1144,7 +1146,7 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 				name := d.Lhs[0].Value
 				r.bashPPDeclareName(name, cell.vr)
 				target := r.bashPPScope.lookup(name)
-				*target = *cell
+				target.publish(cell)
 				target.object = &bashPPObjectIdentity{owner: name, collection: cell.valueMeta}
 				return
 			}
@@ -1163,7 +1165,7 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 							name := d.Lhs[0].Value
 							r.bashPPDeclareName(name, cell.vr)
 							if bound := r.bashPPScope.lookup(name); bound != nil {
-								*bound = *cell
+								bound.publish(cell)
 								bound.declType = target
 								if base := bashPPNamedTypeBase(target); base != "" {
 									if _, named := r.bashPPTypes[base]; named {
@@ -1188,7 +1190,7 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 				name := d.Lhs[0].Value
 				r.bashPPDeclareName(name, cell.vr)
 				if target := r.bashPPScope.lookup(name); target != nil {
-					*target = *cell
+					target.publish(cell)
 				}
 				return
 			}
@@ -1243,7 +1245,7 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 				// store an object cell that ++, <, += and conversions reject.
 				cell := r.goSourceCollectionReadCell(d.Expr, value, meta)
 				r.bashPPDeclareName(name, cell.vr)
-				*r.bashPPScope.lookup(name) = *cell
+				r.bashPPScope.lookup(name).publish(cell)
 			} else if meta != nil {
 				value, meta = bashPPCopyArrayValue(value, meta)
 				r.bashPPDeclareName(name, bashPPCollectionVariable(value))
@@ -1258,7 +1260,7 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 			} else {
 				cell := r.goSourceCollectionReadCell(d.Expr, value, meta)
 				r.bashPPDeclareName(name, cell.vr)
-				*r.bashPPScope.lookup(name) = *cell
+				r.bashPPScope.lookup(name).publish(cell)
 			}
 			return
 		}
@@ -1276,7 +1278,7 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 			cell := r.goSourceCollectionReadCell(d.Expr, value, meta)
 			r.bashPPDeclareName(name, cell.vr)
 			target := r.bashPPScope.lookup(name)
-			*target = *cell
+			target.publish(cell)
 			if target.vr.Kind != expand.Object {
 				return
 			}
@@ -1305,7 +1307,7 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 					// names a declared type, so the binding stays scalar.
 					cell := r.goSourceCollectionReadCell(d.Expr, value, meta)
 					r.bashPPDeclareName(name, cell.vr)
-					*r.bashPPScope.lookup(name) = *cell
+					r.bashPPScope.lookup(name).publish(cell)
 				} else if meta != nil {
 					value, meta = bashPPCopyArrayValue(value, meta)
 					r.bashPPDeclareName(name, expand.NewObject(value))
@@ -1320,7 +1322,7 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 				} else {
 					cell := r.goSourceCollectionReadCell(d.Expr, value, meta)
 					r.bashPPDeclareName(name, cell.vr)
-					*r.bashPPScope.lookup(name) = *cell
+					r.bashPPScope.lookup(name).publish(cell)
 				}
 				return
 			}
@@ -1472,7 +1474,7 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 				}
 				r.bashPPDeclareName(name.Value, cells[i].vr)
 				if target := r.bashPPScope.lookup(name.Value); target != nil {
-					*target = *cells[i]
+					target.publish(cells[i])
 				}
 			}
 			return
@@ -1701,7 +1703,7 @@ func (r *Runner) bashPPBeginShortDecl(d *syntax.BashPPShortDecl) (*bashPPShortDe
 		names:  make([]bashPPShortName, 0, len(d.Lhs)),
 	}
 	for name, cell := range r.bashPPScope.entries {
-		txn.saved = append(txn.saved, bashPPSavedCell{name: name, cell: cell, before: *cell})
+		txn.saved = append(txn.saved, bashPPSavedCell{name: name, cell: cell, before: *cell.view()})
 	}
 	for _, lhs := range d.Lhs {
 		name := lhs.Value
@@ -1741,7 +1743,7 @@ func (r *Runner) bashPPRollbackShortDecl(txn *bashPPShortDeclTxn) {
 	}
 	for i := range txn.saved {
 		saved := &txn.saved[i]
-		*saved.cell = saved.before
+		saved.cell.publish(&saved.before)
 		entries[saved.name] = saved.cell
 	}
 }
@@ -2442,7 +2444,7 @@ func (r *Runner) bashPPDeclareName(name string, vr expand.Variable) {
 			// The producer decorates a fresh candidate cell. The transaction
 			// validates that candidate against the saved target identity and
 			// restores the target identity only at commit.
-			*cell = bashPPCell{vr: vr}
+			cell.publish(&bashPPCell{vr: vr})
 			txn.bind(name)
 			return
 		}
@@ -2820,7 +2822,7 @@ func (r *Runner) bashPPFor(ctx context.Context, loop *syntax.BashPPFor) {
 		// observed while the loop itself proceeds with the fresh one.
 		for _, name := range iterationNames {
 			if old := r.bashPPScope.entries[name]; old != nil {
-				copyCell := *old
+				copyCell := *old.view()
 				r.bashPPScope.entries[name] = &copyCell
 			}
 		}

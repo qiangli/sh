@@ -568,7 +568,7 @@ func (r *Runner) goSourceUnsafeShortDecl(d *syntax.BashPPShortDecl) bool {
 		cell := r.goSourceCollectionReadCell(d.Call, value, meta)
 		r.bashPPDeclareName(name, cell.vr)
 		target := r.bashPPScope.lookup(name)
-		*target = *cell
+		target.publish(cell)
 		target.object = &bashPPObjectIdentity{owner: name, collection: meta}
 		target.valueMeta = meta
 		return true

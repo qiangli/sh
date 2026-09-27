@@ -49,7 +49,7 @@ func goSourceCopyTaskReceiver(source *bashPPCell) *bashPPCell {
 	if source == nil {
 		return nil
 	}
-	copy := *source
+	copy := *source.view()
 	if source.vr.Kind == expand.Object && bashPPValueMeta(bashPPCellMeta(source)) {
 		value, meta := bashPPCopyArrayValue(source.vr.Obj, bashPPCellMeta(source))
 		copy.vr = expand.Variable{Set: true, Kind: expand.Object, Obj: value}

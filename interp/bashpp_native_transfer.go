@@ -223,7 +223,10 @@ func (s *bashPPNativeSession) applyNativeSliceTransfers(q bashPPBridgeRequest, r
 // readonly tracks. The declared collection layout is gone with the storage.
 func bashPPRebindTransferredCell(cell *bashPPCell, value bashPPBridgeValue) {
 	copy := value
-	*cell = bashPPCell{vr: expand.NewObject(&copy), object: cell.object, typeName: value.Type}
+	// The surviving identity edge is read from a snapshot and the whole new
+	// binding is published as one store; see bashpp_cell_share.go.
+	object := cell.view().object
+	cell.publish(&bashPPCell{vr: expand.NewObject(&copy), object: object, typeName: value.Type})
 }
 
 // Sprint: #247; Story: #673; Story-ID: f24307569417

@@ -552,7 +552,7 @@ func (r *Runner) bashPPBindPromotedMethod(rootCell *bashPPCell, method string, s
 	}
 	methodOwner := sel.method.decl.Receiver.RecvType.Value
 	if receiver.typeName != methodOwner {
-		copyCell := *receiver
+		copyCell := *receiver.view()
 		copyCell.typeName = methodOwner
 		copyCell.declType = sel.receiverType
 		if receiver.pointer {

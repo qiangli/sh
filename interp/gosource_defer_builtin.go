@@ -139,7 +139,7 @@ func (r *Runner) goSourceCaptureDeferredValueBuiltin(call *syntax.BashPPCall) (*
 			r.exit = exitStatus{code: 2}
 			return nil, nil, true
 		}
-		*target = *copy
+		target.publish(copy)
 		if cells == nil {
 			cells = make(map[string]*bashPPCell)
 		}

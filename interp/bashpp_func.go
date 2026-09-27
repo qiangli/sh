@@ -1769,7 +1769,7 @@ func (r *Runner) bashPPBindMethodReceiver(cell *bashPPCell, method string, addre
 			bound.receiver = cell
 			return &bound, true
 		}
-		copyCell := *cell
+		copyCell := *cell.view()
 		if cell.pointer && cell.pointerValue != nil {
 			value, meta, typ, err := cell.pointerValue.read()
 			if err != nil {
@@ -2595,7 +2595,7 @@ func (r *Runner) bashPPEnterFrame(fn *bashPPFunc, args []string) *bashPPFrame {
 		if recv.Pointer {
 			r.bashPPScope.entries[recv.Name.Value] = fn.receiver
 		} else {
-			copyCell := *fn.receiver
+			copyCell := *fn.receiver.view()
 			r.bashPPScope.entries[recv.Name.Value] = &copyCell
 		}
 	}
@@ -2821,11 +2821,14 @@ func (r *Runner) bashPPSettleResults(fn *bashPPFunc, resultNames []string) []str
 			if name != "" && name != "_" && i < len(ret.values) {
 				target := r.bashPPScope.lookup(name)
 				if target != nil && i < len(ret.cells) && ret.cells[i] != nil {
-					constantBinding := target.constant
-					readonlyBinding, exportedBinding := target.vr.ReadOnly, target.vr.Exported
-					*target = *bashPPCopyAssignmentCell(ret.cells[i])
-					target.constant = constantBinding
-					target.vr.ReadOnly, target.vr.Exported = readonlyBinding, exportedBinding
+					// Attributes belong to the declaration, so they are merged
+					// into the result BEFORE it is stored: patching them back
+					// afterwards would republish the binding twice.
+					view := target.view()
+					merged := *bashPPCopyAssignmentCell(ret.cells[i])
+					merged.constant = view.constant
+					merged.vr.ReadOnly, merged.vr.Exported = view.vr.ReadOnly, view.vr.Exported
+					target.publish(&merged)
 				} else {
 					r.setVarString(name, ret.values[i])
 					target = r.bashPPScope.lookup(name)

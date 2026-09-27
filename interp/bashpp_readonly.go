@@ -188,7 +188,7 @@ func (r *Runner) bashPPBuiltinAssign(assign *syntax.BashPPAssign) {
 		return
 	}
 	owner := cell.object
-	*cell = *result
+	cell.publish(result)
 	// The target keeps naming its own storage: append that reused the backing
 	// array returns the source identity, and one that reallocated returns a
 	// fresh one, but either way this variable is what owns it here.
@@ -533,6 +533,9 @@ func (r *Runner) goSourceUntypedNilTemporaryCandidate(target *bashPPCell, expr s
 // goSourceUntypedNilCell reports whether cell holds the untyped nil literal
 // itself: a nil interface with no declared or inferred type at all.
 func goSourceUntypedNilCell(cell *bashPPCell) bool {
+	// Eight fields of one value have to be zero together, so a shared cell is
+	// tested through a snapshot; see bashpp_cell_share.go.
+	cell = cell.view()
 	return cell != nil && cell.interfaceValue != nil && cell.interfaceValue.nilIface &&
 		cell.declType == nil && cell.typeName == "" && cell.valueMeta == nil &&
 		cell.object == nil && !cell.pointer && cell.vr.Kind == expand.String && cell.vr.Str == ""
@@ -546,9 +549,13 @@ func bashPPCopyAssignmentCell(source *bashPPCell) *bashPPCell {
 	if source == nil {
 		return nil
 	}
-	copyCell := *source
-	if source.vr.Kind == expand.Object && source.vr.Obj != nil && source.object != nil && bashPPValueMeta(bashPPCellMeta(source)) {
-		value, meta := bashPPCopyArrayValue(source.vr.Obj, bashPPCellMeta(source))
+	// Read the source once: the carrier test and the payload it copies must
+	// describe the same store, and the copy is private so it starts unaliased.
+	// See bashpp_cell_share.go.
+	snapshot := source.view()
+	copyCell := *snapshot
+	if snapshot.vr.Kind == expand.Object && snapshot.vr.Obj != nil && snapshot.object != nil && bashPPValueMeta(bashPPCellMeta(snapshot)) {
+		value, meta := bashPPCopyArrayValue(snapshot.vr.Obj, bashPPCellMeta(snapshot))
 		// The source already crossed the object boundary with authenticated
 		// array/struct metadata. Preserve that carrier while replacing its
 		// payload with the value copy: re-entering expand.NewObject would reject
@@ -571,7 +578,7 @@ func (r *Runner) bashPPCommitTupleAssign(assign *syntax.BashPPAssign, candidates
 			r.exit = exitStatus{code: 2}
 			return
 		}
-		if target.constant || target.vr.ReadOnly {
+		if view := target.view(); view.constant || view.vr.ReadOnly {
 			r.errf("%sBASHPP-EASSIGN-CONST: cannot assign to %s\n", r.bashErrPrefix(name.Pos()), name.Value)
 			r.exit = exitStatus{code: 2}
 			return
@@ -598,13 +605,16 @@ func (r *Runner) bashPPCommitTupleAssign(assign *syntax.BashPPAssign, candidates
 		if target == nil {
 			continue
 		}
-		declType, typeName := target.declType, target.typeName
-		constantBinding := target.constant
-		readonlyBinding, exportedBinding := target.vr.ReadOnly, target.vr.Exported
-		*target = *candidates[i]
-		target.declType, target.typeName = declType, typeName
-		target.constant = constantBinding
-		target.vr.ReadOnly, target.vr.Exported = readonlyBinding, exportedBinding
+		// The declaration's own attributes survive the assignment. Merge them
+		// into the new value FIRST and store the result once: patching them
+		// back after the store would republish the binding twice and let a
+		// reader catch it wearing the candidate's declared type.
+		view := target.view()
+		merged := *candidates[i].view()
+		merged.declType, merged.typeName = view.declType, view.typeName
+		merged.constant = view.constant
+		merged.vr.ReadOnly, merged.vr.Exported = view.vr.ReadOnly, view.vr.Exported
+		target.publish(&merged)
 	}
 	r.exit.clear()
 }

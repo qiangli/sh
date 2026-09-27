@@ -95,6 +95,6 @@ func (r *Runner) goSourceChannelDeclaration(d *syntax.BashPPDecl) bool {
 		r.exit.fatal(err)
 		return true
 	}
-	*r.bashPPScope.lookup(d.Name.Value) = *cell
+	r.bashPPScope.lookup(d.Name.Value).publish(cell)
 	return true
 }

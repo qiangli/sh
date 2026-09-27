@@ -219,7 +219,7 @@ func (r *Runner) bashPPBindReceivedCell(name string, cell *bashPPCell) {
 	}
 	r.bashPPDeclareName(name, cell.vr)
 	if target := r.bashPPScope.lookup(name); target != nil {
-		*target = *cell
+		target.publish(cell)
 	}
 }
 

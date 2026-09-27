@@ -452,7 +452,7 @@ func (r *Runner) goSourceBindLocalReflectCell(name string, cell *bashPPCell) {
 	value := goSourceLocalReflectCell(cell)
 	r.bashPPDeclareName(name, value.vr)
 	if target := r.bashPPScope.lookup(name); target != nil {
-		*target = *value
+		target.publish(value)
 	}
 }
 

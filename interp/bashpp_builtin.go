@@ -847,7 +847,7 @@ func (r *Runner) bashPPBindBuiltinResult(d *syntax.BashPPShortDecl, result *bash
 		return
 	}
 	cell := r.bashPPScope.lookup(name)
-	*cell = *result
+	cell.publish(result)
 	if cell.object == nil && cell.vr.Kind == expand.Object {
 		cell.object = &bashPPObjectIdentity{owner: name, collection: cell.valueMeta}
 	} else if cell.object != nil && cell.object.owner == "" {

@@ -73,7 +73,7 @@ func (r *Runner) bashPPSelectReceiveAssign(assign *syntax.BashPPAssign, received
 	}
 	if len(ptr.path) == 0 {
 		declType, typeName := ptr.target.declType, ptr.target.typeName
-		*ptr.target = *candidate
+		ptr.target.publish(candidate)
 		ptr.target.declType, ptr.target.typeName = declType, typeName
 		return
 	}

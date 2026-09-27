@@ -114,6 +114,9 @@ func (hc HandlerContext) DescribeValue(name string) (ValueDescription, bool) {
 
 // bashPPDescribeCell classifies one typed cell without changing it.
 func (r *Runner) bashPPDescribeCell(cell *bashPPCell) ValueDescription {
+	// A description is a reading of the whole cell, so a shared one is read
+	// from a snapshot; see bashpp_cell_share.go.
+	cell = cell.view()
 	if iface := cell.interfaceValue; iface != nil {
 		if iface.nilIface || iface.cell == nil {
 			return ValueDescription{Type: r.bashPPDescribeType(cell), Kind: "nil", Nil: true}

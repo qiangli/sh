@@ -1160,7 +1160,7 @@ func (r *Runner) bashPPInvokeDecorated(ctx context.Context, fn *bashPPFunc, args
 		results[i] = text
 		if i < len(resultNames) && resultNames[i] != "" {
 			if target := r.bashPPScope.lookup(resultNames[i]); target != nil {
-				*target = *bashPPCopyAssignmentCell(converted)
+				target.publish(bashPPCopyAssignmentCell(converted))
 			} else {
 				r.setVarString(resultNames[i], text)
 			}

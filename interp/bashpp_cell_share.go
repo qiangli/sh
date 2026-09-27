@@ -82,6 +82,32 @@ func (c *bashPPCell) view() *bashPPCell {
 	return &dup
 }
 
+// publish replaces every field of c with value's, as `*c = *value` did before
+// a cell could be shared. It differs from that assignment in two ways, both of
+// which the plain assignment gets wrong for a shared cell.
+//
+// First, it is the whole-cell case of the bundle rule: one struct assignment is
+// a couple of dozen host stores, so it is made under c's guard and reads value
+// through a snapshot, and no reader can land between the two halves of a
+// rebound binding.
+//
+// Second, it keeps c's OWN guard. The guard answers "is this storage location
+// reachable from two goroutines", which is a property of the binding rather
+// than of whatever value is currently in it; copying the source's guard field
+// over it would silently disarm a shared cell the moment it was reassigned.
+func (c *bashPPCell) publish(value *bashPPCell) {
+	if c == nil || value == nil {
+		return
+	}
+	snapshot := *value.view()
+	c.lock()
+	defer c.unlock()
+	// Written back as part of the struct store, never cleared separately: a
+	// window with a nil guard would let a concurrent lock() skip the mutex.
+	snapshot.guard = c.guard
+	*c = snapshot
+}
+
 // viewConstant is [bashPPCell.view] for a caller that needs only the `const`
 // marker. The marker is written once at declaration and never republished, so
 // reading it alone still answers about a single store.
