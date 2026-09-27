@@ -89,11 +89,11 @@ func TestS281NativeSequenceMaterializationChecksSourceType(t *testing.T) {
 	}
 	source := `package main
 import (
+	"crypto/sha256"
 	"debug/dwarf"
 	"encoding/csv"
 	"fmt"
 	"io"
-	"reflect"
 	"strings"
 )
 func main() {
@@ -104,7 +104,7 @@ func main() {
 	}})
 	records, recordsErr := csv.NewReader(strings.NewReader("a,b\nc,d\n")).ReadAll()
 	fields := (&dwarf.Entry{Field: []dwarf.Field{{Attr: dwarf.AttrLowpc, Val: uint64(10)}}}).Field
-	array := reflect.New(reflect.ArrayOf(32, reflect.TypeOf(byte(0)))).Elem().Interface()
+	array := sha256.Sum256([]byte("probe"))
 	println("probe")
 	fmt.Fprintf(io.Discard, "%v %v %v %v %v %v %v %v", empty, emptyErr, ranges, rangesErr, records, recordsErr, fields, array)
 }`

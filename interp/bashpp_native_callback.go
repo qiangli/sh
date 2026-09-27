@@ -608,7 +608,7 @@ func bashPPStringResult(results []bashPPParam) bool {
 // SDK storage is never reflected into an interpreter-owned imitation.
 func (r *Runner) bashPPBridgeContents(v bashPPBridgeValue, typ syntax.BashPPTypeExpr) (any, *bashPPCollectionMeta, error) {
 	if _, ok := r.bashPPInterfaceType(typ); ok {
-		if v.Kind == "nil" && (v.Type == "" || v.Type == v.Interface) {
+		if bashPPBridgeValueNilInterface(v) {
 			return "", &bashPPCollectionMeta{kind: "interface", typ: typ, interfaceValue: &bashPPInterfaceValue{nilIface: true}}, nil
 		}
 		dynamic := bashPPBridgeValueDynamicType(v)
@@ -772,6 +772,10 @@ func bashPPBridgeValueDynamicType(v bashPPBridgeValue) syntax.BashPPTypeExpr {
 		name = v.NativeType
 	}
 	return bashPPBridgeDynamicType(name)
+}
+
+func bashPPBridgeValueNilInterface(v bashPPBridgeValue) bool {
+	return v.Kind == "nil" && (v.Type == "" || v.Type == v.Interface)
 }
 
 // bashPPBridgeScalarValue converts one transported scalar into the interpreter
