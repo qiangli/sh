@@ -54,7 +54,8 @@ func TestBashPPTestingCallbackFrameOwnership(t *testing.T) {
 	scope := newBashPPScope(nil)
 	shared := &bashPPCell{}
 	scope.entries["shared"] = shared
-	fn := &bashPPFunc{scope: scope}
+	launch := parseGoStmt(t, "func main() {\n\tgo func() { shared++ }()\n}\n")
+	fn := &bashPPFunc{lit: launch.Call.FuncLit, scope: scope}
 	parent.bashPPGoSource = true
 	parent.bashPPScope = scope
 	parent.bashPPFuncs = map[string]*bashPPFunc{"callback": fn}
@@ -62,8 +63,12 @@ func TestBashPPTestingCallbackFrameOwnership(t *testing.T) {
 	parent.bashPPTools.routedDepth = 1
 
 	group := new(bashPPTestingCallbackFrames)
-	capture := map[*bashPPCell]bool{shared: true}
-	child, err := parent.bashPPTestingCallbackFrame(group, capture)
+	registered, err := parent.bashPPCallbackFunctionTemplate(fn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer registered.template.closeDirFile()
+	child, childFn, err := registered.bashPPTestingCallbackFrame(group)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,6 +79,9 @@ func TestBashPPTestingCallbackFrameOwnership(t *testing.T) {
 	}
 	if got := child.bashPPScope.lookup("shared"); got != shared {
 		t.Fatalf("testing callback split shared Go cell: got %p want %p", got, shared)
+	}
+	if childFn == fn || childFn.scope.lookup("shared") != shared {
+		t.Fatal("testing callback function did not come from the immutable template")
 	}
 	if child.bashPPTools.testingCallbackFrames != group || !child.bashPPTools.callbackDescendant {
 		t.Fatal("testing callback lost scheduler ownership or routed lineage")
@@ -86,12 +94,22 @@ func TestBashPPTestingCallbackFrameOwnership(t *testing.T) {
 	}
 
 	session := &bashPPNativeSession{functions: map[uint64]*bashPPFunc{7: fn}, functionOwners: map[uint64]*bashPPCallbackFunction{
-		7: {fn: fn, owner: parent, capture: capture},
+		7: registered,
 	}}
-	if got := session.callbackFunction(7); got == nil || got.owner != parent || got.fn != fn || !got.capture[shared] {
-		t.Fatalf("callback handle lost registered owner: %#v", got)
+	if got := session.callbackFunction(7); got != registered || got.template == parent || !got.capture[shared] {
+		t.Fatalf("callback handle lost registered template: %#v", got)
 	}
-	answer := session.callbackAnswer(parent.ectx, parent, bashPPBridgeResponse{ID: 1, Receiver: &bashPPBridgeValue{Kind: "callback", Handle: 8}}, nil)
+	legacy := &bashPPNativeSession{functions: map[uint64]*bashPPFunc{7: fn}}
+	if got := legacy.callbackFunction(7); got != nil {
+		t.Fatalf("legacy function handle fabricated template ownership: %#v", got)
+	}
+	if got := legacy.originalCallbackFunction(7); got != fn {
+		t.Fatalf("legacy function handle did not keep its callback path: %#v", got)
+	}
+	if _, _, scheduled, err := legacy.testingCallbackFrame(group, bashPPBridgeResponse{Receiver: &bashPPBridgeValue{Kind: "callback", Handle: 7}}); err != nil || scheduled {
+		t.Fatalf("legacy callback unexpectedly entered template scheduler: scheduled=%v err=%v", scheduled, err)
+	}
+	answer := session.callbackAnswer(parent.ectx, parent, bashPPBridgeResponse{ID: 1, Receiver: &bashPPBridgeValue{Kind: "callback", Handle: 8}}, nil, nil)
 	if answer.Error != "gosource: original callback handle expired" {
 		t.Fatalf("unknown callback was not refused: %#v", answer)
 	}

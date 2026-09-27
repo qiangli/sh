@@ -60,6 +60,9 @@ func (g *bashPPTestingCallbackFrames) adopt(r *Runner) error {
 	if status == nil {
 		return nil
 	}
+	if r == nil {
+		return errors.New("gosource: testing callback lifetime has no owning runner")
+	}
 	r.exit = *status
 	if status.exiting {
 		return &bashPPNativeExit{status: int(status.code)}
@@ -79,14 +82,12 @@ func (g *bashPPTestingCallbackFrames) closeFrames() {
 	})
 }
 
-func (r *Runner) bashPPTestingCallbackFrame(group *bashPPTestingCallbackFrames, capture map[*bashPPCell]bool) (*Runner, error) {
-	if r == nil {
-		return nil, fmt.Errorf("callback has no original owner")
+func (registered *bashPPCallbackFunction) bashPPTestingCallbackFrame(group *bashPPTestingCallbackFrames) (*Runner, *bashPPFunc, error) {
+	if registered == nil || registered.template == nil || registered.templateFn == nil {
+		return nil, nil, fmt.Errorf("callback has no registered execution template")
 	}
-	saved := r.bashPPGoSourceCapture
-	r.bashPPGoSourceCapture = capture
-	child := r.subshell(true)
-	r.bashPPGoSourceCapture = saved
+	template := registered.template
+	child := template.subshell(true)
 	child.bashPPGoSourceCapture = nil
 	child.bashPPTools.callbackDepth = 0
 	child.bashPPTools.routedDepth = 0
@@ -94,7 +95,10 @@ func (r *Runner) bashPPTestingCallbackFrame(group *bashPPTestingCallbackFrames, 
 	child.bashPPTools.testingCallbackFrames = group
 	child.exit = exitStatus{}
 	child.lastExit = exitStatus{}
-	return child, nil
+	cloner := newBashPPClonerFor(child)
+	cloner.shared = registered.capture
+	cloner.goSourceTask = true
+	return child, registered.templateFn.cloned(cloner), nil
 }
 
 func nativeTestingCallbackBarrier(q bashPPBridgeRequest) (testingM bool, ok bool) {
@@ -108,6 +112,57 @@ func nativeTestingCallbackBarrier(q bashPPBridgeRequest) (testingM bool, ok bool
 		return false, true
 	}
 	return false, false
+}
+
+func (s *bashPPNativeSession) testingCallbackFrame(group *bashPPTestingCallbackFrames, q bashPPBridgeResponse) (*Runner, *bashPPFunc, bool, error) {
+	if group == nil || q.Receiver == nil || q.Receiver.Kind != "callback" {
+		return nil, nil, false, nil
+	}
+	registered := s.callbackFunction(q.Receiver.Handle)
+	// Sessions and focused tests predating execution templates may populate
+	// only functions. Preserve their serialized callback path.
+	if registered == nil {
+		return nil, nil, false, nil
+	}
+	if registered.templateErr != "" {
+		return nil, nil, false, errors.New(registered.templateErr)
+	}
+	if registered.template == nil {
+		return nil, nil, false, nil
+	}
+	frame, fn, err := registered.bashPPTestingCallbackFrame(group)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	group.add(frame)
+	return frame, fn, true, nil
+}
+
+func (s *bashPPNativeSession) answerMailboxCallback(mailbox *bashPPCallbackMailbox, slot int, answer bashPPBridgeRequest) {
+	s.mu.Lock()
+	alive, conn := s.mailbox == mailbox, s.conn
+	s.mu.Unlock()
+	if !alive {
+		return
+	}
+	if mailbox.answer(slot, answer) {
+		return
+	}
+	// The original body has already run. Send its exact result once through
+	// the authenticated socket, then wake its mailbox waiter with a marker.
+	var sendErr error
+	if conn == nil {
+		sendErr = errors.New("gosource: callback connection closed")
+	} else {
+		s.write.Lock()
+		sendErr = json.NewEncoder(conn).Encode(answer)
+		s.write.Unlock()
+	}
+	marker := bashPPBridgeRequest{ID: answer.ID, Op: "callback-mailbox-overflow"}
+	if sendErr != nil {
+		marker.Error = sendErr.Error()
+	}
+	mailbox.answer(slot, marker)
 }
 
 // enterCallbacks serializes callback-capable outer requests. Nested imports from
@@ -168,21 +223,16 @@ func (s *bashPPNativeSession) enterCallbacks(ctx context.Context, req bashPPEval
 // emitter, is checked after the body and after the receiver reconciliation
 // is computed: a stale copy fails this callback before the dependency reads
 // any further.
-func (s *bashPPNativeSession) callbackAnswer(ctx context.Context, owner *Runner, q bashPPBridgeResponse, outer *bashPPBridgeRequest) bashPPBridgeRequest {
+func (s *bashPPNativeSession) callbackAnswer(ctx context.Context, owner *Runner, q bashPPBridgeResponse, outer *bashPPBridgeRequest, frameFn *bashPPFunc) bashPPBridgeRequest {
 	answer := bashPPBridgeRequest{ID: q.ID, Op: "callback-reply"}
 	var coherence *goSourceCopyCoherence
 	if outer != nil {
 		coherence = outer.coherence
 	}
-	var callback *bashPPCallbackFunction
 	if q.Receiver != nil && q.Receiver.Kind == "callback" {
-		callback = s.callbackFunction(q.Receiver.Handle)
-		if callback == nil || callback.fn == nil || callback.owner == nil {
+		if s.originalCallbackFunction(q.Receiver.Handle) == nil {
 			answer.Error = "gosource: original callback handle expired"
 			return answer
-		}
-		if owner == nil {
-			owner = callback.owner
 		}
 	}
 	if owner != nil && outer != nil && outer.sliceCallbackSync {
@@ -227,7 +277,7 @@ func (s *bashPPNativeSession) callbackAnswer(ctx context.Context, owner *Runner,
 		var values []bashPPBridgeValue
 		var err error
 		if q.Receiver.Kind == "callback" {
-			values, err = owner.bashPPNativeFunctionCallback(ctx, q.Receiver.Handle, q.Receiver.Elements)
+			values, err = owner.bashPPNativeFunctionCallback(ctx, q.Receiver.Handle, q.Receiver.Elements, frameFn)
 		} else {
 			values, err = owner.bashPPNativeCallback(ctx, q.Selector, *q.Receiver)
 		}
@@ -314,8 +364,8 @@ func (s *bashPPNativeSession) recordCallbackRefusal(err error) {
 	}
 }
 
-func (s *bashPPNativeSession) serveCallback(ctx context.Context, owner *Runner, q bashPPBridgeResponse, outer *bashPPBridgeRequest) {
-	answer := s.callbackAnswer(ctx, owner, q, outer)
+func (s *bashPPNativeSession) serveCallback(ctx context.Context, owner *Runner, q bashPPBridgeResponse, outer *bashPPBridgeRequest, frameFn *bashPPFunc) {
+	answer := s.callbackAnswer(ctx, owner, q, outer, frameFn)
 	s.mu.Lock()
 	conn := s.conn
 	s.mu.Unlock()

@@ -349,6 +349,7 @@ func (s *bashPPNativeSession) closeCanceled(cause error) {
 		s.mailbox = nil
 		s.mu.Unlock()
 		mailbox.close()
+		s.closeCallbackFunctionTemplates()
 		if s.cmd != nil && s.cmd.Process != nil {
 			// The child is gone by now, so the copiers can reach EOF; waiting
 			// here makes the program's final output visible before the session
@@ -729,7 +730,7 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 						return
 					}
 				} else {
-					s.serveCallback(ctx, nil, reply, nil)
+					s.serveCallback(ctx, nil, reply, nil, nil)
 				}
 				continue
 			}
@@ -880,7 +881,26 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 		s.mu.Unlock()
 		if mailboxActive {
 			if slot, callback, ok := requestMailbox.take(); ok {
-				answer := s.callbackAnswer(ctx, req.CallbackOwner, callback, &q)
+				callbackFrames := testingFrames
+				if !testingBarrier {
+					callbackFrames = nil
+				}
+				frame, frameFn, scheduled, frameErr := s.testingCallbackFrame(callbackFrames, callback)
+				if frameErr != nil {
+					answer := bashPPBridgeRequest{ID: callback.ID, Op: "callback-reply", Error: fmt.Sprintf("gosource: testing callback frame: %v", frameErr)}
+					s.answerMailboxCallback(requestMailbox, slot, answer)
+					continue
+				}
+				if scheduled {
+					go func() {
+						defer testingFrames.Done()
+						defer testingFrames.finish(frame)
+						answer := s.callbackAnswer(ctx, frame, callback, &q, frameFn)
+						s.answerMailboxCallback(requestMailbox, slot, answer)
+					}()
+					continue
+				}
+				answer := s.callbackAnswer(ctx, req.CallbackOwner, callback, &q, nil)
 				s.mu.Lock()
 				mailboxAlive, waitErr := s.mailbox == requestMailbox, s.waitErr
 				s.mu.Unlock()
@@ -890,26 +910,7 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 					}
 					return nil, s.programExitError(waitErr)
 				}
-				if !requestMailbox.answer(slot, answer) {
-					// The original body has already run. Send its exact result once
-					// through the authenticated socket, then wake its mailbox waiter.
-					s.mu.Lock()
-					conn := s.conn
-					s.mu.Unlock()
-					var sendErr error
-					if conn == nil {
-						sendErr = errors.New("gosource: callback connection closed")
-					} else {
-						s.write.Lock()
-						sendErr = json.NewEncoder(conn).Encode(answer)
-						s.write.Unlock()
-					}
-					marker := bashPPBridgeRequest{ID: answer.ID, Op: "callback-mailbox-overflow"}
-					if sendErr != nil {
-						marker.Error = sendErr.Error()
-					}
-					requestMailbox.answer(slot, marker)
-				}
+				s.answerMailboxCallback(requestMailbox, slot, answer)
 				if owner := req.CallbackOwner; owner != nil {
 					// A nested os.Exit has already made this the program's process
 					// outcome. Keep that identity through the enclosing request.
@@ -959,31 +960,35 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 			// The callback installs a write barrier on the interpreter's
 			// streams. If it writes directly, earlier child output lands first;
 			// a callback with no direct output needs no pipe round trip.
-			if testingBarrier && testingFrames != nil && req.CallbackOwner != nil && callback.Receiver != nil && callback.Receiver.Kind == "callback" {
-				registered := s.callbackFunction(callback.Receiver.Handle)
-				if registered == nil || registered.owner == nil {
-					s.serveCallback(ctx, nil, callback, &q)
-					return nil, fmt.Errorf("gosource: original callback handle expired")
+			if testingBarrier && testingFrames != nil {
+				frame, frameFn, scheduled, frameErr := s.testingCallbackFrame(testingFrames, callback)
+				if frameErr != nil {
+					s.serveCallback(ctx, nil, callback, &q, nil)
+					return nil, fmt.Errorf("gosource: testing callback frame: %w", frameErr)
 				}
-				frame, err := registered.owner.bashPPTestingCallbackFrame(testingFrames, registered.capture)
-				if err != nil {
-					s.serveCallback(ctx, nil, callback, &q)
-					return nil, fmt.Errorf("gosource: testing callback frame: %w", err)
+				if !scheduled {
+					if routed {
+						req.CallbackOwner.bashPPTools.routedDepth++
+					}
+					s.serveCallback(ctx, req.CallbackOwner, callback, &q, nil)
+					if routed {
+						req.CallbackOwner.bashPPTools.routedDepth--
+					}
+					break
 				}
-				testingFrames.add(frame)
 				go func() {
 					defer testingFrames.Done()
+					defer testingFrames.finish(frame)
 					if routed {
 						frame.bashPPTools.routedDepth++
 					}
-					s.serveCallback(ctx, frame, callback, &q)
-					testingFrames.finish(frame)
+					s.serveCallback(ctx, frame, callback, &q, frameFn)
 				}()
 			} else {
 				if routed {
 					req.CallbackOwner.bashPPTools.routedDepth++
 				}
-				s.serveCallback(ctx, req.CallbackOwner, callback, &q)
+				s.serveCallback(ctx, req.CallbackOwner, callback, &q, nil)
 				if routed {
 					req.CallbackOwner.bashPPTools.routedDepth--
 				}
