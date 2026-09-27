@@ -200,11 +200,17 @@ type Runner struct {
 	// the runner's static type and method tables and the selector inputs, but
 	// it reallocates edge slices, ancestor maps and struct-field views on
 	// every field or method access — the dominant cost of an interpreted
-	// struct-heavy program. The cache is deliberately NOT copied into a
-	// subshell or Reset clone: those rebuild bashPPMethods into fresh
-	// *bashPPFunc objects, so a shared entry would hand back a stale method,
-	// and a nil map is lazily rebuilt against the clone's own tables. It is
-	// only ever touched by its owning Runner's goroutine.
+	// struct-heavy program. It is keyed by the canonical identity of the type
+	// selected on, not by the type node the evaluator handed in: those nodes
+	// are synthesized per evaluation for a root reached through a value, so a
+	// node key made the map grow with the number of accesses rather than with
+	// the program. Because an entry now outlives the node, every mutation of
+	// the type or method tables drops the map
+	// ([Runner.bashPPInvalidateSelectionCache]). The cache is deliberately
+	// NOT copied into a subshell or Reset clone: those rebuild bashPPMethods
+	// into fresh *bashPPFunc objects, so a shared entry would hand back a
+	// stale method, and a nil map is lazily rebuilt against the clone's own
+	// tables. It is only ever touched by its owning Runner's goroutine.
 	bashPPSelectionCache map[bashPPSelectionCacheKey]bashPPSelection
 	// bashPPNativeFuncNames memoizes the set of unqualified names that resolve
 	// to a native (bodyless) companion function or a mapped-companion runtime

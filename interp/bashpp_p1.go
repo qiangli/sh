@@ -204,6 +204,7 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 		// recursion), instead of being misreported as undefined.
 		candidate := bashPPType{underlying: d.DeclType.Value, alias: d.Alias, typeParams: d.TypeParams, typeExpr: d.DeclTypeExpr, fields: d.StructFields}
 		r.bashPPTypes[name] = candidate
+		r.bashPPInvalidateSelectionCache()
 		typeInstalled = true
 		if d.DeclType.Value == "struct" {
 			seenFields := make(map[string]bool)
@@ -460,6 +461,7 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 			members[i] = member.Value
 		}
 		r.bashPPTypes[name] = bashPPType{underlying: d.DeclType.Value, alias: d.Alias, typeParams: d.TypeParams, members: members, typeExpr: d.DeclTypeExpr, fields: d.StructFields}
+		r.bashPPInvalidateSelectionCache()
 		keepType = true
 	}
 	if (d.Site == syntax.StartVar || d.Site == syntax.StartConst) && d.DeclType != nil {

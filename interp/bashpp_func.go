@@ -553,6 +553,7 @@ func (r *Runner) bashPPMethodDecl(d *syntax.BashPPFuncDecl) {
 		}
 	}
 	methods[d.Name.Value] = &bashPPFunc{decl: d, scope: captured, advised: advised}
+	r.bashPPInvalidateSelectionCache()
 }
 
 // bashPPLookupFunc resolves a call's callee to a callable function: a literal
@@ -2648,6 +2649,7 @@ func (f *bashPPFrame) leave() {
 		} else {
 			delete(r.bashPPTypes, local.name)
 		}
+		r.bashPPInvalidateSelectionCache()
 	}
 	r.bashPPAgentic = f.agentic
 	f.own.release()

@@ -1893,6 +1893,7 @@ func (r *Runner) bashPPBridgeRegisterScalarTypes(ctx context.Context, req bashPP
 				r.bashPPTypes[binding] = bashPPType{underlying: basic.Name(), alias: true, typeExpr: &syntax.BashPPNamedType{Name: &syntax.Lit{Value: canonical}}}
 			}
 		}
+		r.bashPPInvalidateSelectionCache()
 	}
 	return nil
 }

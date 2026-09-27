@@ -181,40 +181,108 @@ func (r *Runner) bashPPResolveSelection(root syntax.BashPPTypeExpr, name string,
 	return r.bashPPResolveSelectionIn(root, name, methods, addressable, pkg)
 }
 
-// bashPPSelectionCacheKey identifies one memoized selector resolution. Every
-// concrete [syntax.BashPPTypeExpr] is a pointer type, so the interface value is
-// comparable and keys on the resolved type node's identity — the same node
-// always denotes the same type (a function-local type shadowing a name is a
-// distinct node, so distinct types never collide under a shared spelling).
+// bashPPSelectionCacheKey identifies one memoized selector resolution. The
+// root is the canonical identity of the type selected on
+// ([Runner.bashPPSelectionRootKey]) rather than the AST node the evaluator
+// happened to hand in: a root reached through a value — a pointer cell's
+// `*T`, an interface box's dynamic type — is SYNTHESIZED per evaluation, so
+// keying on the node re-keyed one static type under a fresh pointer on every
+// access and the map grew without bound for the life of the runner. Keyed by
+// identity the map is bounded by the program's distinct (type, selector)
+// pairs.
 type bashPPSelectionCacheKey struct {
-	root        syntax.BashPPTypeExpr
+	root        string
 	name        string
 	pkg         string
 	methods     bool
 	addressable bool
 }
 
+// bashPPSelectionRootKey spells the identity of a selector root: a string
+// equal for two type expressions exactly when they denote the same type and
+// independent of which node spells it. A named type is its name plus, for a
+// function-local declaration, the lexical scope of the declaration a
+// reference resolves to — the same `name@scope` identity
+// bashpp_sprint162_type_scope.go and bashPPUnderlyingTypeKey already use, so
+// two functions each declaring `type s struct{…}` stay distinct types.
+//
+// ok is false for a root whose identity a spelling cannot carry, and such a
+// root is resolved without the cache:
+//
+//   - an anonymous struct, interface or func literal, whose members are the
+//     type and which two distinct literals spell alike;
+//   - a type parameter, or a named type whose name the executing frame binds
+//     to a type argument: its meaning is the frame's, not the program's;
+//   - anything else (a collection, a channel, an inferred placeholder), none
+//     of which has members for a selector to reach.
+func (r *Runner) bashPPSelectionRootKey(typ syntax.BashPPTypeExpr) (string, bool) {
+	switch x := typ.(type) {
+	case *syntax.BashPPPointerType:
+		element, ok := r.bashPPSelectionRootKey(x.Element)
+		if !ok {
+			return "", false
+		}
+		return "*" + element, true
+	case *syntax.BashPPNamedType:
+		if x.Name == nil || r.bashPPTypeParamArgs[x.Name.Value] != nil {
+			return "", false
+		}
+		key := x.Name.Value
+		if len(x.TypeArgs) > 0 {
+			var args strings.Builder
+			for i, arg := range x.TypeArgs {
+				if i > 0 {
+					args.WriteString(",")
+				}
+				argKey, ok := r.bashPPSelectionRootKey(arg.ArgType)
+				if !ok {
+					return "", false
+				}
+				args.WriteString(argKey)
+			}
+			key += "[" + args.String() + "]"
+		}
+		if scope, known := r.goSourceLocalTypeScope(x); known && scope != "" {
+			key += "@" + scope
+		}
+		return key, true
+	}
+	return "", false
+}
+
 // bashPPResolveSelectionIn memoizes bashPPResolveSelectionUncached. Resolution
 // reallocates edge slices, ancestor maps and struct-field views on every call
 // and its result depends only on the static type/method tables and these
-// inputs, so it is cached per Runner. A nil root cannot be keyed (its dynamic
-// type is unknown) and is resolved directly. The cached bashPPSelection is
-// treated read-only by every caller (edge slices are copied before any
-// prepend and only sub-ranged for reads), so sharing the value is safe.
+// inputs, so it is cached per Runner. A root without a canonical identity —
+// including a nil one, whose type is unknown — is resolved directly. The
+// cached bashPPSelection is treated read-only by every caller (edge slices are
+// copied before any prepend and only sub-ranged for reads), so sharing the
+// value is safe.
 func (r *Runner) bashPPResolveSelectionIn(root syntax.BashPPTypeExpr, name string, methods, addressable bool, pkg string) bashPPSelection {
-	if root != nil {
-		key := bashPPSelectionCacheKey{root: root, name: name, pkg: pkg, methods: methods, addressable: addressable}
-		if sel, ok := r.bashPPSelectionCache[key]; ok {
-			return sel
-		}
-		sel := r.bashPPResolveSelectionUncached(root, name, methods, addressable, pkg)
-		if r.bashPPSelectionCache == nil {
-			r.bashPPSelectionCache = make(map[bashPPSelectionCacheKey]bashPPSelection)
-		}
-		r.bashPPSelectionCache[key] = sel
+	rootKey, keyed := r.bashPPSelectionRootKey(root)
+	if !keyed {
+		return r.bashPPResolveSelectionUncached(root, name, methods, addressable, pkg)
+	}
+	key := bashPPSelectionCacheKey{root: rootKey, name: name, pkg: pkg, methods: methods, addressable: addressable}
+	if sel, ok := r.bashPPSelectionCache[key]; ok {
 		return sel
 	}
-	return r.bashPPResolveSelectionUncached(root, name, methods, addressable, pkg)
+	sel := r.bashPPResolveSelectionUncached(root, name, methods, addressable, pkg)
+	if r.bashPPSelectionCache == nil {
+		r.bashPPSelectionCache = make(map[bashPPSelectionCacheKey]bashPPSelection)
+	}
+	r.bashPPSelectionCache[key] = sel
+	return sel
+}
+
+// bashPPInvalidateSelectionCache drops every memoized selector resolution.
+// Keyed by type identity, an entry outlives the node a selector spelled it
+// with, so it must not outlive the declaration it resolved against: every
+// mutation of the runner's named-type or method tables — a Go-form body
+// declaring a local type, a frame restoring the entry it shadowed, a method
+// declaration — calls this.
+func (r *Runner) bashPPInvalidateSelectionCache() {
+	r.bashPPSelectionCache = nil
 }
 
 // bashPPResolveSelectionUncached is bashPPResolveSelection for a selector

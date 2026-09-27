@@ -66,6 +66,7 @@ func (r *Runner) bashPPGoSourceRegisterTypes(file *syntax.File) {
 			typeExpr:   d.DeclTypeExpr,
 			fields:     d.StructFields,
 		}
+		r.bashPPInvalidateSelectionCache()
 		r.bashPPGoSourcePending[name] = true
 		// Reset purges whatever a gosource tree installed; a pre-registered
 		// type is no different from one installed by its own statement.
