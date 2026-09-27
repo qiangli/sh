@@ -751,7 +751,29 @@ func (r *Runner) bashPPBridgeContents(v bashPPBridgeValue, typ syntax.BashPPType
 	if err != nil {
 		return nil, nil, err
 	}
+	if bashPPBridgeCarrierText(v, value) {
+		// The payload is the value's spelling, not a value of typ, so it
+		// travels the way every other collection carrier text does: bare, for
+		// the declared destination to reconstruct on read.
+		return value, nil, nil
+	}
 	return value, &bashPPCollectionMeta{kind: "scalar", typ: typ}, nil
+}
+
+// bashPPBridgeCarrierText reports whether the interpreter representation of a
+// transported scalar is that value's exact Go spelling rather than a value of
+// its declared type. Complex numbers have no interpreter scalar of their own —
+// collections stay JSON-shaped, so the lossless text is the carrier and the
+// destination type rebuilds the tagged scalar on read (see
+// bashPPSprint162ComplexCollectionText). Such a payload must not claim scalar
+// collection metadata: the metadata would assert that the text IS a value of
+// that type, and scalar consumers would then compare, print and convert the
+// spelling instead of the number.
+func bashPPBridgeCarrierText(v bashPPBridgeValue, value any) bool {
+	if _, text := value.(string); !text {
+		return false
+	}
+	return v.Kind != "string"
 }
 
 func bashPPBridgeDynamicType(name string) syntax.BashPPTypeExpr {
