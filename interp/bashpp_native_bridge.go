@@ -114,8 +114,14 @@ func bashPPBridgeString(text string) bashPPBridgeValue {
 	return bashPPBridgeValue{Kind: "string", Type: "string", Text: text, Bytes: []byte(text)}
 }
 
+func bashPPBridgePanicString(text string) bashPPBridgeValue {
+	value := bashPPBridgeString(text)
+	value.Kind = "panic"
+	return value
+}
+
 func (v bashPPBridgeValue) stringText() string {
-	if v.Kind == "string" && v.Bytes != nil {
+	if (v.Kind == "string" || v.Kind == "panic" && v.Type == "string") && v.Bytes != nil {
 		return string(v.Bytes)
 	}
 	return v.Text
@@ -988,7 +994,7 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 				return nil, err
 			}
 			if reply.Panic != nil {
-				return nil, &bashPPCallbackPanic{value: reply.Panic.Text}
+				return nil, &bashPPCallbackPanic{value: reply.Panic.stringText()}
 			}
 			if reply.Error != "" {
 				s.mu.Lock()

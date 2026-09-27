@@ -389,7 +389,7 @@ func (r *Runner) bashPPNativeCallback(ctx context.Context, selector string, recv
 	if r.bashPPCallbackRaised(entry) && !r.exit.exiting {
 		payload := r.bashPPPanic.value()
 		r.bashPPPanic, r.exit = savedPanic, savedExit
-		return []bashPPBridgeValue{{Kind: "panic", Type: "string", Text: payload}}, nil
+		return []bashPPBridgeValue{bashPPBridgePanicString(payload)}, nil
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err

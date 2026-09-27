@@ -296,7 +296,7 @@ func (r *Runner) bashPPRunCallbackFunc(ctx context.Context, fn *bashPPFunc, args
 	if r.bashPPCallbackRaised(entry) && !r.exit.exiting {
 		payload := r.bashPPPanic.value()
 		r.bashPPPanic, r.exit = savedPanic, savedExit
-		return []bashPPBridgeValue{{Kind: "panic", Text: payload, Type: "string"}}, nil
+		return []bashPPBridgeValue{bashPPBridgePanicString(payload)}, nil
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err

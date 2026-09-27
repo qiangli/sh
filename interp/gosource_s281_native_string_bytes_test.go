@@ -104,10 +104,61 @@ func main() {
 	if err != nil {
 		t.Fatalf("Runner: %v; outcome=%+v", err, got)
 	}
-	const want = "flags ffff3f fffff\n" +
+	const want = "flags ffff3f0000 fffff\n" +
 		"props 01039901aa01ffff3f01cef5b7f70f 1 [99 aa fffff] [feedface]\n" +
 		"invalid 4100fffe5a true 5\n" +
 		"unicode c3a90ae280a801 true 7\n"
+	if got.stdout != want || got.stderr != "" || got.status != 0 {
+		t.Fatalf("outcome=%+v; want stdout %q", got, want)
+	}
+}
+
+func TestS281OriginalErrorAndPanicCallbackPreserveBytes(t *testing.T) {
+	const source = `package main
+
+import (
+	"fmt"
+	"sort"
+)
+
+type originalError struct{ text string }
+
+func (e originalError) Error() string { return e.text }
+
+func checkError(name, text string) {
+	got := fmt.Sprint(originalError{text})
+	fmt.Printf("error %s %x %t %d\n", name, []byte(got), got == text, len(got))
+}
+
+func checkPanic(name, text string) {
+	defer func() {
+		got, ok := recover().(string)
+		fmt.Printf("panic %s %x %t %d\n", name, []byte(got), ok && got == text, len(got))
+	}()
+	sort.Slice([]int{2, 1}, func(i, j int) bool { panic(text) })
+}
+
+func main() {
+	invalid := string([]byte{'A', 0, 0xff, 0xfe, 'Z'})
+	unicode := "é\n\u2028\x01"
+	checkError("invalid", invalid)
+	checkError("unicode", unicode)
+	checkError("empty", "")
+	checkPanic("invalid", invalid)
+	checkPanic("unicode", unicode)
+	checkPanic("empty", "")
+}
+`
+	got, err := runGoSourceIdentity(t, source, "")
+	if err != nil {
+		t.Fatalf("Runner: %v; outcome=%+v", err, got)
+	}
+	const want = "error invalid 4100fffe5a true 5\n" +
+		"error unicode c3a90ae280a801 true 7\n" +
+		"error empty  true 0\n" +
+		"panic invalid 4100fffe5a true 5\n" +
+		"panic unicode c3a90ae280a801 true 7\n" +
+		"panic empty  true 0\n"
 	if got.stdout != want || got.stderr != "" || got.status != 0 {
 		t.Fatalf("outcome=%+v; want stdout %q", got, want)
 	}

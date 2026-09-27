@@ -69,7 +69,7 @@ type request struct { SliceBuffers []sliceBuffer `json:"slice_buffers,omitempty"
 // Op, Selector and Receiver are set only on a callback: the reverse direction
 // in which this helper asks the interpreter to run an original method body.
 type response struct { SliceUpdates []sliceBuffer `json:"slice_updates,omitempty"`; Transferred []sliceBuffer `json:"transferred,omitempty"`; PtrUpdates []value `json:"ptr_updates,omitempty"`; Panic *value `json:"panic,omitempty"`; PanicAddr *uint64 `json:"panic_addr,omitempty"`; ID uint64 `json:"id"`; Op string `json:"op,omitempty"`; Selector string `json:"selector,omitempty"`; Receiver *value `json:"receiver,omitempty"`; Values []value `json:"values,omitempty"`; Error string `json:"error,omitempty"`; Parent uint64 `json:"parent,omitempty"`; OutputBarrierStdout uint64 `json:"output_barrier_stdout,omitempty"`; OutputBarrierStderr uint64 `json:"output_barrier_stderr,omitempty"` }
-func stringText(v value)string{if v.Kind=="string"&&v.Bytes!=nil{return string(v.Bytes)};return v.Text}
+func stringText(v value)string{if (v.Kind=="string"||v.Kind=="panic"&&v.Type=="string")&&v.Bytes!=nil{return string(v.Bytes)};return v.Text}
 var symbols = map[string]reflect.Value{
 //SYMBOLS
 }
