@@ -821,7 +821,14 @@ func Parse(cb func()) { Retain(cb) }
 `,
 		},
 		{
-			name: "unknown star value copy cannot hide callback",
+			// Retain reads a pointer of unproven origin, so the copy it makes
+			// is modelled as possibly holding a callback -- but nothing Parse
+			// hands Retain reaches one, and no package variable can hold one in
+			// a state this proof has not refused, so Retain cannot name cb at
+			// all and is summarized without being walked. The conservatism
+			// about unknown dereferences is kept exactly where it is
+			// load-bearing, by the case below.
+			name: "unknown star value copy in a callback-unreachable callee",
 			source: `package dep
 type H struct{ f func() }
 var saved func()
@@ -830,6 +837,23 @@ func Retain(h *H) {
 	saved = copied.f
 }
 func Parse(cb func()) { Retain(nil) }
+`,
+			want: true,
+		},
+		{
+			// The same unknown dereference in a callee that does reach the
+			// callback -- through a second argument it never even reads. The
+			// body is walked and the copy is refused.
+			name: "unknown star value copy hides callback from a reaching callee",
+			source: `package dep
+type H struct{ f func() }
+type keep struct{ cb func() }
+var saved func()
+func Retain(h *H, k *keep) {
+	copied := *h
+	saved = copied.f
+}
+func Parse(cb func()) { Retain(nil, &keep{cb: cb}) }
 `,
 		},
 		{

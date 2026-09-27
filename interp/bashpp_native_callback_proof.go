@@ -1685,6 +1685,53 @@ func dependencyCallbackCallbackPlaces(value dependencyCallbackValue) (map[string
 	return places, true
 }
 
+// dependencyCallbackValueReachesCallback reports whether an original callback
+// -- a closure with no literal -- sits anywhere in a value's graph. It reads
+// the answer off the proof's own value graph, with the same projection the
+// recursion rule uses, so it is a fact about where callbacks are and never
+// about what anything is called. A place walk that exhausts its bound is
+// reported as reaching one.
+func dependencyCallbackValueReachesCallback(value dependencyCallbackValue) bool {
+	if !value.tainted() {
+		// tainted() is true of every closure and of every object holding one,
+		// so a clean value holds no closure at all, let alone the callback.
+		return false
+	}
+	places, ok := dependencyCallbackCallbackPlaces(value)
+	return !ok || len(places) != 0
+}
+
+// dependencyCallbackCalleeCannotReachCallback reports that a callee can neither
+// invoke nor store an original callback, because no value it can observe
+// reaches one.
+//
+// A Go body observes exactly: its parameters, its receiver, the variables a
+// closure captured, the package-level identifiers, and whatever it builds from
+// those. Package-level constants and functions are code, not callback-bearing
+// state; and no package-level variable can reach a callback in any state this
+// proof has not already refused, because every route into one is a refusal --
+// a direct store (assign's package global case), a store through a selector,
+// index or pointer whose base is the untracked value a global reads as, a
+// callback-bearing actual handed to a callee that is not source-visible, and a
+// callback-bearing result returned out of the region. So when the actuals, the
+// receiver and the callee's own captures all hold no callback, neither the
+// callee nor anything it transitively calls can name the callback value, and
+// its whole effect on the callback's lifetime is nothing. The caller summarizes
+// it by escaping what it was handed -- the callee may have retained those
+// clean values, so a later callback store into them must refuse -- and the body
+// is not walked at all: no depth is spent and no further steps are charged.
+func dependencyCallbackCalleeCannotReachCallback(args []dependencyCallbackValue, receiver, callee dependencyCallbackValue) bool {
+	for _, arg := range args {
+		if dependencyCallbackValueReachesCallback(arg) {
+			return false
+		}
+	}
+	if dependencyCallbackValueReachesCallback(receiver) {
+		return false
+	}
+	return !dependencyCallbackValueReachesCallback(callee)
+}
+
 // dependencyCallbackSameCallbackReach reports whether two states put the
 // tracked callback in the same places. Differences outside those places are
 // callback-free by construction.
@@ -3173,6 +3220,10 @@ func (p *dependencyCallbackProof) callWithResolvedCallee(call *ast.CallExpr, cal
 		if callee.callback.lit == nil {
 			return true
 		}
+		if dependencyCallbackCalleeCannotReachCallback(args, dependencyCallbackValue{}, callee) {
+			p.markEscaped(append(append([]dependencyCallbackValue{}, args...), callee))
+			return true
+		}
 		supplied, bound := dependencyCallbackBindArguments(callee.callback.lit.Type.Params, args)
 		if !bound {
 			return p.refuse(call, fmt.Sprintf("call to function literal cannot bind actual=%d to formals=%q", len(args), dependencyCallbackFormalLabels(callee.callback.lit.Type.Params)))
@@ -3220,14 +3271,19 @@ func (p *dependencyCallbackProof) callWithResolvedCallee(call *ast.CallExpr, cal
 		p.markEscaped(args)
 		return true
 	}
-	// Clean actuals do not make a callee harmless. A body can materialise an
-	// unknown value on its own -- dereferencing a pointer that is not proven
-	// to point at a tracked object yields one -- and store it where the
-	// callback would be retained. Whenever the body is source-visible it is
-	// proved, with the actuals it is given; only bodies this proof cannot see
-	// are summarised by escaping the clean actuals.
+	// Past this point something the callee can observe reaches a callback, so
+	// its body must be proved with the actuals it is given. Clean actuals alone
+	// would not have made it harmless: a body can materialise an unknown value
+	// on its own -- dereferencing a pointer that is not proven to point at a
+	// tracked object yields one -- and store it where the callback would be
+	// retained. What licenses not descending is the stronger fact checked
+	// above, that no route from this call site reaches a callback at all.
 	switch fun := call.Fun.(type) {
 	case *ast.Ident:
+		if dependencyCallbackCalleeCannotReachCallback(args, dependencyCallbackValue{}, callee) {
+			p.markEscaped(args)
+			return true
+		}
 		if !tainted {
 			p.markEscaped(args)
 		}
@@ -3241,6 +3297,10 @@ func (p *dependencyCallbackProof) callWithResolvedCallee(call *ast.CallExpr, cal
 		return p.callFunction(call, decls[0], args, dependencyCallbackValue{}, depth)
 	case *ast.SelectorExpr:
 		receiver := p.value(fun.X, env)
+		if dependencyCallbackCalleeCannotReachCallback(args, receiver, callee) {
+			p.markEscaped(append(append([]dependencyCallbackValue{}, args...), receiver))
+			return true
+		}
 		carriesCallback := tainted || receiver.tainted()
 		if !carriesCallback {
 			p.markEscaped(append(args, receiver))

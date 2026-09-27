@@ -8,6 +8,12 @@ package interp_test
 // catalogue entry. Parse stores ErrorHandler only in its stack-local parser,
 // scanner, and source values; the general dependency-source lifetime proof
 // admits it while preserving the callback's concrete syntax.Error identity.
+//
+// The bad token sits inside a function body, not at the top level, so Parse
+// recovers and returns a File as well as the first error: all four facts the
+// program prints are then non-trivial. Real go1.27.1 prints exactly the same
+// four for this input; the earlier top-level "package p\n@" makes Parse return
+// a nil *File natively too, which no interpreter change can turn into true.
 
 import "testing"
 
@@ -21,7 +27,7 @@ import (
 func main() {
 	count := 0
 	originalType := true
-	file, first := syntax.Parse(syntax.NewFileBase("bad.go"), strings.NewReader("package p\n@"), func(err error) {
+	file, first := syntax.Parse(syntax.NewFileBase("bad.go"), strings.NewReader("package p\nfunc f() { @ }"), func(err error) {
 		count++
 		_, ok := err.(syntax.Error)
 		originalType = originalType && ok
