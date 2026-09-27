@@ -323,6 +323,9 @@ func (r *Runner) bashPPPrepareNativeCall(ctx context.Context, call *syntax.BashP
 				if err != nil {
 					return bashPPBridgeRequest{}, err
 				}
+				if inner.ResultFuncType != nil && len(values) == 1 && values[0].Kind == "handle" {
+					values[0].Type = bashPPTypeText(inner.ResultFuncType)
+				}
 				q.Args = append(q.Args, values...)
 				return q, nil
 			}

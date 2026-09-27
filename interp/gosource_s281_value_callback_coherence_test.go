@@ -117,3 +117,47 @@ func main() {
 	qt.Assert(t, qt.StringContains(err.Error(), "the copy would be stale"))
 	qt.Assert(t, qt.IsFalse(strings.Contains(out+stderr, "after")), qt.Commentf("program continued: %q %q", out, stderr))
 }
+
+// TestS809NestedNativeSlicesValuesIterators pins a source-only regression from
+// Go's rangefunc corpus: each slices.Values call returns a native iterator
+// handle, and slices.Collect invokes that handle through the same checked yield
+// callback path as direct range-over-function. Nested loops also prove that the
+// synthetic yield callback owns its lexical cells per invocation instead of
+// sharing the inner accumulator between sibling ranges.
+func TestS809NestedNativeSlicesValuesIterators(t *testing.T) {
+	const source = `package main
+
+import (
+	"fmt"
+	"slices"
+)
+
+func Bug70035(s1, s2, s3 []string) string {
+	var c1 string
+	for v1 := range slices.Values(s1) {
+		var c2 string
+		for v2 := range slices.Values(s2) {
+			var c3 string
+			for v3 := range slices.Values(s3) {
+				c3 = c3 + v3
+			}
+			c2 = c2 + v2 + c3
+		}
+		c1 = c1 + v1 + c2
+	}
+	return c1
+}
+
+func main() {
+	fmt.Println(Bug70035([]string{"1", "2", "3"}, []string{"a", "b", "c"}, []string{"A", "B", "C"}))
+}
+`
+	got, err := runGoSourceIdentity(t, source, "cmd/compile/internal/rangefunc")
+	if err != nil {
+		t.Fatalf("Runner: %v; outcome=%+v", err, got)
+	}
+	const want = "1aABCbABCcABC2aABCbABCcABC3aABCbABCcABC\n"
+	if got.stdout != want || got.stderr != "" || got.status != 0 {
+		t.Fatalf("outcome=%+v; want native stdout %q", got, want)
+	}
+}

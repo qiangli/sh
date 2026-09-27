@@ -810,12 +810,13 @@ func nativeMapPrimitiveEqual(a, b bashPPBridgeValue) (bool, error) {
 }
 
 func (r *Runner) goSourceSlicesCollect(ctx context.Context, req bashPPEvalRequest, args []bashPPBridgeValue) ([]bashPPBridgeValue, error) {
-	if len(args) != 1 || args[0].Kind != "callback" || args[0].Session != req.Bridge.id {
+	if len(args) != 1 {
 		return nil, fmt.Errorf("gosource: slices.Collect requires one current iterator callback")
 	}
-	req.Bridge.mu.Lock()
-	iterator := req.Bridge.functions[args[0].Handle]
-	req.Bridge.mu.Unlock()
+	iterator, err := r.goSourceSlicesCollectIterator(req, args[0])
+	if err != nil {
+		return nil, err
+	}
 	yieldType, err := r.goSourceIteratorYield(iterator)
 	if err != nil {
 		return nil, fmt.Errorf("gosource: slices.Collect: %w", err)
@@ -840,6 +841,41 @@ func (r *Runner) goSourceSlicesCollect(ctx context.Context, req bashPPEvalReques
 		return nil, errBashPPScalarInterrupted
 	}
 	return []bashPPBridgeValue{{Kind: "slice", Type: "[]" + bashPPTypeText(yieldParams[0].typ), Elements: collected}}, nil
+}
+
+func (r *Runner) goSourceSlicesCollectIterator(req bashPPEvalRequest, arg bashPPBridgeValue) (*bashPPFunc, error) {
+	if req.Bridge == nil {
+		return nil, fmt.Errorf("gosource: slices.Collect requires one current iterator callback")
+	}
+	if arg.Kind == "callback" && arg.Session == req.Bridge.id {
+		req.Bridge.mu.Lock()
+		iterator := req.Bridge.functions[arg.Handle]
+		req.Bridge.mu.Unlock()
+		if iterator != nil {
+			return iterator, nil
+		}
+	}
+	if arg.Kind == "handle" {
+		if signature, ok := bashPPBridgeFuncType(arg); ok {
+			native := arg
+			native.Callable = "range-iterator"
+			return &bashPPFunc{native: &native, lit: &syntax.BashPPFuncLit{Params: signature.Params, Results: signature.Results}}, nil
+		}
+	}
+	return nil, fmt.Errorf("gosource: slices.Collect requires one current iterator callback")
+}
+
+func bashPPBridgeFuncType(value bashPPBridgeValue) (*syntax.BashPPFuncType, bool) {
+	for _, text := range []string{value.Type, value.NativeType} {
+		if text == "" {
+			continue
+		}
+		signature, ok := syntax.BashPPTypeExprFromText(text).(*syntax.BashPPFuncType)
+		if ok {
+			return signature, true
+		}
+	}
+	return nil, false
 }
 
 // nativeSliceElements returns the visible element values of a transported
