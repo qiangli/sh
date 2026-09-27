@@ -374,7 +374,11 @@ func synchronousFunctionCallback(req bashPPEvalRequest, q bashPPBridgeRequest) b
 		}
 		path = req.Imports[alias] + "." + name
 	}
-	if path == "golang.org/x/tour/wc.Test" || path == "golang.org/x/tour/pic.Show" || path == "path/filepath.WalkDir" || path == "testing.Main" {
+	// ir.DoChildren immediately delegates to the node's generated doChildren
+	// method. The generator emits only inline do(child) calls and synchronous
+	// list loops, stopping as soon as one call returns true; no implementation
+	// stores the callback or starts a goroutine.
+	if path == "cmd/compile/internal/ir.DoChildren" || path == "golang.org/x/tour/wc.Test" || path == "golang.org/x/tour/pic.Show" || path == "path/filepath.WalkDir" || path == "testing.Main" {
 		return true
 	}
 	// testing.AllocsPerRun stays refused: it would invoke the original func
