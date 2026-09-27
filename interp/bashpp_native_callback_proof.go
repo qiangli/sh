@@ -161,6 +161,7 @@ type dependencyCallbackFormal struct {
 type dependencyCallbackActiveFrame struct {
 	supplied map[string]dependencyCallbackValue
 	receiver dependencyCallbackValue
+	snapshot string
 }
 
 type dependencyCallbackCompletedFrame struct {
@@ -445,7 +446,7 @@ func (p *dependencyCallbackProof) function(decl *ast.FuncDecl, supplied map[stri
 			return true
 		}
 	}
-	p.active[key] = dependencyCallbackActiveFrame{supplied: dependencyCallbackCloneEnv(supplied), receiver: receiver}
+	p.active[key] = dependencyCallbackActiveFrame{supplied: dependencyCallbackCloneEnv(supplied), receiver: receiver, snapshot: before}
 	defer delete(p.active, key)
 	savedFunc := p.currentFunc
 	p.currentFunc = key
@@ -493,7 +494,7 @@ func dependencyCallbackSameFrame(active dependencyCallbackActiveFrame, supplied 
 			return false
 		}
 	}
-	return true
+	return active.snapshot == dependencyCallbackFrameSnapshot(supplied, receiver)
 }
 
 func dependencyCallbackSameValue(left, right dependencyCallbackValue) bool {
@@ -1246,11 +1247,6 @@ func (p *dependencyCallbackProof) callWithResolvedCallee(call *ast.CallExpr, cal
 		if callee.callback.lit == nil {
 			return true
 		}
-		if callee.callback.lit.Type.Results != nil && len(callee.callback.lit.Type.Results.List) != 0 {
-			// Return-value propagation for closures is intentionally unsupported;
-			// refusal prevents a returned closure from being mistaken for clean.
-			return p.refuse(callee.callback.lit, "callback closure returns values")
-		}
 		supplied, bound := dependencyCallbackBindArguments(callee.callback.lit.Type.Params, args)
 		if !bound {
 			return p.refuse(call, fmt.Sprintf("call to function literal cannot bind actual=%d to formals=%q", len(args), dependencyCallbackFormalLabels(callee.callback.lit.Type.Params)))
@@ -1259,6 +1255,15 @@ func (p *dependencyCallbackProof) callWithResolvedCallee(call *ast.CallExpr, cal
 		for name, value := range supplied {
 			closureEnv[name] = value
 		}
+		results := make(map[string]bool)
+		for _, name := range dependencyCallbackFieldNames(callee.callback.lit.Type.Results) {
+			if name != "" {
+				results[name] = true
+				closureEnv[name] = dependencyCallbackValue{}
+			}
+		}
+		p.results = append(p.results, results)
+		defer func() { p.results = p.results[:len(p.results)-1] }()
 		p.defers = append(p.defers, nil)
 		ok := p.block(callee.callback.lit.Body, closureEnv, depth+1) && p.runDeferred(closureEnv, depth+1)
 		p.defers = p.defers[:len(p.defers)-1]

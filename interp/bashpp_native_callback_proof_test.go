@@ -292,12 +292,73 @@ func Parse(cb func()) { walk(cb) }
 `,
 		},
 		{
+			name: "recursive receiver field mutation is unproved",
+			source: `package dep
+var saved func()
+type holder struct{ f func() }
+func (h *holder) run(cb func(), choose bool) {
+	if h.f != nil {
+		saved = h.f
+		return
+	}
+	h.f = cb
+	if choose {
+		h.run(cb, false)
+	}
+}
+func Parse(cb func(), choose bool) {
+	h := &holder{}
+	h.run(cb, choose)
+}
+`,
+		},
+		{
+			name: "recursive captured environment mutation is unproved",
+			source: `package dep
+var saved func()
+type holder struct{ f func() }
+func run(invoke func(), h *holder, cb func(), choose bool) {
+	h.f = cb
+	if choose {
+		run(invoke, h, cb, false)
+		return
+	}
+	invoke()
+}
+func Parse(cb func(), choose bool) {
+	h := &holder{}
+	invoke := func() {
+		if h.f != nil {
+			saved = h.f
+		}
+	}
+	run(invoke, h, cb, choose)
+}
+`,
+		},
+		{
 			name: "stable recursive synchronous callback",
 			source: `package dep
 func walk(cb func(), n int) { if n > 0 { walk(cb, n-1) } else { cb() } }
 func Parse(cb func()) { walk(cb, 1) }
 `,
 			want: true,
+		},
+		{
+			name: "value returning closure synchronously invokes callback",
+			source: `package dep
+func list(each func() bool) { _ = each() }
+func Parse(cb func()) { list(func() bool { cb(); return true }) }
+`,
+			want: true,
+		},
+		{
+			name: "value returning closure still cannot return callback",
+			source: `package dep
+var saved func()
+func list(each func() func()) { saved = each() }
+func Parse(cb func()) { list(func() func() { return cb }) }
+`,
 		},
 		{
 			name: "lexical local shadows global",
