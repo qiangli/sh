@@ -118,13 +118,29 @@ func (e *dependencyCallbackEnumeration) report(title string, steps int, root str
 	return b.String()
 }
 
-func dependencyCallbackEnumerationFiles(t *testing.T) (*token.FileSet, []*ast.File, string) {
+// dependencyCallbackEnumerationSelected is the file set the manager proof
+// fixtures use; the empty list means every non-test .go file of the package,
+// which is what the end-to-end gate proves over.
+var dependencyCallbackEnumerationSelected = []string{"syntax.go", "parser.go", "scanner.go", "source.go", "branches.go", "tokens.go"}
+
+func dependencyCallbackEnumerationFiles(t *testing.T, selected []string) (*token.FileSet, []*ast.File, string) {
 	t.Helper()
 	dir := filepath.Join(runtime.GOROOT(), "src", "cmd", "compile", "internal", "syntax")
 	if _, err := os.Stat(dir); err != nil {
 		t.Skipf("SDK sources unavailable: %v", err)
 	}
-	selected := []string{"syntax.go", "parser.go", "scanner.go", "source.go", "branches.go", "tokens.go"}
+	if len(selected) == 0 {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatalf("read %s: %v", dir, err)
+		}
+		for _, entry := range entries {
+			name := entry.Name()
+			if strings.HasSuffix(name, ".go") && !strings.HasSuffix(name, "_test.go") {
+				selected = append(selected, name)
+			}
+		}
+	}
 	fset := token.NewFileSet()
 	files := make([]*ast.File, 0, len(selected))
 	for _, name := range selected {
@@ -139,7 +155,21 @@ func dependencyCallbackEnumerationFiles(t *testing.T) (*token.FileSet, []*ast.Fi
 
 // Sprint: #281; Story: #810; Story-ID: 48c1146a3ab0
 func TestS281CallbackProofRefusalEnumeration(t *testing.T) {
-	fset, files, dir := dependencyCallbackEnumerationFiles(t)
+	for _, set := range []struct {
+		name     string
+		selected []string
+	}{
+		{name: "selected", selected: dependencyCallbackEnumerationSelected},
+		{name: "package", selected: nil},
+	} {
+		t.Run(set.name, func(t *testing.T) {
+			dependencyCallbackEnumerate(t, set.selected)
+		})
+	}
+}
+
+func dependencyCallbackEnumerate(t *testing.T, selected []string) {
+	fset, files, dir := dependencyCallbackEnumerationFiles(t, selected)
 	for _, test := range []struct {
 		name string
 		fn   string
@@ -158,7 +188,7 @@ func TestS281CallbackProofRefusalEnumeration(t *testing.T) {
 			report := enumeration.report("syntax."+test.fn, proof.steps, dir)
 			t.Log("\n" + report)
 			if out := os.Getenv("BASHPP_CALLBACK_PROOF_ENUM_DIR"); out != "" {
-				path := filepath.Join(out, "enumerate-"+test.name+".txt")
+				path := filepath.Join(out, "enumerate-"+strings.ReplaceAll(t.Name(), "/", "-")+".txt")
 				if err := os.WriteFile(path, []byte(report), 0o644); err != nil {
 					t.Fatalf("write %s: %v", path, err)
 				}

@@ -946,7 +946,15 @@ func dependencyCallbackSameFrame(active dependencyCallbackActiveFrame, supplied 
 			continue
 		}
 		if value.tainted() || other.tainted() {
-			return false, false, "argument " + name + " identity changed across tainted state"
+			// A func-typed parameter re-bound to another local closure is a
+			// change of code, not of callback position: the new closure holds
+			// the callback only where the entry closure already held it, and
+			// which literal each one is says nothing about where it lives. What
+			// the new code does with it is proved by the generalized body
+			// summary below, which walks this body with these actuals.
+			if !dependencyCallbackClosureKeepsCallbackPlaces(value, other) {
+				return false, false, "argument " + name + " identity changed across tainted state"
+			}
 		}
 		dependencyCallbackMarkGeneralized([]dependencyCallbackValue{other})
 		generalized = true
@@ -1121,15 +1129,17 @@ func (p *dependencyCallbackProof) recursiveBodyStoresCallback(decl *ast.FuncDecl
 	if depth > 64 {
 		return true
 	}
-	if p.summarizing[key] > 0 {
-		// Already summarizing this function: the enclosing walk covers the
-		// same body under the same generalized frame, so re-walking it here
-		// would only re-derive its obligation at exponential cost.
-		return false
-	}
 	frame := key + "\x00" + dependencyCallbackFrameSnapshot(supplied, receiver)
 	if stores, ok := p.summaries[frame]; ok {
 		return stores
+	}
+	obligation := key + "\x00" + dependencyCallbackSummaryFrame(supplied, receiver)
+	if p.summarizing[obligation] > 0 {
+		// Already summarizing this body under this obligation: the enclosing
+		// walk covers the same statements with the callback in the same
+		// places, so re-walking them here would only re-derive what it already
+		// carries, at exponential cost.
+		return false
 	}
 	// The active frame is an immutable entry snapshot used only for the
 	// recursion comparison. Build this isolated effect graph from the current
@@ -1150,9 +1160,9 @@ func (p *dependencyCallbackProof) recursiveBodyStoresCallback(decl *ast.FuncDecl
 	if p.summarizing == nil {
 		p.summarizing = make(map[string]int)
 	}
-	p.summarizing[key]++
+	p.summarizing[obligation]++
 	stores := p.recursiveBlockStoresCallback(decl.Body, env, scope, scope, depth)
-	p.summarizing[key]--
+	p.summarizing[obligation]--
 	if p.summaries == nil {
 		p.summaries = make(map[string]bool)
 	}
@@ -1472,6 +1482,27 @@ func dependencyCallbackFrameSnapshot(supplied map[string]dependencyCallbackValue
 		closures: make(map[*dependencyCallbackClosure]int),
 		cells:    make(map[*dependencyCallbackCell]int),
 	}
+	return s.frame(supplied, receiver)
+}
+
+// dependencyCallbackSummaryFrame identifies the obligation of one generalized
+// body summary: the callback-relevant part of the frame, plus the identity of
+// every function literal it can reach. A recursive body re-summarized under a
+// frame that only grew in a callback-free region -- a lazily allocated map, a
+// counter -- carries the obligation the enclosing summary already carries. A
+// frame whose func-typed parameter is bound to a different local closure does
+// not: other statements run, so it is a summary of its own.
+func dependencyCallbackSummaryFrame(supplied map[string]dependencyCallbackValue, receiver dependencyCallbackValue) string {
+	s := &dependencyCallbackSnapshot{
+		objects:   make(map[*dependencyCallbackObject]int),
+		closures:  make(map[*dependencyCallbackClosure]int),
+		cells:     make(map[*dependencyCallbackCell]int),
+		projected: true,
+	}
+	return s.frame(supplied, receiver)
+}
+
+func (s *dependencyCallbackSnapshot) frame(supplied map[string]dependencyCallbackValue, receiver dependencyCallbackValue) string {
 	var b strings.Builder
 	b.WriteString("recv=")
 	s.value(&b, receiver)
@@ -1524,6 +1555,115 @@ func dependencyCallbackReachSnapshot(value dependencyCallbackValue) string {
 	var b strings.Builder
 	s.value(&b, value)
 	return b.String()
+}
+
+// dependencyCallbackClosureKeepsCallbackPlaces reports whether re-binding a
+// func-typed parameter from the local closure a frame was entered with to
+// another local closure leaves the callback where it already was: every place
+// the new closure holds it is a place the entry closure held it too. Holding it
+// in fewer places is admitted -- that only shrinks what this argument could
+// retain -- but not in one more. Which literal each closure is, and the
+// callback-free graph each navigates to reach those places, are free to differ:
+// they are code and shape, not the callback's position. Neither side may be a
+// callback with no literal: that is the original callback itself, or the
+// unknown value a pointer of unproven origin yields, and neither is a local
+// closure over the callback.
+func dependencyCallbackClosureKeepsCallbackPlaces(entry, current dependencyCallbackValue) bool {
+	entry, current = dependencyCallbackResolvedValue(entry), dependencyCallbackResolvedValue(current)
+	if entry.callback == nil || current.callback == nil || entry.callback.lit == nil || current.callback.lit == nil {
+		return false
+	}
+	if entry.escaped != current.escaped || entry.callable != current.callable {
+		return false
+	}
+	entryPlaces, ok := dependencyCallbackCallbackPlaces(entry)
+	if !ok {
+		return false
+	}
+	currentPlaces, ok := dependencyCallbackCallbackPlaces(current)
+	if !ok {
+		return false
+	}
+	for place := range currentPlaces {
+		if !entryPlaces[place] {
+			return false
+		}
+	}
+	return true
+}
+
+// dependencyCallbackPlaceLimit bounds one place walk, so a cyclic or very wide
+// graph costs a refusal rather than the whole proof.
+const dependencyCallbackPlaceLimit = 4096
+
+// dependencyCallbackCallbackPlaces collects every place an original callback
+// sits in a value's graph: the entity holding it, the name it is held under,
+// and whether it has escaped. Holders are identified by lineage, so a frozen
+// entry clone names the same place as the live entity it was cloned from, while
+// a structurally similar but distinct entity names a different one. How the
+// graph is navigated to reach a place is deliberately not part of it: that is
+// the callback-free shape of the value, not the callback's position.
+func dependencyCallbackCallbackPlaces(value dependencyCallbackValue) (map[string]bool, bool) {
+	places := make(map[string]bool)
+	objects := make(map[*dependencyCallbackObject]bool)
+	closures := make(map[*dependencyCallbackClosure]bool)
+	cells := make(map[*dependencyCallbackCell]bool)
+	steps := 0
+	var walk func(holder, name string, value dependencyCallbackValue) bool
+	walk = func(holder, name string, value dependencyCallbackValue) bool {
+		steps++
+		if steps > dependencyCallbackPlaceLimit {
+			return false
+		}
+		if !value.tainted() {
+			return true
+		}
+		if value.cell != nil {
+			cell := value.cell
+			if cells[cell] {
+				return true
+			}
+			cells[cell] = true
+			return walk(fmt.Sprintf("cell:%p", dependencyCallbackCellLineage(cell)), name, cell.value)
+		}
+		value = dependencyCallbackResolvedValue(value)
+		if value.callback != nil {
+			closure := value.callback
+			if closure.lit == nil {
+				places[fmt.Sprintf("%s.%s:escaped=%t", holder, name, value.escaped)] = true
+				return true
+			}
+			if closures[closure] {
+				return true
+			}
+			closures[closure] = true
+			id := fmt.Sprintf("closure:%p", dependencyCallbackClosureLineage(closure))
+			for captured, inner := range closure.env {
+				if !walk(id, captured, inner) {
+					return false
+				}
+			}
+			return true
+		}
+		if value.object != nil {
+			obj := value.object
+			if objects[obj] {
+				return true
+			}
+			objects[obj] = true
+			id := fmt.Sprintf("object:%p", dependencyCallbackObjectLineage(obj))
+			for field, inner := range obj.fields {
+				if !walk(id, field, inner) {
+					return false
+				}
+			}
+		}
+		return true
+	}
+	if !walk("<root>", "", value) {
+		return nil, false
+	}
+	return places, true
 }
 
 // dependencyCallbackSameCallbackReach reports whether two states put the
