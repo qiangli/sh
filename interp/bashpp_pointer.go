@@ -78,6 +78,22 @@ func bashPPPointerMeta(typ syntax.BashPPTypeExpr) *bashPPCollectionMeta {
 	return &bashPPCollectionMeta{kind: "pointer", typ: typ}
 }
 
+func bashPPScalarKindForType(typ syntax.BashPPTypeExpr) constant.Kind {
+	switch bashPPTypeText(typ) {
+	case "string":
+		return constant.String
+	case "bool":
+		return constant.Bool
+	case "int", "int8", "int16", "int32", "int64", "uint", "uint8", "uint16", "uint32", "uint64", "uintptr", "byte", "rune":
+		return constant.Int
+	case "float32", "float64":
+		return constant.Float
+	case "complex64", "complex128":
+		return constant.Complex
+	}
+	return constant.Unknown
+}
+
 func bashPPCanonicalPointerAddress(ptr *bashPPPointer, elem syntax.BashPPTypeExpr) (*bashPPPointer, *bashPPCollectionMeta, error) {
 	if ptr == nil {
 		return nil, nil, errBashPPNilDereference
@@ -953,6 +969,37 @@ func bashPPStoreCellValue(cell *bashPPCell, value any, meta *bashPPCollectionMet
 		}
 	}
 	cell.pointer, cell.pointerValue, cell.nilPointer = false, nil, false
+	if meta != nil && meta.kind == "scalar" {
+		cell.vr = expand.Variable{Set: true, Kind: expand.String, Str: fmt.Sprint(value)}
+		cell.valueMeta, cell.object = nil, nil
+		cell.exactScalar, cell.negativeZero = nil, false
+		cell.nonFinite, cell.hasNonFinite = 0, false
+		cell.nonFiniteComplex, cell.hasNonFiniteComplex = 0, false
+		if meta.typ != nil {
+			cell.declType = meta.typ
+		}
+		if named, ok := cell.declType.(*syntax.BashPPNamedType); ok && named.Name != nil {
+			cell.typeName = named.Name.Value
+		}
+		cell.scalarKind = bashPPScalarKindForType(cell.declType)
+		if cell.scalarKind == constant.Unknown {
+			switch value.(type) {
+			case string:
+				if cell.declType == nil {
+					cell.scalarKind = constant.String
+				}
+			case bool:
+				cell.scalarKind = constant.Bool
+			case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, uintptr:
+				cell.scalarKind = constant.Int
+			case float32, float64:
+				cell.scalarKind = constant.Float
+			case complex64, complex128:
+				cell.scalarKind = constant.Complex
+			}
+		}
+		return
+	}
 	if meta != nil {
 		// Collection payloads are interpreter-owned typed storage. They may
 		// legitimately contain values which cannot cross the shell's JSON object
