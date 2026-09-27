@@ -166,11 +166,15 @@ type bashPPBridgeRequest struct {
 	// The worker and interpreter therefore keep one logical backing store even
 	// though the transport itself necessarily decoded a copy.
 	sliceCallbackSync bool
-	sourceProgram     bool   // the call site is in the program package itself
-	ID                uint64 `json:"id"`
-	Op                string `json:"op"`
-	PanicOnFault      bool   `json:"panic_on_fault,omitempty"`
-	Selector          string `json:"selector"`
+	// sourceSynchronousCallback is set only after the selected dependency's
+	// immutable Go sources prove that every callback stays on this call's
+	// stack. It is host-only and deliberately absent from the wire protocol.
+	sourceSynchronousCallback bool
+	sourceProgram            bool   // the call site is in the program package itself
+	ID                       uint64 `json:"id"`
+	Op                       string `json:"op"`
+	PanicOnFault             bool   `json:"panic_on_fault,omitempty"`
+	Selector                 string `json:"selector"`
 	// Instance is the type-argument suffix of an instantiated imported
 	// generic function; the helper resolves Selector+Instance.
 	Instance   string              `json:"instance,omitempty"`
@@ -246,6 +250,8 @@ type bashPPNativeSession struct {
 	handleTypes         map[uint64]uint64
 	typeFacts           map[bashPPNativeTypeFactKey]bashPPBridgeValue // protected by mu
 	interfaceAdmissions map[goSourceNativeAdmissionKey]bool
+	callbackProofs      map[string]bool // immutable source proofs, protected by mu
+	callbackProofSeen   map[string]bool // distinguishes a proved refusal from absent
 	functions           map[uint64]*bashPPFunc
 	functionOwners      map[uint64]*bashPPCallbackFunction
 	functionNext        uint64
@@ -774,6 +780,9 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 		if values, handled, err := req.CallbackOwner.goSourceSharedHeap(ctx, req, &q); handled || err != nil {
 			return values, err
 		}
+	}
+	if requestHasCallbacks(req, q) && !synchronousFunctionCallback(req, q) {
+		q.sourceSynchronousCallback = dependencyFunctionCallbackLifetimeProof(ctx, req, q)
 	}
 	if err := prepareNativeSliceBuffers(req, &q); err != nil {
 		return nil, err

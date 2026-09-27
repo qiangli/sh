@@ -540,6 +540,9 @@ func (r *Runner) bashPPRunCallbackFunc(ctx context.Context, fn *bashPPFunc, args
 }
 
 func synchronousFunctionCallback(req bashPPEvalRequest, q bashPPBridgeRequest) bool {
+	if q.sourceSynchronousCallback {
+		return true
+	}
 	path := ""
 	if q.Receiver != nil && q.Receiver.Kind == "handle" {
 		if q.Selector == "" && q.Receiver.Function && q.Receiver.Origin != 0 && q.Receiver.Callbacks {
