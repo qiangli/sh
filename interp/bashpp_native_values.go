@@ -169,7 +169,28 @@ func (r *Runner) bashPPBridgeCall(ctx context.Context, call *syntax.BashPPCall) 
 	if !r.goSourceNativeSleepBoundary(ctx, req, q) {
 		return nil, errBashPPScalarInterrupted
 	}
-	return r.bashPPNativeRequest(ctx, req, q)
+	values, err := r.bashPPNativeRequest(ctx, req, q)
+	if err != nil {
+		return values, err
+	}
+	return r.bashPPNativeFunctionResults(req, call, values)
+}
+
+func (r *Runner) bashPPNativeFunctionResults(req bashPPEvalRequest, call *syntax.BashPPCall, values []bashPPBridgeValue) ([]bashPPBridgeValue, error) {
+	if call == nil || call.ResultFuncType == nil {
+		return values, nil
+	}
+	if len(values) != 1 {
+		return nil, fmt.Errorf("gosource: native function result has invalid arity")
+	}
+	if req.Bridge == nil || values[0].Kind != "handle" || values[0].Handle == 0 || values[0].Session != req.Bridge.id {
+		return nil, fmt.Errorf("gosource: native function result lost its authenticated handle")
+	}
+	if values[0].Function || strings.HasPrefix(values[0].Type, "func(") || strings.HasPrefix(values[0].NativeType, "func(") {
+		values[0].Type = bashPPTypeText(call.ResultFuncType)
+		return values, nil
+	}
+	return nil, fmt.Errorf("gosource: native function result has invalid signature")
 }
 
 func (r *Runner) goSourceUnsafeSliceCall(call *syntax.BashPPCall) ([]bashPPBridgeValue, bool, error) {
@@ -322,9 +343,6 @@ func (r *Runner) bashPPPrepareNativeCall(ctx context.Context, call *syntax.BashP
 				values, err := r.bashPPBridgeCall(ctx, inner)
 				if err != nil {
 					return bashPPBridgeRequest{}, err
-				}
-				if inner.ResultFuncType != nil && len(values) == 1 && values[0].Kind == "handle" {
-					values[0].Type = bashPPTypeText(inner.ResultFuncType)
 				}
 				q.Args = append(q.Args, values...)
 				return q, nil
