@@ -303,50 +303,70 @@ func (r *Runner) bashPPConvertToCollection(x *syntax.BashPPConvertExpr) (any, *b
 // bashPPConvertCollectionScalar implements `string(bs)` for a byte or rune
 // slice. Like its counterpart it reports whether it claimed the conversion, so
 // that `string(n)` and the other scalar conversions keep their own path.
-func (r *Runner) bashPPConvertCollectionScalar(x *syntax.BashPPConvertExpr) (bashPPScalar, bool, error) {
+//
+// A call operand has to run to answer that question, and Go evaluates it
+// exactly once. The second result carries the cell such a call produced when
+// the conversion is not claimed after all, so the scalar reader continues from
+// the value already computed instead of calling the function a second time.
+func (r *Runner) bashPPConvertCollectionScalar(x *syntax.BashPPConvertExpr) (bashPPScalar, *bashPPCell, bool, error) {
 	target := r.bashPPConvertTarget(x)
 	named, ok := r.bashPPUnderlyingType(target).(*syntax.BashPPNamedType)
 	if !ok || named.Name.Value != "string" {
-		return bashPPScalar{}, false, nil
+		return bashPPScalar{}, nil, false, nil
 	}
 	if r.bashPPGoSource && r.bashPPNativeExpr(x.X) {
 		value, err := r.bashPPBridgeExpr(x.X)
 		if err != nil {
-			return bashPPScalar{}, true, err
+			return bashPPScalar{}, nil, true, err
 		}
 		text, ok, err := r.bashPPNativeStringConversion(value)
 		if !ok {
-			return bashPPScalar{}, false, nil
+			return bashPPScalar{}, nil, false, nil
 		}
 		if err != nil {
-			return bashPPScalar{}, true, err
+			return bashPPScalar{}, nil, true, err
 		}
 		typ := ""
 		if declared, ok := target.(*syntax.BashPPNamedType); ok {
 			typ = declared.Name.Value
 		}
-		return bashPPScalar{value: constant.MakeString(text), typ: typ, runtime: true}, true, nil
+		return bashPPScalar{value: constant.MakeString(text), typ: typ, runtime: true}, nil, true, nil
 	}
 	value, meta, claimed, err := r.goSourceUnsafeSliceValue(x.X)
 	if err != nil {
-		return bashPPScalar{}, true, err
+		return bashPPScalar{}, nil, true, err
 	}
 	if !claimed {
 		value, meta, ok = r.bashPPCollectionOperand(x.X)
 		if !ok {
-			return bashPPScalar{}, false, nil
+			// `string(s.segment())` converts the byte slice a call returned
+			// and that no named operand carries. Without this the sequence
+			// reaches the scalar reader as an object and renders as its JSON
+			// encoding, so the "string" is the list of its own byte values.
+			cell, called, err := r.bashPPCallOperandCell(x.X)
+			if err != nil {
+				return bashPPScalar{}, nil, true, err
+			}
+			if !called {
+				return bashPPScalar{}, nil, false, nil
+			}
+			cellMeta := bashPPCellMeta(cell)
+			if cell.vr.Kind != expand.Object || cellMeta == nil {
+				return bashPPScalar{}, cell, false, nil
+			}
+			value, meta = cell.vr.Obj, cellMeta
 		}
 	}
 	elemKind, ok := r.bashPPByteOrRuneSlice(meta.typ)
 	if !ok {
-		return bashPPScalar{}, true, fmt.Errorf("BASHPP-EEXPR-CONVERT: cannot convert %s to string", bashPPTypeText(meta.typ))
+		return bashPPScalar{}, nil, true, fmt.Errorf("BASHPP-EEXPR-CONVERT: cannot convert %s to string", bashPPTypeText(meta.typ))
 	}
 	sequence, _ := value.([]any)
 	var out strings.Builder
 	for _, item := range sequence {
 		n, ok := bashPPElementInt(item)
 		if !ok {
-			return bashPPScalar{}, true, fmt.Errorf("BASHPP-EEXPR-CONVERT: %s element is not an integer", elemKind)
+			return bashPPScalar{}, nil, true, fmt.Errorf("BASHPP-EEXPR-CONVERT: %s element is not an integer", elemKind)
 		}
 		if elemKind == "byte" {
 			out.WriteByte(byte(n))
@@ -358,7 +378,7 @@ func (r *Runner) bashPPConvertCollectionScalar(x *syntax.BashPPConvertExpr) (bas
 	if declared, ok := target.(*syntax.BashPPNamedType); ok {
 		typ = declared.Name.Value
 	}
-	return bashPPScalar{value: constant.MakeString(out.String()), typ: typ, runtime: true}, true, nil
+	return bashPPScalar{value: constant.MakeString(out.String()), typ: typ, runtime: true}, nil, true, nil
 }
 
 func (r *Runner) bashPPNativeStringConversion(value bashPPBridgeValue) (string, bool, error) {

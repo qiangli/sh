@@ -226,7 +226,8 @@ func (r *Runner) bashPPEvalScalarExpr(expr syntax.BashPPExpr) (result bashPPScal
 		// bashPPConvertCollectionScalar in bashpp_collection_convert.go. It
 		// reports false for every conversion whose operand is already scalar,
 		// which keeps the named-scalar path below unchanged.
-		if scalar, handled, err := r.bashPPConvertCollectionScalar(x); handled {
+		scalar, operand, handled, err := r.bashPPConvertCollectionScalar(x)
+		if handled {
 			return scalar, err
 		}
 		if r.bashPPGoSource {
@@ -234,8 +235,11 @@ func (r *Runner) bashPPEvalScalarExpr(expr syntax.BashPPExpr) (result bashPPScal
 				return scalar, err
 			}
 		}
-		v, err := r.bashPPEvalScalarExpr(x.X)
-		if err != nil {
+		// A call operand the reader above already ran must not run again.
+		v := bashPPScalar{}
+		if operand != nil {
+			v = r.bashPPScalarFromCell(operand)
+		} else if v, err = r.bashPPEvalScalarExpr(x.X); err != nil {
 			return bashPPScalar{}, err
 		}
 		// `IteratorFunc[int](it)`: a function value converted to a named
