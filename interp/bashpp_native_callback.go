@@ -775,6 +775,9 @@ func bashPPBridgeValueDynamicType(v bashPPBridgeValue) syntax.BashPPTypeExpr {
 }
 
 func bashPPBridgeValueNilInterface(v bashPPBridgeValue) bool {
+	if v.Kind == "nil" && v.NativeType != "" && v.NativeType != v.Interface {
+		return false
+	}
 	return v.Kind == "nil" && (v.Type == "" || v.Type == v.Interface)
 }
 

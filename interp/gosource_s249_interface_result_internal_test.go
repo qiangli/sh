@@ -27,3 +27,12 @@ func TestGoSourceS249NativeValueResultKeepsInterfaceWrapper(t *testing.T) {
 		t.Fatalf("dynamic payload = %#v, want one unwrapped concrete value", payload)
 	}
 }
+
+func TestGoSourceS281NativeNilInterfacePredicateKeepsDynamicPointer(t *testing.T) {
+	if bashPPBridgeValueNilInterface(bashPPBridgeValue{Kind: "nil", Type: "any", Interface: "any", NativeType: "*main.T"}) {
+		t.Fatal("typed nil dynamic pointer collapsed to nil interface")
+	}
+	if !bashPPBridgeValueNilInterface(bashPPBridgeValue{Kind: "nil", Type: "any", Interface: "any"}) {
+		t.Fatal("plain nil interface stopped comparing as nil")
+	}
+}
