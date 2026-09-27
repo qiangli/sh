@@ -253,17 +253,22 @@ type bashPPConcurrent struct {
 	changed    *sync.Cond
 	ctx        context.Context
 	cancel     context.CancelFunc
-	active     int
-	quiesced   bool
-	failures   []bashPPTaskFailure
-	nextTask   uint64
-	tasks      map[uint64]*bashPPTaskState
-	chans      map[string]*bashPPChannel
-	ioMu       sync.Mutex
-	logicalMu  sync.Mutex
-	observerMu sync.Mutex
-	fifoMu     sync.Mutex
-	fifos      map[*os.File]*bashPPFIFOEntry
+	// fileRunOwner is stamped only by bashPPConcurrency while its Runner is
+	// inside Run(*syntax.File). Callback templates retain this group pointer,
+	// so the stamp is the capability which lets a verified testing callback
+	// recover the otherwise deliberately-uncloned bashPPFileRun bit.
+	fileRunOwner bool
+	active       int
+	quiesced     bool
+	failures     []bashPPTaskFailure
+	nextTask     uint64
+	tasks        map[uint64]*bashPPTaskState
+	chans        map[string]*bashPPChannel
+	ioMu         sync.Mutex
+	logicalMu    sync.Mutex
+	observerMu   sync.Mutex
+	fifoMu       sync.Mutex
+	fifos        map[*os.File]*bashPPFIFOEntry
 	// fifoPending holds rendezvous openers that have announced themselves
 	// but not yet acquired a descriptor; see bashPPFIFOOpen.
 	fifoPending map[*bashPPFIFOEntry]struct{}
@@ -373,7 +378,26 @@ func (r *Runner) bashPPConcurrency(ctx context.Context) *bashPPConcurrent {
 	if r.bashPPConcurrent == nil {
 		r.bashPPConcurrent = newBashPPConcurrent(ctx)
 	}
+	if r.bashPPFileRun {
+		r.bashPPConcurrent.mu.Lock()
+		if !r.bashPPConcurrent.quiesced && r.bashPPConcurrent.ctx.Err() == nil {
+			r.bashPPConcurrent.fileRunOwner = true
+		}
+		r.bashPPConcurrent.mu.Unlock()
+	}
 	return r.bashPPConcurrent
+}
+
+// ownsActiveFileRun reports whether c is the still-live group minted for an
+// owning File Run. Merely attaching a fresh group to a bare Runner is not an
+// ownership capability, and cancellation or quiescence revokes it.
+func (c *bashPPConcurrent) ownsActiveFileRun() bool {
+	if c == nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.fileRunOwner && !c.quiesced && c.ctx.Err() == nil
 }
 
 func (c *bashPPConcurrent) add() (*bashPPTaskState, bool) {

@@ -308,6 +308,42 @@ func main() {
 	}
 }
 
+func TestS281TestingMainStartCallbackOwnsGoTasks(t *testing.T) {
+	driver := s249Source("_testmain.go", `package main
+
+import (
+	"fmt"
+	"os"
+	"sync"
+	"testing"
+	"testing/internal/testdeps"
+)
+
+func TestCallbackTasks(t *testing.T) {
+	ch := make(chan int)
+	go func() { ch <- 7 }()
+	fmt.Println("go", <-ch)
+
+	var wg sync.WaitGroup
+	wg.Go(func() { ch <- 11 })
+	fmt.Println("waitgroup", <-ch)
+	wg.Wait()
+}
+
+var tests = []testing.InternalTest{{"TestCallbackTasks", TestCallbackTasks}}
+
+func main() {
+	m := testing.MainStart(testdeps.TestDeps{}, tests, nil, nil, nil)
+	os.Exit(m.Run())
+}
+`)
+	got, err := runS249PackageTestMain(t, []gosource.Source{driver}, nil)
+	const want = "go 7\nwaitgroup 11\nPASS\n"
+	if err != nil || got.stdout != want || got.stderr != "" || got.status != 0 {
+		t.Fatalf("run=%v outcome=%+v", err, got)
+	}
+}
+
 func TestS281EqualFuncSynchronizesInterfaceSliceIdentities(t *testing.T) {
 	source := `package main
 
