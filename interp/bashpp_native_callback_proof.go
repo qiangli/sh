@@ -123,6 +123,7 @@ type dependencyCallbackValue struct {
 	callback *dependencyCallbackClosure // nil lit means the original callback
 	object   *dependencyCallbackObject
 	callable bool // source declares this clean value to have function type
+	escaped  bool
 }
 
 const dependencyCallbackElementField = "[]"
@@ -546,7 +547,7 @@ func dependencyCallbackSameFrame(active dependencyCallbackActiveFrame, supplied 
 }
 
 func dependencyCallbackSameValue(left, right dependencyCallbackValue) bool {
-	return left.callback == right.callback && left.object == right.object && left.callable == right.callable
+	return left.callback == right.callback && left.object == right.object && left.callable == right.callable && left.escaped == right.escaped
 }
 
 func (p *dependencyCallbackProof) recursiveBodyStoresCallback(decl *ast.FuncDecl, active dependencyCallbackActiveFrame) bool {
@@ -629,14 +630,27 @@ type dependencyCallbackSnapshot struct {
 func (s *dependencyCallbackSnapshot) value(b *strings.Builder, value dependencyCallbackValue) {
 	if value.callback != nil {
 		s.closure(b, value.callback)
+		if value.escaped {
+			b.WriteString("(escaped)")
+		}
 		return
 	}
 	if value.object != nil {
 		s.object(b, value.object)
+		if value.escaped {
+			b.WriteString("(escaped)")
+		}
 		return
 	}
 	if value.callable {
 		b.WriteByte('F')
+		if value.escaped {
+			b.WriteString("(escaped)")
+		}
+		return
+	}
+	if value.escaped {
+		b.WriteByte('E')
 		return
 	}
 	b.WriteByte('_')
@@ -885,7 +899,7 @@ func (p *dependencyCallbackProof) statement(stmt ast.Stmt, env map[string]depend
 			if value.tainted() {
 				return p.refuse(result, "return exposes callback-bearing value")
 			}
-			dependencyCallbackMarkEscaped([]dependencyCallbackValue{value})
+			p.markEscaped([]dependencyCallbackValue{value})
 		}
 		return p.runDeferred(env, depth)
 	case *ast.GoStmt:
@@ -1069,11 +1083,31 @@ func dependencyCallbackCloneEnv(env map[string]dependencyCallbackValue) map[stri
 	return clone
 }
 
+type dependencyCallbackJoinPair struct {
+	left  *dependencyCallbackObject
+	right *dependencyCallbackObject
+}
+
+type dependencyCallbackJoinState struct {
+	objects map[dependencyCallbackJoinPair]*dependencyCallbackObject
+	steps   int
+}
+
 func dependencyCallbackJoinValue(left, right dependencyCallbackValue) dependencyCallbackValue {
-	if left.object == nil && left.callback == nil && !left.callable {
+	state := dependencyCallbackJoinState{objects: make(map[dependencyCallbackJoinPair]*dependencyCallbackObject)}
+	return state.value(left, right)
+}
+
+func (s *dependencyCallbackJoinState) value(left, right dependencyCallbackValue) dependencyCallbackValue {
+	s.steps++
+	if s.steps > 20000 {
+		dependencyCallbackMarkEscaped([]dependencyCallbackValue{left, right})
+		return dependencyCallbackValue{callback: &dependencyCallbackClosure{}}
+	}
+	if left.object == nil && left.callback == nil && !left.callable && !left.escaped {
 		return right
 	}
-	if right.object == nil && right.callback == nil && !right.callable {
+	if right.object == nil && right.callback == nil && !right.callable && !right.escaped {
 		return left
 	}
 	if left.object != nil && right.object != nil {
@@ -1081,17 +1115,22 @@ func dependencyCallbackJoinValue(left, right dependencyCallbackValue) dependency
 			return left
 		}
 		dependencyCallbackMarkEscaped([]dependencyCallbackValue{left, right})
+		pair := dependencyCallbackJoinPair{left: left.object, right: right.object}
+		if joined := s.objects[pair]; joined != nil {
+			return dependencyCallbackValue{object: joined}
+		}
 		joined := &dependencyCallbackObject{
 			typ:     left.object.typ,
 			escaped: true,
 			general: left.object.general || right.object.general,
 			fields:  make(map[string]dependencyCallbackValue),
 		}
+		s.objects[pair] = joined
 		if joined.typ != right.object.typ {
 			joined.typ = ""
 		}
-		dependencyCallbackMergeObjectFields(joined, left.object)
-		dependencyCallbackMergeObjectFields(joined, right.object)
+		s.mergeObjectFields(joined, left.object)
+		s.mergeObjectFields(joined, right.object)
 		return dependencyCallbackValue{object: joined}
 	}
 	if right.tainted() {
@@ -1108,12 +1147,12 @@ func dependencyCallbackJoinValue(left, right dependencyCallbackValue) dependency
 	return left
 }
 
-func dependencyCallbackMergeObjectFields(dst, src *dependencyCallbackObject) {
+func (s *dependencyCallbackJoinState) mergeObjectFields(dst, src *dependencyCallbackObject) {
 	if dst == nil || src == nil {
 		return
 	}
 	for name, value := range src.fields {
-		dst.fields[name] = dependencyCallbackJoinValue(dst.fields[name], value)
+		dst.fields[name] = s.value(dst.fields[name], value)
 	}
 }
 
@@ -1144,9 +1183,12 @@ func (p *dependencyCallbackProof) assign(lhs ast.Expr, value dependencyCallbackV
 		if p.currentResultName(lhs.Name) && value.tainted() {
 			return p.refuse(lhs, "assignment stores callback-bearing value in named result")
 		}
+		if value.tainted() && env[lhs.Name].escaped {
+			return p.refuse(lhs, "assignment stores callback-bearing value in escaped closure cell")
+		}
 		_, local := env[lhs.Name]
 		if p.globals[lhs.Name] && !define && !local {
-			dependencyCallbackMarkEscaped([]dependencyCallbackValue{value})
+			p.markEscaped([]dependencyCallbackValue{value})
 			if value.tainted() {
 				return p.refuse(lhs, "assignment stores callback-bearing value in package global")
 			}
@@ -1161,7 +1203,7 @@ func (p *dependencyCallbackProof) assign(lhs ast.Expr, value dependencyCallbackV
 		base := p.value(lhs.X, env)
 		if !value.tainted() {
 			if base.object == nil || !base.object.owned || base.object.escaped {
-				dependencyCallbackMarkEscaped([]dependencyCallbackValue{value})
+				p.markEscaped([]dependencyCallbackValue{value})
 				return true
 			}
 			if base.object.general {
@@ -1187,7 +1229,7 @@ func (p *dependencyCallbackProof) assign(lhs ast.Expr, value dependencyCallbackV
 		base.object.fields[lhs.Sel.Name] = value
 		return true
 	case *ast.IndexExpr:
-		dependencyCallbackMarkEscaped([]dependencyCallbackValue{value})
+		p.markEscaped([]dependencyCallbackValue{value})
 		if value.tainted() {
 			return p.refuse(lhs, "index assignment stores callback-bearing value")
 		}
@@ -1195,7 +1237,7 @@ func (p *dependencyCallbackProof) assign(lhs ast.Expr, value dependencyCallbackV
 	case *ast.StarExpr:
 		base := p.value(lhs.X, env)
 		if base.object == nil || !base.object.owned || base.object.escaped {
-			dependencyCallbackMarkEscaped([]dependencyCallbackValue{value})
+			p.markEscaped([]dependencyCallbackValue{value})
 		}
 		if value.tainted() && (base.object == nil || !base.object.owned || base.object.escaped) {
 			return p.refuse(lhs, "pointer assignment stores callback-bearing value through unowned pointer")
@@ -1241,6 +1283,10 @@ func (p *dependencyCallbackProof) value(expr ast.Expr, env map[string]dependency
 			return value
 		}
 		return dependencyCallbackValue{}
+	case *ast.SliceExpr:
+		return p.value(expr.X, env)
+	case *ast.TypeAssertExpr:
+		return p.value(expr.X, env)
 	case *ast.SelectorExpr:
 		base := p.value(expr.X, env)
 		return p.field(base, expr.Sel.Name, map[string]bool{})
@@ -1506,13 +1552,13 @@ func (p *dependencyCallbackProof) callWithResolvedCallee(call *ast.CallExpr, cal
 	// clean, invoking it cannot expose a callback carried elsewhere in the
 	// containing object. Tainted fields are represented as callbacks above.
 	if callee.callable && !tainted {
-		dependencyCallbackMarkEscaped(args)
+		p.markEscaped(args)
 		return true
 	}
 	switch fun := call.Fun.(type) {
 	case *ast.Ident:
 		if !tainted {
-			dependencyCallbackMarkEscaped(args)
+			p.markEscaped(args)
 			return true
 		}
 		decls := p.funcs[fun.Name]
@@ -1523,7 +1569,7 @@ func (p *dependencyCallbackProof) callWithResolvedCallee(call *ast.CallExpr, cal
 	case *ast.SelectorExpr:
 		receiver := p.value(fun.X, env)
 		if !tainted && !receiver.tainted() {
-			dependencyCallbackMarkEscaped(append(args, receiver))
+			p.markEscaped(append(args, receiver))
 			return true
 		}
 		decl, actual := p.method(receiver, fun.Sel.Name, map[string]bool{})
@@ -1538,10 +1584,30 @@ func (p *dependencyCallbackProof) callWithResolvedCallee(call *ast.CallExpr, cal
 	return true
 }
 
+func (p *dependencyCallbackProof) markEscaped(values []dependencyCallbackValue) {
+	dependencyCallbackMarkEscaped(values)
+	for _, value := range values {
+		p.markClosureCellsEscaped(value.callback, make(map[*dependencyCallbackClosure]bool))
+	}
+}
+
+func (p *dependencyCallbackProof) markClosureCellsEscaped(closure *dependencyCallbackClosure, seen map[*dependencyCallbackClosure]bool) {
+	if closure == nil || seen[closure] {
+		return
+	}
+	seen[closure] = true
+	for name, value := range closure.env {
+		value.escaped = true
+		closure.env[name] = value
+		p.markClosureCellsEscaped(value.callback, seen)
+	}
+}
+
 func dependencyCallbackMarkEscaped(values []dependencyCallbackValue) {
 	seen := make(map[*dependencyCallbackObject]bool)
 	for _, value := range values {
 		dependencyCallbackMarkObjectEscaped(value.object, seen)
+		dependencyCallbackMarkClosureObjectsEscaped(value.callback, seen, make(map[*dependencyCallbackClosure]bool))
 	}
 }
 
@@ -1553,6 +1619,17 @@ func dependencyCallbackMarkObjectEscaped(obj *dependencyCallbackObject, seen map
 	obj.escaped = true
 	for _, field := range obj.fields {
 		dependencyCallbackMarkObjectEscaped(field.object, seen)
+	}
+}
+
+func dependencyCallbackMarkClosureObjectsEscaped(closure *dependencyCallbackClosure, objects map[*dependencyCallbackObject]bool, closures map[*dependencyCallbackClosure]bool) {
+	if closure == nil || closures[closure] {
+		return
+	}
+	closures[closure] = true
+	for _, value := range closure.env {
+		dependencyCallbackMarkObjectEscaped(value.object, objects)
+		dependencyCallbackMarkClosureObjectsEscaped(value.callback, objects, closures)
 	}
 }
 

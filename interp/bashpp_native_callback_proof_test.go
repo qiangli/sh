@@ -420,6 +420,21 @@ func Parse(cb func()) { Retain(cb) }
 `,
 		},
 		{
+			name: "resliced element alias later taint",
+			source: `package dep
+var saved func()
+type holder struct{ f func() }
+func Retain(cb func()) {
+	h := &holder{}
+	xs := []*holder{h}
+	ys := xs[:]
+	h.f = cb
+	saved = ys[0].f
+}
+func Parse(cb func()) { Retain(cb) }
+`,
+		},
+		{
 			name: "map element alias later taint",
 			source: `package dep
 var saved func()
@@ -429,6 +444,34 @@ func Retain(cb func()) {
 	xs := map[int]*holder{0: h}
 	h.f = cb
 	saved = xs[0].f
+}
+func Parse(cb func()) { Retain(cb) }
+`,
+		},
+		{
+			name: "type assertion preserves source object alias",
+			source: `package dep
+var saved func()
+type holder struct{ f func() }
+func Retain(cb func()) {
+	h := &holder{f: cb}
+	var v any = h
+	p := v.(*holder)
+	saved = p.f
+}
+func Parse(cb func()) { Retain(cb) }
+`,
+		},
+		{
+			name: "two-result type assertion preserves source object alias",
+			source: `package dep
+var saved func()
+type holder struct{ f func() }
+func Retain(cb func()) {
+	h := &holder{f: cb}
+	var v any = h
+	p, _ := v.(*holder)
+	saved = p.f
 }
 func Parse(cb func()) { Retain(cb) }
 `,
@@ -444,6 +487,24 @@ func Retain(cb func()) {
 	xs := []*holder{h}
 	keep(xs)
 	h.f = cb
+}
+func Parse(cb func()) { Retain(cb) }
+`,
+		},
+		{
+			name: "cyclic joined elements retain callback fields",
+			source: `package dep
+var saved func()
+type holder struct{ next *holder; f func() }
+func Retain(cb func()) {
+	a := &holder{}
+	b := &holder{}
+	a.next = a
+	b.next = b
+	a.f = cb
+	b.f = cb
+	xs := []*holder{a, b}
+	saved = xs[0].f
 }
 func Parse(cb func()) { Retain(cb) }
 `,
@@ -485,6 +546,33 @@ func Retain(cb func()) {
 	xs := map[int]*holder{k: h}
 	h.f = cb
 	saved = xs[k].f
+}
+func Parse(cb func()) { Retain(cb) }
+`,
+		},
+		{
+			name: "retained clean closure observes later object callback",
+			source: `package dep
+var saved func()
+type holder struct{ f func() }
+func Retain(cb func()) {
+	h := &holder{}
+	invoke := func() { h.f() }
+	saved = invoke
+	h.f = cb
+}
+func Parse(cb func()) { Retain(cb) }
+`,
+		},
+		{
+			name: "retained clean closure observes later lexical callback",
+			source: `package dep
+var saved func()
+func Retain(cb func()) {
+	var f func()
+	invoke := func() { f() }
+	saved = invoke
+	f = cb
 }
 func Parse(cb func()) { Retain(cb) }
 `,
