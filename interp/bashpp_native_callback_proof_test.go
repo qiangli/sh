@@ -676,6 +676,33 @@ func Parse(cb func(error)) {
 			want: true,
 		},
 		{
+			name: "recursive call result assignment is not callback store",
+			source: `package dep
+type labelScope struct { errh func(error) }
+type block struct { parent *block }
+type stmt struct{}
+func (ls *labelScope) blockBranches(parent *block, n int, body []stmt) []stmt {
+	b := &block{parent: parent}
+	innerBlock := func(body []stmt) {
+		_ = b
+		body = append(body, ls.blockBranches(b, n-1, body)...)
+	}
+	if n > 0 {
+		innerBlock(body)
+	}
+	if ls.errh != nil {
+		ls.errh(nil)
+	}
+	return body
+}
+func Parse(cb func(error)) {
+	ls := &labelScope{errh: cb}
+	ls.blockBranches(nil, 1, nil)
+}
+`,
+			want: true,
+		},
+		{
 			name: "recursive mixed short declaration existing cell is unproved",
 			source: `package dep
 type labelScope struct { errh func(error) }
@@ -901,6 +928,38 @@ func Parse(cb func()) { var f func(); { f := cb; f() }; _ = f }
 			want: true,
 		},
 		{
+			name: "recursive outer short declaration shadow is fresh local",
+			source: `package dep
+type labelScope struct { errh func(error) }
+func (ls *labelScope) walk(n int) {
+	inner := func() {}
+	{
+		inner := func(next int) { ls.walk(next) }
+		if n > 0 { inner(n-1) }
+	}
+	inner()
+	if ls.errh != nil { ls.errh(nil) }
+}
+func Parse(cb func(error)) { ls := &labelScope{errh: cb}; ls.walk(1) }
+`,
+			want: true,
+		},
+		{
+			name: "recursive select clause store is unproved",
+			source: `package dep
+type holder struct { f func() }
+func (h *holder) walk(cb func(), ch chan int, n int) {
+	if n > 0 { h.walk(cb, ch, n-1) }
+	select {
+	case <-ch:
+		h.f = cb
+	default:
+	}
+}
+func Parse(cb func(), ch chan int) { h := &holder{}; h.walk(cb, ch, 1) }
+`,
+		},
+		{
 			name: "conditional synchronous callback",
 			source: `package dep
 func Parse(cb func(), choose bool) { if choose { cb() } }
@@ -1009,6 +1068,42 @@ func Parse(cb func()) { h := &holder{}; walk(h, cb) }
 	}
 	if strings.Contains(joined, "<no graph path difference>") {
 		t.Fatalf("diagnostic reported no graph path difference:\n%s", joined)
+	}
+	if len(proof.diagnostic) > dependencyCallbackProofDiagnosticLimit {
+		t.Fatalf("diagnostic has %d lines, limit %d", len(proof.diagnostic), dependencyCallbackProofDiagnosticLimit)
+	}
+}
+
+// Sprint: #281; Story: #810; Story-ID: 48c1146a3ab0
+func TestDependencyCallbackProofRecursiveStoreDiagnosticUsesAssignmentSite(t *testing.T) {
+	source := `package dep
+type holder struct { f func() }
+func walk(a, b *holder, cb func(), n int) {
+	if n > 0 { walk(a, a, cb, n-1) }
+	b.f = cb
+}
+func Parse(cb func()) { walk(&holder{}, &holder{}, cb, 1) }
+`
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "dep.go", source, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof := newDependencyCallbackProof([]*ast.File{file})
+	proof.fset = fset
+	proof.diagnostics = true
+	if proof.prove("Parse", []int{0}) {
+		t.Fatal("proof unexpectedly accepted generalized recursive store")
+	}
+	joined := strings.Join(proof.diagnostic, "\n")
+	for _, want := range []string{
+		"dep.go:4:",
+		"selector assignment stores callback-bearing value in generalized recursive region",
+		"store=assign lhs=b.f rhs=cb",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("diagnostic missing %q:\n%s", want, joined)
+		}
 	}
 	if len(proof.diagnostic) > dependencyCallbackProofDiagnosticLimit {
 		t.Fatalf("diagnostic has %d lines, limit %d", len(proof.diagnostic), dependencyCallbackProofDiagnosticLimit)
