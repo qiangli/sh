@@ -7,14 +7,22 @@ import "mvdan.cc/sh/v3/syntax"
 // variables are shared storage in Go, not closure captures: copying them would
 // lose mutations, while the GoSource task clone otherwise omits them entirely.
 //
-// The callback position authenticates the source package before its flattened
-// package tag is consulted. The cells come from the callback's registration-
-// time scope, not the Runner's later live root. Their names come from actual
-// top-level variable declarations at positions owned by that package; a local
-// which merely resembles a flattened name is never admitted. The outermost
-// matching binding in the captured scope chain is the package cell: snapshots
-// and testing frames can put that cell above an otherwise empty root, while a
-// nearer binding can be an ordinary local shadow.
+// The entitlement spans the whole linked program, not the callback's own
+// package: a callback body that only names types.NewPkg still runs code which
+// reads and writes that package's own globals on this very frame, so admitting
+// same-package cells alone leaves those absent. Flattening keeps the names
+// distinct — a linked package's declarations carry its hygiene marker and only
+// the program package spells bare names — so one name set cannot conflate two
+// packages' storage.
+//
+// The callback position authenticates that the body is Go source at all. The
+// cells come from the callback's registration-time scope, not the Runner's
+// later live root. Their names come from actual top-level variable
+// declarations at positions the source file owns; a local which merely
+// resembles a flattened name is never admitted. The outermost matching binding
+// in the captured scope chain is the package cell: snapshots and testing frames
+// can put that cell above an otherwise empty root, while a nearer binding can
+// be an ordinary local shadow.
 func (r *Runner) bashPPCallbackSharedCells(fn *bashPPFunc, capture map[*bashPPCell]bool) map[*bashPPCell]bool {
 	pos := bashPPCallbackSourcePos(fn)
 	if r == nil || fn == nil || fn.scope == nil || r.bashPPGoSourceFile == nil || !pos.IsValid() {
@@ -24,14 +32,13 @@ func (r *Runner) bashPPCallbackSharedCells(fn *bashPPFunc, capture map[*bashPPCe
 	if _, ok := file.SourceAt(pos); !ok {
 		return capture
 	}
-	packageTag := r.goSourcePackageAt(pos)
 	packageNames := make(map[string]bool)
 	for _, stmt := range file.Stmts {
 		decl, ok := stmt.Cmd.(*syntax.BashPPDecl)
 		if !ok || decl.Site != syntax.StartVar || decl.Name == nil {
 			continue
 		}
-		if _, ok := file.SourceAt(decl.Pos()); !ok || r.goSourcePackageAt(decl.Pos()) != packageTag {
+		if _, ok := file.SourceAt(decl.Pos()); !ok {
 			continue
 		}
 		packageNames[decl.Name.Value] = true
