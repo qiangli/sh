@@ -2990,26 +2990,37 @@ func (p *dependencyCallbackProof) callWithResolvedCallee(call *ast.CallExpr, cal
 		p.markEscaped(args)
 		return true
 	}
+	// Clean actuals do not make a callee harmless. A body can materialise an
+	// unknown value on its own -- dereferencing a pointer that is not proven
+	// to point at a tracked object yields one -- and store it where the
+	// callback would be retained. Whenever the body is source-visible it is
+	// proved, with the actuals it is given; only bodies this proof cannot see
+	// are summarised by escaping the clean actuals.
 	switch fun := call.Fun.(type) {
 	case *ast.Ident:
 		if !tainted {
 			p.markEscaped(args)
-			return true
 		}
 		decls := p.funcs[fun.Name]
 		if len(decls) != 1 {
-			return p.refuse(fun, "tainted call target is not exactly one local function")
+			if tainted {
+				return p.refuse(fun, "tainted call target is not exactly one local function")
+			}
+			return true
 		}
 		return p.callFunction(call, decls[0], args, dependencyCallbackValue{}, depth)
 	case *ast.SelectorExpr:
 		receiver := p.value(fun.X, env)
-		if !tainted && !receiver.tainted() {
+		carriesCallback := tainted || receiver.tainted()
+		if !carriesCallback {
 			p.markEscaped(append(args, receiver))
-			return true
 		}
 		decl, actual := p.method(receiver, fun.Sel.Name, map[string]bool{})
 		if decl == nil {
-			return p.refuse(fun, "tainted method call target is not source-visible")
+			if carriesCallback {
+				return p.refuse(fun, "tainted method call target is not source-visible")
+			}
+			return true
 		}
 		return p.callFunction(call, decl, args, actual, depth)
 	}
