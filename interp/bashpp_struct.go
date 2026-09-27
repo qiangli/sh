@@ -615,6 +615,12 @@ func (r *Runner) bashPPCheckTypedValue(value any, meta *bashPPCollectionMeta, ex
 		}
 		return nil
 	}
+	if meta != nil && meta.kind == "bridge-scalar" {
+		if !r.bashPPTypeAssignable(meta.typ, expected) {
+			return fmt.Errorf("BASHPP-ECOLLECTION-ELEMENT: cannot use %s value as %s", bashPPTypeText(meta.typ), bashPPTypeText(expected))
+		}
+		return nil
+	}
 	if err := r.bashPPCheckCollectionValue(value, expected); err != nil {
 		// A dependency carrier reaching a scalar destination (a non-finite
 		// float64 struct field, say) is still wrapped; validate it with the
@@ -782,8 +788,8 @@ func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (value any, meta *bashPP
 			if err != nil {
 				return nil, nil, err
 			}
-			result, err := bashPPNativeReadValue(member)
-			return result, nil, err
+			result, resultMeta, err := bashPPNativeReadValue(member)
+			return result, resultMeta, err
 		}
 		if meta == nil || meta.kind != "struct" {
 			return nil, nil, fmt.Errorf("BASHPP-ESELECTOR-TYPE: %s has no fields", bashPPExprText(x.X))

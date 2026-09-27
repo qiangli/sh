@@ -6,6 +6,27 @@ package interp_test
 
 import "testing"
 
+// TestS281NativePopulatedIntFieldPreservesType exercises an exported int field
+// on a pointer populated inside the dependency worker. The field must retain
+// its declared int identity when it is copied into an ordinary scalar and when
+// it is used as an interpreter-owned map key.
+func TestS281NativePopulatedIntFieldPreservesType(t *testing.T) {
+	const source = `package main
+import (
+	"fmt"
+	"net"
+)
+func main() {
+	addr, err := net.ResolveTCPAddr("tcp", "127.0.0.1:7524")
+	if err != nil { panic(err) }
+	var port int = addr.Port
+	seen := map[int]bool{}
+	seen[addr.Port] = true
+	fmt.Println(port, seen[7524])
+}`
+	differGoSource(t, source, nil, "")
+}
+
 // TestS281NativeTupleCollectionField compares the non-plain tuple assignment
 // shape from debug/dwarf's readScope with native Go. The synthetic entry makes
 // Data.Ranges return its literal low/high-PC pair before any optional DWARF

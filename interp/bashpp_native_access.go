@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"go/constant"
+	"strconv"
 	"strings"
 
 	"mvdan.cc/sh/v3/expand"
@@ -370,38 +371,44 @@ func (r *Runner) bashPPNativeRead(expr syntax.BashPPExpr) (any, *bashPPCollectio
 	if err != nil {
 		return nil, nil, err, true
 	}
-	result, err := bashPPNativeReadValue(value)
-	return result, nil, err, true
+	result, meta, err := bashPPNativeReadValue(value)
+	return result, meta, err, true
 }
 
 // bashPPNativeReadValue projects one native value into the interpreter's
-// untyped value space without losing a handle's identity.
-func bashPPNativeReadValue(value bashPPBridgeValue) (any, error) {
+// value space without losing a handle's identity or a scalar's declared Go
+// type. The JSON wire stores all integer spellings alike; retaining Type in
+// metadata is what distinguishes int from int64 and defined integer types at
+// the later assignment or collection boundary.
+func bashPPNativeReadValue(value bashPPBridgeValue) (any, *bashPPCollectionMeta, error) {
 	switch value.Kind {
 	case "handle", "nil":
 		copy := value
-		return &copy, nil
+		return &copy, nil, nil
 	}
 	scalar, err := value.scalar()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
+	}
+	var meta *bashPPCollectionMeta
+	if value.Type != "" {
+		meta = &bashPPCollectionMeta{kind: "bridge-scalar", typ: bashPPBridgeValueDynamicType(value)}
 	}
 	switch scalar.value.Kind() {
 	case constant.String:
-		return constant.StringVal(scalar.value), nil
+		return constant.StringVal(scalar.value), meta, nil
 	case constant.Bool:
-		return constant.BoolVal(scalar.value), nil
+		return constant.BoolVal(scalar.value), meta, nil
 	case constant.Int:
-		n, ok := constant.Int64Val(scalar.value)
-		if !ok {
-			return bashPPScalarString(scalar.value), nil
+		if n, err := strconv.Atoi(value.Text); err == nil {
+			return n, meta, nil
 		}
-		return n, nil
+		return bashPPScalarString(scalar.value), meta, nil
 	case constant.Float:
 		n, _ := constant.Float64Val(scalar.value)
-		return n, nil
+		return n, meta, nil
 	}
-	return bashPPScalarString(scalar.value), nil
+	return bashPPScalarString(scalar.value), meta, nil
 }
 
 // bashPPNativeShortDecl binds `name := <native read>`. Without it the general
