@@ -67,6 +67,61 @@ func main() {
 	}
 }
 
+func TestS281DoChildrenInterfaceAssertedPointerMapKey(t *testing.T) {
+	const source = `package main
+
+import (
+	"fmt"
+
+	"cmd/compile/internal/base"
+	"cmd/compile/internal/ir"
+	"cmd/compile/internal/typecheck"
+	"cmd/compile/internal/types"
+	"cmd/internal/obj"
+	"cmd/internal/src"
+	"cmd/internal/sys"
+)
+
+func main() {
+	types.PtrSize = 8
+	types.RegSize = 8
+	types.MaxWidth = 1 << 50
+	base.Ctxt = &obj.Link{Arch: &obj.LinkArch{Arch: &sys.Arch{Alignment: 1, CanMergeLoads: true}}}
+	typecheck.InitUniverse()
+
+	pkg := types.NewPkg("", "")
+	left := ir.NewNameAt(src.NoXPos, pkg.Lookup("left"), types.Types[types.TINT])
+	right := ir.NewNameAt(src.NoXPos, pkg.Lookup("right"), types.Types[types.TINT])
+	root := ir.NewBinaryExpr(src.NoXPos, ir.OADD, left, right)
+
+	seen := map[*ir.Name]int{}
+	order := []*ir.Name{}
+	ir.DoChildren(root, func(n ir.Node) bool {
+		name := n.(*ir.Name)
+		seen[name]++
+		order = append(order, name)
+		name.SetUsed(true)
+		return false
+	})
+	fmt.Println(len(seen), len(order), seen[left], seen[right], left.Used(), right.Used())
+
+	ir.DoChildren(root, func(n ir.Node) bool {
+		seen[n.(*ir.Name)]++
+		return false
+	})
+	fmt.Println(len(seen), seen[left], seen[right], order[0] == left, order[1] == right)
+}
+`
+	got, err := runGoSourceIdentity(t, source, "cmd/compile/internal/inline/inlheur")
+	if err != nil {
+		t.Fatalf("Runner: %v; outcome=%+v", err, got)
+	}
+	const want = "2 2 1 1 true true\n2 2 2 true true\n"
+	if got.stdout != want || got.stderr != "" || got.status != 0 {
+		t.Fatalf("outcome=%+v; want native stdout %q", got, want)
+	}
+}
+
 func TestS281DoChildrenCallbackEligibilityStaysExact(t *testing.T) {
 	for name, source := range map[string]string{
 		"unknown ir visitor": `package main

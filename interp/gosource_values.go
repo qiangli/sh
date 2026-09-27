@@ -25,7 +25,7 @@ func goSourceNativeValueCell(value bashPPBridgeValue) *bashPPCell {
 			cell.interfaceValue = &bashPPInterfaceValue{
 				nilIface: value.Kind == "nil",
 				cell:     payload,
-				dynamic:  bashPPBridgeDynamicType(value.Type),
+				dynamic:  bashPPBridgeValueDynamicType(value),
 			}
 		}
 		return cell
@@ -33,7 +33,7 @@ func goSourceNativeValueCell(value bashPPBridgeValue) *bashPPCell {
 	cell := &bashPPCell{vr: expand.NewObject(&value), typeName: value.Type}
 	if value.Interface != "" {
 		cell.declType = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.Interface}}
-		dynamic := bashPPBridgeDynamicType(value.Type)
+		dynamic := bashPPBridgeValueDynamicType(value)
 		// The payload is the dynamic value itself, not the interface: once
 		// asserted out, a typed nil pointer compares equal to nil, which the
 		// dependency denies for a value still marked as an interface.

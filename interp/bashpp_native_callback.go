@@ -364,7 +364,7 @@ func (r *Runner) bashPPNativeCallback(ctx context.Context, selector string, recv
 		}
 		cells := make([]*bashPPCell, len(params))
 		for i, arg := range recv.CallArgs {
-			cell := goSourceNativeValueCell(arg)
+			cell := r.goSourceNativeValueCell(arg)
 			cell.declType = params[i].typ
 			if params[i].variadic {
 				// A generated variadic mirror receives its trailing arguments as
@@ -455,7 +455,7 @@ func (r *Runner) bashPPBridgeContents(v bashPPBridgeValue, typ syntax.BashPPType
 		if v.Kind == "nil" && (v.Type == "" || v.Type == v.Interface) {
 			return "", &bashPPCollectionMeta{kind: "interface", typ: typ, interfaceValue: &bashPPInterfaceValue{nilIface: true}}, nil
 		}
-		dynamic := bashPPBridgeDynamicType(v.Type)
+		dynamic := bashPPBridgeValueDynamicType(v)
 		if _, ok := r.bashPPInterfaceType(dynamic); ok {
 			return nil, nil, fmt.Errorf("dynamic type %s of an interface value is not materialised", v.Type)
 		}
@@ -573,6 +573,9 @@ func (r *Runner) bashPPBridgeContents(v bashPPBridgeValue, typ syntax.BashPPType
 
 func bashPPBridgeDynamicType(name string) syntax.BashPPTypeExpr {
 	name = strings.TrimSpace(name)
+	if strings.HasPrefix(name, "*") {
+		return &syntax.BashPPPointerType{Element: bashPPBridgeDynamicType(name[1:])}
+	}
 	switch name {
 	case "interface {}", "interface{}":
 		return &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "any"}}
@@ -605,6 +608,14 @@ func bashPPBridgeDynamicType(name string) syntax.BashPPTypeExpr {
 		}
 	}
 	return &syntax.BashPPNamedType{Name: &syntax.Lit{Value: bashPPLocalTypeName(name)}}
+}
+
+func bashPPBridgeValueDynamicType(v bashPPBridgeValue) syntax.BashPPTypeExpr {
+	name := v.Type
+	if (v.Kind == "handle" || v.Kind == "nil") && v.NativeType != "" {
+		name = v.NativeType
+	}
+	return bashPPBridgeDynamicType(name)
 }
 
 // bashPPBridgeScalarValue converts one transported scalar into the interpreter
