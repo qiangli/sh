@@ -249,6 +249,15 @@ func encodeHandle(v reflect.Value,result value)value {
  result.NativeTypeID=nativeTypeToken(v.Type())
  if v.Kind()==reflect.Pointer&&v.IsNil(){result.Kind="nil";return result}
  if v.Kind()==reflect.Chan&&v.IsNil(){result.NilChannel=true}
+ // A pointer the interpreter transported under an origin stays that origin's
+ // pointer however deep in the value graph reflect reaches it, so a handle
+ // minted for it names the interpreter's own storage. The interpreter owns the
+ // methods of a materialised original type, and only the origin lets it find
+ // the receiver again (bashpp_s809_original_handles.go).
+ if v.Kind()==reflect.Pointer&&result.Origin==0 {
+  originalPointers.Lock();origin:=originalPointers.ids[v.Pointer()];originalPointers.Unlock()
+  if origin!=0{result.Origin=origin;result.Session=bridgeAuth[:16]}
+ }
  handles.Lock();defer handles.Unlock()
  var pointerKey nativePointerHandleKey
  if v.Kind()==reflect.Pointer {

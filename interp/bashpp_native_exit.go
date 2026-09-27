@@ -116,6 +116,7 @@ func (r *Runner) bashPPNativeRequest(ctx context.Context, req bashPPEvalRequest,
 	values, err := req.Bridge.request(ctx, req, q)
 	if err == nil {
 		r.goSourceRememberValueOf(ctx, req, q, values)
+		r.goSourceAdoptOriginalHandles(req, values)
 	}
 	if r.bashPPGoSource && r.bashPPGoTask && ctx.Err() != nil && errors.Is(err, ctx.Err()) {
 		// EOF cancels the task lifetime. Native expression callers need the
