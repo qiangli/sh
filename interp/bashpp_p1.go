@@ -1231,6 +1231,14 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 			name := d.Lhs[0].Value
 			if meta != nil && meta.kind == "pointer" {
 				r.bashPPDeclarePointerRead(name, value, meta)
+			} else if bashPPScalarMetaKind(meta) {
+				// A scalar element of a materialized collection carries its
+				// declared element type as metadata, not a payload shape. It
+				// must bind as the plain scalar it is, or `pc := r[0]` would
+				// store an object cell that ++, <, += and conversions reject.
+				cell := r.goSourceCollectionReadCell(d.Expr, value, meta)
+				r.bashPPDeclareName(name, cell.vr)
+				*r.bashPPScope.lookup(name) = *cell
 			} else if meta != nil {
 				value, meta = bashPPCopyArrayValue(value, meta)
 				r.bashPPDeclareName(name, bashPPCollectionVariable(value))
@@ -1287,6 +1295,12 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 					cell.declType = meta.typ
 				} else if meta != nil && meta.kind == "pointer" {
 					r.bashPPDeclarePointerRead(name, value, meta)
+				} else if bashPPScalarMetaKind(meta) {
+					// See the index branch above: scalar element metadata
+					// names a declared type, so the binding stays scalar.
+					cell := r.goSourceCollectionReadCell(d.Expr, value, meta)
+					r.bashPPDeclareName(name, cell.vr)
+					*r.bashPPScope.lookup(name) = *cell
 				} else if meta != nil {
 					value, meta = bashPPCopyArrayValue(value, meta)
 					r.bashPPDeclareName(name, expand.NewObject(value))
