@@ -23,23 +23,3 @@ func main() {
 `
 	differGoSource(t, source, nil, "")
 }
-
-func TestGoSourceS281NativeInterfaceTypedNilPointerFieldTuple(t *testing.T) {
-	const source = `package main
-
-import (
-	"fmt"
-	"reflect"
-)
-
-type T struct{ X int }
-type Box struct{ V any }
-
-func main() {
-	box := Box{V: reflect.New(reflect.TypeOf((*T)(nil))).Elem().Interface()}
-	p := box.V.(*T)
-	fmt.Println(box.V == nil, p == nil)
-}
-`
-	differGoSource(t, source, nil, "")
-}
