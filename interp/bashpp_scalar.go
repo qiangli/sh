@@ -1304,6 +1304,10 @@ func (r *Runner) bashPPCompareExpr(left syntax.BashPPExpr, op token.Token, right
 			return false, err
 		}
 	}
+	return r.bashPPCompareComparableValues(lv, op, rv)
+}
+
+func (r *Runner) bashPPCompareComparableValues(lv bashPPComparableValue, op token.Token, rv bashPPComparableValue) (bool, error) {
 	if r.bashPPGoSource {
 		lv.value = bashPPComparablePayload(lv.value, lv.meta)
 		rv.value = bashPPComparablePayload(rv.value, rv.meta)

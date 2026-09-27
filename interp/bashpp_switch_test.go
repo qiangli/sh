@@ -67,6 +67,60 @@ main()
 	}
 }
 
+func TestBashPPSwitchLazyCaseEvaluation(t *testing.T) {
+	const src = `package main
+
+import "fmt"
+
+type terms map[string]int
+
+func (t *terms) nonempty() bool { return len(*t) != 0 }
+
+var calls int
+
+func later() bool {
+	calls++
+	return true
+}
+
+func tag() int {
+	calls++
+	return 2
+}
+
+func laterInt() int {
+	calls += 100
+	return 3
+}
+
+func main() {
+	var nilTerms *terms
+	switch {
+	case true:
+		fmt.Println("first")
+	case later(), nilTerms.nonempty():
+		fmt.Println("wrong")
+	}
+	fmt.Println("after-first", calls)
+	switch tag() {
+	default:
+		fmt.Println("default")
+	case 1, 2, laterInt():
+		fmt.Println("matched", calls)
+	}
+	fmt.Println("after-tag", calls)
+}
+`
+	out, stderr, err := bashPPRunGoSource(t, t.TempDir(), "switch_lazy.go", src)
+	if err != nil {
+		t.Fatalf("run: %v; stderr: %s; output: %s", err, stderr, out)
+	}
+	const want = "first\nafter-first 0\nmatched 1\nafter-tag 1\n"
+	if out != want {
+		t.Fatalf("output = %q, want %q", out, want)
+	}
+}
+
 func TestBashPPSwitchTypeDiagnostics(t *testing.T) {
 	for _, test := range []struct{ src, want string }{
 		{"func main() { switch 1 { case \"1\": echo wrong } }\nmain()\n", "BASHPP-ESWITCH-TYPE: case expression type String does not match switch tag type Int\n"},
