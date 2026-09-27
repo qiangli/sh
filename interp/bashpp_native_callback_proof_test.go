@@ -1425,7 +1425,7 @@ func walk(h *holder, cb func()) { h.f = cb }
 	proof := newDependencyCallbackProof([]*ast.File{file})
 	active := dependencyCallbackActiveFrame{
 		supplied: map[string]dependencyCallbackValue{
-			"h": {object: &dependencyCallbackObject{typ: "holder", owned: true, general: true, fields: make(map[string]dependencyCallbackValue)}},
+			"h":  {object: &dependencyCallbackObject{typ: "holder", owned: true, general: true, fields: make(map[string]dependencyCallbackValue)}},
 			"cb": {callback: &dependencyCallbackClosure{}},
 		},
 	}
@@ -1633,5 +1633,130 @@ func TestDependencyCallbackProofCompilerSyntaxSource(t *testing.T) {
 				t.Fatalf("%s callback proof refused: %s", test.fn, proof.reason)
 			}
 		})
+	}
+}
+
+// A call written inside a function literal runs in the literal's own scope, not
+// where the literal is written. Walking it with the enclosing environment loses
+// every binding the literal declares and misreads a shadowing parameter or local
+// as the captured cell it shadows.
+//
+// Sprint: #281; Story: #810; Story-ID: 48c1146a3ab0
+func TestDependencyCallbackProofNestedLiteralCallUsesClosureScope(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		source string
+		want   bool
+	}{{
+		name: "nested literal local call resolves in closure scope",
+		source: `package dep
+func run(fn func()) { fn() }
+func Parse(cb func()) {
+	setter := func() {
+		inner := func() {}
+		inner()
+		inner()
+	}
+	run(setter)
+}
+`,
+		want: true,
+	}, {
+		name: "nested literal parameter shadows captured callback name",
+		source: `package dep
+func run(fn func()) { fn() }
+func Parse(cb func()) {
+	var f func()
+	setter := func() {
+		inner := func(cb func()) {
+			var f func()
+			f = cb
+			f()
+		}
+		inner(func() {})
+	}
+	run(setter)
+	_ = f
+}
+`,
+		want: true,
+	}, {
+		name: "nested literal still leaks the captured callback when invoked",
+		source: `package dep
+var saved func()
+func run(fn func()) { fn() }
+func Parse(cb func()) {
+	setter := func() {
+		inner := func() { saved = cb }
+		inner()
+	}
+	run(setter)
+}
+`,
+	}, {
+		name: "immediately invoked literal resolves its own locals",
+		source: `package dep
+func Parse(cb func()) {
+	func() {
+		inner := func(cb func()) { cb() }
+		inner(func() {})
+	}()
+}
+`,
+		want: true,
+	}, {
+		name: "immediately invoked literal still leaks the captured callback",
+		source: `package dep
+var saved func()
+func Parse(cb func()) {
+	func() {
+		inner := func() { saved = cb }
+		inner()
+	}()
+}
+`,
+	}} {
+		t.Run(test.name, func(t *testing.T) {
+			fset := token.NewFileSet()
+			file, err := parser.ParseFile(fset, "dep.go", test.source, parser.SkipObjectResolution)
+			if err != nil {
+				t.Fatal(err)
+			}
+			proof := newDependencyCallbackProof([]*ast.File{file})
+			proof.fset = fset
+			proof.diagnostics = true
+			if got := proof.prove("Parse", []int{0}); got != test.want {
+				t.Fatalf("proof=%v, want %v:\n%s", got, test.want, strings.Join(proof.diagnostic, "\n"))
+			}
+		})
+	}
+}
+
+// The active frame records a frozen clone of the entry graph, so a recursive
+// call never sees the pointer it was cloned from. Identity must therefore be
+// decided by lineage of the value root alone: a mutated argument is the same
+// argument with a changed snapshot, and the taint that matters is the one the
+// live argument carries now.
+//
+// Sprint: #281; Story: #810; Story-ID: 48c1146a3ab0
+func TestDependencyCallbackSameFrameSeparatesIdentityFromSnapshot(t *testing.T) {
+	object := &dependencyCallbackObject{typ: "holder", owned: true, fields: map[string]dependencyCallbackValue{}}
+	argument := dependencyCallbackValue{object: object}
+	active := dependencyCallbackNewActiveFrame(map[string]dependencyCallbackValue{"h": argument}, dependencyCallbackValue{})
+
+	if !dependencyCallbackSameIdentity(active.supplied["h"], argument) {
+		t.Fatal("frozen entry clone is not the same argument as the live value")
+	}
+	if same, _, rejection := dependencyCallbackSameFrame(active, map[string]dependencyCallbackValue{"h": argument}, dependencyCallbackValue{}); !same {
+		t.Fatalf("unmutated argument rejected: %s", rejection)
+	}
+
+	object.fields["f"] = dependencyCallbackValue{callback: &dependencyCallbackClosure{}}
+	same, _, rejection := dependencyCallbackSameFrame(active, map[string]dependencyCallbackValue{"h": argument}, dependencyCallbackValue{})
+	if same {
+		t.Fatal("recursive call with a newly tainted argument accepted")
+	}
+	if want := "argument h snapshot changed after entry and active argument is tainted"; rejection != want {
+		t.Fatalf("rejection = %q, want %q", rejection, want)
 	}
 }

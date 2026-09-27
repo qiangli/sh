@@ -832,10 +832,10 @@ func dependencyCallbackNewActiveFrame(supplied map[string]dependencyCallbackValu
 
 func dependencyCallbackSameFrame(active dependencyCallbackActiveFrame, supplied map[string]dependencyCallbackValue, receiver dependencyCallbackValue) (bool, bool, string) {
 	generalized := false
-	if dependencyCallbackSameValue(active.receiver, receiver) || dependencyCallbackSameLineageGraph(active.receiver, receiver) {
+	if dependencyCallbackSameValue(active.receiver, receiver) || dependencyCallbackSameIdentity(active.receiver, receiver) || dependencyCallbackSameLineageGraph(active.receiver, receiver) {
 		current := dependencyCallbackValueSnapshot(receiver)
 		if current != active.receiverSnapshot {
-			if active.receiver.tainted() {
+			if active.receiver.tainted() || receiver.tainted() {
 				return false, false, "receiver snapshot changed after entry and active receiver is tainted"
 			}
 			dependencyCallbackMarkGeneralized([]dependencyCallbackValue{receiver})
@@ -858,10 +858,10 @@ func dependencyCallbackSameFrame(active dependencyCallbackActiveFrame, supplied 
 		if !ok {
 			return false, false, "argument " + name + " missing in recursive call"
 		}
-		if dependencyCallbackSameValue(value, other) || dependencyCallbackSameLineageGraph(value, other) {
+		if dependencyCallbackSameValue(value, other) || dependencyCallbackSameIdentity(value, other) || dependencyCallbackSameLineageGraph(value, other) {
 			current := dependencyCallbackValueSnapshot(other)
 			if current != active.argSnapshots[name] {
-				if value.tainted() {
+				if value.tainted() || other.tainted() {
 					return false, false, "argument " + name + " snapshot changed after entry and active argument is tainted"
 				}
 				dependencyCallbackMarkGeneralized([]dependencyCallbackValue{other})
@@ -879,6 +879,29 @@ func dependencyCallbackSameFrame(active dependencyCallbackActiveFrame, supplied 
 		generalized = true
 	}
 	return true, generalized, ""
+}
+
+// dependencyCallbackSameIdentity reports whether two values denote the same
+// entity. The active frame holds a frozen clone of the entry graph, so the
+// live argument of a recursive call is never pointer-equal to the recorded one
+// even when nothing but its contents moved; lineage recovers that identity.
+// Identity is a property of the root alone — whether the contents changed is
+// the separate question answered by comparing value snapshots, so a mutated
+// object stays the same argument instead of looking like a new one.
+func dependencyCallbackSameIdentity(left, right dependencyCallbackValue) bool {
+	if left.cell != nil || right.cell != nil {
+		return left.cell != nil && right.cell != nil &&
+			dependencyCallbackCellLineage(left.cell) == dependencyCallbackCellLineage(right.cell)
+	}
+	if left.callback != nil || right.callback != nil {
+		return left.callback != nil && right.callback != nil &&
+			dependencyCallbackClosureLineage(left.callback) == dependencyCallbackClosureLineage(right.callback)
+	}
+	if left.object != nil || right.object != nil {
+		return left.object != nil && right.object != nil &&
+			dependencyCallbackObjectLineage(left.object) == dependencyCallbackObjectLineage(right.object)
+	}
+	return false
 }
 
 func dependencyCallbackSameValue(left, right dependencyCallbackValue) bool {
@@ -2052,6 +2075,15 @@ func (p *dependencyCallbackProof) expressionCalls(expr ast.Expr, env map[string]
 	ok := true
 	ast.Inspect(expr, func(node ast.Node) bool {
 		if !ok || node == nil {
+			return false
+		}
+		// A function literal body does not run while the enclosing expression
+		// is evaluated, and its statements bind names in the literal's own
+		// scope rather than in env: a nested helper's parameter or local that
+		// shadows a captured name is a distinct cell. Calls written inside the
+		// body are modelled when the closure is invoked, by
+		// callWithResolvedCallee, using the closure environment.
+		if _, isLit := node.(*ast.FuncLit); isLit {
 			return false
 		}
 		call, isCall := node.(*ast.CallExpr)
