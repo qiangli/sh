@@ -39,9 +39,9 @@ type goSourceLocalTypeDecl struct {
 	holderEnd   syntax.Pos
 }
 
-// goSourceLocalTypeIndex is the per-file index of function-local type
-// declarations, built once per runner on first use. It is private to the
-// runner that built it (subshells and tasks start without one).
+// goSourceLocalTypeIndex is the immutable per-file index of function-local
+// type declarations. It is built with the shared declaration scan; runners
+// keep only a fast pointer to it.
 type goSourceLocalTypeIndex struct {
 	file  *syntax.File
 	decls map[string][]goSourceLocalTypeDecl
@@ -55,25 +55,20 @@ func (r *Runner) goSourceLocalTypes() *goSourceLocalTypeIndex {
 	if r.bashPPLocalTypes != nil && r.bashPPLocalTypes.file == file {
 		return r.bashPPLocalTypes
 	}
-	// The index depends only on the immutable parsed file, and every task
-	// snapshot starts with an empty per-runner slot, so the built index is
-	// shared across runners; see gosource_s247_free_names_memo.go.
-	if index := goSourceLocalTypeIndexShared(file); index != nil {
-		r.bashPPLocalTypes = index
-		return index
-	}
+	// The immutable declaration index is shared weakly by file and includes
+	// this scope index, so descriptor construction and lexical lookup never
+	// rescan the same tree independently.
+	r.bashPPLocalTypes = bashPPScanLocalTypeDecls(file).localTypes
+	return r.bashPPLocalTypes
+}
+
+func goSourceBuildLocalTypeIndex(file *syntax.File, stmtsByTop map[*syntax.Stmt][]*syntax.Stmt) *goSourceLocalTypeIndex {
 	index := &goSourceLocalTypeIndex{file: file, decls: make(map[string][]goSourceLocalTypeDecl)}
 	for _, top := range file.Stmts {
-		// Every statement range below the top-level statement, so a
-		// declaration's holder can be found as the smallest range that
-		// strictly contains it.
-		var stmts []*syntax.Stmt
-		syntax.Walk(top, func(n syntax.Node) bool {
-			if s, ok := n.(*syntax.Stmt); ok {
-				stmts = append(stmts, s)
-			}
-			return true
-		})
+		// Every statement range below the top-level statement was collected by
+		// the declaration scan, so a declaration's holder can be found without
+		// another syntax walk.
+		stmts := stmtsByTop[top]
 		for _, s := range stmts {
 			d, ok := s.Cmd.(*syntax.BashPPDecl)
 			if !ok || d.Site != syntax.StartTypeDecl || d.Name == nil || s == top {
@@ -96,8 +91,7 @@ func (r *Runner) goSourceLocalTypes() *goSourceLocalTypeIndex {
 			})
 		}
 	}
-	r.bashPPLocalTypes = goSourceLocalTypeIndexPublish(file, index)
-	return r.bashPPLocalTypes
+	return index
 }
 
 func goSourceRangeContains(s *syntax.Stmt, pos syntax.Pos) bool {

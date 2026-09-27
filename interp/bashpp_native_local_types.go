@@ -170,28 +170,20 @@ func (r *Runner) bashPPBuildLocalTypeDescriptors() ([]bashPPLocalType, map[strin
 }
 
 func (r *Runner) bashPPBuildLocalTypeDescriptorsWithout(withdrawn map[string]bool) ([]bashPPLocalType, map[string]string, map[string]bool) {
+	index := r.bashPPLocalTypeDeclarationIndex()
 	declared := map[string]syntax.BashPPTypeExpr{}
 	identities := map[string]*syntax.BashPPTypeIdentity{}
-	methods := map[string][]*syntax.BashPPFuncDecl{}
 	aliases := map[string]bool{}
 	ambiguous := map[string]bool{}
 	generics := map[string]*syntax.BashPPDecl{}
 	instantiations := map[string]*syntax.BashPPNamedType{}
-	var spelled []*syntax.BashPPNamedType
-	var anonymous []syntax.BashPPTypeExpr
-	packageGenerics := map[string]*syntax.BashPPDecl{}
-	for _, stmt := range r.bashPPGoSourceFile.Stmts {
-		if d, ok := stmt.Cmd.(*syntax.BashPPDecl); ok && d.Site == syntax.StartTypeDecl && d.Name != nil && len(d.TypeParams) > 0 && !d.Alias {
-			packageGenerics[d.Name.Value] = d
-		}
-	}
-	syntax.Walk(r.bashPPGoSourceFile, func(node syntax.Node) bool {
-		if d, ok := node.(*syntax.BashPPDecl); ok && d.Site == syntax.StartTypeDecl && d.Name.Value == "_" {
+	for _, d := range index.typeDecls {
+		if d.Name.Value == "_" {
 			// A blank declaration introduces no type name to register. Keep
-			// walking its children so anonymous shapes retain their codecs.
-			return true
+			// its anonymous shapes, which the immutable index collected too.
+			continue
 		}
-		if d, ok := node.(*syntax.BashPPDecl); ok && d.Site == syntax.StartTypeDecl && len(d.TypeParams) == 0 && d.DeclTypeExpr != nil {
+		if len(d.TypeParams) == 0 {
 			name := d.Name.Value
 			if _, exists := declared[name]; exists {
 				ambiguous[name] = true
@@ -200,35 +192,20 @@ func (r *Runner) bashPPBuildLocalTypeDescriptorsWithout(withdrawn map[string]boo
 			identities[name] = d.GoTypeIdentity
 			aliases[name] = d.Alias
 		}
-		if d, ok := node.(*syntax.BashPPDecl); ok && d.Site == syntax.StartTypeDecl && len(d.TypeParams) > 0 && d.DeclTypeExpr != nil {
+		if len(d.TypeParams) > 0 {
 			if _, exists := generics[d.Name.Value]; exists {
 				ambiguous[d.Name.Value] = true
 			}
 			generics[d.Name.Value] = d
 		}
-		if named, ok := node.(*syntax.BashPPNamedType); ok && named.Name != nil && len(named.TypeArgs) > 0 {
-			spelled = append(spelled, named)
-		}
-		if shape, ok := node.(*syntax.BashPPStructType); ok {
-			anonymous = append(anonymous, shape)
-		}
-		// An interface literal with methods — `new(interface{ M() })`, a
-		// type argument, a conversion target — has an identity reflect
-		// cannot build from its spelling; it is materialised as an alias
-		// like an anonymous struct shape. The empty interface needs no
-		// alias: the helper's base registry already resolves it.
-		if shape, ok := node.(*syntax.BashPPInterfaceType); ok && len(shape.Methods) > 0 {
-			anonymous = append(anonymous, shape)
-		}
-		return true
-	})
+	}
 	// A name used in two scopes denotes distinct Go types even when their
 	// fields are identical. A package-level declaration keeps the plain
 	// name; each function-local declaration is registered under its own
 	// identity and a reference is spelled by the declaration it resolves
 	// to (bashpp_s243_scoped_local_types.go). A generic reused name is
 	// scoped the same way unless it is declared in a generic function.
-	scopedDecls, packageLevel := bashPPScopedLocalDecls(r.bashPPGoSourceFile, ambiguous)
+	scopedDecls, packageLevel := bashPPScopedLocalDecls(index, ambiguous)
 	scopedNames := map[string]string{}
 	for key := range scopedDecls {
 		scopedNames[key] = bashPPScopedLocalName(key)
@@ -253,7 +230,7 @@ func (r *Runner) bashPPBuildLocalTypeDescriptorsWithout(withdrawn map[string]boo
 	// name in the helper. It is registered under a generated identity keyed
 	// by the package scope "", and every reference spells that identity, the
 	// way a reused local name is (bashpp_s290_reserved_type_names.go).
-	reservedPackage, reservedDecls := bashPPReservedPackageTypes(r.bashPPGoSourceFile)
+	reservedPackage, reservedDecls := index.reservedNames, index.reservedDecls
 	for _, name := range reservedPackage {
 		key := bashPPScopedLocalKey(name, "")
 		scopedNames[key] = bashPPScopedLocalName(key)
@@ -273,7 +250,7 @@ func (r *Runner) bashPPBuildLocalTypeDescriptorsWithout(withdrawn map[string]boo
 	// a type argument naming a function-local declaration of a reused name
 	// is spelled by that declaration's identity, so `T[Int]` in two scopes
 	// with two local `Int`s is two instantiations.
-	for _, named := range spelled {
+	for _, named := range index.spelled {
 		wire := bashPPTypeText(named)
 		if scoped := bashPPBridgeTypeTextIn(named, resolveScoped); scoped != bashPPBridgeTypeText(named) {
 			wire = scoped
@@ -289,15 +266,7 @@ func (r *Runner) bashPPBuildLocalTypeDescriptorsWithout(withdrawn map[string]boo
 			instantiations[wire] = named
 		}
 	}
-	for _, stmt := range r.bashPPGoSourceFile.Stmts {
-		switch d := stmt.Cmd.(type) {
-		case *syntax.BashPPFuncDecl:
-			if d.Receiver != nil && d.Receiver.RecvType != nil && d.Name.Value != "_" {
-				owner := d.Receiver.RecvType.Value
-				methods[owner] = append(methods[owner], d)
-			}
-		}
-	}
+	methods := index.methods
 	names := make([]string, 0, len(declared))
 	for name := range declared {
 		// Go lets a program redefine a predeclared name. The helper's base
@@ -324,8 +293,8 @@ func (r *Runner) bashPPBuildLocalTypeDescriptorsWithout(withdrawn map[string]boo
 	// generic is settled before any declaration renders, so an embedded
 	// instantiation in another declaration can rely on it.
 	local.public = map[string]bool{}
-	genericNames := make([]string, 0, len(packageGenerics))
-	for name := range packageGenerics {
+	genericNames := make([]string, 0, len(index.packageGenerics))
+	for name := range index.packageGenerics {
 		genericNames = append(genericNames, name)
 	}
 	sort.Strings(genericNames)
@@ -333,7 +302,7 @@ func (r *Runner) bashPPBuildLocalTypeDescriptorsWithout(withdrawn map[string]boo
 	genericMethods := map[string][]bashPPLocalMethod{}
 	genericRefs := map[string]map[string]bool{}
 	for _, name := range genericNames {
-		base := packageGenerics[name]
+		base := index.packageGenerics[name]
 		if base.Alias || generics[name] != base || bashPPHelperReserved[name] || withdrawn[name] {
 			continue
 		}
@@ -345,7 +314,7 @@ func (r *Runner) bashPPBuildLocalTypeDescriptorsWithout(withdrawn map[string]boo
 			if !local.public[name] {
 				continue
 			}
-			base := packageGenerics[name]
+			base := index.packageGenerics[name]
 			refs := map[string]bool{}
 			local.refs = refs
 			decl, ok := local.genericHeader(base)
@@ -441,7 +410,7 @@ func (r *Runner) bashPPBuildLocalTypeDescriptorsWithout(withdrawn map[string]boo
 	// Anonymous shapes keep their Go identity through aliases, never invented
 	// defined types. Existing typed codecs provide legal private field access.
 	shapes := map[string]syntax.BashPPTypeExpr{}
-	for _, shape := range anonymous {
+	for _, shape := range index.anonymous {
 		// Use the same scoped spelling as value transport and descriptor source.
 		// Two identical-looking shapes may contain distinct local named types.
 		shapes[bashPPBridgeTypeTextIn(shape, resolveScoped)] = shape
@@ -562,7 +531,7 @@ func (r *Runner) bashPPBuildLocalTypeDescriptorsWithout(withdrawn map[string]boo
 		// alias and registry key, so fmt and reflect see F[Arg], never the key.
 		// Generic aliases deliberately retain the structural path repaired by
 		// 15455fc6; local generics retain their lexical-identity materialisation.
-		if local.public[named.Name.Value] && packageGenerics[named.Name.Value] == base {
+		if local.public[named.Name.Value] && index.packageGenerics[named.Name.Value] == base {
 			if _, publicType, ok := local.genericDeclaration(base, named); ok {
 				materialised.PublicType = publicType
 				// The instance mirrors exactly the stubs the generic
