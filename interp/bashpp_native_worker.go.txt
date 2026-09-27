@@ -515,24 +515,45 @@ func formatUsesTypeVerb(format string)bool{
  for i:=0;i<len(format);i++ {if format[i]!='%'{continue};i++;if i<len(format)&&format[i]=='%'{continue};for ;i<len(format);i++ {c:=format[i];if c=='T'{return true};if c>='A'&&c<='Z'||c>='a'&&c<='z'{break}}}
  return false
 }
-func originalFmtValue(v reflect.Value)reflect.Value{
- if !v.IsValid(){return v}
- if v.Kind()==reflect.Interface&&!v.IsNil(){v=v.Elem()}
- if v.CanInterface(){if typ,ok:=v.Interface().(reflect.Type);ok&&hasOriginalTypeIdentity(typ){return reflect.ValueOf(originalTypeFormat{typ})}}
- return v
+// originalFmtProjection returns the formatting projection of one argument and
+// reports whether it differs from the argument itself. Only a materialised
+// interpreted reflect.Type diverges, so every other value is handed to the
+// dependency exactly as the interpreter sent it.
+func originalFmtProjection(v reflect.Value)(reflect.Value,bool){
+ if !v.IsValid(){return v,false}
+ elem:=v
+ if elem.Kind()==reflect.Interface&&!elem.IsNil(){elem=elem.Elem()}
+ if !elem.CanInterface(){return v,false}
+ typ,ok:=elem.Interface().(reflect.Type);if !ok||!hasOriginalTypeIdentity(typ){return v,false}
+ return reflect.ValueOf(originalTypeFormat{typ}),true
 }
 func originalFmtArgs(fn reflect.Value,args []reflect.Value,spread bool)[]reflect.Value{
  same:=func(target any)bool{return fn.IsValid()&&fn.Pointer()==reflect.ValueOf(target).Pointer()}
  formatIndex,first:=-1,-1
  switch {case same(fmt.Printf),same(fmt.Sprintf),same(fmt.Errorf):formatIndex,first=0,1;case same(fmt.Fprintf),same(fmt.Appendf):formatIndex,first=1,2;default:return args}
  if formatIndex>=len(args)||args[formatIndex].Kind()!=reflect.String||formatUsesTypeVerb(args[formatIndex].String()){return args}
- out:=append([]reflect.Value(nil),args...)
- if spread&&len(out)>first&&len(out)==first+1&&out[first].Kind()==reflect.Slice {
-  src:=out[first];dst:=reflect.MakeSlice(src.Type(),src.Len(),src.Len());reflect.Copy(dst,src)
-  for i:=0;i<dst.Len();i++ {wrapped:=originalFmtValue(dst.Index(i));if wrapped.Type().AssignableTo(dst.Index(i).Type()){dst.Index(i).Set(wrapped)}else if dst.Index(i).Kind()==reflect.Interface&&wrapped.Type().Implements(dst.Index(i).Type()){dst.Index(i).Set(wrapped)}}
-  out[first]=dst;return out
+ // The projection is materialised lazily. A spread variadic slice is still the
+ // interpreter's own backing array, shared with the callback slice frame, so
+ // replacing it with a copy would hide a mutation made by a synchronous
+ // original callback running mid-format; it is only copied once an element
+ // actually needs the projection, and never otherwise.
+ if spread&&len(args)==first+1&&args[first].Kind()==reflect.Slice {
+  src:=args[first];var dst reflect.Value
+  for i:=range src.Len() {
+   projected,differs:=originalFmtProjection(src.Index(i));if !differs{continue}
+   if !dst.IsValid(){dst=reflect.MakeSlice(src.Type(),src.Len(),src.Len());reflect.Copy(dst,src)}
+   slot:=dst.Index(i);if projected.Type().AssignableTo(slot.Type())||slot.Kind()==reflect.Interface&&projected.Type().Implements(slot.Type()){slot.Set(projected)}
+  }
+  if !dst.IsValid(){return args}
+  out:=append([]reflect.Value(nil),args...);out[first]=dst;return out
  }
- for i:=first;i<len(out);i++ {out[i]=originalFmtValue(out[i])}
+ var out []reflect.Value
+ for i:=first;i<len(args);i++ {
+  projected,differs:=originalFmtProjection(args[i]);if !differs{continue}
+  if out==nil{out=append([]reflect.Value(nil),args...)}
+  out[i]=projected
+ }
+ if out==nil{return args}
  return out
 }
 func memberMethod(rv reflect.Value,name string) reflect.Value {
