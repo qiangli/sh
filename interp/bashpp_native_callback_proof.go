@@ -14,6 +14,7 @@ import (
 )
 
 const dependencyCallbackProofDiagnosticEnv = "BASHPP_CALLBACK_PROOF_DIAG"
+const dependencyCallbackProofDiagnosticLimit = 48
 
 // dependencyFunctionCallbackLifetimeProof proves, from the exact package
 // sources selected for the dependency worker, that a package function cannot
@@ -333,10 +334,28 @@ func (p *dependencyCallbackProof) refuse(node ast.Node, reason string) bool {
 	if p.reason == "" {
 		p.reason = line
 	}
-	if p.diagnostics && len(p.diagnostic) < 100 {
+	if p.diagnostics && len(p.diagnostic) < dependencyCallbackProofDiagnosticLimit {
 		p.diagnostic = append(p.diagnostic, line)
 	}
 	return false
+}
+
+func (p *dependencyCallbackProof) diagnoseRecursiveFrameDifference(key string, active dependencyCallbackActiveFrame, supplied map[string]dependencyCallbackValue, receiver dependencyCallbackValue) {
+	if !p.diagnostics {
+		return
+	}
+	p.addDiagnostic("recursive frame difference for " + key)
+	left := dependencyCallbackDiagnosticFrame(active.supplied, active.receiver)
+	right := dependencyCallbackDiagnosticFrame(supplied, receiver)
+	for _, path := range dependencyCallbackDiagnosticDifferingPaths(left, right, 12) {
+		p.addDiagnostic("  " + path + " active=" + left[path] + " current=" + right[path])
+	}
+}
+
+func (p *dependencyCallbackProof) addDiagnostic(line string) {
+	if p.diagnostics && len(p.diagnostic) < dependencyCallbackProofDiagnosticLimit {
+		p.diagnostic = append(p.diagnostic, line)
+	}
 }
 
 func (p *dependencyCallbackProof) writeDiagnostics(out *os.File, path, name string) {
@@ -449,6 +468,7 @@ func (p *dependencyCallbackProof) function(decl *ast.FuncDecl, supplied map[stri
 			}
 			return true
 		}
+		p.diagnoseRecursiveFrameDifference(key, active, supplied, receiver)
 		return p.refuse(decl, "recursive call changes callback capture state")
 	}
 	before := dependencyCallbackFrameSnapshot(supplied, receiver)
@@ -710,6 +730,162 @@ func (s *dependencyCallbackSnapshot) object(b *strings.Builder, obj *dependencyC
 
 func dependencyCallbackSnapshotOmitField(value dependencyCallbackValue) bool {
 	return false
+}
+
+type dependencyCallbackDiagnosticGraph struct {
+	out      map[string]string
+	objects  map[*dependencyCallbackObject]int
+	closures map[*dependencyCallbackClosure]int
+	seenObj  map[*dependencyCallbackObject]bool
+	seenFunc map[*dependencyCallbackClosure]bool
+	nodes    int
+}
+
+func dependencyCallbackDiagnosticFrame(supplied map[string]dependencyCallbackValue, receiver dependencyCallbackValue) map[string]string {
+	g := &dependencyCallbackDiagnosticGraph{
+		out:      make(map[string]string),
+		objects:  make(map[*dependencyCallbackObject]int),
+		closures: make(map[*dependencyCallbackClosure]int),
+		seenObj:  make(map[*dependencyCallbackObject]bool),
+		seenFunc: make(map[*dependencyCallbackClosure]bool),
+	}
+	g.value("receiver", receiver)
+	names := make([]string, 0, len(supplied))
+	for name := range supplied {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		g.value("arg."+name, supplied[name])
+	}
+	return g.out
+}
+
+func (g *dependencyCallbackDiagnosticGraph) value(path string, value dependencyCallbackValue) {
+	if g.nodes >= 512 {
+		return
+	}
+	g.nodes++
+	g.out[path] = g.summary(value)
+	if value.object != nil {
+		if g.seenObj[value.object] {
+			return
+		}
+		g.seenObj[value.object] = true
+		names := make([]string, 0, len(value.object.fields))
+		for name := range value.object.fields {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			g.value(path+"."+name, value.object.fields[name])
+		}
+		return
+	}
+	if value.callback != nil {
+		if g.seenFunc[value.callback] {
+			return
+		}
+		g.seenFunc[value.callback] = true
+		names := make([]string, 0, len(value.callback.env))
+		for name := range value.callback.env {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			g.value(path+".capture."+name, value.callback.env[name])
+		}
+	}
+}
+
+func (g *dependencyCallbackDiagnosticGraph) summary(value dependencyCallbackValue) string {
+	if value.object != nil {
+		id := g.objectID(value.object)
+		typ := value.object.typ
+		if typ == "" {
+			typ = "<unknown>"
+		}
+		return fmt.Sprintf("object#%d{type=%s,owned=%t,escaped=%t,general=%t,synthetic=%t,taint=%t}", id, typ, value.object.owned, value.object.escaped, value.object.general, value.object.synthetic, value.tainted())
+	}
+	if value.callback != nil {
+		id := g.closureID(value.callback)
+		kind := "literal"
+		if value.callback.lit == nil {
+			kind = "original"
+		}
+		names := make([]string, 0, len(value.callback.env))
+		for name := range value.callback.env {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		return fmt.Sprintf("closure#%d{kind=%s,escaped=%t,captures=%s,taint=true}", id, kind, value.escaped, strings.Join(names, ","))
+	}
+	if value.callable {
+		return fmt.Sprintf("callable{escaped=%t,taint=false}", value.escaped)
+	}
+	if value.escaped {
+		return "empty{escaped=true,taint=false}"
+	}
+	return "empty{taint=false}"
+}
+
+func (g *dependencyCallbackDiagnosticGraph) objectID(obj *dependencyCallbackObject) int {
+	if id, ok := g.objects[obj]; ok {
+		return id
+	}
+	id := len(g.objects) + 1
+	g.objects[obj] = id
+	return id
+}
+
+func (g *dependencyCallbackDiagnosticGraph) closureID(closure *dependencyCallbackClosure) int {
+	if id, ok := g.closures[closure]; ok {
+		return id
+	}
+	id := len(g.closures) + 1
+	g.closures[closure] = id
+	return id
+}
+
+func dependencyCallbackDiagnosticDifferingPaths(left, right map[string]string, limit int) []string {
+	seen := make(map[string]bool, len(left)+len(right))
+	paths := make([]string, 0, len(left)+len(right))
+	for path := range left {
+		seen[path] = true
+		paths = append(paths, path)
+	}
+	for path := range right {
+		if !seen[path] {
+			paths = append(paths, path)
+		}
+	}
+	sort.Strings(paths)
+	var diff []string
+	for _, path := range paths {
+		if left[path] == right[path] {
+			continue
+		}
+		diff = append(diff, path)
+		if len(diff) >= limit {
+			break
+		}
+	}
+	if len(diff) == 0 {
+		diff = append(diff, "<snapshot>")
+		left["<snapshot>"] = "<no graph path difference>"
+		right["<snapshot>"] = "<no graph path difference>"
+	}
+	for path := range left {
+		if right[path] == "" {
+			right[path] = "<missing>"
+		}
+	}
+	for path := range right {
+		if left[path] == "" {
+			left[path] = "<missing>"
+		}
+	}
+	return diff
 }
 
 func (p *dependencyCallbackProof) block(block *ast.BlockStmt, env map[string]dependencyCallbackValue, depth int) bool {

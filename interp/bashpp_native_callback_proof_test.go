@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -725,6 +726,38 @@ func Parse(cb func()) { inspect(func(){}); inspect(func(){ cb() }) }
 				t.Fatalf("proof=%v, want %v", got, test.want)
 			}
 		})
+	}
+}
+
+// Sprint: #281; Story: #810; Story-ID: 48c1146a3ab0
+func TestDependencyCallbackProofRecursiveDiagnostic(t *testing.T) {
+	source := `package dep
+func walk(cb func()) { next := func() { cb() }; walk(next) }
+func Parse(cb func()) { walk(cb) }
+`
+	file, err := parser.ParseFile(token.NewFileSet(), "dep.go", source, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof := newDependencyCallbackProof([]*ast.File{file})
+	proof.diagnostics = true
+	if proof.prove("Parse", []int{0}) {
+		t.Fatal("proof unexpectedly accepted recursive callback substitution")
+	}
+	joined := strings.Join(proof.diagnostic, "\n")
+	for _, want := range []string{
+		"recursive frame difference for walk",
+		"arg.cb active=closure#",
+		"current=closure#",
+		"captures=cb",
+		"recursive call changes callback capture state",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("diagnostic missing %q:\n%s", want, joined)
+		}
+	}
+	if len(proof.diagnostic) > dependencyCallbackProofDiagnosticLimit {
+		t.Fatalf("diagnostic has %d lines, limit %d", len(proof.diagnostic), dependencyCallbackProofDiagnosticLimit)
 	}
 }
 
