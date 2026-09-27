@@ -6,23 +6,30 @@ package interp_test
 
 import "testing"
 
-// TestS281NativePopulatedIntFieldPreservesType exercises an exported int field
-// on a pointer populated inside the dependency worker. The field must retain
-// its declared int identity when it is copied into an ordinary scalar and when
-// it is used as an interpreter-owned map key.
+// TestS281NativePopulatedIntFieldPreservesType exercises exported int and
+// int64 fields on pointers populated inside the dependency worker. The fields
+// must retain their declared identities when copied into ordinary scalars and
+// when used as interpreter-owned map keys.
 func TestS281NativePopulatedIntFieldPreservesType(t *testing.T) {
 	const source = `package main
 import (
+	"encoding/json"
 	"fmt"
-	"net"
+	"image"
+	"io"
 )
 func main() {
-	addr, err := net.ResolveTCPAddr("tcp", "127.0.0.1:7524")
-	if err != nil { panic(err) }
-	var port int = addr.Port
+	point := new(image.Point)
+	if err := json.Unmarshal([]byte("{\"X\":7524}"), point); err != nil { panic(err) }
+	var x int = point.X
 	seen := map[int]bool{}
-	seen[addr.Port] = true
-	fmt.Println(port, seen[7524])
+	seen[point.X] = true
+	reader := new(io.LimitedReader)
+	if err := json.Unmarshal([]byte("{\"N\":9007199254740993}"), reader); err != nil { panic(err) }
+	var n int64 = reader.N
+	wide := map[int64]bool{}
+	wide[reader.N] = true
+	fmt.Println(x, seen[7524], n, wide[9007199254740993])
 }`
 	differGoSource(t, source, nil, "")
 }
