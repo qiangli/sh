@@ -92,3 +92,22 @@ func main(){payload:=time.Date(2020,1,2,0,0,0,0,time.UTC);e:=Event{payload};fmt.
 		t.Fatalf("stale callback field accepted: %v", probeErr)
 	}
 }
+
+func TestGoSourceCallbackScalarResultKeepsDeclaredType(t *testing.T) {
+	runner := &Runner{bashPPGoSource: true}
+	typ := &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "string"}}
+	value, meta, err := runner.bashPPBridgeContents(bashPPBridgeString("_"), typ)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta == nil || meta.kind != "scalar" || bashPPTypeText(meta.typ) != "string" {
+		t.Fatalf("callback scalar metadata = %#v", meta)
+	}
+	equal, err := runner.bashPPCompareValues(value, meta, false, "_", nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !equal {
+		t.Fatal("declared callback string did not compare equal to string literal")
+	}
+}

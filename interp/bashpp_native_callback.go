@@ -736,7 +736,11 @@ func (r *Runner) bashPPBridgeContents(v bashPPBridgeValue, typ syntax.BashPPType
 		}
 		return out, meta, nil
 	}
-	return bashPPBridgeScalarValue(v)
+	value, _, err := bashPPBridgeScalarValue(v)
+	if err != nil {
+		return nil, nil, err
+	}
+	return value, &bashPPCollectionMeta{kind: "scalar", typ: typ}, nil
 }
 
 func bashPPBridgeDynamicType(name string) syntax.BashPPTypeExpr {

@@ -382,6 +382,14 @@ func (r *Runner) bashPPScalarPath(expr syntax.BashPPExpr) (bashPPScalar, error) 
 			return scalar, nil
 		}
 	}
+	if r.bashPPGoSource && bashPPScalarComparableMeta(meta) {
+		cell := &bashPPCell{declType: meta.typ}
+		bashPPStoreCellValue(cell, value, nil)
+		scalar := r.bashPPScalarFromCell(cell)
+		if scalar.value != nil && scalar.value.Kind() != constant.Unknown {
+			return scalar, nil
+		}
+	}
 	if meta != nil {
 		return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-OPERAND: indexed value is not a scalar")
 	}
@@ -1586,6 +1594,12 @@ func bashPPCompareValuesWithRunner(r *Runner, left any, leftMeta *bashPPCollecti
 		}
 		return bashPPCompareScalarAny(left, right)
 	}
+	if r != nil && r.bashPPGoSource && (bashPPScalarComparableMeta(leftMeta) || bashPPScalarComparableMeta(rightMeta)) {
+		if ok, err := r.bashPPScalarComparisonAssignable(leftMeta, rightMeta); !ok {
+			return false, err
+		}
+		return bashPPCompareScalarAny(left, right)
+	}
 	if bashPPPointerComparable(leftMeta) || bashPPPointerComparable(rightMeta) {
 		if !bashPPPointerComparable(leftMeta) || !bashPPPointerComparable(rightMeta) || bashPPTypeText(leftMeta.typ) != bashPPTypeText(rightMeta.typ) {
 			return false, fmt.Errorf("BASHPP-ECOMPARE-TYPE: mismatched pointer comparison")
@@ -1671,6 +1685,23 @@ func bashPPPointerComparable(meta *bashPPCollectionMeta) bool {
 
 func bashPPNilComparable(meta *bashPPCollectionMeta) bool {
 	return meta != nil && (meta.kind == "slice" || meta.kind == "map" || meta.kind == "interface" || meta.kind == "channel" || meta.kind == "func")
+}
+
+func bashPPScalarComparableMeta(meta *bashPPCollectionMeta) bool {
+	return meta != nil && meta.kind == "scalar"
+}
+
+func (r *Runner) bashPPScalarComparisonAssignable(left, right *bashPPCollectionMeta) (bool, error) {
+	if left == nil || right == nil {
+		return true, nil
+	}
+	if !bashPPScalarComparableMeta(left) || !bashPPScalarComparableMeta(right) {
+		return false, fmt.Errorf("BASHPP-ECOMPARE-TYPE: mismatched comparison")
+	}
+	if r.bashPPTypeAssignable(left.typ, right.typ) && r.bashPPTypeAssignable(right.typ, left.typ) {
+		return true, nil
+	}
+	return false, fmt.Errorf("BASHPP-ECOMPARE-TYPE: mismatched comparison")
 }
 
 func (r *Runner) goSourceNilableScalarComparableMeta(expr syntax.BashPPExpr) *bashPPCollectionMeta {
