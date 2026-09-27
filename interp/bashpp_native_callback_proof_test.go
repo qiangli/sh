@@ -960,6 +960,56 @@ func Parse(cb func(), ch chan int) { h := &holder{}; h.walk(cb, ch, 1) }
 `,
 		},
 		{
+			name: "recursive literal closure effect is not skipped",
+			source: `package dep
+var saved func()
+type holder struct { f func() }
+func (h *holder) walk(cb func(), n int) {
+	if n > 0 {
+		h.walk(cb, n-1)
+	}
+	func() {
+		h.f = cb
+	}()
+	saved = h.f
+}
+func Parse(cb func()) { h := &holder{}; h.walk(cb, 1) }
+`,
+		},
+		{
+			name: "recursive RHS factory effect is not skipped",
+			source: `package dep
+var saved func()
+type holder struct { f func() }
+func factory(h *holder, cb func()) func() {
+	h.f = cb
+	return func() {}
+}
+func (h *holder) walk(cb func(), n int) {
+	if n > 0 {
+		h.walk(cb, n-1)
+	}
+	_ = factory(h, cb)
+	saved = h.f
+}
+func Parse(cb func()) { h := &holder{}; h.walk(cb, 1) }
+`,
+		},
+		{
+			name: "branch literal closure effect remains persistent taint",
+			source: `package dep
+var saved func()
+type holder struct { f func() }
+func Parse(cb func(), choose bool) {
+	h := &holder{}
+	if choose {
+		func() { h.f = cb }()
+	}
+	saved = h.f
+}
+`,
+		},
+		{
 			name: "conditional synchronous callback",
 			source: `package dep
 func Parse(cb func(), choose bool) { if choose { cb() } }
@@ -1001,6 +1051,86 @@ func Parse(cb func()) { inspect(func(){}); inspect(func(){ cb() }) }
 				t.Fatalf("proof=%v, want %v", got, test.want)
 			}
 		})
+	}
+}
+
+// Sprint: #281; Story: #810; Story-ID: 48c1146a3ab0
+func TestDependencyCallbackProofRecursiveStoreScanDoesNotMutateActiveGraph(t *testing.T) {
+	source := `package dep
+type holder struct { f func() }
+func walk(h *holder, cb func()) { h.f = cb }
+`
+	file, err := parser.ParseFile(token.NewFileSet(), "dep.go", source, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof := newDependencyCallbackProof([]*ast.File{file})
+	active := dependencyCallbackActiveFrame{
+		supplied: map[string]dependencyCallbackValue{
+			"h": {object: &dependencyCallbackObject{typ: "holder", owned: true, general: true, fields: make(map[string]dependencyCallbackValue)}},
+			"cb": {callback: &dependencyCallbackClosure{}},
+		},
+	}
+	before := dependencyCallbackFrameSnapshot(active.supplied, dependencyCallbackValue{})
+	if !proof.recursiveBodyStoresCallback(proof.funcs["walk"][0], active) {
+		t.Fatal("recursive store scan did not observe the callback store")
+	}
+	after := dependencyCallbackFrameSnapshot(active.supplied, dependencyCallbackValue{})
+	if after != before {
+		t.Fatalf("recursive store scan mutated active graph:\nbefore %s\nafter  %s", before, after)
+	}
+}
+
+// Sprint: #281; Story: #810; Story-ID: 48c1146a3ab0
+func TestDependencyCallbackProofBranchScanDoesNotMutateLiveGraph(t *testing.T) {
+	source := `package dep
+func Parse(cb func(), choose bool) {
+	if choose {
+		h.f = cb
+	}
+}
+`
+	file, err := parser.ParseFile(token.NewFileSet(), "dep.go", source, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof := newDependencyCallbackProof([]*ast.File{file})
+	env := map[string]dependencyCallbackValue{
+		"h":  {object: &dependencyCallbackObject{owned: true, fields: make(map[string]dependencyCallbackValue)}},
+		"cb": {callback: &dependencyCallbackClosure{}},
+	}
+	before := dependencyCallbackFrameSnapshot(env, dependencyCallbackValue{})
+	if proof.statement(proof.funcs["Parse"][0].Body.List[0], env, 0) {
+		t.Fatal("branch statement unexpectedly accepted callback taint")
+	}
+	after := dependencyCallbackFrameSnapshot(env, dependencyCallbackValue{})
+	if after != before {
+		t.Fatalf("branch scan mutated live graph:\nbefore %s\nafter  %s", before, after)
+	}
+}
+
+// Sprint: #281; Story: #810; Story-ID: 48c1146a3ab0
+func TestDependencyCallbackProofStoreDiagnosticNilFileSet(t *testing.T) {
+	source := `package dep
+type holder struct { f func() }
+func walk(a, b *holder, cb func(), n int) {
+	if n > 0 { walk(a, a, cb, n-1) }
+	b.f = cb
+}
+func Parse(cb func()) { walk(&holder{}, &holder{}, cb, 1) }
+`
+	file, err := parser.ParseFile(token.NewFileSet(), "dep.go", source, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof := newDependencyCallbackProof([]*ast.File{file})
+	proof.diagnostics = true
+	if proof.prove("Parse", []int{0}) {
+		t.Fatal("proof unexpectedly accepted generalized recursive store")
+	}
+	joined := strings.Join(proof.diagnostic, "\n")
+	if !strings.Contains(joined, "store=assign lhs=b.f rhs=cb") {
+		t.Fatalf("diagnostic missing store context:\n%s", joined)
 	}
 }
 

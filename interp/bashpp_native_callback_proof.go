@@ -628,14 +628,16 @@ func (p *dependencyCallbackProof) recursiveBodyStoresCallback(decl *ast.FuncDecl
 	if decl == nil || decl.Body == nil {
 		return true
 	}
-	env := dependencyCallbackCloneEnv(active.supplied)
+	cloner := newDependencyCallbackGraphCloner()
+	env := cloner.env(active.supplied)
+	receiver := cloner.value(active.receiver)
 	scope := make(map[string]bool, len(env)+1)
 	for name := range env {
 		scope[name] = true
 	}
 	if decl.Recv != nil && len(decl.Recv.List[0].Names) == 1 {
 		name := decl.Recv.List[0].Names[0].Name
-		env[name] = active.receiver
+		env[name] = receiver
 		scope[name] = true
 	}
 	return p.recursiveBlockStoresCallback(decl.Body, env, scope, scope)
@@ -689,6 +691,9 @@ func (p *dependencyCallbackProof) recursiveStatementStoresCallback(stmt ast.Stmt
 	case *ast.AssignStmt:
 		values := make([]dependencyCallbackValue, len(stmt.Rhs))
 		for i, rhs := range stmt.Rhs {
+			if !p.expressionCalls(rhs, env, 0) {
+				return true
+			}
 			values[i] = p.value(rhs, env)
 		}
 		for i, lhs := range stmt.Lhs {
@@ -724,6 +729,9 @@ func (p *dependencyCallbackProof) recursiveStatementStoresCallback(stmt ast.Stmt
 					value.object = &dependencyCallbackObject{typ: dependencyCallbackTypeName(spec.Type), owned: true, fields: make(map[string]dependencyCallbackValue)}
 				}
 				if i < len(spec.Values) {
+					if !p.expressionCalls(spec.Values[i], env, 0) {
+						return true
+					}
 					value = p.value(spec.Values[i], env)
 					if value.object != nil {
 						value.object.owned = true
@@ -738,11 +746,12 @@ func (p *dependencyCallbackProof) recursiveStatementStoresCallback(stmt ast.Stmt
 		}
 	case *ast.ExprStmt:
 		if call, ok := stmt.X.(*ast.CallExpr); ok {
-			if p.value(call.Fun, env).callback != nil || p.recursiveCallTargetsActive(call, env) {
+			callee := p.value(call.Fun, env)
+			if callee.callback != nil && callee.callback.lit == nil || p.recursiveCallTargetsActive(call, env) {
 				return false
 			}
 			if !p.withStoreContext("call", call.Fun, call, func() bool {
-				return p.call(call, env, 0)
+				return p.callWithCallee(call, callee, env, 0)
 			}) {
 				return true
 			}
@@ -889,8 +898,13 @@ func dependencyCallbackExprAt(exprs []ast.Expr, index int) ast.Expr {
 func (p *dependencyCallbackProof) withStoreContext(kind string, lhs, rhs ast.Node, fn func() bool) bool {
 	oldKind, oldLHS, oldRHS := p.storeKind, p.storeLHS, p.storeRHS
 	p.storeKind = kind
-	p.storeLHS = p.nodeSource(lhs)
-	p.storeRHS = p.nodeSource(rhs)
+	if p.diagnostics {
+		p.storeLHS = p.nodeSource(lhs)
+		p.storeRHS = p.nodeSource(rhs)
+	} else {
+		p.storeLHS = ""
+		p.storeRHS = ""
+	}
 	ok := fn()
 	p.storeKind, p.storeLHS, p.storeRHS = oldKind, oldLHS, oldRHS
 	return ok
@@ -900,8 +914,12 @@ func (p *dependencyCallbackProof) nodeSource(node ast.Node) string {
 	if node == nil {
 		return "<none>"
 	}
+	fset := p.fset
+	if fset == nil {
+		fset = token.NewFileSet()
+	}
 	var buf bytes.Buffer
-	if err := printer.Fprint(&buf, p.fset, node); err != nil {
+	if err := printer.Fprint(&buf, fset, node); err != nil {
 		return fmt.Sprintf("%T", node)
 	}
 	text := strings.Join(strings.Fields(buf.String()), " ")
@@ -1416,7 +1434,7 @@ func (p *dependencyCallbackProof) statement(stmt ast.Stmt, env map[string]depend
 	case *ast.DeferStmt:
 		return p.queueDeferredCall(stmt.Call, env, depth)
 	case *ast.IfStmt:
-		branchBase := dependencyCallbackCloneEnv(env)
+		branchBase := dependencyCallbackCloneEnvGraph(env)
 		before := dependencyCallbackTaintSnapshot(env)
 		if stmt.Init != nil && !p.statement(stmt.Init, branchBase, depth) {
 			return p.refuse(stmt.Init, "if initializer refused")
@@ -1426,7 +1444,7 @@ func (p *dependencyCallbackProof) statement(stmt ast.Stmt, env map[string]depend
 		}
 		if value, ok := p.boolConst(stmt.Cond); ok {
 			if value {
-				body := dependencyCallbackCloneEnv(branchBase)
+				body := dependencyCallbackCloneEnvGraph(branchBase)
 				if !p.scopedBlock(stmt.Body, body, depth) || dependencyCallbackBranchAddsTaint(before, body) {
 					return p.refuse(stmt.Body, "constant-true if branch may add callback taint")
 				}
@@ -1435,18 +1453,18 @@ func (p *dependencyCallbackProof) statement(stmt ast.Stmt, env map[string]depend
 			if stmt.Else == nil {
 				return true
 			}
-			other := dependencyCallbackCloneEnv(branchBase)
+			other := dependencyCallbackCloneEnvGraph(branchBase)
 			if !p.statement(stmt.Else, other, depth) || dependencyCallbackBranchAddsTaint(before, other) {
 				return p.refuse(stmt.Else, "constant-false else branch may add callback taint")
 			}
 			return true
 		}
-		body := dependencyCallbackCloneEnv(branchBase)
+		body := dependencyCallbackCloneEnvGraph(branchBase)
 		if !p.scopedBlock(stmt.Body, body, depth) || dependencyCallbackBranchAddsTaint(before, body) {
 			return p.refuse(stmt.Body, "if branch may add callback taint")
 		}
 		if stmt.Else != nil {
-			other := dependencyCallbackCloneEnv(branchBase)
+			other := dependencyCallbackCloneEnvGraph(branchBase)
 			if !p.statement(stmt.Else, other, depth) || dependencyCallbackBranchAddsTaint(before, other) {
 				return p.refuse(stmt.Else, "else branch may add callback taint")
 			}
@@ -1459,7 +1477,7 @@ func (p *dependencyCallbackProof) statement(stmt ast.Stmt, env map[string]depend
 		return p.scopedBlock(stmt, env, depth)
 	case *ast.ForStmt:
 		before := dependencyCallbackTaintSnapshot(env)
-		loop := dependencyCallbackCloneEnv(env)
+		loop := dependencyCallbackCloneEnvGraph(env)
 		if stmt.Init != nil && !p.statement(stmt.Init, loop, depth) {
 			return p.refuse(stmt.Init, "loop initializer refused")
 		}
@@ -1481,7 +1499,7 @@ func (p *dependencyCallbackProof) statement(stmt ast.Stmt, env map[string]depend
 			return false
 		}
 		before := dependencyCallbackTaintSnapshot(env)
-		loop := dependencyCallbackCloneEnv(env)
+		loop := dependencyCallbackCloneEnvGraph(env)
 		if !p.scopedBlock(stmt.Body, loop, depth) {
 			return false
 		}
@@ -1490,7 +1508,7 @@ func (p *dependencyCallbackProof) statement(stmt ast.Stmt, env map[string]depend
 		}
 		return true
 	case *ast.SwitchStmt:
-		base := dependencyCallbackCloneEnv(env)
+		base := dependencyCallbackCloneEnvGraph(env)
 		if stmt.Init != nil && !p.statement(stmt.Init, base, depth) {
 			return false
 		}
@@ -1499,7 +1517,7 @@ func (p *dependencyCallbackProof) statement(stmt ast.Stmt, env map[string]depend
 		}
 		return p.caseClauses(stmt.Body, base, depth)
 	case *ast.TypeSwitchStmt:
-		base := dependencyCallbackCloneEnv(env)
+		base := dependencyCallbackCloneEnvGraph(env)
 		if stmt.Init != nil && !p.statement(stmt.Init, base, depth) {
 			return false
 		}
@@ -1568,7 +1586,7 @@ func (p *dependencyCallbackProof) caseClauses(body *ast.BlockStmt, env map[strin
 		if !ok {
 			return false
 		}
-		branch := dependencyCallbackCloneEnv(env)
+		branch := dependencyCallbackCloneEnvGraph(env)
 		for _, expr := range clause.List {
 			if !p.expressionCalls(expr, branch, depth) {
 				return false
@@ -1586,6 +1604,78 @@ func dependencyCallbackCloneEnv(env map[string]dependencyCallbackValue) map[stri
 	for name, value := range env {
 		clone[name] = value
 	}
+	return clone
+}
+
+type dependencyCallbackGraphCloner struct {
+	objects  map[*dependencyCallbackObject]*dependencyCallbackObject
+	closures map[*dependencyCallbackClosure]*dependencyCallbackClosure
+}
+
+func newDependencyCallbackGraphCloner() *dependencyCallbackGraphCloner {
+	return &dependencyCallbackGraphCloner{
+		objects:  make(map[*dependencyCallbackObject]*dependencyCallbackObject),
+		closures: make(map[*dependencyCallbackClosure]*dependencyCallbackClosure),
+	}
+}
+
+func dependencyCallbackCloneEnvGraph(env map[string]dependencyCallbackValue) map[string]dependencyCallbackValue {
+	return newDependencyCallbackGraphCloner().env(env)
+}
+
+func (c *dependencyCallbackGraphCloner) env(env map[string]dependencyCallbackValue) map[string]dependencyCallbackValue {
+	clone := make(map[string]dependencyCallbackValue, len(env))
+	for name, value := range env {
+		clone[name] = c.value(value)
+	}
+	return clone
+}
+
+func (c *dependencyCallbackGraphCloner) value(value dependencyCallbackValue) dependencyCallbackValue {
+	return dependencyCallbackValue{
+		callback: c.closure(value.callback),
+		object:   c.object(value.object),
+		callable: value.callable,
+		escaped:  value.escaped,
+	}
+}
+
+func (c *dependencyCallbackGraphCloner) object(obj *dependencyCallbackObject) *dependencyCallbackObject {
+	if obj == nil {
+		return nil
+	}
+	if clone := c.objects[obj]; clone != nil {
+		return clone
+	}
+	clone := &dependencyCallbackObject{
+		typ:       obj.typ,
+		owned:     obj.owned,
+		escaped:   obj.escaped,
+		synthetic: obj.synthetic,
+		scalar:    obj.scalar,
+		general:   obj.general,
+		fields:    make(map[string]dependencyCallbackValue, len(obj.fields)),
+	}
+	c.objects[obj] = clone
+	for name, field := range obj.fields {
+		clone.fields[name] = c.value(field)
+	}
+	return clone
+}
+
+func (c *dependencyCallbackGraphCloner) closure(closure *dependencyCallbackClosure) *dependencyCallbackClosure {
+	if closure == nil {
+		return nil
+	}
+	if closure.lit == nil {
+		return closure
+	}
+	if clone := c.closures[closure]; clone != nil {
+		return clone
+	}
+	clone := &dependencyCallbackClosure{lit: closure.lit}
+	c.closures[closure] = clone
+	clone.env = c.env(closure.env)
 	return clone
 }
 
