@@ -1781,12 +1781,20 @@ func TestDependencyCallbackSameFrameSeparatesIdentityFromSnapshot(t *testing.T) 
 		t.Fatalf("unmutated argument rejected: %s", rejection)
 	}
 
+	// A callback-free field appearing after entry leaves the callback
+	// reachability unchanged: the frame is the same, generalized over the new
+	// region, which the body summary must then keep callback-free.
+	object.fields["n"] = dependencyCallbackValue{object: &dependencyCallbackObject{typ: "int", owned: true}}
+	if same, generalized, rejection := dependencyCallbackSameFrame(active, map[string]dependencyCallbackValue{"h": argument}, dependencyCallbackValue{}); !same || !generalized {
+		t.Fatalf("callback-free argument growth rejected: same=%v generalized=%v %s", same, generalized, rejection)
+	}
+
 	object.fields["f"] = dependencyCallbackValue{callback: &dependencyCallbackClosure{}}
 	same, _, rejection := dependencyCallbackSameFrame(active, map[string]dependencyCallbackValue{"h": argument}, dependencyCallbackValue{})
 	if same {
 		t.Fatal("recursive call with a newly tainted argument accepted")
 	}
-	if want := "argument h snapshot changed after entry and active argument is tainted"; rejection != want {
+	if want := "argument h callback reachability changed after entry"; rejection != want {
 		t.Fatalf("rejection = %q, want %q", rejection, want)
 	}
 }
