@@ -41,6 +41,8 @@ func bashPPScalarConstant(value any) constant.Value {
 		return constant.MakeString(v)
 	case int:
 		return constant.MakeInt64(int64(v))
+	case float64:
+		return constant.MakeFloat64(v)
 	case bool:
 		return constant.MakeBool(v)
 	default:
