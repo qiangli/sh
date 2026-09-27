@@ -829,6 +829,16 @@ func (r *Runner) bashPPBoxConcreteValue(expr syntax.BashPPExpr, iface *syntax.Ba
 	if err != nil {
 		return nil, expand.Variable{}, err
 	}
+	// The source is itself an interface holding nothing, so there is no
+	// dynamic value to box: bashPPCellForInterfaceExpr hands such a cell back
+	// unwrapped with the STATIC interface type as its `actual`, and boxing
+	// that would mint a non-nil interface whose dynamic type is the interface
+	// itself. The named ident and selector forms test this before they reach
+	// here; a call, index or dereference result only gets here, so
+	// `f.Type = p.typeOrNil()` would compare != nil.
+	if cell != nil && cell.interfaceValue != nil && cell.interfaceValue.nilIface {
+		return &bashPPInterfaceValue{nilIface: true}, expand.Variable{Set: true, Kind: expand.String}, nil
+	}
 	if err := r.bashPPImplementsCell(cell, actual, iface); err != nil {
 		return nil, expand.Variable{}, err
 	}
