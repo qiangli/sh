@@ -1688,7 +1688,11 @@ func bashPPNilComparable(meta *bashPPCollectionMeta) bool {
 }
 
 func bashPPScalarComparableMeta(meta *bashPPCollectionMeta) bool {
-	return meta != nil && meta.kind == "scalar"
+	return bashPPScalarMetaKind(meta)
+}
+
+func bashPPScalarMetaKind(meta *bashPPCollectionMeta) bool {
+	return meta != nil && (meta.kind == "scalar" || meta.kind == "bridge-scalar")
 }
 
 func (r *Runner) bashPPScalarComparisonAssignable(left, right *bashPPCollectionMeta) (bool, error) {

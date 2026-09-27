@@ -969,7 +969,7 @@ func bashPPStoreCellValue(cell *bashPPCell, value any, meta *bashPPCollectionMet
 		}
 	}
 	cell.pointer, cell.pointerValue, cell.nilPointer = false, nil, false
-	if meta != nil && meta.kind == "scalar" {
+	if bashPPScalarMetaKind(meta) {
 		cell.vr = expand.Variable{Set: true, Kind: expand.String, Str: fmt.Sprint(value)}
 		cell.valueMeta, cell.object = nil, nil
 		cell.exactScalar, cell.negativeZero = nil, false
