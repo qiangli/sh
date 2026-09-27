@@ -477,7 +477,13 @@ func (r *Runner) goSourceNativeSequenceContents(native *bashPPBridgeValue, expec
 		if err != nil {
 			return nil, nil, true, err
 		}
-		value, child, err := r.bashPPBridgeContents(element, shape.Element)
+		// Native indexing encodes a nested array or slice as another handle.
+		// Re-enter this path so that handle is authenticated against its own
+		// destination type before local metadata replaces its native identity.
+		value, child, materialized, err := r.goSourceNativeSequenceContents(&element, shape.Element)
+		if !materialized && err == nil {
+			value, child, err = r.bashPPBridgeContents(element, shape.Element)
+		}
 		if err != nil {
 			return nil, nil, true, fmt.Errorf("BASHPP-ECOLLECTION-ELEMENT: %v", err)
 		}

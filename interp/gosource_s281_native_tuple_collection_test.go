@@ -31,6 +31,28 @@ func main() {
 	differGoSource(t, source, nil, "")
 }
 
+// TestS281NativeTupleNestedSliceField covers the same result-temporary path
+// when indexing the outer native handle produces another slice handle. The
+// local alias checks that materialization retains interpreter slice aliasing.
+func TestS281NativeTupleNestedSliceField(t *testing.T) {
+	const source = `package main
+import (
+	"encoding/csv"
+	"fmt"
+	"strings"
+)
+type Scope struct { records [][]string }
+func main() {
+	var scope Scope
+	var err error
+	scope.records, err = csv.NewReader(strings.NewReader("a,b\nc,d\n")).ReadAll()
+	alias := scope.records
+	alias[0][0] = "changed"
+	fmt.Println(err, len(scope.records), len(scope.records[0]), scope.records[0][0], alias[1][1])
+}`
+	differGoSource(t, source, nil, "")
+}
+
 // TestS281TupleCollectionAssignmentControls keeps the repair on the ordinary
 // composite assignment path: local tuple values, nil and empty slices, arrays,
 // and a later plain reassignment/range must retain their existing semantics.
