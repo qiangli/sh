@@ -26,6 +26,12 @@ type bashPPNativeSliceBuffer struct {
 	Value  bashPPBridgeValue `json:"value"`
 }
 
+type bashPPNativeSliceRefreshKey struct {
+	storage          uint64
+	offset           int
+	length, capacity int
+}
+
 func nativeSliceCallable(req bashPPEvalRequest, q bashPPBridgeRequest) string {
 	if q.Receiver != nil {
 		if q.Selector == "" {
@@ -204,10 +210,23 @@ func prepareNativeSliceBuffers(req bashPPEvalRequest, q *bashPPBridgeRequest) er
 	q.sliceTargets = nil
 	hasSlice := false
 	hasDirectSlice := false
+	seenSlices := map[bashPPNativeSliceRefreshKey]bool{}
 	var refresh func(*bashPPBridgeValue) error
 	refresh = func(v *bashPPBridgeValue) error {
 		if capture := v.sliceView; capture != nil {
 			hasSlice = true
+			key := bashPPNativeSliceRefreshKey{
+				storage:  v.Storage,
+				offset:   v.Offset,
+				length:   v.Length,
+				capacity: v.Capacity,
+			}
+			if key.storage != 0 {
+				if seenSlices[key] {
+					return nil
+				}
+				seenSlices[key] = true
+			}
 			if req.CallbackOwner == nil {
 				return fmt.Errorf("gosource: original slice has no request owner")
 			}
