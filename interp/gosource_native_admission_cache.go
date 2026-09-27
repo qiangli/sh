@@ -17,11 +17,15 @@ type goSourceNativeAdmissionKey struct {
 }
 
 func (s *bashPPNativeSession) rememberNativeHandleType(v bashPPBridgeValue) {
-	if v.Kind != "handle" || v.Handle == 0 || v.NativeTypeID == 0 || v.Session != s.id {
+	if v.Kind != "handle" || v.Handle == 0 || v.Session != s.id {
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if v.NativeTypeID == 0 {
+		delete(s.handleTypes, v.Handle)
+		return
+	}
 	if s.handleTypes == nil {
 		s.handleTypes = make(map[uint64]uint64)
 	}

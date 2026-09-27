@@ -309,6 +309,7 @@ type bashPPNativeSession struct {
 	cgo                 string
 	instances           string
 	genericTypes        string
+	selectors           string
 	id                  string
 }
 
@@ -406,6 +407,9 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 		}
 		if s.genericTypes != identity.generics {
 			return errors.New("gosource: generic bridge types changed after native dependency initialization")
+		}
+		if s.selectors != identity.selectors {
+			return errors.New("gosource: bridge selectors changed after native dependency initialization")
 		}
 		return nil
 	}
@@ -718,7 +722,7 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 	identity := req.sessionIdentity()
 	s.imports, s.locals, s.embeds = identity.imports, identity.locals, identity.embeds
 	s.companions, s.cgo = identity.companions, identity.cgo
-	s.instances, s.genericTypes = identity.instances, identity.generics
+	s.instances, s.genericTypes, s.selectors = identity.instances, identity.generics, identity.selectors
 	go func() {
 		for {
 			var reply bashPPBridgeResponse

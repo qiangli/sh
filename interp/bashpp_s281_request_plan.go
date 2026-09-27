@@ -152,6 +152,7 @@ type bashPPSessionIdentity struct {
 	cgo        string
 	instances  string
 	generics   string
+	selectors  string
 }
 
 func bashPPBuildSessionIdentity(req bashPPEvalRequest, locals string) bashPPSessionIdentity {
@@ -164,16 +165,40 @@ func bashPPBuildSessionIdentity(req bashPPEvalRequest, locals string) bashPPSess
 		cgo:       bashPPCgoIdentity(req.CgoPackages),
 		instances: bashPPImportedInstanceIdentity(req.Instances),
 		generics:  bashPPGenericTypeIdentity(req.GenericTypes),
+		selectors: strings.Join(req.Selectors, "\x00"),
 	}
 }
 
 // sessionIdentity is this request's session fingerprint, derived once per
 // program revision by [Runner.bashPPNativeRequestShape].
 func (req bashPPEvalRequest) sessionIdentity() bashPPSessionIdentity {
-	if req.identity != nil {
+	if req.identity != nil && req.identityPlan.matchesRequest(req) {
 		return *req.identity
 	}
 	return bashPPBuildSessionIdentity(req, bashPPLocalTypeIdentity(req.LocalTypes))
+}
+
+// matchesRequest reports whether req still carries the immutable descriptor
+// sets from this plan. A request is a value and package-internal callers may
+// replace one of its registry fields after construction; such a copy must not
+// retain the plan's cached fingerprint.
+func (plan *bashPPNativeRequestPlan) matchesRequest(req bashPPEvalRequest) bool {
+	return plan != nil && maps.Equal(plan.imports, req.Imports) &&
+		samePublishedSlice(plan.localTypes, req.LocalTypes) &&
+		samePublishedSlice(plan.embedDecls, req.EmbedDecls) &&
+		samePublishedSlice(plan.companionFiles, req.CompanionFiles) &&
+		samePublishedSlice(plan.nativeFuncs, req.NativeFuncs) &&
+		samePublishedSlice(plan.mapped, req.MappedCompanions) &&
+		samePublishedSlice(plan.trampolines, req.CompanionTrampolines) &&
+		samePublishedSlice(plan.unmappedFrames, req.CompanionUnmappedFrames) &&
+		samePublishedSlice(plan.cgo, req.CgoPackages) &&
+		samePublishedSlice(plan.instances, req.Instances) &&
+		samePublishedSlice(plan.genericTypes, req.GenericTypes) &&
+		samePublishedSlice(plan.selectors, req.Selectors)
+}
+
+func samePublishedSlice[S ~[]E, E any](a, b S) bool {
+	return len(a) == len(b) && (len(a) == 0 || &a[0] == &b[0])
 }
 
 // bashPPNativeRequestPlan is the program-derived part of a native eval request:
@@ -331,6 +356,7 @@ func (r *Runner) bashPPNativeRequestShape() *bashPPNativeRequestPlan {
 		cgo:       bashPPCgoIdentity(plan.cgo),
 		instances: bashPPImportedInstanceIdentity(plan.instances),
 		generics:  bashPPGenericTypeIdentity(plan.genericTypes),
+		selectors: strings.Join(plan.selectors, "\x00"),
 	}
 	// The memos every piece above was read through, recorded after the
 	// derivation populated them, and whether a companion spelling could have
