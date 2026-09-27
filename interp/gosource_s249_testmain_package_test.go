@@ -115,6 +115,95 @@ func main() {
 	}
 }
 
+// A native testing.M retains mapped-package callbacks after registration.
+// Their package variables are shared Go storage even though they are not
+// lexical closure captures: typed zero/non-zero values and indexed aggregate
+// reads must remain available, and mutations from parallel testing frames must
+// be visible to the test main after M.Run. The package channel supplies the
+// same synchronization Go source requested, including under the host race
+// detector.
+func TestGoSourceTestingCallbacksShareMappedPackageGlobals(t *testing.T) {
+	xtest := gosource.PackageSpec{Path: "example.com/globals_test", Sources: []gosource.Source{s249Source("globals_test.go", `package globals_test
+
+import (
+	"fmt"
+	"go/token"
+	"testing"
+)
+
+var zero token.Pos
+var nonzero token.Pos = 1
+var panicArray = [...]string{"array-zero", "array-one"}
+var panicSlice = []string{"slice-zero", "slice-one"}
+var guard = make(chan struct{}, 1)
+var callbackCount int
+
+func init() { guard <- struct{}{} }
+
+func increment() {
+	<-guard
+	callbackCount++
+	guard <- struct{}{}
+}
+
+func CallbackCount() int {
+	<-guard
+	n := callbackCount
+	guard <- struct{}{}
+	return n
+}
+
+func TestPackageGlobals(t *testing.T) {
+	local := "lexical-local"
+	t.Run("typed-and-indexed", func(t *testing.T) {
+		got := panicArray[zero] + "|" + panicSlice[nonzero] + "|" + local
+		if got != "array-zero|slice-one|lexical-local" {
+			panic(panicArray[zero] + ":" + panicSlice[nonzero])
+		}
+		increment()
+	})
+	for i := 0; i < 4; i++ {
+		t.Run(fmt.Sprintf("parallel-%d", i), func(t *testing.T) {
+			t.Parallel()
+			increment()
+		})
+	}
+}
+`)}}
+	driver := s249Source("_testmain.go", `package main
+
+import (
+	"fmt"
+	"os"
+	"testing"
+	"testing/internal/testdeps"
+	_xtest "example.com/globals_test"
+)
+
+var tests = []testing.InternalTest{{"TestPackageGlobals", _xtest.TestPackageGlobals}}
+var benchmarks = []testing.InternalBenchmark{}
+var fuzzTargets = []testing.InternalFuzzTarget{}
+var examples = []testing.InternalExample{}
+
+func main() {
+	m := testing.MainStart(testdeps.TestDeps{}, tests, benchmarks, fuzzTargets, examples)
+	code := m.Run()
+	if got := _xtest.CallbackCount(); got != 5 {
+		panic(fmt.Sprintf("callback count after M.Run = %d, want 5", got))
+	}
+	os.Exit(code)
+}
+`)
+
+	got, err := runS249PackageTestMain(t, []gosource.Source{driver}, []gosource.PackageSpec{xtest})
+	if err != nil {
+		t.Fatalf("Runner: %v; stderr: %s", err, got.stderr)
+	}
+	if want := (s249GoSourceOutcome{stdout: "PASS\n"}); got != want {
+		t.Fatalf("Runner %+v; want %+v", got, want)
+	}
+}
+
 // A mapped test package executes its body in the interpreter even though the
 // generated test main reaches it through testing's native descriptor wrapper.
 // Interface results must survive both the native call and the interpreted

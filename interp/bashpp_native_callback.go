@@ -107,6 +107,10 @@ func (registered *bashPPCallbackFunction) bashPPTestingCallbackFrame(group *bash
 	child.exit = exitStatus{}
 	child.lastExit = exitStatus{}
 	cloner := newBashPPClonerFor(child)
+	// Registration recorded both true lexical captures and the authenticated
+	// source package's global cells. Reuse that immutable identity set: cloning
+	// the template's root here would either lose package mutation or retain
+	// unrelated frame and foreign-package storage.
 	cloner.shared = registered.capture
 	cloner.goSourceTask = true
 	return child, registered.templateFn.cloned(cloner), nil
