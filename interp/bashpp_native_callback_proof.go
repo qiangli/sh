@@ -621,30 +621,148 @@ func (p *dependencyCallbackProof) recursiveBodyStoresCallback(decl *ast.FuncDecl
 		return true
 	}
 	env := dependencyCallbackCloneEnv(active.supplied)
-	if decl.Recv != nil && len(decl.Recv.List[0].Names) == 1 {
-		env[decl.Recv.List[0].Names[0].Name] = active.receiver
+	scope := make(map[string]bool, len(env)+1)
+	for name := range env {
+		scope[name] = true
 	}
-	stores := false
-	ast.Inspect(decl.Body, func(node ast.Node) bool {
-		if stores || node == nil {
+	if decl.Recv != nil && len(decl.Recv.List[0].Names) == 1 {
+		name := decl.Recv.List[0].Names[0].Name
+		env[name] = active.receiver
+		scope[name] = true
+	}
+	return p.recursiveBlockStoresCallback(decl.Body, env, scope)
+}
+
+func (p *dependencyCallbackProof) recursiveBlockStoresCallback(block *ast.BlockStmt, env map[string]dependencyCallbackValue, scope map[string]bool) bool {
+	if block == nil {
+		return false
+	}
+	local := dependencyCallbackCloneScope(scope)
+	for _, stmt := range block.List {
+		if p.recursiveStatementStoresCallback(stmt, env, local) {
+			return true
+		}
+		for _, name := range dependencyCallbackStatementDeclarations(stmt) {
+			if name != "_" {
+				local[name] = true
+			}
+		}
+	}
+	return false
+}
+
+func (p *dependencyCallbackProof) recursiveStatementStoresCallback(stmt ast.Stmt, env map[string]dependencyCallbackValue, scope map[string]bool) bool {
+	switch stmt := stmt.(type) {
+	case *ast.AssignStmt:
+		if p.recursiveFreshFuncLiteralShortDecl(stmt, scope) {
 			return false
 		}
-		if _, nested := node.(*ast.FuncLit); nested {
+		for _, rhs := range stmt.Rhs {
+			if dependencyCallbackNodeTainted(rhs, env, p) {
+				return true
+			}
+		}
+	case *ast.DeclStmt:
+		decl, ok := stmt.Decl.(*ast.GenDecl)
+		if !ok {
 			return false
 		}
-		assign, ok := node.(*ast.AssignStmt)
+		for _, item := range decl.Specs {
+			spec, ok := item.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for _, value := range spec.Values {
+				if dependencyCallbackNodeTainted(value, env, p) {
+					return true
+				}
+			}
+		}
+	case *ast.BlockStmt:
+		return p.recursiveBlockStoresCallback(stmt, env, scope)
+	case *ast.IfStmt:
+		if stmt.Init != nil && p.recursiveStatementStoresCallback(stmt.Init, env, dependencyCallbackCloneScope(scope)) {
+			return true
+		}
+		if p.recursiveBlockStoresCallback(stmt.Body, env, scope) {
+			return true
+		}
+		if stmt.Else != nil && p.recursiveStatementStoresCallback(stmt.Else, env, dependencyCallbackCloneScope(scope)) {
+			return true
+		}
+	case *ast.ForStmt:
+		loop := dependencyCallbackCloneScope(scope)
+		if stmt.Init != nil && p.recursiveStatementStoresCallback(stmt.Init, env, loop) {
+			return true
+		}
+		if p.recursiveBlockStoresCallback(stmt.Body, env, loop) {
+			return true
+		}
+		if stmt.Post != nil && p.recursiveStatementStoresCallback(stmt.Post, env, loop) {
+			return true
+		}
+	case *ast.RangeStmt:
+		return p.recursiveBlockStoresCallback(stmt.Body, env, dependencyCallbackCloneScope(scope))
+	case *ast.SwitchStmt:
+		next := dependencyCallbackCloneScope(scope)
+		if stmt.Init != nil && p.recursiveStatementStoresCallback(stmt.Init, env, next) {
+			return true
+		}
+		return p.recursiveCaseClausesStoreCallback(stmt.Body, env, next)
+	case *ast.TypeSwitchStmt:
+		next := dependencyCallbackCloneScope(scope)
+		if stmt.Init != nil && p.recursiveStatementStoresCallback(stmt.Init, env, next) {
+			return true
+		}
+		if stmt.Assign != nil && p.recursiveStatementStoresCallback(stmt.Assign, env, next) {
+			return true
+		}
+		return p.recursiveCaseClausesStoreCallback(stmt.Body, env, next)
+	case *ast.LabeledStmt:
+		return p.recursiveStatementStoresCallback(stmt.Stmt, env, scope)
+	}
+	return false
+}
+
+func (p *dependencyCallbackProof) recursiveCaseClausesStoreCallback(body *ast.BlockStmt, env map[string]dependencyCallbackValue, scope map[string]bool) bool {
+	if body == nil {
+		return false
+	}
+	for _, stmt := range body.List {
+		clause, ok := stmt.(*ast.CaseClause)
 		if !ok {
 			return true
 		}
-		for _, rhs := range assign.Rhs {
-			if dependencyCallbackNodeTainted(rhs, env, p) {
-				stores = true
-				return false
-			}
+		next := dependencyCallbackCloneScope(scope)
+		if p.recursiveBlockStoresCallback(&ast.BlockStmt{List: clause.Body}, env, next) {
+			return true
 		}
-		return true
-	})
-	return stores
+	}
+	return false
+}
+
+func (p *dependencyCallbackProof) recursiveFreshFuncLiteralShortDecl(stmt *ast.AssignStmt, scope map[string]bool) bool {
+	if stmt == nil || stmt.Tok != token.DEFINE || len(stmt.Lhs) != len(stmt.Rhs) || len(stmt.Lhs) == 0 {
+		return false
+	}
+	for i, lhs := range stmt.Lhs {
+		name, ok := lhs.(*ast.Ident)
+		if !ok || name.Name == "_" || scope[name.Name] || p.globals[name.Name] || p.currentResultName(name.Name) {
+			return false
+		}
+		if _, ok := stmt.Rhs[i].(*ast.FuncLit); !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func dependencyCallbackCloneScope(scope map[string]bool) map[string]bool {
+	clone := make(map[string]bool, len(scope))
+	for name, value := range scope {
+		clone[name] = value
+	}
+	return clone
 }
 
 func dependencyCallbackFrameSnapshot(supplied map[string]dependencyCallbackValue, receiver dependencyCallbackValue) string {
@@ -1405,6 +1523,56 @@ func dependencyCallbackOverwriteObject(dst *dependencyCallbackObject, src depend
 	}
 }
 
+func dependencyCallbackValueCopy(value dependencyCallbackValue) dependencyCallbackValue {
+	if value.object == nil {
+		return value
+	}
+	objects := make(map[*dependencyCallbackObject]*dependencyCallbackObject)
+	return dependencyCallbackValue{
+		callback: value.callback,
+		object:   dependencyCallbackObjectValueCopy(value.object, objects),
+		callable: value.callable,
+		escaped:  value.escaped,
+	}
+}
+
+func dependencyCallbackObjectValueCopy(obj *dependencyCallbackObject, seen map[*dependencyCallbackObject]*dependencyCallbackObject) *dependencyCallbackObject {
+	if obj == nil {
+		return nil
+	}
+	if copied := seen[obj]; copied != nil {
+		return copied
+	}
+	copied := &dependencyCallbackObject{
+		typ:       obj.typ,
+		owned:     true,
+		escaped:   obj.escaped,
+		synthetic: obj.synthetic,
+		scalar:    obj.scalar,
+		general:   obj.general,
+		fields:    make(map[string]dependencyCallbackValue, len(obj.fields)),
+	}
+	seen[obj] = copied
+	for name, field := range obj.fields {
+		copied.fields[name] = dependencyCallbackValueCopyField(field)
+	}
+	return copied
+}
+
+func dependencyCallbackValueCopyField(value dependencyCallbackValue) dependencyCallbackValue {
+	if value.object == nil {
+		return value
+	}
+	// A dereferenced struct copy gets its own top-level storage, but nested
+	// pointer/map/slice-like references remain shared in this proof model.
+	return dependencyCallbackValue{
+		callback: value.callback,
+		object:   value.object,
+		callable: value.callable,
+		escaped:  value.escaped,
+	}
+}
+
 func (p *dependencyCallbackProof) assign(lhs ast.Expr, value dependencyCallbackValue, env map[string]dependencyCallbackValue, define bool) bool {
 	switch lhs := lhs.(type) {
 	case *ast.Ident:
@@ -1505,6 +1673,12 @@ func (p *dependencyCallbackProof) value(expr ast.Expr, env map[string]dependency
 		return p.value(expr.X, env)
 	case *ast.UnaryExpr:
 		return p.value(expr.X, env)
+	case *ast.StarExpr:
+		base := p.value(expr.X, env)
+		if base.object == nil {
+			return dependencyCallbackValue{callback: &dependencyCallbackClosure{}, escaped: true}
+		}
+		return dependencyCallbackValueCopy(base)
 	case *ast.IndexExpr:
 		container := p.value(expr.X, env)
 		if container.object == nil {
@@ -1947,6 +2121,9 @@ func (p *dependencyCallbackProof) method(receiver dependencyCallbackValue, name 
 // the containing object; no package- or type-specific exception is involved.
 func (p *dependencyCallbackProof) field(receiver dependencyCallbackValue, name string, seen map[string]bool) dependencyCallbackValue {
 	if receiver.object == nil {
+		if receiver.callback != nil || receiver.callable {
+			return receiver
+		}
 		return dependencyCallbackValue{}
 	}
 	if value, ok := receiver.object.fields[name]; ok {

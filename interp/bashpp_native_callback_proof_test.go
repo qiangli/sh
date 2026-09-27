@@ -654,6 +654,107 @@ func Parse(cb func()) { Retain(cb) }
 `,
 		},
 		{
+			name: "recursive fresh local helper closure",
+			source: `package dep
+type labelScope struct { errh func(error) }
+func (ls *labelScope) blockBranches(n int) {
+	innerBlock := func(next int) {
+		ls.blockBranches(next)
+	}
+	if n > 0 {
+		innerBlock(n-1)
+	}
+	if ls.errh != nil {
+		ls.errh(nil)
+	}
+}
+func Parse(cb func(error)) {
+	ls := &labelScope{errh: cb}
+	ls.blockBranches(1)
+}
+`,
+			want: true,
+		},
+		{
+			name: "recursive mixed short declaration existing cell is unproved",
+			source: `package dep
+type labelScope struct { errh func(error) }
+var saved func(error)
+func (ls *labelScope) blockBranches(n int) {
+	var retained func()
+	retained, innerBlock := func() { saved = ls.errh }, func(next int) {
+		ls.blockBranches(next)
+	}
+	_ = retained
+	if n > 0 {
+		innerBlock(n-1)
+	}
+}
+func Parse(cb func(error)) {
+	ls := &labelScope{errh: cb}
+	ls.blockBranches(1)
+}
+`,
+		},
+		{
+			name: "direct star value copy retains callback after source field clear",
+			source: `package dep
+type H struct{ f func() }
+var saved func()
+func Retain(cb func()) {
+	h := &H{f: cb}
+	copied := *h
+	h.f = nil
+	saved = copied.f
+}
+func Parse(cb func()) { Retain(cb) }
+`,
+		},
+		{
+			name: "recursive star value copy retains callback after source field clear",
+			source: `package dep
+type H struct{ f func() }
+var saved func()
+func walk(h *H, n int) {
+	copied := *h
+	h.f = nil
+	if n > 0 {
+		walk(h, n-1)
+	}
+	saved = copied.f
+}
+func Parse(cb func()) { walk(&H{f: cb}, 1) }
+`,
+		},
+		{
+			name: "direct star value copy nested alias keeps later callback",
+			source: `package dep
+type C struct{ f func() }
+type H struct{ child *C }
+var saved func()
+func Retain(cb func()) {
+	c := &C{}
+	h := &H{child: c}
+	copied := *h
+	c.f = cb
+	saved = copied.child.f
+}
+func Parse(cb func()) { Retain(cb) }
+`,
+		},
+		{
+			name: "unknown star value copy cannot hide callback",
+			source: `package dep
+type H struct{ f func() }
+var saved func()
+func Retain(h *H) {
+	copied := *h
+	saved = copied.f
+}
+func Parse(cb func()) { Retain(nil) }
+`,
+		},
+		{
 			name: "pointer scalar-looking field is not omitted",
 			source: `package dep
 type Pointer *int
