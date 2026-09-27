@@ -449,6 +449,92 @@ func Parse(cb func()) { Retain(cb) }
 `,
 		},
 		{
+			name: "joined distinct elements retain callback fields",
+			source: `package dep
+var saved func()
+type holder struct{ f func() }
+func Retain(cb func()) {
+	h1 := &holder{f: cb}
+	h2 := &holder{f: cb}
+	xs := []*holder{h1, h2}
+	saved = xs[0].f
+}
+func Parse(cb func()) { Retain(cb) }
+`,
+		},
+		{
+			name: "positional struct literal retains callback field",
+			source: `package dep
+var saved func()
+type holder struct{ f func() }
+func Retain(cb func()) {
+	h := holder{cb}
+	saved = h.f
+}
+func Parse(cb func()) { Retain(cb) }
+`,
+		},
+		{
+			name: "map identifier key preserves element alias",
+			source: `package dep
+var saved func()
+type holder struct{ f func() }
+func Retain(cb func()) {
+	h := &holder{}
+	k := 0
+	xs := map[int]*holder{k: h}
+	h.f = cb
+	saved = xs[k].f
+}
+func Parse(cb func()) { Retain(cb) }
+`,
+		},
+		{
+			name: "clean closure observes later object callback",
+			source: `package dep
+var saved func()
+type holder struct{ f func() }
+func Retain(cb func()) {
+	h := &holder{}
+	invoke := func() { saved = h.f }
+	h.f = cb
+	invoke()
+}
+func Parse(cb func()) { Retain(cb) }
+`,
+		},
+		{
+			name: "clean closure observes later lexical callback",
+			source: `package dep
+var saved func()
+func Retain(cb func()) {
+	var f func()
+	invoke := func() { saved = f }
+	f = cb
+	invoke()
+}
+func Parse(cb func()) { Retain(cb) }
+`,
+		},
+		{
+			name: "recursive generalized child helper store is unproved",
+			source: `package dep
+type C struct{ f func() }
+type H struct{ child C }
+var saved func()
+func store(c *C, cb func()) { c.f = cb }
+func walk(a, b *H, cb func(), n int) {
+	if n > 0 {
+		walk(a, a, cb, n-1)
+	}
+	store(&a.child, cb)
+	saved = b.child.f
+}
+func Retain(cb func()) { walk(&H{}, &H{}, cb, 1) }
+func Parse(cb func()) { Retain(cb) }
+`,
+		},
+		{
 			name: "escaped clean child cannot later receive callback",
 			source: `package dep
 var saved *child

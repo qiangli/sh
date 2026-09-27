@@ -149,6 +149,7 @@ func dependencyCallbackObjectTainted(obj *dependencyCallbackObject, seen map[*de
 
 type dependencyCallbackType struct {
 	fields   map[string]dependencyCallbackField
+	order    []string
 	embedded []string
 }
 
@@ -246,12 +247,14 @@ func newDependencyCallbackProof(files []*ast.File) *dependencyCallbackProof {
 							if len(field.Names) == 0 {
 								if fieldType != "" {
 									shape.embedded = append(shape.embedded, fieldType)
+									shape.order = append(shape.order, fieldType)
 								}
 								continue
 							}
 							_, directFunc := field.Type.(*ast.FuncType)
 							for _, name := range field.Names {
 								shape.fields[name.Name] = dependencyCallbackField{typ: fieldType, callable: directFunc || p.funcTypes[fieldType]}
+								shape.order = append(shape.order, name.Name)
 							}
 						}
 						p.types[spec.Name.Name] = shape
@@ -1067,9 +1070,6 @@ func dependencyCallbackCloneEnv(env map[string]dependencyCallbackValue) map[stri
 }
 
 func dependencyCallbackJoinValue(left, right dependencyCallbackValue) dependencyCallbackValue {
-	if !left.tainted() && right.tainted() {
-		return right
-	}
 	if left.object == nil && left.callback == nil && !left.callable {
 		return right
 	}
@@ -1081,12 +1081,40 @@ func dependencyCallbackJoinValue(left, right dependencyCallbackValue) dependency
 			return left
 		}
 		dependencyCallbackMarkEscaped([]dependencyCallbackValue{left, right})
-		return dependencyCallbackValue{object: &dependencyCallbackObject{escaped: true, fields: make(map[string]dependencyCallbackValue)}}
+		joined := &dependencyCallbackObject{
+			typ:     left.object.typ,
+			escaped: true,
+			general: left.object.general || right.object.general,
+			fields:  make(map[string]dependencyCallbackValue),
+		}
+		if joined.typ != right.object.typ {
+			joined.typ = ""
+		}
+		dependencyCallbackMergeObjectFields(joined, left.object)
+		dependencyCallbackMergeObjectFields(joined, right.object)
+		return dependencyCallbackValue{object: joined}
+	}
+	if right.tainted() {
+		dependencyCallbackMarkEscaped([]dependencyCallbackValue{left})
+		return right
+	}
+	if left.tainted() {
+		dependencyCallbackMarkEscaped([]dependencyCallbackValue{right})
+		return left
 	}
 	if !right.tainted() {
 		dependencyCallbackMarkEscaped([]dependencyCallbackValue{right})
 	}
 	return left
+}
+
+func dependencyCallbackMergeObjectFields(dst, src *dependencyCallbackObject) {
+	if dst == nil || src == nil {
+		return
+	}
+	for name, value := range src.fields {
+		dst.fields[name] = dependencyCallbackJoinValue(dst.fields[name], value)
+	}
 }
 
 func dependencyCallbackOverwriteObject(dst *dependencyCallbackObject, src dependencyCallbackValue) {
@@ -1217,20 +1245,23 @@ func (p *dependencyCallbackProof) value(expr ast.Expr, env map[string]dependency
 		base := p.value(expr.X, env)
 		return p.field(base, expr.Sel.Name, map[string]bool{})
 	case *ast.FuncLit:
-		if dependencyCallbackNodeTainted(expr.Body, env, p) {
-			return dependencyCallbackValue{callback: &dependencyCallbackClosure{lit: expr, env: dependencyCallbackCloneEnv(env)}}
-		}
+		return dependencyCallbackValue{callback: &dependencyCallbackClosure{lit: expr, env: env}}
 	case *ast.CompositeLit:
 		obj := &dependencyCallbackObject{typ: dependencyCallbackTypeName(expr.Type), owned: true, fields: make(map[string]dependencyCallbackValue)}
-		for _, elt := range expr.Elts {
+		fieldOrder, structLiteral := p.compositeFieldOrder(expr.Type)
+		for i, elt := range expr.Elts {
 			kv, ok := elt.(*ast.KeyValueExpr)
 			if !ok {
 				value := p.value(elt, env)
+				if structLiteral && i < len(fieldOrder) {
+					obj.fields[fieldOrder[i]] = value
+					continue
+				}
 				obj.fields[dependencyCallbackElementField] = dependencyCallbackJoinValue(obj.fields[dependencyCallbackElementField], value)
 				continue
 			}
 			key, ok := kv.Key.(*ast.Ident)
-			if ok {
+			if ok && structLiteral {
 				obj.fields[key.Name] = p.value(kv.Value, env)
 				continue
 			}
@@ -1243,6 +1274,31 @@ func (p *dependencyCallbackProof) value(expr ast.Expr, env map[string]dependency
 		}
 	}
 	return dependencyCallbackValue{}
+}
+
+func (p *dependencyCallbackProof) compositeFieldOrder(expr ast.Expr) ([]string, bool) {
+	switch expr := expr.(type) {
+	case *ast.Ident:
+		shape, ok := p.types[expr.Name]
+		return shape.order, ok
+	case *ast.StarExpr:
+		return p.compositeFieldOrder(expr.X)
+	case *ast.StructType:
+		var order []string
+		for _, field := range expr.Fields.List {
+			if len(field.Names) == 0 {
+				if name := dependencyCallbackTypeName(field.Type); name != "" {
+					order = append(order, name)
+				}
+				continue
+			}
+			for _, name := range field.Names {
+				order = append(order, name.Name)
+			}
+		}
+		return order, true
+	}
+	return nil, false
 }
 
 func (p *dependencyCallbackProof) callTainted(call *ast.CallExpr, env map[string]dependencyCallbackValue) bool {
@@ -1518,6 +1574,18 @@ func dependencyCallbackMarkObjectGeneralized(obj *dependencyCallbackObject, seen
 	}
 }
 
+func dependencyCallbackSyntheticChild(parent *dependencyCallbackObject, typ string) dependencyCallbackValue {
+	child := &dependencyCallbackObject{
+		typ:       typ,
+		owned:     parent.owned,
+		escaped:   parent.escaped,
+		synthetic: true,
+		general:   parent.general,
+		fields:    make(map[string]dependencyCallbackValue),
+	}
+	return dependencyCallbackValue{object: child}
+}
+
 func (p *dependencyCallbackProof) callFunction(call *ast.CallExpr, decl *ast.FuncDecl, args []dependencyCallbackValue, receiver dependencyCallbackValue, depth int) bool {
 	supplied, bound := dependencyCallbackBindArguments(decl.Type.Params, args)
 	if !bound {
@@ -1551,7 +1619,7 @@ func (p *dependencyCallbackProof) method(receiver dependencyCallbackValue, name 
 	for _, embedded := range p.types[receiver.object.typ].embedded {
 		child := receiver.object.fields[embedded]
 		if child.object == nil {
-			child = dependencyCallbackValue{object: &dependencyCallbackObject{typ: embedded, owned: receiver.object.owned, synthetic: true, fields: make(map[string]dependencyCallbackValue)}}
+			child = dependencyCallbackSyntheticChild(receiver.object, embedded)
 			receiver.object.fields[embedded] = child
 		}
 		if decl, actual := p.method(child, name, seen); decl != nil {
@@ -1581,14 +1649,14 @@ func (p *dependencyCallbackProof) field(receiver dependencyCallbackValue, name s
 		if field.callable {
 			return dependencyCallbackValue{callable: true}
 		}
-		child := dependencyCallbackValue{object: &dependencyCallbackObject{typ: field.typ, owned: receiver.object.owned, synthetic: true, fields: make(map[string]dependencyCallbackValue)}}
+		child := dependencyCallbackSyntheticChild(receiver.object, field.typ)
 		receiver.object.fields[name] = child
 		return child
 	}
 	for _, embedded := range shape.embedded {
 		child := receiver.object.fields[embedded]
 		if child.object == nil {
-			child = dependencyCallbackValue{object: &dependencyCallbackObject{typ: embedded, owned: receiver.object.owned, synthetic: true, fields: make(map[string]dependencyCallbackValue)}}
+			child = dependencyCallbackSyntheticChild(receiver.object, embedded)
 			receiver.object.fields[embedded] = child
 		}
 		if embedded == name {
