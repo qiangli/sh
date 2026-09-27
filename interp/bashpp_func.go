@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"go/constant"
+	"go/types"
 	"maps"
 	"strconv"
 	"strings"
@@ -1120,6 +1121,16 @@ func (r *Runner) bashPPComparableType(typ syntax.BashPPTypeExpr, seen map[string
 			if bashPPBuiltinType(name) {
 				return true
 			}
+			// Since Go 1.20, an ordinary interface may satisfy comparable even
+			// though comparing two values of that interface can still panic when
+			// their identical dynamic type is not comparable. Dependency-owned
+			// interfaces have no interpreter declaration, so consult their
+			// authenticated go/types export metadata. IsMethodSet identifies the
+			// basic interfaces which may be used as ordinary value types; a
+			// constraint interface with type terms cannot enter through here.
+			if r.bashPPImportedBasicInterface(x) {
+				return true
+			}
 			// A dependency-owned defined type has no interpreter declaration;
 			// its identity lives in the import's export metadata. One with a
 			// basic underlying type is comparable, and it is exactly the shape
@@ -1150,6 +1161,18 @@ func (r *Runner) bashPPComparableType(typ syntax.BashPPTypeExpr, seen map[string
 		return true
 	}
 	return false
+}
+
+func (r *Runner) bashPPImportedBasicInterface(typ *syntax.BashPPNamedType) bool {
+	if !r.bashPPGoSource {
+		return false
+	}
+	native := r.bashPPEmbeddedNativeType(typ)
+	if native == nil {
+		return false
+	}
+	iface, ok := types.Unalias(native).Underlying().(*types.Interface)
+	return ok && iface.IsMethodSet()
 }
 
 func (r *Runner) bashPPInstantiateNamedType(named *syntax.BashPPNamedType) syntax.BashPPTypeExpr {
