@@ -104,6 +104,7 @@ type dependencyCallbackObject struct {
 	owned     bool
 	escaped   bool
 	synthetic bool
+	scalar    bool
 	general   bool
 	fields    map[string]dependencyCallbackValue
 }
@@ -158,6 +159,7 @@ type dependencyCallbackType struct {
 type dependencyCallbackField struct {
 	typ      string
 	callable bool
+	scalar   bool
 }
 
 type dependencyCallbackFormal struct {
@@ -182,6 +184,7 @@ type dependencyCallbackProof struct {
 	funcs     map[string][]*ast.FuncDecl
 	methods   map[string]map[string]*ast.FuncDecl
 	types     map[string]dependencyCallbackType
+	typeSpecs map[string]*ast.TypeSpec
 	funcTypes map[string]bool
 	globals   map[string]bool
 	consts    map[string]bool
@@ -201,7 +204,7 @@ type dependencyCallbackProof struct {
 func newDependencyCallbackProof(files []*ast.File) *dependencyCallbackProof {
 	p := &dependencyCallbackProof{
 		funcs: make(map[string][]*ast.FuncDecl), methods: make(map[string]map[string]*ast.FuncDecl),
-		types: make(map[string]dependencyCallbackType), funcTypes: make(map[string]bool), globals: make(map[string]bool), consts: make(map[string]bool), active: make(map[string]dependencyCallbackActiveFrame), done: make(map[string][]dependencyCallbackCompletedFrame),
+		types: make(map[string]dependencyCallbackType), typeSpecs: make(map[string]*ast.TypeSpec), funcTypes: make(map[string]bool), globals: make(map[string]bool), consts: make(map[string]bool), active: make(map[string]dependencyCallbackActiveFrame), done: make(map[string][]dependencyCallbackCompletedFrame),
 	}
 	for _, file := range files {
 		for _, decl := range file.Decls {
@@ -214,6 +217,7 @@ func newDependencyCallbackProof(files []*ast.File) *dependencyCallbackProof {
 				if !ok {
 					continue
 				}
+				p.typeSpecs[spec.Name.Name] = spec
 				if _, ok := spec.Type.(*ast.FuncType); ok {
 					p.funcTypes[spec.Name.Name] = true
 				}
@@ -255,8 +259,9 @@ func newDependencyCallbackProof(files []*ast.File) *dependencyCallbackProof {
 								continue
 							}
 							_, directFunc := field.Type.(*ast.FuncType)
+							scalar := p.certifiedScalarType(field.Type, make(map[string]bool), 0)
 							for _, name := range field.Names {
-								shape.fields[name.Name] = dependencyCallbackField{typ: fieldType, callable: directFunc || p.funcTypes[fieldType]}
+								shape.fields[name.Name] = dependencyCallbackField{typ: fieldType, callable: directFunc || p.funcTypes[fieldType], scalar: scalar}
 								shape.order = append(shape.order, name.Name)
 							}
 						}
@@ -279,6 +284,34 @@ func newDependencyCallbackProof(files []*ast.File) *dependencyCallbackProof {
 		}
 	}
 	return p
+}
+
+func (p *dependencyCallbackProof) certifiedScalarType(expr ast.Expr, seen map[string]bool, depth int) bool {
+	if expr == nil || depth > 32 {
+		return false
+	}
+	switch expr := expr.(type) {
+	case *ast.Ident:
+		if spec := p.typeSpecs[expr.Name]; spec != nil {
+			if seen[expr.Name] || spec.TypeParams != nil && len(spec.TypeParams.List) != 0 {
+				return false
+			}
+			seen[expr.Name] = true
+			return p.certifiedScalarType(spec.Type, seen, depth+1)
+		}
+		switch expr.Name {
+		case "bool", "string",
+			"int", "int8", "int16", "int32", "int64",
+			"uint", "uint8", "uint16", "uint32", "uint64", "uintptr",
+			"byte", "rune",
+			"float32", "float64",
+			"complex64", "complex128":
+			return true
+		}
+	case *ast.ParenExpr:
+		return p.certifiedScalarType(expr.X, seen, depth)
+	}
+	return false
 }
 
 func dependencyCallbackTypeName(expr ast.Expr) string {
@@ -485,7 +518,11 @@ func (p *dependencyCallbackProof) function(decl *ast.FuncDecl, supplied map[stri
 		receiver:         receiver,
 		argSnapshots:     dependencyCallbackEnvSnapshots(supplied),
 		receiverSnapshot: dependencyCallbackValueSnapshot(receiver),
-		diagnosticFrame:  dependencyCallbackDiagnosticFrame(supplied, receiver),
+	}
+	if p.diagnostics {
+		active := p.active[key]
+		active.diagnosticFrame = dependencyCallbackDiagnosticFrame(supplied, receiver)
+		p.active[key] = active
 	}
 	defer delete(p.active, key)
 	savedFunc := p.currentFunc
@@ -738,7 +775,8 @@ func (s *dependencyCallbackSnapshot) object(b *strings.Builder, obj *dependencyC
 }
 
 func dependencyCallbackSnapshotOmitField(value dependencyCallbackValue) bool {
-	return false
+	return value.callback == nil && !value.callable && !value.escaped &&
+		value.object != nil && value.object.synthetic && value.object.scalar && len(value.object.fields) == 0
 }
 
 type dependencyCallbackDiagnosticGraph struct {
@@ -780,6 +818,9 @@ func dependencyCallbackCloneDiagnosticFrame(frame map[string]string) map[string]
 
 func (g *dependencyCallbackDiagnosticGraph) value(path string, value dependencyCallbackValue) {
 	if g.nodes >= 512 {
+		return
+	}
+	if dependencyCallbackSnapshotOmitField(value) {
 		return
 	}
 	g.nodes++
@@ -1844,12 +1885,13 @@ func dependencyCallbackMarkObjectGeneralized(obj *dependencyCallbackObject, seen
 	}
 }
 
-func dependencyCallbackSyntheticChild(parent *dependencyCallbackObject, typ string) dependencyCallbackValue {
+func dependencyCallbackSyntheticChild(parent *dependencyCallbackObject, typ string, scalar bool) dependencyCallbackValue {
 	child := &dependencyCallbackObject{
 		typ:       typ,
 		owned:     parent.owned,
 		escaped:   parent.escaped,
 		synthetic: true,
+		scalar:    scalar,
 		general:   parent.general,
 		fields:    make(map[string]dependencyCallbackValue),
 	}
@@ -1889,7 +1931,7 @@ func (p *dependencyCallbackProof) method(receiver dependencyCallbackValue, name 
 	for _, embedded := range p.types[receiver.object.typ].embedded {
 		child := receiver.object.fields[embedded]
 		if child.object == nil {
-			child = dependencyCallbackSyntheticChild(receiver.object, embedded)
+			child = dependencyCallbackSyntheticChild(receiver.object, embedded, false)
 			receiver.object.fields[embedded] = child
 		}
 		if decl, actual := p.method(child, name, seen); decl != nil {
@@ -1919,14 +1961,14 @@ func (p *dependencyCallbackProof) field(receiver dependencyCallbackValue, name s
 		if field.callable {
 			return dependencyCallbackValue{callable: true}
 		}
-		child := dependencyCallbackSyntheticChild(receiver.object, field.typ)
+		child := dependencyCallbackSyntheticChild(receiver.object, field.typ, field.scalar)
 		receiver.object.fields[name] = child
 		return child
 	}
 	for _, embedded := range shape.embedded {
 		child := receiver.object.fields[embedded]
 		if child.object == nil {
-			child = dependencyCallbackSyntheticChild(receiver.object, embedded)
+			child = dependencyCallbackSyntheticChild(receiver.object, embedded, false)
 			receiver.object.fields[embedded] = child
 		}
 		if embedded == name {

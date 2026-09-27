@@ -268,6 +268,36 @@ func Parse(cb func(), handler Handler) { var p parser; p.callback = cb; p.handle
 			want: true,
 		},
 		{
+			name: "recursive synthetic basic scalar leaf",
+			source: `package dep
+type parser struct { bad bool; callback func() }
+func (p *parser) walk(n int) { _ = p.bad; if n > 0 { p.walk(n-1) }; p.callback() }
+func Parse(cb func()) { var p parser; p.callback = cb; p.walk(1) }
+`,
+			want: true,
+		},
+		{
+			name: "recursive synthetic named scalar leaf",
+			source: `package dep
+type LitKind uint8
+type parser struct { kind LitKind; callback func() }
+func (p *parser) walk(n int) { _ = p.kind; if n > 0 { p.walk(n-1) }; p.callback() }
+func Parse(cb func()) { var p parser; p.callback = cb; p.walk(1) }
+`,
+			want: true,
+		},
+		{
+			name: "recursive synthetic alias scalar leaf",
+			source: `package dep
+type LitKind uint8
+type Alias = LitKind
+type parser struct { kind Alias; callback func() }
+func (p *parser) walk(n int) { _ = p.kind; if n > 0 { p.walk(n-1) }; p.callback() }
+func Parse(cb func()) { var p parser; p.callback = cb; p.walk(1) }
+`,
+			want: true,
+		},
+		{
 			name: "function field cannot receive callback",
 			source: `package dep
 type Handler func(func())
@@ -621,6 +651,91 @@ func walk(a, b *H, cb func(), n int) {
 }
 func Retain(cb func()) { walk(&H{}, &H{}, cb, 1) }
 func Parse(cb func()) { Retain(cb) }
+`,
+		},
+		{
+			name: "pointer scalar-looking field is not omitted",
+			source: `package dep
+type Pointer *int
+type parser struct { pos Pointer; callback func() }
+func (p *parser) walk(n int) { _ = p.pos; if n > 0 { p.walk(n-1) }; p.callback() }
+func Parse(cb func()) { var p parser; p.callback = cb; p.walk(1) }
+`,
+		},
+		{
+			name: "local declaration shadows scalar predeclared name",
+			source: `package dep
+type bool struct { f func() }
+type parser struct { bad bool; callback func() }
+func (p *parser) walk(n int) { _ = p.bad; if n > 0 { p.walk(n-1) }; p.callback() }
+func Parse(cb func()) { var p parser; p.callback = cb; p.walk(1) }
+`,
+		},
+		{
+			name: "generic field is not scalar leaf",
+			source: `package dep
+type Box[T any] struct { value T }
+type parser struct { box Box[int]; callback func() }
+func (p *parser) walk(n int) { _ = p.box; if n > 0 { p.walk(n-1) }; p.callback() }
+func Parse(cb func()) { var p parser; p.callback = cb; p.walk(1) }
+`,
+		},
+		{
+			name: "named scalar method can retain late callback",
+			source: `package dep
+var saved func()
+type Kind uint8
+func (k Kind) keep(cb func()) { saved = cb }
+type parser struct { kind Kind }
+func (p *parser) walk(cb func(), n int) { _ = p.kind; if n > 0 { p.walk(cb, n-1) }; p.kind.keep(cb) }
+func Parse(cb func()) { var p parser; p.walk(cb, 1) }
+`,
+		},
+		{
+			name: "cross argument lazy scalar child does not hide callback alias",
+			source: `package dep
+var saved func()
+type State struct { kind uint8; f func() }
+type parser struct { state State }
+func walk(a, b *parser, cb func(), n int) {
+	_ = a.state.kind
+	if n > 0 { walk(a, a, cb, n-1) }
+	a.state.f = cb
+	saved = b.state.f
+}
+func Parse(cb func()) { walk(&parser{}, &parser{}, cb, 1) }
+`,
+		},
+		{
+			name: "lazy child recursion keeps aggregate field",
+			source: `package dep
+var saved func()
+type child struct { f func() }
+type parser struct { count int; child child }
+func (p *parser) walk(cb func(), n int) {
+	_ = p.count
+	_ = p.child
+	if n > 0 { p.walk(cb, n-1) }
+	p.child.f = cb
+	saved = p.child.f
+}
+func Parse(cb func()) { var p parser; p.walk(cb, 1) }
+`,
+		},
+		{
+			name: "retained scalar-looking value with callback field",
+			source: `package dep
+var saved func()
+type uint8 struct { f func() }
+type parser struct { kind uint8 }
+func retain(k uint8) { saved = k.f }
+func (p *parser) walk(cb func(), n int) {
+	_ = p.kind
+	if n > 0 { p.walk(cb, n-1) }
+	p.kind.f = cb
+	retain(p.kind)
+}
+func Parse(cb func()) { var p parser; p.walk(cb, 1) }
 `,
 		},
 		{
