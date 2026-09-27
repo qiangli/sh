@@ -139,8 +139,11 @@ func (r *Runner) goSourceNativeHandleIsNil(value bashPPBridgeValue) (bool, error
 }
 
 func (r *Runner) bashPPNativeCompareValues(lv bashPPBridgeValue, op token.Token, rv bashPPBridgeValue) (bool, error) {
+	r.bashPPTypedNilDiag("native-compare/enter", nil, nil, lv, rv)
 	lv, rv = bashPPBridgeCompareOperands(lv, rv)
+	r.bashPPTypedNilDiag("native-compare/normalized", nil, nil, lv, rv)
 	if lv.Kind == "nil" && rv.Kind == "handle" || rv.Kind == "nil" && lv.Kind == "handle" {
+		r.bashPPTypedNilDiag("native-compare/nil-handle", nil, nil, lv, rv)
 		handle := lv
 		if handle.Kind == "nil" {
 			handle = rv
@@ -155,6 +158,7 @@ func (r *Runner) bashPPNativeCompareValues(lv bashPPBridgeValue, op token.Token,
 		return equal, nil
 	}
 	if equal, handled := bashPPNativeScalarEqual(lv, rv); handled {
+		r.bashPPTypedNilDiag("native-compare/scalar-equal", nil, nil, lv, rv)
 		if op == token.NEQ {
 			equal = !equal
 		}

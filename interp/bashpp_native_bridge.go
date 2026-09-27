@@ -238,6 +238,7 @@ func bashPPNativeNoOutputReply(req bashPPEvalRequest, q bashPPBridgeRequest, rep
 }
 
 type bashPPNativeSession struct {
+	typedNilDiag atomic.Uint32
 	// Type facts are authenticated on this connection; no native values are cached.
 	handleTypes         map[uint64]uint64
 	typeFacts           map[bashPPNativeTypeFactKey]bashPPBridgeValue // protected by mu

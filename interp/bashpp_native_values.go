@@ -562,6 +562,7 @@ func (r *Runner) bashPPBridgeExpr(expr syntax.BashPPExpr) (bashPPBridgeValue, er
 		}
 	case *syntax.BashPPSelectorExpr:
 		if value := r.bashPPNativeLocalField(x); value != nil {
+			r.bashPPTypedNilDiag("bridge-expr/local-field", value, nil, *value)
 			return *value, nil
 		}
 		if r.bashPPNativeExpr(x.X) {
@@ -973,7 +974,11 @@ func (r *Runner) bashPPBridgeIntegerCarrier(typ syntax.BashPPTypeExpr, text stri
 }
 
 func (r *Runner) bashPPBridgeCollection(value any, meta *bashPPCollectionMeta, typ syntax.BashPPTypeExpr) (bashPPBridgeValue, error) {
+	if meta != nil && meta.interfaceValue != nil || bashPPTypedNilBridgeCarrier(value) {
+		r.bashPPTypedNilDiag("bridge-encode/enter", value, meta)
+	}
 	if meta != nil && meta.interfaceValue != nil {
+		r.bashPPTypedNilDiag("bridge-encode/interface", value, meta)
 		cell := meta.interfaceValue.cell
 		if meta.interfaceValue.nilIface || cell == nil {
 			return bashPPBridgeValue{Kind: "nil"}, nil
