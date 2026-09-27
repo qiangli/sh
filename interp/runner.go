@@ -2201,7 +2201,7 @@ func (r *Runner) printFuncDecl(name string, body *syntax.Stmt) {
 		return
 	}
 	r.out("{ \n")
-	printer := syntax.NewPrinter(syntax.Indent(4), syntax.SpaceRedirects(true), syntax.BashCompatArith(true))
+	printer := syntax.NewPrinter(syntax.Indent(4), syntax.SpaceRedirects(true), syntax.BashCompatArith(true), syntax.JoinEscapedNewlines(true))
 	// bash 5.3 declare -f groups a `cmd &` with the following
 	// simple stmt onto one line. Skip ahead when we emit a
 	// background stmt and merge the buffer of the next.

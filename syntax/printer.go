@@ -94,6 +94,14 @@ func SingleLine(enabled bool) PrinterOption {
 	return func(p *Printer) { p.singleLine = enabled }
 }
 
+// JoinEscapedNewlines prints a command whose words the source continued
+// with backslash-newlines on one line, as bash's `declare -f` does: the
+// escaped newline is layout, not syntax, and a printer that keeps it breaks
+// a caller that appends `;` to every line.
+func JoinEscapedNewlines(enabled bool) PrinterOption {
+	return func(p *Printer) { p.joinBslashNewl = enabled }
+}
+
 // FunctionNextLine will place a function's opening braces on the next line.
 func FunctionNextLine(enabled bool) PrinterOption {
 	return func(p *Printer) { p.funcNextLine = enabled }
@@ -253,6 +261,7 @@ type Printer struct {
 	keepPadding     bool
 	minify          bool
 	singleLine      bool
+	joinBslashNewl  bool
 	funcNextLine    bool
 	bashCompatArith bool
 
@@ -355,6 +364,12 @@ func (p *Printer) wantsNewline(pos Pos, escapingNewline bool) bool {
 }
 
 func (p *Printer) bslashNewl() {
+	if p.joinBslashNewl {
+		// The source line is consumed; the following word's spacePad
+		// writes the separating space.
+		p.line++
+		return
+	}
 	if p.wantSpace == spaceRequired {
 		p.space()
 	}
