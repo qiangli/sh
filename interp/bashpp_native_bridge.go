@@ -109,6 +109,24 @@ type bashPPBridgeValue struct {
 	// Host-only; only a non-retaining result consumer may carry it.
 	copiedResults bool
 }
+
+func bashPPBridgeString(text string) bashPPBridgeValue {
+	return bashPPBridgeValue{Kind: "string", Type: "string", Text: text, Bytes: []byte(text)}
+}
+
+func bashPPBridgePanicString(text string) bashPPBridgeValue {
+	value := bashPPBridgeString(text)
+	value.Kind = "panic"
+	return value
+}
+
+func (v bashPPBridgeValue) stringText() string {
+	if (v.Kind == "string" || v.Kind == "panic" && v.Type == "string") && v.Bytes != nil {
+		return string(v.Bytes)
+	}
+	return v.Text
+}
+
 type bashPPBridgeEntry struct {
 	Key   bashPPBridgeValue `json:"key"`
 	Value bashPPBridgeValue `json:"value"`
@@ -976,7 +994,7 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 				return nil, err
 			}
 			if reply.Panic != nil {
-				return nil, &bashPPCallbackPanic{value: reply.Panic.Text}
+				return nil, &bashPPCallbackPanic{value: reply.Panic.stringText()}
 			}
 			if reply.Error != "" {
 				s.mu.Lock()
@@ -1709,7 +1727,9 @@ func bashPPBridgeLiteral(text string) (bashPPBridgeValue, error) {
 		return bashPPBridgeValue{Kind: "nil"}, nil
 	}
 	if str, err := strconv.Unquote(text); err == nil {
-		return bashPPBridgeValue{Kind: "string", Text: str, Bytes: []byte(str)}, nil
+		value := bashPPBridgeString(str)
+		value.Type = ""
+		return value, nil
 	}
 	if text == "true" || text == "false" {
 		return bashPPBridgeValue{Kind: "bool", Text: text}, nil

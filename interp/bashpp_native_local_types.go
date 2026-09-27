@@ -1395,7 +1395,7 @@ func bashPPLocalMethodStubGo(selectorBase, receiver string, method bashPPLocalMe
  out, err := callback(%q, callbackReceiver(reflect.ValueOf(bpprecv)))
  if err != nil { return callbackFailed(err) }
  if len(out) != 1 || out[0].Kind != "string" { return callbackFailed(fmt.Errorf("original %s.%s did not answer one string")) }
- return out[0].Text
+ return stringText(out[0])
 }
 `, receiver, method.Name, selectorBase+"."+method.Name, selectorBase, method.Name)
 	}

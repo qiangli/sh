@@ -69,6 +69,7 @@ type request struct { SliceBuffers []sliceBuffer `json:"slice_buffers,omitempty"
 // Op, Selector and Receiver are set only on a callback: the reverse direction
 // in which this helper asks the interpreter to run an original method body.
 type response struct { SliceUpdates []sliceBuffer `json:"slice_updates,omitempty"`; Transferred []sliceBuffer `json:"transferred,omitempty"`; PtrUpdates []value `json:"ptr_updates,omitempty"`; Panic *value `json:"panic,omitempty"`; PanicAddr *uint64 `json:"panic_addr,omitempty"`; ID uint64 `json:"id"`; Op string `json:"op,omitempty"`; Selector string `json:"selector,omitempty"`; Receiver *value `json:"receiver,omitempty"`; Values []value `json:"values,omitempty"`; Error string `json:"error,omitempty"`; Parent uint64 `json:"parent,omitempty"`; OutputBarrierStdout uint64 `json:"output_barrier_stdout,omitempty"`; OutputBarrierStderr uint64 `json:"output_barrier_stderr,omitempty"` }
+func stringText(v value)string{if (v.Kind=="string"||v.Kind=="panic"&&v.Type=="string")&&v.Bytes!=nil{return string(v.Bytes)};return v.Text}
 var symbols = map[string]reflect.Value{
 //SYMBOLS
 }
@@ -370,7 +371,7 @@ func callDependency(fn reflect.Value,args []reflect.Value,spread bool)(returned 
  if spread{return fn.CallSlice(args)}
  return fn.Call(args)
 }
-func(p originalCallbackPanic)Error()string{return p.value.Text}
+func(p originalCallbackPanic)Error()string{return stringText(p.value)}
 
 func resolveType(name string) reflect.Type {
  if typ:=types[name];typ!=nil{return typ}
@@ -660,7 +661,7 @@ func primitiveTemplateTree(node bppTemplateParse.Node)bool {
 }
 func dispatch(q request)(reply response){
  reply.ID=q.ID
- defer func(){if e:=recover();e!=nil{if original,ok:=e.(originalCallbackPanic);ok{reply.Panic=&original.value}else if raised,ok:=e.(dependencyStringPanic);ok{reply.Panic=&value{Kind:"panic",Type:"string",Text:string(raised)}}else{reply.Error=fmt.Sprintf("native dependency panic: %v",e)}}}()
+ defer func(){if e:=recover();e!=nil{if original,ok:=e.(originalCallbackPanic);ok{reply.Panic=&original.value}else if raised,ok:=e.(dependencyStringPanic);ok{reply.Panic=&value{Kind:"panic",Type:"string",Text:string(raised),Bytes:[]byte(string(raised))}}else{reply.Error=fmt.Sprintf("native dependency panic: %v",e)}}}()
  if q.Op=="origin-refresh" {
   if q.Receiver!=nil||len(q.Args)!=1||q.Args[0].Kind!="pointer"||q.Args[0].Origin==0{reply.Error="origin refresh requires one authenticated pointer";return}
   if _,err:=decode(q.Args[0],nil);err!=nil{reply.Error=err.Error()};return
