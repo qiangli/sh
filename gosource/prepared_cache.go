@@ -65,7 +65,12 @@ func openPreparedProgramCache(sources []Source, options Options) (*preparedProgr
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, fmt.Errorf("gosource: create prepared cache: %w", err)
 	}
-	key := preparedProgramKey(interpreterID, sources, options)
+	key, ok := preparedProgramKey(interpreterID, sources, options)
+	if !ok {
+		// An input the key cannot authenticate disables the cache for this
+		// load rather than risking a hit on stale content.
+		return nil, nil
+	}
 	cache := &preparedProgramCache{
 		key:  key,
 		path: filepath.Join(dir, key+".json"),
@@ -95,7 +100,7 @@ func openPreparedProgramCache(sources []Source, options Options) (*preparedProgr
 	}
 }
 
-func preparedProgramKey(interpreterID string, sources []Source, options Options) string {
+func preparedProgramKey(interpreterID string, sources []Source, options Options) (string, bool) {
 	h := sha256.New()
 	write := func(text string) {
 		h.Write([]byte(text))
@@ -136,8 +141,20 @@ func preparedProgramKey(interpreterID string, sources []Source, options Options)
 	for _, pkg := range options.Packages {
 		write(pkg.Path)
 		write(pkg.SourceDir)
+		// A companion is a non-Go input the program links, so its bytes are
+		// as much a part of the prepared program as a Go source's are.
 		for _, companion := range pkg.CompanionFiles {
 			write(companion)
+			path := companion
+			if !filepath.IsAbs(path) {
+				path = filepath.Join(pkg.SourceDir, path)
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return "", false
+			}
+			digest := sha256.Sum256(data)
+			h.Write(digest[:])
 		}
 		pkgSources := append([]Source(nil), pkg.Sources...)
 		sort.SliceStable(pkgSources, func(i, j int) bool { return pkgSources[i].Name < pkgSources[j].Name })
@@ -147,7 +164,7 @@ func preparedProgramKey(interpreterID string, sources []Source, options Options)
 			h.Write(digest[:])
 		}
 	}
-	return hex.EncodeToString(h.Sum(nil))
+	return hex.EncodeToString(h.Sum(nil)), true
 }
 
 func readPreparedProgram(path, key string) *preparedProgramRecord {
