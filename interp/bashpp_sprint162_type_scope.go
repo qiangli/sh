@@ -56,9 +56,9 @@ func (r *Runner) goSourceLocalTypes() *goSourceLocalTypeIndex {
 		return r.bashPPLocalTypes
 	}
 	// The immutable declaration index is shared weakly by file and includes
-	// this scope index, so descriptor construction and lexical lookup never
-	// rescan the same tree independently.
-	r.bashPPLocalTypes = bashPPScanLocalTypeDecls(file).localTypes
+	// this scope index. Retain the parent cache through the Runner so a scope-
+	// only consumer cannot let it be collected before a later consumer.
+	r.bashPPLocalTypes = r.bashPPLocalTypeDeclarationIndex().localTypes
 	return r.bashPPLocalTypes
 }
 

@@ -4,9 +4,11 @@
 package interp
 
 import (
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
+	"weak"
 
 	"mvdan.cc/sh/v3/gosource"
 )
@@ -60,6 +62,43 @@ func second() { type Item struct { Second bool }; fmt.Println(Item{}) }
 	if len(selectors) != 1 || selectors[0] != "fmt.Println" {
 		t.Fatalf("referenced selectors = %v, want [fmt.Println]", selectors)
 	}
+}
+
+func TestS281SourceTypeIndexScopeOwnerRetainsParentAcrossGC(t *testing.T) {
+	program, err := gosource.Parse(strings.NewReader(`package main
+func one() { type Local struct { N int }; _ = Local{} }
+`), "scope_owner.go", gosource.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := &Runner{bashPPGoSource: true, bashPPGoSourceFile: program.File}
+	localTypes := owner.goSourceLocalTypes()
+	if localTypes == nil || owner.goSourceLocalTypes() != localTypes {
+		t.Fatal("scope-only owner did not retain its local type index")
+	}
+
+	// Observe the shared parent without retaining it here. Its only strong
+	// owner across the collection must be the Runner above; the global entry
+	// deliberately holds it weakly.
+	parentRef := weak.Make(bashPPScanLocalTypeDecls(program.File))
+	runtime.GC()
+	parent := parentRef.Value()
+	if parent == nil {
+		t.Fatal("scope-only owner allowed the shared parent index to be collected")
+	}
+	if owner.goSourceLocalTypes() != localTypes {
+		t.Fatal("scope-only owner lost its local type index across collection")
+	}
+	consumer := &Runner{bashPPGoSource: true, bashPPGoSourceFile: program.File}
+	_, _ = consumer.bashPPBuildLocalTypeDescriptors()
+	later := consumer.bashPPLocalTypeDeclarationIndex()
+	if later != parent {
+		t.Fatal("later consumer did not reuse the parent index retained by the scope-only owner")
+	}
+	if later.localTypes != localTypes {
+		t.Fatal("later parent index does not contain the scope owner's local type index")
+	}
+	runtime.KeepAlive(owner)
 }
 
 func TestS281SourceTypeIndexSingleScanAcrossConsumers(t *testing.T) {
