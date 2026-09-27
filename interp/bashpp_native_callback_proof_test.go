@@ -833,13 +833,19 @@ func Parse(cb func()) { Retain(nil) }
 `,
 		},
 		{
-			name: "pointer scalar-looking field is not omitted",
+			// The field is not a certified scalar leaf, so it is not omitted
+			// from the frame snapshot; lazily materializing it still leaves
+			// the callback exactly where it was, so the recursion is a
+			// fixpoint. TestS281CallbackProofLazyFieldScalarCertification
+			// guards the classification itself.
+			name: "pointer scalar-looking field does not move the callback",
 			source: `package dep
 type Pointer *int
 type parser struct { pos Pointer; callback func() }
 func (p *parser) walk(n int) { _ = p.pos; if n > 0 { p.walk(n-1) }; p.callback() }
 func Parse(cb func()) { var p parser; p.callback = cb; p.walk(1) }
 `,
+			want: true,
 		},
 		{
 			name: "local declaration shadows scalar predeclared name",
@@ -849,14 +855,38 @@ type parser struct { bad bool; callback func() }
 func (p *parser) walk(n int) { _ = p.bad; if n > 0 { p.walk(n-1) }; p.callback() }
 func Parse(cb func()) { var p parser; p.callback = cb; p.walk(1) }
 `,
+			want: true,
 		},
 		{
-			name: "generic field is not scalar leaf",
+			name: "generic field does not move the callback",
 			source: `package dep
 type Box[T any] struct { value T }
 type parser struct { box Box[int]; callback func() }
 func (p *parser) walk(n int) { _ = p.box; if n > 0 { p.walk(n-1) }; p.callback() }
 func Parse(cb func()) { var p parser; p.callback = cb; p.walk(1) }
+`,
+			want: true,
+		},
+		{
+			// The same shapes do retain once the lazily materialized field
+			// actually receives the callback.
+			name: "pointer scalar-looking field can still retain",
+			source: `package dep
+type Pointer *int
+type carrier struct { pos Pointer; f func() }
+var saved *carrier
+func (p *carrier) walk(n int) { _ = p.pos; if n > 0 { p.walk(n-1) }; saved = p }
+func Parse(cb func()) { p := &carrier{}; p.f = cb; p.walk(1) }
+`,
+		},
+		{
+			name: "generic field can still retain",
+			source: `package dep
+type Box[T any] struct { value T }
+type carrier struct { box Box[int]; f func() }
+var saved func()
+func (p *carrier) walk(n int) { _ = p.box; if n > 0 { p.walk(n-1) }; saved = p.f }
+func Parse(cb func()) { p := &carrier{}; p.f = cb; p.walk(1) }
 `,
 		},
 		{
@@ -1542,7 +1572,7 @@ func Parse(cb func()) { h := &holder{}; walk(h, cb) }
 	}
 	joined := strings.Join(proof.diagnostic, "\n")
 	for _, want := range []string{
-		"same-frame rejection: argument h snapshot changed after entry and active argument is tainted",
+		"same-frame rejection: argument h callback reachability changed after entry",
 		"recursive frame difference for walk",
 		"arg.h active=object#",
 		"current=object#",
@@ -1758,5 +1788,71 @@ func TestDependencyCallbackSameFrameSeparatesIdentityFromSnapshot(t *testing.T) 
 	}
 	if want := "argument h snapshot changed after entry and active argument is tainted"; rejection != want {
 		t.Fatalf("rejection = %q, want %q", rejection, want)
+	}
+}
+
+// Sprint: #281; Story: #810; Story-ID: 48c1146a3ab0
+//
+// A field is dropped from the frame snapshot only when its type is certified
+// to be a scalar leaf, because such a field can never come to hold a callback.
+// Anything else — a named pointer type, a locally declared type that shadows a
+// predeclared scalar name, an instantiated generic — must stay classified as a
+// non-leaf so the snapshot keeps describing it.
+func TestS281CallbackProofLazyFieldScalarCertification(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		source string
+		typ    string
+		field  string
+		want   bool
+	}{
+		{
+			name:   "predeclared scalar",
+			source: "package dep\ntype parser struct { bad bool }\n",
+			typ:    "parser", field: "bad", want: true,
+		},
+		{
+			name:   "named scalar",
+			source: "package dep\ntype LitKind uint8\ntype parser struct { kind LitKind }\n",
+			typ:    "parser", field: "kind", want: true,
+		},
+		{
+			name:   "alias of named scalar",
+			source: "package dep\ntype LitKind uint8\ntype Alias = LitKind\ntype parser struct { kind Alias }\n",
+			typ:    "parser", field: "kind", want: true,
+		},
+		{
+			name:   "named pointer type",
+			source: "package dep\ntype Pointer *int\ntype parser struct { pos Pointer }\n",
+			typ:    "parser", field: "pos",
+		},
+		{
+			name:   "local declaration shadows predeclared scalar name",
+			source: "package dep\ntype bool struct { f func() }\ntype parser struct { bad bool }\n",
+			typ:    "parser", field: "bad",
+		},
+		{
+			name:   "instantiated generic",
+			source: "package dep\ntype Box[T any] struct { value T }\ntype parser struct { box Box[int] }\n",
+			typ:    "parser", field: "box",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			file, err := parser.ParseFile(token.NewFileSet(), "dep.go", test.source, parser.SkipObjectResolution)
+			if err != nil {
+				t.Fatal(err)
+			}
+			shape, ok := newDependencyCallbackProof([]*ast.File{file}).types[test.typ]
+			if !ok {
+				t.Fatalf("type %s has no recorded shape", test.typ)
+			}
+			field, ok := shape.fields[test.field]
+			if !ok {
+				t.Fatalf("type %s has no field %s", test.typ, test.field)
+			}
+			if field.scalar != test.want {
+				t.Fatalf("%s.%s scalar=%v, want %v", test.typ, test.field, field.scalar, test.want)
+			}
+		})
 	}
 }

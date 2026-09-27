@@ -878,8 +878,8 @@ func dependencyCallbackSameFrame(active dependencyCallbackActiveFrame, supplied 
 	if dependencyCallbackSameValue(active.receiver, receiver) || dependencyCallbackSameIdentity(active.receiver, receiver) || dependencyCallbackSameLineageGraph(active.receiver, receiver) {
 		current := dependencyCallbackValueSnapshot(receiver)
 		if current != active.receiverSnapshot {
-			if active.receiver.tainted() || receiver.tainted() {
-				return false, false, "receiver snapshot changed after entry and active receiver is tainted"
+			if !dependencyCallbackSameCallbackReach(active.receiver, receiver) {
+				return false, false, "receiver callback reachability changed after entry"
 			}
 			dependencyCallbackMarkGeneralized([]dependencyCallbackValue{receiver})
 			generalized = true
@@ -904,8 +904,8 @@ func dependencyCallbackSameFrame(active dependencyCallbackActiveFrame, supplied 
 		if dependencyCallbackSameValue(value, other) || dependencyCallbackSameIdentity(value, other) || dependencyCallbackSameLineageGraph(value, other) {
 			current := dependencyCallbackValueSnapshot(other)
 			if current != active.argSnapshots[name] {
-				if value.tainted() || other.tainted() {
-					return false, false, "argument " + name + " snapshot changed after entry and active argument is tainted"
+				if !dependencyCallbackSameCallbackReach(value, other) {
+					return false, false, "argument " + name + " callback reachability changed after entry"
 				}
 				dependencyCallbackMarkGeneralized([]dependencyCallbackValue{other})
 				generalized = true
@@ -1479,13 +1479,44 @@ func dependencyCallbackValueSnapshot(value dependencyCallbackValue) string {
 	return b.String()
 }
 
+// dependencyCallbackReachSnapshot renders only the part of a value's graph
+// through which the tracked callback is reachable: the callback-free regions
+// are elided, so two snapshots are equal exactly when the same callbacks sit
+// at the same addresses with the same escape status. Recursion uses it to
+// separate "the capture state moved" from "some callback-free field grew".
+func dependencyCallbackReachSnapshot(value dependencyCallbackValue) string {
+	s := &dependencyCallbackSnapshot{
+		objects:   make(map[*dependencyCallbackObject]int),
+		closures:  make(map[*dependencyCallbackClosure]int),
+		cells:     make(map[*dependencyCallbackCell]int),
+		projected: true,
+	}
+	var b strings.Builder
+	s.value(&b, value)
+	return b.String()
+}
+
+// dependencyCallbackSameCallbackReach reports whether two states put the
+// tracked callback in the same places. Differences outside those places are
+// callback-free by construction.
+func dependencyCallbackSameCallbackReach(left, right dependencyCallbackValue) bool {
+	return dependencyCallbackReachSnapshot(left) == dependencyCallbackReachSnapshot(right)
+}
+
 type dependencyCallbackSnapshot struct {
 	objects  map[*dependencyCallbackObject]int
 	closures map[*dependencyCallbackClosure]int
 	cells    map[*dependencyCallbackCell]int
+	// projected elides every subgraph that cannot reach a callback, and with
+	// it the descriptive object flags that only ever widen refusals.
+	projected bool
 }
 
 func (s *dependencyCallbackSnapshot) value(b *strings.Builder, value dependencyCallbackValue) {
+	if s.projected && !value.tainted() {
+		b.WriteByte('~')
+		return
+	}
 	if value.cell != nil {
 		if id, ok := s.cells[value.cell]; ok {
 			fmt.Fprintf(b, "L#%d", id)
@@ -1545,6 +1576,9 @@ func (s *dependencyCallbackSnapshot) closure(b *strings.Builder, closure *depend
 	}
 	names := make([]string, 0, len(closure.env))
 	for name := range closure.env {
+		if s.projected && !closure.env[name].tainted() {
+			continue
+		}
 		names = append(names, name)
 	}
 	sort.Strings(names)
@@ -1564,9 +1598,16 @@ func (s *dependencyCallbackSnapshot) object(b *strings.Builder, obj *dependencyC
 	}
 	id := len(s.objects) + 1
 	s.objects[obj] = id
-	fmt.Fprintf(b, "O#%d{%s,owned=%t,escaped=%t,general=%t", id, obj.typ, obj.owned, obj.escaped, obj.general)
+	if s.projected {
+		fmt.Fprintf(b, "O#%d{%s,owned=%t,escaped=%t", id, obj.typ, obj.owned, obj.escaped)
+	} else {
+		fmt.Fprintf(b, "O#%d{%s,owned=%t,escaped=%t,general=%t", id, obj.typ, obj.owned, obj.escaped, obj.general)
+	}
 	names := make([]string, 0, len(obj.fields))
 	for name := range obj.fields {
+		if s.projected && !obj.fields[name].tainted() {
+			continue
+		}
 		if dependencyCallbackSnapshotOmitField(obj.fields[name]) {
 			continue
 		}
