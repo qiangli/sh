@@ -167,3 +167,32 @@ func (r *Runner) goSourceNativeAssertsInterface(iv *bashPPInterfaceValue, assert
 	}
 	return answer.Kind == "bool" && answer.Text == "true", true, nil
 }
+
+// goSourceNativeAssertIdentical answers `x.(T)` and type switch cases for a
+// dependency-owned dynamic value when T is an imported concrete type. Spelling
+// canonicalisation handles aliases like ast.GenDecl vs go/ast.GenDecl, but the
+// dependency's reflect type is the authority for values crossing as handles.
+func (r *Runner) goSourceNativeAssertIdentical(iv *bashPPInterfaceValue, asserted syntax.BashPPTypeExpr) (matched, claimed bool, err error) {
+	if !r.bashPPGoSource || iv == nil || iv.nilIface || iv.cell == nil {
+		return false, false, nil
+	}
+	if !r.goSourceDependencyOwnedCell(iv.cell) {
+		return false, false, nil
+	}
+	if !r.goSourceImportedTypeName(bashPPTypeText(asserted)) {
+		return false, false, nil
+	}
+	value, err := r.bashPPBridgeCell(iv.cell)
+	if err != nil {
+		return false, true, err
+	}
+	value.Interface = ""
+	answer, err := r.bashPPNativeTypeRequest("identical", asserted, value)
+	if err != nil {
+		return false, true, err
+	}
+	if answer.Kind != "bool" {
+		return false, true, fmt.Errorf("gosource: type identity of %s answered %s", bashPPTypeText(asserted), answer.Kind)
+	}
+	return answer.Text == "true", true, nil
+}

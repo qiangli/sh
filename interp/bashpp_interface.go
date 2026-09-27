@@ -1401,19 +1401,27 @@ func (r *Runner) bashPPTypeAssertCell(assert *syntax.BashPPTypeAssertExpr, comma
 		} else if assertingInterface {
 			matched = r.bashPPImplements(iv.dynamic, assertIface) == nil
 		} else {
-			dynamic := r.bashPPCanonicalAssignableType(iv.dynamic)
-			asserted := r.bashPPCanonicalAssignableType(assert.Assert)
-			matched = bashPPStripLocalPackage(bashPPInterfaceAssertTypeText(r.bashPPPredeclaredAliases(dynamic))) == bashPPStripLocalPackage(bashPPInterfaceAssertTypeText(r.bashPPPredeclaredAliases(asserted))) ||
-				r.goSourceNativeTypeIdentical(dynamic, asserted)
-			// A struct literal type is identified by its fields, not by the
-			// word "struct"; see gosource_struct_identity.go.
-			if matched && (bashPPStructLiteralType(dynamic) || bashPPStructLiteralType(asserted)) {
-				matched = r.goSourceDynamicTypeIdentity(dynamic) == r.goSourceDynamicTypeIdentity(asserted)
+			native, claimed, err := r.goSourceNativeAssertIdentical(iv, assert.Assert)
+			if err != nil {
+				return nil, nil, err
 			}
-			// Same spelling, possibly different declarations: a type declared
-			// inside a function is its own type; see bashpp_sprint162_type_scope.go.
-			if matched {
-				matched = r.goSourceSameTypeScope(dynamic, asserted)
+			if claimed {
+				matched = native
+			} else {
+				dynamic := r.bashPPCanonicalAssignableType(iv.dynamic)
+				asserted := r.bashPPCanonicalAssignableType(assert.Assert)
+				matched = bashPPStripLocalPackage(bashPPInterfaceAssertTypeText(r.bashPPPredeclaredAliases(dynamic))) == bashPPStripLocalPackage(bashPPInterfaceAssertTypeText(r.bashPPPredeclaredAliases(asserted))) ||
+					r.goSourceNativeTypeIdentical(dynamic, asserted)
+				// A struct literal type is identified by its fields, not by the
+				// word "struct"; see gosource_struct_identity.go.
+				if matched && (bashPPStructLiteralType(dynamic) || bashPPStructLiteralType(asserted)) {
+					matched = r.goSourceDynamicTypeIdentity(dynamic) == r.goSourceDynamicTypeIdentity(asserted)
+				}
+				// Same spelling, possibly different declarations: a type declared
+				// inside a function is its own type; see bashpp_sprint162_type_scope.go.
+				if matched {
+					matched = r.goSourceSameTypeScope(dynamic, asserted)
+				}
 			}
 		}
 	}
@@ -1691,6 +1699,14 @@ func typeCaseTypeMatches(r *Runner, iv *bashPPInterfaceValue, target syntax.Bash
 	// bashpp_sprint165_runtime_panic.go. A refusal there is a diagnostic the
 	// switch statement reports, not a case that silently misses.
 	native, claimed, err := r.goSourceNativeAssertsInterface(iv, target)
+	if err != nil {
+		r.exit.fatal(err)
+		return false
+	}
+	if claimed {
+		return native
+	}
+	native, claimed, err = r.goSourceNativeAssertIdentical(iv, target)
 	if err != nil {
 		r.exit.fatal(err)
 		return false
