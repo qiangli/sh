@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
 )
 
@@ -141,5 +142,26 @@ func TestS281LocalImportedScalarUnderlying(t *testing.T) {
 	}
 	if got, ok := r.goSourceScalarUnderlying(named("posPointer")); ok || got != "" {
 		t.Fatalf("posPointer underlying = %q, %v; want empty, false", got, ok)
+	}
+}
+
+func TestS281BridgeScalarStoreRemainsScalar(t *testing.T) {
+	r := &Runner{bashPPGoSource: true}
+	named := &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "localInt"}}
+	r.bashPPTypes = map[string]bashPPType{
+		"localInt": {underlying: "int", typeExpr: named},
+	}
+	cell := &bashPPCell{declType: named}
+
+	bashPPStoreCellValue(cell, 7, &bashPPCollectionMeta{kind: "scalar", typ: named})
+	if cell.vr.Kind != expand.String {
+		t.Fatalf("scalar bridge store kind = %v, want string", cell.vr.Kind)
+	}
+	if cell.declType != named || cell.typeName != "localInt" || cell.scalarKind != constant.Int {
+		t.Fatalf("scalar metadata = decl %v type %q kind %v", cell.declType, cell.typeName, cell.scalarKind)
+	}
+	scalar := r.bashPPScalarFromCell(cell)
+	if scalar.typ != "localInt" || constant.ToInt(scalar.value).String() != "7" {
+		t.Fatalf("scalar read = (%v, %q), want (7, localInt)", scalar.value, scalar.typ)
 	}
 }

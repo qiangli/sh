@@ -382,6 +382,14 @@ func (r *Runner) bashPPScalarPath(expr syntax.BashPPExpr) (bashPPScalar, error) 
 			return scalar, nil
 		}
 	}
+	if r.bashPPGoSource && bashPPScalarComparableMeta(meta) {
+		cell := &bashPPCell{declType: meta.typ}
+		bashPPStoreCellValue(cell, value, nil)
+		scalar := r.bashPPScalarFromCell(cell)
+		if scalar.value != nil && scalar.value.Kind() != constant.Unknown {
+			return scalar, nil
+		}
+	}
 	if meta != nil {
 		return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-OPERAND: indexed value is not a scalar")
 	}
@@ -1573,16 +1581,22 @@ func bashPPCompareValuesWithRunner(r *Runner, left any, leftMeta *bashPPCollecti
 		// arrive here in different scalar storage types; compare their
 		// numeric values without evaluating either expression again.
 		if r != nil && r.bashPPGoSource {
-			switch l := left.(type) {
-			case float64:
-				if n, ok := right.(int); ok {
-					return l == float64(n), nil
-				}
-			case int:
-				if n, ok := right.(float64); ok {
-					return float64(l) == n, nil
-				}
+			if equal, ok := bashPPCompareContextualNumeric(left, right); ok {
+				return equal, nil
 			}
+		}
+		return bashPPCompareScalarAny(left, right)
+	}
+	if r != nil && r.bashPPGoSource && (bashPPScalarComparableMeta(leftMeta) || bashPPScalarComparableMeta(rightMeta)) {
+		if ok, err := r.bashPPScalarComparisonAssignable(leftMeta, rightMeta); !ok {
+			return false, err
+		}
+		// Native callback fields retain their declared scalar metadata, while
+		// a contextual integer literal does not. Apply the same Go numeric
+		// coercion as the metadata-free path, but only after the declared-type
+		// compatibility check above has rejected mismatched typed operands.
+		if equal, ok := bashPPCompareContextualNumeric(left, right); ok {
+			return equal, nil
 		}
 		return bashPPCompareScalarAny(left, right)
 	}
@@ -1673,6 +1687,23 @@ func bashPPNilComparable(meta *bashPPCollectionMeta) bool {
 	return meta != nil && (meta.kind == "slice" || meta.kind == "map" || meta.kind == "interface" || meta.kind == "channel" || meta.kind == "func")
 }
 
+func bashPPScalarComparableMeta(meta *bashPPCollectionMeta) bool {
+	return meta != nil && meta.kind == "scalar"
+}
+
+func (r *Runner) bashPPScalarComparisonAssignable(left, right *bashPPCollectionMeta) (bool, error) {
+	if left == nil || right == nil {
+		return true, nil
+	}
+	if !bashPPScalarComparableMeta(left) || !bashPPScalarComparableMeta(right) {
+		return false, fmt.Errorf("BASHPP-ECOMPARE-TYPE: mismatched comparison")
+	}
+	if r.bashPPTypeAssignable(left.typ, right.typ) && r.bashPPTypeAssignable(right.typ, left.typ) {
+		return true, nil
+	}
+	return false, fmt.Errorf("BASHPP-ECOMPARE-TYPE: mismatched comparison")
+}
+
 func (r *Runner) goSourceNilableScalarComparableMeta(expr syntax.BashPPExpr) *bashPPCollectionMeta {
 	typ := r.bashPPExprScalarType(expr)
 	switch r.bashPPUnderlyingType(typ).(type) {
@@ -1733,6 +1764,20 @@ func bashPPCompareScalarAny(left, right any) (bool, error) {
 		return ok && l == r, nil
 	}
 	return false, fmt.Errorf("BASHPP-ECOMPARE-NONCOMPARABLE: unsupported scalar comparison")
+}
+
+func bashPPCompareContextualNumeric(left, right any) (bool, bool) {
+	switch l := left.(type) {
+	case float64:
+		if n, ok := right.(int); ok {
+			return l == float64(n), true
+		}
+	case int:
+		if n, ok := right.(float64); ok {
+			return float64(l) == n, true
+		}
+	}
+	return false, false
 }
 
 func bashPPPointerEqual(left, right any) bool {
