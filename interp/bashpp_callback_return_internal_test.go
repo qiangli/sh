@@ -127,6 +127,11 @@ func TestBashPPTestingCallbackFrameOwnership(t *testing.T) {
 
 func TestBashPPTestingCallbackSharesAuthenticatedPackageGlobalsOnly(t *testing.T) {
 	program, err := gosource.Parse(strings.NewReader(`package main
+
+var own int
+var nativeGlobal int
+const packageConstant = 3
+
 func main() {
 	_ = func() { own++ }
 }
@@ -146,7 +151,8 @@ func main() {
 		t.Fatal("converted source has no callback literal")
 	}
 
-	root := newBashPPScope(nil)
+	outer := newBashPPScope(nil)
+	root := newBashPPScope(outer)
 	own := scalarCell("1")
 	native := &bashPPCell{vr: expand.Variable{Kind: expand.Object, Obj: &bashPPBridgeValue{Kind: "handle", Session: "source-session", Handle: 1}}}
 	foreign := scalarCell("2")
@@ -159,16 +165,18 @@ func main() {
 	frame := newBashPPScope(root)
 	captured := scalarCell("4")
 	private := scalarCell("5")
+	shadow := scalarCell("6")
 	frame.entries["captured"] = captured
 	frame.entries["private"] = private
+	frame.entries["own"] = shadow
 
 	runner := &Runner{bashPPGoSource: true, bashPPGoSourceFile: program.File}
 	shared := runner.bashPPCallbackSharedCells(&bashPPFunc{lit: lit, scope: frame}, map[*bashPPCell]bool{captured: true})
 	if !shared[own] || !shared[native] || !shared[captured] {
 		t.Fatalf("authenticated cells missing: own=%v native=%v captured=%v", shared[own], shared[native], shared[captured])
 	}
-	if shared[foreign] || shared[private] || shared[constant] {
-		t.Fatalf("unowned cells leaked: foreign=%v private=%v constant=%v", shared[foreign], shared[private], shared[constant])
+	if shared[foreign] || shared[private] || shared[constant] || shared[shadow] {
+		t.Fatalf("unowned cells leaked: foreign=%v private=%v constant=%v shadow=%v", shared[foreign], shared[private], shared[constant], shared[shadow])
 	}
 	if got := runner.bashPPGoSourceSharableCells; len(got) != 0 {
 		t.Fatalf("package provenance was replaced by payload classification: %#v", got)
