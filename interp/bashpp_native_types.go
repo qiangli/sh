@@ -97,6 +97,18 @@ func (r *Runner) bashPPNativeDeclaration(d *syntax.BashPPDecl) bool {
 	}
 	if d.Name.Value != "_" {
 		r.bashPPBindNativeValue(d.Name.Value, value)
+		// A declared variable keeps its static type for its whole lifetime.
+		// A dependency-owned handle carries no declared type of its own, so
+		// record the declaration's: once `var p *dep.T` is reassigned to
+		// interpreter storage (`p = new(dep.T)`), the assignment keeps the
+		// target's declared type, and `p = nil` must still be typed as *dep.T.
+		if cell := r.bashPPScope.lookup(d.Name.Value); cell != nil && d.DeclTypeExpr != nil {
+			if view := cell.view(); view.declType == nil {
+				typed := *view
+				typed.declType = d.DeclTypeExpr
+				cell.publish(&typed)
+			}
+		}
 	}
 	return true
 }
