@@ -72,3 +72,4 @@
 {"op":"add","slug":"scope-pointer-writeback-to-mutable-or-retained-origins","id":"01a0e7c2-b0b4-7367-8e55-ab429f1595e3","tool":"codex-gpt5.6-sol2-p","host":"dragon","episode":"weave-issue-224","at":"2026-09-28T11:24:51.254081Z"}
 {"op":"update","slug":"cache-interpreted-reexec-preparation-never-compiler-outputs","id":"01a0e494-dab7-7b2b-9f4d-3f70ee236d4d","tool":"codex-gpt5.6-sol-c","host":"dragon","episode":"weave-issue-237","at":"2026-09-28T13:28:13.326117Z"}
 {"op":"add","slug":"reuse-callback-transport-policy-for-range-function-yields","id":"01a0e846-2fa9-7d8c-a32f-11b8e0fc7720","tool":"codex-gpt5.6-sol-e","host":"dragon","episode":"weave-issue-239","at":"2026-09-28T13:48:28.971531Z"}
+{"op":"add","slug":"materialize-dependency-collection-carriers-on-every-typed-read-p","id":"01a0e854-e051-70e6-9674-e4b02f38c0f6","tool":"codex-gpt5.6-sol-w242-h","host":"dragon","episode":"weave-issue-242","at":"2026-09-28T14:04:31.700154Z"}

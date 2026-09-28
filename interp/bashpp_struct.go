@@ -511,6 +511,10 @@ func (r *Runner) bashPPEvalTypedValue(expr syntax.BashPPExpr, expected syntax.Ba
 		if err != nil {
 			return nil, nil, err
 		}
+		value, meta, err = r.goSourceMaterializeTypedCollection(value, meta, expected)
+		if err != nil {
+			return nil, nil, err
+		}
 		if err := r.bashPPCheckTypedValue(value, meta, expected); err != nil {
 			return nil, nil, err
 		}
@@ -519,6 +523,10 @@ func (r *Runner) bashPPEvalTypedValue(expr syntax.BashPPExpr, expected syntax.Ba
 	}
 	if _, ok := expr.(*syntax.BashPPSliceExpr); ok {
 		value, meta, err := r.bashPPReadExpr(expr)
+		if err != nil {
+			return nil, nil, err
+		}
+		value, meta, err = r.goSourceMaterializeTypedCollection(value, meta, expected)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -535,6 +543,10 @@ func (r *Runner) bashPPEvalTypedValue(expr syntax.BashPPExpr, expected syntax.Ba
 	// the type name is not.
 	if sel, ok := expr.(*syntax.BashPPSelectorExpr); ok && !(sel.MethodValue && r.bashPPGoSource && !r.bashPPNativeExpr(sel.X)) && !r.goSourceMethodExprSelector(sel) {
 		value, meta, err := r.bashPPReadExpr(expr)
+		if err != nil {
+			return nil, nil, err
+		}
+		value, meta, err = r.goSourceMaterializeTypedCollection(value, meta, expected)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -556,25 +568,11 @@ func (r *Runner) bashPPEvalTypedValue(expr syntax.BashPPExpr, expected syntax.Ba
 			// with no collection metadata of its own. Materialize that carrier only
 			// when it is being stored in an interpreter-owned collection target;
 			// imported/native targets keep their lazy handle and identity.
-			if native, ok := cell.vr.Obj.(*bashPPBridgeValue); ok && native != nil && meta == nil && !r.bashPPNativeType(expected) {
-				if _, collection := r.bashPPUnderlyingType(expected).(*syntax.BashPPCollectionType); collection {
-					var handled bool
-					value, materializedMeta, handled, err := r.goSourceNativeSequenceContents(native, expected)
-					if err != nil {
-						return nil, nil, err
-					}
-					if !handled && (native.Kind == "slice" || native.Kind == "array" || native.Kind == "map") {
-						value, materializedMeta, err = r.bashPPBridgeContents(*native, expected)
-						handled = true
-						if err != nil {
-							return nil, nil, err
-						}
-					}
-					if handled {
-						value, materializedMeta = bashPPCopyArrayValue(value, materializedMeta)
-						return value, materializedMeta, nil
-					}
-				}
+			if value, materializedMeta, err := r.goSourceMaterializeTypedCollection(cell.vr.Obj, meta, expected); err != nil {
+				return nil, nil, err
+			} else if materializedMeta != meta {
+				value, materializedMeta = bashPPCopyArrayValue(value, materializedMeta)
+				return value, materializedMeta, nil
 			}
 			if err := r.bashPPCheckTypedValue(cell.vr.Obj, meta, expected); err != nil {
 				return nil, nil, err
@@ -588,6 +586,39 @@ func (r *Runner) bashPPEvalTypedValue(expr syntax.BashPPExpr, expected syntax.Ba
 		return value, meta, err
 	}
 	return value, nil, err
+}
+
+// goSourceMaterializeTypedCollection turns a dependency-owned collection
+// carrier into interpreter storage when it is assigned to an
+// interpreter-owned collection destination. Selectors need this just as named
+// result temporaries do: a native field read has no local collection metadata
+// until its authenticated type is checked and its elements are transported.
+func (r *Runner) goSourceMaterializeTypedCollection(value any, meta *bashPPCollectionMeta, expected syntax.BashPPTypeExpr) (any, *bashPPCollectionMeta, error) {
+	if !r.bashPPGoSource || meta != nil || r.bashPPNativeType(expected) {
+		return value, meta, nil
+	}
+	if _, collection := r.bashPPUnderlyingType(expected).(*syntax.BashPPCollectionType); !collection {
+		return value, meta, nil
+	}
+	native, ok := value.(*bashPPBridgeValue)
+	if !ok || native == nil {
+		return value, meta, nil
+	}
+	converted, convertedMeta, handled, err := r.goSourceNativeSequenceContents(native, expected)
+	if err != nil {
+		return nil, nil, err
+	}
+	if handled {
+		return converted, convertedMeta, nil
+	}
+	if native.Kind != "slice" && native.Kind != "array" && native.Kind != "map" {
+		return value, meta, nil
+	}
+	if _, _, err := r.goSourceNativeAssignedValue(*native, expected); err != nil {
+		return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-ELEMENT: %v", err)
+	}
+	converted, convertedMeta, err = r.bashPPBridgeContents(*native, expected)
+	return converted, convertedMeta, err
 }
 
 func (r *Runner) bashPPCheckTypedValue(value any, meta *bashPPCollectionMeta, expected syntax.BashPPTypeExpr) error {
