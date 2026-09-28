@@ -1,0 +1,117 @@
+//go:build full
+
+package interp_test
+
+import (
+	"bytes"
+	"context"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"mvdan.cc/sh/v3/gosource"
+	"mvdan.cc/sh/v3/interp"
+	"mvdan.cc/sh/v3/lower"
+	"mvdan.cc/sh/v3/syntax"
+)
+
+// TestS319ConstraintEvalMethodValue exercises the exact cmd/internal/testdir
+// bridge shape: constraint.Parse returns an Expr interface backed by one of
+// the dependency's recursive concrete nodes, and Eval receives a method value
+// over an interpreted receiver.
+//
+// Sprint: #319; Story: #1088; Story-ID: 00446a7bd51a
+func TestS319ConstraintEvalMethodValue(t *testing.T) {
+	const source = `package main
+
+import (
+	"fmt"
+	"go/build/constraint"
+)
+
+type context struct{ want string }
+
+func (c *context) match(tag string) bool { return tag == c.want }
+
+func main() {
+	expr, err := constraint.Parse("//go:build linux && !windows")
+	ctxt := &context{want: "linux"}
+	fmt.Println(err == nil, expr.Eval(ctxt.match))
+}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "original.go")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	oracle := runNativeOracle(t, dir, path, nil, "")
+	got := runGoSourceRunner(t, dir, path, source, nil, "")
+	if got.stdout != oracle.stdout || got.stderr != oracle.stderr || got.status != oracle.status {
+		t.Fatalf("interp=%+v oracle=%+v", got, oracle)
+	}
+}
+
+// TestS319ConstraintEvalForeignImplementationRefuses proves that observed
+// dispatch is not a package-wide name match. An external type can satisfy
+// constraint.Expr by embedding it and overriding Eval; both a top-level value
+// and one nested below a source-visible AndExpr must remain fail-closed.
+//
+// Sprint: #319; Story: #1088; Story-ID: 00446a7bd51a
+func TestS319ConstraintEvalForeignImplementationRefuses(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.com/s319\n\ngo 1.27\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	evilDir := filepath.Join(dir, "evil")
+	if err := os.Mkdir(evilDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	const evil = `package evil
+import "go/build/constraint"
+var Saved func(string) bool
+type Evil struct{ constraint.Expr }
+func (*Evil) Eval(ok func(string) bool) bool { Saved = ok; return false }
+func Outer(inner constraint.Expr) constraint.Expr { return &Evil{Expr: inner} }
+func Nested(inner constraint.Expr) constraint.Expr {
+	return &constraint.AndExpr{X: &Evil{Expr: inner}, Y: inner}
+}
+`
+	if err := os.WriteFile(filepath.Join(evilDir, "evil.go"), []byte(evil), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, factory := range []string{"Outer", "Nested"} {
+		t.Run(factory, func(t *testing.T) {
+			source := `package main
+import (
+	"example.com/s319/evil"
+	"go/build/constraint"
+)
+type context struct{}
+func (*context) match(string) bool { return true }
+func main() {
+	expr, _ := constraint.Parse("//go:build linux")
+	expr = evil.` + factory + `(expr)
+	expr.Eval((&context{}).match)
+}
+`
+			path := filepath.Join(dir, strings.ToLower(factory)+".go")
+			program, err := gosource.Parse(strings.NewReader(source), path, gosource.Options{RunMain: true, Importer: lower.NewModuleImporter(dir)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var output bytes.Buffer
+			runner, err := interp.New(interp.Lang(syntax.LangBashPP), interp.Dir(dir), interp.GoSourceModuleDir(dir), interp.StdIO(nil, &output, &output))
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			err = runner.Run(ctx, program.File)
+			if err == nil || !strings.Contains(err.Error(), "callbacks are unsupported for Eval") {
+				t.Fatalf("foreign implementation was not refused: %v", err)
+			}
+		})
+	}
+}

@@ -34,11 +34,7 @@ const dependencyCallbackProofDepthBound = 64
 // retain or asynchronously invoke any original callback argument. A missing
 // source, unresolved call, unsupported syntax, or exhausted bound is a refusal.
 func dependencyFunctionCallbackLifetimeProof(ctx context.Context, req bashPPEvalRequest, q bashPPBridgeRequest) bool {
-	if q.Op != "call" || q.Receiver != nil {
-		return false
-	}
-	alias, name, ok := strings.Cut(q.Selector, ".")
-	if !ok || req.Imports[alias] == "" || name == "" {
+	if q.Op != "call" {
 		return false
 	}
 	var callbackArgs []int
@@ -50,10 +46,58 @@ func dependencyFunctionCallbackLifetimeProof(ctx context.Context, req bashPPEval
 	if len(callbackArgs) == 0 {
 		return false
 	}
+	path, name, receiverType := "", "", ""
+	var dispatchTypes []string
+	if q.Receiver == nil {
+		alias, selected, ok := strings.Cut(q.Selector, ".")
+		if !ok || req.Imports[alias] == "" || selected == "" {
+			return false
+		}
+		path, name = req.Imports[alias], selected
+	} else {
+		if req.Bridge == nil || q.Selector == "" || q.Receiver.Kind != "handle" {
+			return false
+		}
+		path, receiverType = dependencyCallbackQualifiedType(q.Receiver.NativeType)
+		if path == "" {
+			path, receiverType = dependencyCallbackQualifiedType(q.Receiver.Type)
+		}
+		if path == "" || receiverType == "" {
+			return false
+		}
+		values, err := req.Bridge.request(ctx, req, bashPPBridgeRequest{
+			Op: "callback-proof-types", Selector: q.Selector, Receiver: q.Receiver,
+		})
+		if err != nil || len(values) == 0 {
+			if os.Getenv(dependencyCallbackProofDiagnosticEnv) != "" {
+				fmt.Fprintf(os.Stderr, "gosource callback receiver inspection refused %s: values=%d err=%v\n", q.Selector, len(values), err)
+			}
+			return false
+		}
+		for _, value := range values {
+			candidatePath, candidateType := dependencyCallbackQualifiedType(value.stringText())
+			if candidatePath != path || candidateType == "" {
+				if os.Getenv(dependencyCallbackProofDiagnosticEnv) != "" {
+					fmt.Fprintf(os.Stderr, "gosource callback receiver inspection crossed packages: receiver=%s candidate=%q\n", path, value.stringText())
+				}
+				return false
+			}
+			dispatchTypes = append(dispatchTypes, candidateType)
+		}
+		name = q.Selector
+	}
 	var key strings.Builder
-	key.WriteString(req.Imports[alias])
+	key.WriteString(path)
 	key.WriteByte('.')
 	key.WriteString(name)
+	if receiverType != "" {
+		key.WriteByte('@')
+		key.WriteString(receiverType)
+		for _, typ := range dispatchTypes {
+			key.WriteByte(',')
+			key.WriteString(typ)
+		}
+	}
 	for _, index := range callbackArgs {
 		key.WriteByte(':')
 		key.WriteString(strconv.Itoa(index))
@@ -67,7 +111,7 @@ func dependencyFunctionCallbackLifetimeProof(ctx context.Context, req bashPPEval
 			return result
 		}
 	}
-	result := loadDependencyFunctionCallbackLifetimeProof(ctx, req, req.Imports[alias], name, callbackArgs)
+	result := loadDependencyFunctionCallbackLifetimeProof(ctx, req, path, name, receiverType, dispatchTypes, callbackArgs)
 	if req.Bridge != nil && ctx.Err() == nil {
 		req.Bridge.mu.Lock()
 		if req.Bridge.callbackProofSeen == nil {
@@ -81,7 +125,16 @@ func dependencyFunctionCallbackLifetimeProof(ctx context.Context, req bashPPEval
 	return result
 }
 
-func loadDependencyFunctionCallbackLifetimeProof(ctx context.Context, req bashPPEvalRequest, path, name string, callbackArgs []int) bool {
+func dependencyCallbackQualifiedType(name string) (path, typ string) {
+	name = strings.TrimLeft(name, "*[]")
+	dot := strings.LastIndexByte(name, '.')
+	if dot <= 0 || dot == len(name)-1 {
+		return "", ""
+	}
+	return name[:dot], name[dot+1:]
+}
+
+func loadDependencyFunctionCallbackLifetimeProof(ctx context.Context, req bashPPEvalRequest, path, name, receiverType string, dispatchTypes []string, callbackArgs []int) bool {
 	facts, err := bashPPGoListFacts(ctx, req, path)
 	if err != nil || facts.Dir == "" || len(facts.CgoFiles) != 0 || len(facts.GoFiles) == 0 {
 		return false
@@ -105,7 +158,12 @@ func loadDependencyFunctionCallbackLifetimeProof(ctx context.Context, req bashPP
 	proof := newDependencyCallbackProof(files)
 	proof.fset = fset
 	proof.diagnostics = os.Getenv(dependencyCallbackProofDiagnosticEnv) != ""
-	result := proof.prove(name, callbackArgs)
+	result := false
+	if receiverType == "" {
+		result = proof.prove(name, callbackArgs)
+	} else {
+		result = proof.proveMethod(receiverType, name, dispatchTypes, callbackArgs)
+	}
 	if !result && proof.diagnostics {
 		proof.writeDiagnostics(os.Stderr, path, name)
 	}
@@ -121,6 +179,10 @@ type dependencyCallbackObject struct {
 	scalar    bool
 	general   bool
 	fields    map[string]dependencyCallbackValue
+	// dispatchTypes is the bounded set of concrete same-package types observed
+	// in interface slots reachable from an authenticated native receiver. It is
+	// propagated only through fields whose declared type is an interface.
+	dispatchTypes map[string]bool
 
 	// boundMethod, when non-nil, marks this object as a method value: calling
 	// it runs boundMethod's body with the receiver stored under
@@ -259,18 +321,13 @@ type dependencyCallbackProof struct {
 	types     map[string]dependencyCallbackType
 	typeSpecs map[string]*ast.TypeSpec
 	funcTypes map[string]bool
-	// imports holds every package name the proved files import, by declared
-	// alias or path basename. A selector whose base names one of these is a
-	// package-level call to code outside the proved sources, never interface
-	// dispatch over them.
-	imports map[string]bool
-	globals map[string]bool
-	consts  map[string]bool
-	active  map[string]dependencyCallbackActiveFrame
-	done    map[string][]dependencyCallbackCompletedFrame
-	results []map[string]bool
-	defers  [][]dependencyCallbackDeferred
-	steps   int
+	globals   map[string]bool
+	consts    map[string]bool
+	active    map[string]dependencyCallbackActiveFrame
+	done      map[string][]dependencyCallbackCompletedFrame
+	results   []map[string]bool
+	defers    [][]dependencyCallbackDeferred
+	steps     int
 
 	// labels holds every label declared by a statement list currently being
 	// walked, so that a goto nested inside it resolves to an edge. Go forbids
@@ -321,24 +378,9 @@ func newDependencyCallbackProof(files []*ast.File) *dependencyCallbackProof {
 	p := &dependencyCallbackProof{
 		funcs: make(map[string][]*ast.FuncDecl), methods: make(map[string]map[string]*ast.FuncDecl),
 		types: make(map[string]dependencyCallbackType), typeSpecs: make(map[string]*ast.TypeSpec), funcTypes: make(map[string]bool), globals: make(map[string]bool), consts: make(map[string]bool), active: make(map[string]dependencyCallbackActiveFrame), done: make(map[string][]dependencyCallbackCompletedFrame),
-		imports:   make(map[string]bool),
 		stepLimit: dependencyCallbackProofStepBudget, depthLimit: dependencyCallbackProofDepthBound,
 	}
 	for _, file := range files {
-		for _, imp := range file.Imports {
-			name := ""
-			if imp.Name != nil {
-				name = imp.Name.Name
-			} else if path, err := strconv.Unquote(imp.Path.Value); err == nil {
-				if slash := strings.LastIndex(path, "/"); slash >= 0 {
-					path = path[slash+1:]
-				}
-				name = path
-			}
-			if name != "" && name != "_" && name != "." {
-				p.imports[name] = true
-			}
-		}
 		for _, decl := range file.Decls {
 			gen, ok := decl.(*ast.GenDecl)
 			if !ok || gen.Tok != token.TYPE {
@@ -485,6 +527,40 @@ func (p *dependencyCallbackProof) prove(name string, callbackArgs []int) bool {
 		env[params[formal].name] = dependencyCallbackValue{callback: &dependencyCallbackClosure{}}
 	}
 	return p.function(decls[0], env, dependencyCallbackValue{}, 0)
+}
+
+func (p *dependencyCallbackProof) proveMethod(receiverType, name string, dispatchTypes []string, callbackArgs []int) bool {
+	decl := p.methods[receiverType][name]
+	if decl == nil || decl.Body == nil {
+		return p.refuse(nil, fmt.Sprintf("method %s.%s is not source-visible", receiverType, name))
+	}
+	params, valid := dependencyCallbackFormals(decl.Type.Params)
+	if !valid {
+		return p.refuse(decl, fmt.Sprintf("method %s.%s has invalid formal parameters %q", receiverType, name, dependencyCallbackFormalLabels(decl.Type.Params)))
+	}
+	env := make(map[string]dependencyCallbackValue)
+	variadic := len(params) != 0 && params[len(params)-1].variadic
+	for _, index := range callbackArgs {
+		formal := index
+		if variadic && formal >= len(params)-1 {
+			formal = len(params) - 1
+		}
+		if formal < 0 || formal >= len(params) || params[formal].name == "" {
+			return p.refuse(decl, fmt.Sprintf("callback argument index %d has no named parameter", index))
+		}
+		env[params[formal].name] = dependencyCallbackValue{callback: &dependencyCallbackClosure{}}
+	}
+	observed := make(map[string]bool, len(dispatchTypes))
+	for _, typ := range dispatchTypes {
+		if p.methods[typ][name] == nil {
+			return p.refuse(decl, fmt.Sprintf("observed interface implementation %s.%s is not source-visible", typ, name))
+		}
+		observed[typ] = true
+	}
+	receiver := dependencyCallbackValue{object: &dependencyCallbackObject{
+		typ: receiverType, escaped: true, fields: make(map[string]dependencyCallbackValue), dispatchTypes: observed,
+	}}
+	return p.function(decl, env, receiver, 0)
 }
 
 func (p *dependencyCallbackProof) refuse(node ast.Node, reason string) bool {
@@ -2710,15 +2786,16 @@ func (c *dependencyCallbackGraphCloner) object(obj *dependencyCallbackObject) *d
 		return clone
 	}
 	clone := &dependencyCallbackObject{
-		typ:         obj.typ,
-		lineage:     dependencyCallbackObjectLineage(obj),
-		owned:       obj.owned,
-		escaped:     obj.escaped,
-		synthetic:   obj.synthetic,
-		scalar:      obj.scalar,
-		general:     obj.general,
-		boundMethod: obj.boundMethod,
-		fields:      make(map[string]dependencyCallbackValue, len(obj.fields)),
+		typ:           obj.typ,
+		lineage:       dependencyCallbackObjectLineage(obj),
+		owned:         obj.owned,
+		escaped:       obj.escaped,
+		synthetic:     obj.synthetic,
+		scalar:        obj.scalar,
+		general:       obj.general,
+		boundMethod:   obj.boundMethod,
+		dispatchTypes: obj.dispatchTypes,
+		fields:        make(map[string]dependencyCallbackValue, len(obj.fields)),
 	}
 	c.objects[obj] = clone
 	for name, field := range obj.fields {
@@ -3368,11 +3445,7 @@ func (p *dependencyCallbackProof) callWithResolvedCallee(call *ast.CallExpr, cal
 		decl, actual := p.method(receiver, fun.Sel.Name, map[string]bool{})
 		if decl == nil {
 			if carriesCallback {
-				// The receiver is an interface value with no concrete binding
-				// this proof can resolve. Its true dynamic type is one of the
-				// source-visible types that declare a method of this name; proving
-				// every such method is a sound superset of proving the real one.
-				if p.proveInterfaceDispatch(call, fun.Sel.Name, args, depth) {
+				if p.proveObservedInterfaceDispatch(call, receiver, fun.Sel.Name, args, depth) {
 					return true
 				}
 				return p.refuse(fun, "tainted method call target is not source-visible")
@@ -3385,6 +3458,30 @@ func (p *dependencyCallbackProof) callWithResolvedCallee(call *ast.CallExpr, cal
 		return p.refuse(call, "tainted call target is not source-visible")
 	}
 	return true
+}
+
+func (p *dependencyCallbackProof) proveObservedInterfaceDispatch(call *ast.CallExpr, receiver dependencyCallbackValue, name string, args []dependencyCallbackValue, depth int) bool {
+	receiver = dependencyCallbackResolvedValue(receiver)
+	if receiver.object == nil || len(receiver.object.dispatchTypes) == 0 {
+		return false
+	}
+	types := make([]string, 0, len(receiver.object.dispatchTypes))
+	for typ := range receiver.object.dispatchTypes {
+		if p.methods[typ][name] == nil {
+			return false
+		}
+		types = append(types, typ)
+	}
+	sort.Strings(types)
+	for _, typ := range types {
+		actual := dependencyCallbackValue{object: &dependencyCallbackObject{
+			typ: typ, escaped: true, fields: make(map[string]dependencyCallbackValue), dispatchTypes: receiver.object.dispatchTypes,
+		}}
+		if !p.callFunction(call, p.methods[typ][name], args, actual, depth) {
+			return false
+		}
+	}
+	return len(types) != 0
 }
 
 func (p *dependencyCallbackProof) markEscaped(values []dependencyCallbackValue) {
@@ -3521,98 +3618,6 @@ func (p *dependencyCallbackProof) method(receiver dependencyCallbackValue, name 
 	return nil, dependencyCallbackValue{}
 }
 
-// proveInterfaceDispatch discharges a tainted call whose receiver is an
-// interface value the proof cannot bind to a concrete type. The dynamic type at
-// runtime is some source-visible type that declares a method of this name;
-// which one is not statically known, so the proof stands in for it with every
-// candidate. Each candidate is proved against a synthetic receiver of its own
-// type -- unowned and escaped, because an interface's dynamic value is not
-// storage this call site owns -- so a candidate that retains the callback in a
-// field, a global, or an asynchronous launch refuses exactly as a direct call to
-// it would. If every candidate leaves the callback where it found it the call is
-// admitted; a package with no such method, like any other unresolved tainted
-// target, stays refused.
-//
-// Two gates keep the name-based candidate set from standing in for native
-// code. A selector whose base names an imported package is a package-level
-// call to code outside the proved sources, so no source method can model it.
-// And the candidate set is only evidence when some source-visible interface
-// declares the method name: only then is the call an interface method call
-// whose dynamic type ranges over source-visible implementations, rather than
-// a call on a native value that happens to share a method name with them.
-func (p *dependencyCallbackProof) proveInterfaceDispatch(call *ast.CallExpr, name string, args []dependencyCallbackValue, depth int) bool {
-	if fun, ok := call.Fun.(*ast.SelectorExpr); ok {
-		if base, ok := fun.X.(*ast.Ident); ok && p.imports[base.Name] {
-			return false
-		}
-	}
-	if !p.interfaceDeclaresMethod(name) {
-		return false
-	}
-	types := make([]string, 0, len(p.methods))
-	for typ, methods := range p.methods {
-		if methods[name] != nil {
-			types = append(types, typ)
-		}
-	}
-	if len(types) == 0 {
-		return false
-	}
-	sort.Strings(types)
-	for _, typ := range types {
-		receiver := dependencyCallbackValue{object: &dependencyCallbackObject{
-			typ:     typ,
-			escaped: true,
-			fields:  make(map[string]dependencyCallbackValue),
-		}}
-		if !p.callFunction(call, p.methods[typ][name], args, receiver, depth) {
-			return false
-		}
-	}
-	return true
-}
-
-// interfaceDeclaresMethod reports whether any source-visible interface type
-// declares a method of this name, directly or through an embedded
-// source-visible interface.
-func (p *dependencyCallbackProof) interfaceDeclaresMethod(name string) bool {
-	for typeName := range p.typeSpecs {
-		if p.interfaceTypeDeclares(typeName, name, map[string]bool{}) {
-			return true
-		}
-	}
-	return false
-}
-
-func (p *dependencyCallbackProof) interfaceTypeDeclares(typeName, method string, seen map[string]bool) bool {
-	if seen[typeName] {
-		return false
-	}
-	seen[typeName] = true
-	spec := p.typeSpecs[typeName]
-	if spec == nil {
-		return false
-	}
-	iface, ok := spec.Type.(*ast.InterfaceType)
-	if !ok || iface.Methods == nil {
-		return false
-	}
-	for _, field := range iface.Methods.List {
-		if len(field.Names) == 0 {
-			if embedded, ok := field.Type.(*ast.Ident); ok && p.interfaceTypeDeclares(embedded.Name, method, seen) {
-				return true
-			}
-			continue
-		}
-		for _, declared := range field.Names {
-			if declared.Name == method {
-				return true
-			}
-		}
-	}
-	return false
-}
-
 // field resolves both declared fields and fields reached through embedding.
 // An explicitly selected embedded field, such as p.scanner where scanner is
 // anonymous in parser, denotes the embedded object itself. Ownership follows
@@ -3638,6 +3643,9 @@ func (p *dependencyCallbackProof) field(receiver dependencyCallbackValue, name s
 			return dependencyCallbackValue{callable: true}
 		}
 		child := dependencyCallbackSyntheticChild(receiver.object, field.typ, field.scalar)
+		if p.interfaceType(field.typ) {
+			child.object.dispatchTypes = receiver.object.dispatchTypes
+		}
 		receiver.object.fields[name] = child
 		return child
 	}
@@ -3655,6 +3663,15 @@ func (p *dependencyCallbackProof) field(receiver dependencyCallbackValue, name s
 		}
 	}
 	return dependencyCallbackValue{}
+}
+
+func (p *dependencyCallbackProof) interfaceType(name string) bool {
+	spec := p.typeSpecs[name]
+	if spec == nil {
+		return false
+	}
+	_, ok := spec.Type.(*ast.InterfaceType)
+	return ok
 }
 
 // dependencyCallbackJoinEnvTaint models the shared lexical cells captured by

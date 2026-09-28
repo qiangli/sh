@@ -3,6 +3,9 @@
 package interp
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"strings"
 	"testing"
 )
@@ -13,11 +16,10 @@ import (
 // implementations recurse, plus a method value formed from a callback-bearing
 // receiver. Two gaps are closed here, both fail-closed:
 //
-//   - interface dispatch: a tainted call whose receiver is an interface value
-//     with no concrete binding is proved against every source-visible method of
-//     that name, a sound superset of the true dynamic type. If every candidate
-//     leaves the callback where it found it, the call is admitted; a single
-//     retaining candidate refuses the whole proof.
+//   - interface dispatch: the bridge observes the authenticated native
+//     receiver graph under strict bounds and proves exactly the same-package
+//     concrete method bodies found there. Unknown, foreign, or source-invisible
+//     implementations refuse; method names alone prove nothing.
 //   - method values: a selector that names a method rather than a field builds a
 //     method value that captures its whole receiver, so it can reach every
 //     callback the receiver reaches. Storing such a value where a callback may
@@ -32,9 +34,12 @@ const dependencyCallbackConstraintSource = `package dep
 
 type Expr interface {
 	Eval(ok func(tag string) bool) bool
+	isExpr()
 }
 
 type AndExpr struct{ X, Y Expr }
+
+func (*AndExpr) isExpr() {}
 
 func (e *AndExpr) Eval(ok func(tag string) bool) bool {
 	return e.X.Eval(ok) && e.Y.Eval(ok)
@@ -42,17 +47,23 @@ func (e *AndExpr) Eval(ok func(tag string) bool) bool {
 
 type OrExpr struct{ X, Y Expr }
 
+func (*OrExpr) isExpr() {}
+
 func (e *OrExpr) Eval(ok func(tag string) bool) bool {
 	return e.X.Eval(ok) || e.Y.Eval(ok)
 }
 
 type NotExpr struct{ X Expr }
 
+func (*NotExpr) isExpr() {}
+
 func (e *NotExpr) Eval(ok func(tag string) bool) bool {
 	return !e.X.Eval(ok)
 }
 
 type TagExpr struct{ Tag string }
+
+func (*TagExpr) isExpr() {}
 
 func (e *TagExpr) Eval(ok func(tag string) bool) bool {
 	return ok(e.Tag)
@@ -63,13 +74,54 @@ func Match(x Expr, ok func(tag string) bool) bool {
 }
 `
 
-// TestS319CallbackProofInterfaceDispatch proves the constraint reduction: the
-// callback only ever descends the recursion or is invoked synchronously by the
-// Tag leaf, so no implementation retains it and the interface call is admitted.
+// TestS319CallbackProofRefusalEnumeration measures the refusal scope before
+// interface dispatch is admitted. The enumerate hook must expose the single
+// unresolved dispatch class in this reduction; production remains fail-closed.
+//
+// Sprint: #319; Story: #1088; Story-ID: 00446a7bd51a
+func TestS319CallbackProofRefusalEnumeration(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "constraint.go", dependencyCallbackConstraintSource, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enumeration := &dependencyCallbackEnumeration{sites: make(map[string]*dependencyCallbackEnumerationSite)}
+	proof := newDependencyCallbackProof([]*ast.File{file})
+	proof.fset = fset
+	proof.enumerate = enumeration.record
+	proof.prove("Match", []int{1})
+	report := enumeration.report("constraint.Match", proof.steps, "")
+	t.Log("\n" + report)
+	if len(enumeration.sites) != 1 || enumeration.total != 1 {
+		t.Fatalf("refusal scope changed: %s", report)
+	}
+	for _, site := range enumeration.sites {
+		if !strings.Contains(site.class, "tainted method") || !strings.Contains(site.class, "target is not source-visible") {
+			t.Fatalf("unexpected refusal class %q", site.class)
+		}
+	}
+}
+
+func dependencyCallbackProveMethodSource(t *testing.T, source, receiver, name string, implementations []string, args []int) (bool, string) {
+	t.Helper()
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "dep.go", source, parser.SkipObjectResolution)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof := newDependencyCallbackProof([]*ast.File{file})
+	proof.fset = fset
+	ok := proof.proveMethod(receiver, name, implementations, args)
+	return ok, proof.reason
+}
+
+// TestS319CallbackProofInterfaceDispatch proves the exact observed concrete
+// implementations in the constraint receiver graph. Name-only dispatch is not
+// enough: the bridge supplies this bounded set after inspecting the receiver.
 //
 // Sprint: #319; Story: #1088; Story-ID: 00446a7bd51a
 func TestS319CallbackProofInterfaceDispatch(t *testing.T) {
-	ok, reason := dependencyCallbackProveSource(t, dependencyCallbackConstraintSource, "Match", []int{1})
+	ok, reason := dependencyCallbackProveMethodSource(t, dependencyCallbackConstraintSource, "AndExpr", "Eval", []string{"AndExpr", "NotExpr", "OrExpr", "TagExpr"}, []int{0})
 	if !ok {
 		t.Fatalf("interface-dispatched synchronous callback refused: %s", reason)
 	}
@@ -128,7 +180,16 @@ func (e *AsyncExpr) Eval(ok func(tag string) bool) bool {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			source := dependencyCallbackConstraintSource + "\n" + test.extra
-			ok, reason := dependencyCallbackProveSource(t, source, "Match", []int{1})
+			implementations := []string{"AndExpr", "NotExpr", "OrExpr", "TagExpr"}
+			switch test.name {
+			case "field_retention":
+				implementations = append(implementations, "BadExpr")
+			case "global_retention":
+				implementations = append(implementations, "LeakExpr")
+			case "async_invocation":
+				implementations = append(implementations, "AsyncExpr")
+			}
+			ok, reason := dependencyCallbackProveMethodSource(t, source, "AndExpr", "Eval", implementations, []int{0})
 			if ok {
 				t.Fatal("callback-retaining interface implementation incorrectly admitted")
 			}
@@ -317,20 +378,15 @@ func Retain(cb func()) {
 	})
 
 	t.Run("through_interface_dispatch", func(t *testing.T) {
-		// The full testdir shape: a method value over a callback-bearing
-		// context is the callback handed to recursive interface dispatch.
+		// The bridge-level constraint test covers the full method-value through
+		// observed interface dispatch path. An arbitrary interface parameter has
+		// no such provenance and must stay refused here.
 		source := dependencyCallbackConstraintSource + `
-type ctx struct{ f func(tag string) bool }
-
-func (c *ctx) match(tag string) bool { return c.f(tag) }
-
-func MatchCtx(x Expr, cb func(tag string) bool) bool {
-	c := &ctx{f: cb}
-	return x.Eval(c.match)
-}`
-		ok, reason := dependencyCallbackProveSource(t, source, "MatchCtx", []int{1})
-		if !ok {
-			t.Fatalf("method value through interface dispatch refused: %s", reason)
+func MatchCtx(x Expr, cb func(tag string) bool) bool { return x.Eval(cb) }
+`
+		ok, _ := dependencyCallbackProveSource(t, source, "MatchCtx", []int{1})
+		if ok {
+			t.Fatal("arbitrary interface receiver incorrectly admitted without observed provenance")
 		}
 	})
 }
