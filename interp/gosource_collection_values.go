@@ -533,3 +533,34 @@ func (r *Runner) goSourceNativeAssignedValue(native bashPPBridgeValue, expected 
 	}
 	return &native, &bashPPCollectionMeta{typ: expected, interfaceValue: goSourceNativeValueCell(native).interfaceValue}, nil
 }
+
+// goSourceNativeAssignedScalar materializes a dependency-owned basic value in
+// the interpreter's scalar carrier after the native worker has constructed or
+// authenticated it for the expected type. Keeping it as a bridge object would
+// give the value an empty shell spelling, so a typed zero such as token.NoPos
+// would later look like an untyped string when passed to an interpreted
+// function.
+//
+// The destination type, rather than the wire integer/string representation,
+// remains the value's identity. That keeps distinct defined scalar types
+// distinct and lets the ordinary typed-value checks continue to reject them.
+func (r *Runner) goSourceNativeAssignedScalar(native bashPPBridgeValue, expected syntax.BashPPTypeExpr) (any, *bashPPCollectionMeta, bool, error) {
+	if _, ok := r.goSourceScalarUnderlying(expected); !ok {
+		return nil, nil, false, nil
+	}
+	switch native.Kind {
+	case "string", "bool", "int", "uint", "float", "complex":
+	default:
+		return nil, nil, true, fmt.Errorf("native %s value cannot represent scalar %s", native.Kind, bashPPTypeText(expected))
+	}
+	value, meta, err := bashPPNativeReadValue(native)
+	if err != nil {
+		return nil, nil, true, err
+	}
+	if meta == nil {
+		meta = &bashPPCollectionMeta{kind: "bridge-scalar"}
+	}
+	meta.kind = "bridge-scalar"
+	meta.typ = expected
+	return value, meta, true, nil
+}

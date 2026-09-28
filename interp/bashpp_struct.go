@@ -375,6 +375,13 @@ func (r *Runner) bashPPZeroValue(typ syntax.BashPPTypeExpr) (any, *bashPPCollect
 			r.exit.fatal(err)
 			return nil, nil
 		}
+		if scalar, meta, ok, err := r.goSourceNativeAssignedScalar(value, typ); ok {
+			if err != nil {
+				r.exit.fatal(err)
+				return nil, nil
+			}
+			return scalar, meta
+		}
 		return &value, &bashPPCollectionMeta{kind: "native", typ: typ}
 	}
 	if _, ok := r.bashPPInterfaceType(typ); ok {
@@ -410,7 +417,14 @@ func (r *Runner) bashPPEvalTypedValue(expr syntax.BashPPExpr, expected syntax.Ba
 		if err != nil {
 			return nil, nil, err
 		}
-		return r.goSourceNativeAssignedValue(value, expected)
+		assigned, meta, err := r.goSourceNativeAssignedValue(value, expected)
+		if err != nil {
+			return nil, nil, err
+		}
+		if scalar, scalarMeta, ok, err := r.goSourceNativeAssignedScalar(value, expected); ok {
+			return scalar, scalarMeta, err
+		}
+		return assigned, meta, nil
 	}
 	if _, ok := r.bashPPInterfaceType(expected); ok {
 		iv, vr, err := r.bashPPMakeInterfaceValue(expr, expected)
