@@ -1,6 +1,6 @@
 # kb index
 
-43 page(s). Search: `bashy kb search <query>` — check before starting a task; `bashy kb retro` after. Pages live under pages/.
+44 page(s). Search: `bashy kb search <query>` — check before starting a task; `bashy kb retro` after. Pages live under pages/.
 
 - #7 [build-gosource-assembly-companions-through-package-overlay](pages/build-gosource-assembly-companions-through-package-overlay.md) `validated/lesson` Build GoSource assembly companions through package overlay — When a GoSource dependency helper must bind same-package .s companions, do not pass .s files to go build as named files: cmd/go rejects non-.go named files. Build the source package directory instead, with an overlay replacing the original Go root by the generated helper, so companion objects are included while original Go bodies stay out of the native build.
 - [carry-typed-interface-provenance-beside-shell-strings](pages/carry-typed-interface-provenance-beside-shell-strings.md) `validated/lesson` Carry typed interface provenance beside shell strings — When a typed value crosses an existing string-only Bash++ call path, keep dynamic interface identity on the lexical cell and pass only a narrow side channel for bare interface arguments. This preserves the scalar/composite/pointer value model while letting function parameters and snapshots retain dynamic type/value identity.
