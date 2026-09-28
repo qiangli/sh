@@ -371,8 +371,22 @@ func (r *Runner) bashPPNativeRead(expr syntax.BashPPExpr) (any, *bashPPCollectio
 	if err != nil {
 		return nil, nil, err, true
 	}
-	result, meta, err := bashPPNativeReadValue(value)
+	result, meta, err := r.bashPPNativeValueRead(value)
 	return result, meta, err, true
+}
+
+// bashPPNativeValueRead projects one dependency-owned value into the
+// interpreter's value space. A value the dependency marks as an interface
+// keeps its dynamic type: `f.Decls[i]` reads back as an interface value over
+// the dependency's dynamic value, exactly as the same element binds in a
+// range, so a later interface assignment, assertion or type switch has a real
+// interface operand instead of a bare handle. Everything else keeps
+// [bashPPNativeReadValue]'s projection.
+func (r *Runner) bashPPNativeValueRead(value bashPPBridgeValue) (any, *bashPPCollectionMeta, error) {
+	if value.Interface != "" {
+		return r.bashPPReadCellValue(r.goSourceNativeValueCell(value))
+	}
+	return bashPPNativeReadValue(value)
 }
 
 // bashPPNativeReadValue projects one native value into the interpreter's

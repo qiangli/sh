@@ -799,7 +799,9 @@ func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (value any, meta *bashPP
 			if err != nil {
 				return nil, nil, err
 			}
-			result, resultMeta, err := bashPPNativeReadValue(member)
+			// An interface-typed member keeps its dynamic type, exactly as
+			// the named-local spelling does through bashPPNativeRead.
+			result, resultMeta, err := r.bashPPNativeValueRead(member)
 			return result, resultMeta, err
 		}
 		if meta == nil || meta.kind != "struct" {
@@ -835,6 +837,22 @@ func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (value any, meta *bashPP
 			if err != nil {
 				return nil, nil, err
 			}
+		}
+		// A dependency-owned collection reached through a computed base — a
+		// member of a type-assertion result, say — materialises here as its
+		// handle, which the static claim in bashPPNativeReadExpr cannot see.
+		// Index it through the dependency, exactly as the named-local
+		// spelling of the same read would.
+		if native, ok := value.(*bashPPBridgeValue); ok && native != nil && r.bashPPGoSource {
+			index, err := r.bashPPBridgeExpr(x.Index)
+			if err != nil {
+				return nil, nil, err
+			}
+			element, err := r.bashPPNativeAccess(r.ectx, "index", *native, "", index)
+			if err != nil {
+				return nil, nil, err
+			}
+			return r.bashPPNativeValueRead(element)
 		}
 		if meta == nil || meta.kind == "struct" {
 			return nil, nil, fmt.Errorf("BASHPP-ECOLLECTION-INDEX: value is not a collection")
