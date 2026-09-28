@@ -1595,7 +1595,7 @@ func (c *profileChecker) checkTypeAssert(x *syntax.BashPPTypeAssertExpr) {
 	if !ok || missing == "" {
 		return
 	}
-	c.emit(CodeProfileAssertImpossible, "BashPPTypeAssertExpr", x.Pos(), false,
+	c.emit(CodeProfileAssertImpossible, "BashPPTypeAssertExpr", x.Pos(), true,
 		"%s cannot be asserted from %s", profileTypeText(x.Assert), profileTypeText(b.typeExpr))
 }
 

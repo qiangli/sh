@@ -35,7 +35,7 @@ type I interface { M(string) }
 func main() { var v T = 1; var i I = v; x, ok := i.(U); echo $x $ok }
 main()
 `,
-		stderr: "BASHPP-EASSERT-IMPOSSIBLE: U cannot be asserted from I\n",
+		stderr: "assertions/assert-impossible-neg.bpp: line 5: BASHPP-EASSERT-IMPOSSIBLE: U cannot be asserted from I\n",
 	},
 	{
 		id:     "cap-type-neg",

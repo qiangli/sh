@@ -679,6 +679,14 @@ func (r *Runner) bashPPScalarFromCell(cell *bashPPCell) bashPPScalar {
 			value = bashPPScalarFromString(text)
 		}
 	}
+	// A shell assignment retains its spelling even when that spelling is not
+	// a literal of the cell's declared kind. Try the ordinary shell scalar
+	// forms before leaving an unknown carrier: 09 is a floating scalar which
+	// can be read as an int, while text such as abc remains a string until the
+	// typed operand boundary reports its conversion error.
+	if value.value == nil || value.value.Kind() == constant.Unknown {
+		value = bashPPScalarFromString(text)
+	}
 	if r.bashPPGoSource && cell.scalarKind == constant.Float && (value.value == nil || value.value.Kind() == constant.Unknown) {
 		if parts := strings.Split(text, "/"); len(parts) == 2 {
 			numerator := constant.MakeFromLiteral(parts[0], token.FLOAT, 0)
@@ -936,6 +944,13 @@ func (r *Runner) bashPPCanonicalScalarType(name string) string {
 }
 
 func (r *Runner) bashPPBinaryScalar(op token.Token, left, right bashPPScalar) (bashPPScalar, error) {
+	var err error
+	if left, err = r.bashPPTypedRuntimeOperand(left); err != nil {
+		return bashPPScalar{}, err
+	}
+	if right, err = r.bashPPTypedRuntimeOperand(right); err != nil {
+		return bashPPScalar{}, err
+	}
 	if r.bashPPGoSource {
 		left.typ, right.typ = r.bashPPCanonicalScalarType(left.typ), r.bashPPCanonicalScalarType(right.typ)
 	}
@@ -1118,6 +1133,33 @@ func (r *Runner) bashPPBinaryScalar(op token.Token, left, right bashPPScalar) (b
 		return r.bashPPTypedScalarResult(value, left.typ, runtime)
 	}
 	return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-OPERAND: unsupported binary operator %s", op)
+}
+
+// bashPPTypedRuntimeOperand validates a shell-written scalar when its observed
+// lexical kind differs from the binding's declared kind. Matching integers
+// deliberately stay wide until the result boundary, so an int8 cell holding
+// raw 128 can participate in arithmetic before the result wraps. A spelling
+// such as 09, however, is observed as a float and converted to its declared
+// integer type before the operation; nonnumeric text fails at this typed-read
+// boundary rather than leaking an Unknown/String operand into the operator.
+func (r *Runner) bashPPTypedRuntimeOperand(value bashPPScalar) (bashPPScalar, error) {
+	if !value.runtime || value.typ == "" || value.value == nil {
+		return value, nil
+	}
+	underlying, ok := r.bashPPUnderlyingTypeName(value.typ)
+	if !ok {
+		return value, nil
+	}
+	expected := bashPPBuiltinScalarKind(underlying)
+	if expected == constant.Unknown || value.value.Kind() == expected {
+		return value, nil
+	}
+	converted, err := r.bashPPConvertScalar(underlying, value)
+	if err != nil {
+		return bashPPScalar{}, err
+	}
+	converted.typ = value.typ
+	return converted, nil
 }
 
 func (r *Runner) bashPPValidateUntypedScalarOperand(value constant.Value, typ string) error {
