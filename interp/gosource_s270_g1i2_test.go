@@ -108,8 +108,25 @@ func TestCleanup(t *testing.T) {
 }
 
 func TestOnce(t *testing.T) {
-	once := sync.OnceValue(func() int { return 1 })
-	_ = once()
+	var calls int
+	once := sync.OnceValue(func() int { calls++; return 1 })
+	if first, second := once(), once(); first != 1 || second != 1 || calls != 1 {
+		t.Fatalf("OnceValue: values=(%d,%d) calls=%d; want (1,1) and one call", first, second, calls)
+	}
+	var pairCalls int
+	pair := sync.OnceValues(func() (int, error) { pairCalls++; return 2, nil })
+	first, firstErr := pair()
+	second, secondErr := pair()
+	if first != 2 || second != 2 || firstErr != nil || secondErr != nil || pairCalls != 1 {
+		t.Fatalf("OnceValues: values=(%d,%d) errors=(%v,%v) calls=%d; want (2,2), nil errors and one call", first, second, firstErr, secondErr, pairCalls)
+	}
+	var plain sync.Once
+	var plainCalls int
+	plain.Do(func() { plainCalls++ })
+	plain.Do(func() { plainCalls++ })
+	if plainCalls != 1 {
+		t.Fatalf("Once.Do calls=%d; want one call", plainCalls)
+	}
 }
 `)}}
 	driver := s249Source("_testmain.go", `package main
