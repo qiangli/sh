@@ -6,8 +6,8 @@ import (
 	"testing"
 )
 
-// The production depth bound is dependencyCallbackProofDepthBound = 64 and this
-// lane does not change it. This measurement answers the operator's question
+// The production depth bound is dependencyCallbackProofDepthBound and this lane
+// does not change it. This measurement answers the operator's question
 // that the bound alone cannot: how deep would the whole-package proof have had
 // to descend if the only remedy had been a larger bound? It raises the bound in
 // a test-only proof, drives the enumerate hook so a refusal does not truncate

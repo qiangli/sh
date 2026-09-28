@@ -23,11 +23,22 @@ const dependencyCallbackProofDiagnosticLimit = 48
 // raises it, and only to see past the first refusal it records.
 const dependencyCallbackProofStepBudget = 20000
 
-// dependencyCallbackProofDepthBound bounds the nesting of function bodies one
-// proof may descend through. Every proof starts at this bound; only the
-// test-only refusal enumeration raises it, and only to measure how deep the
-// walk would have had to go.
-const dependencyCallbackProofDepthBound = 64
+// dependencyCallbackProofDepthBound bounds the nesting one proof may descend
+// through. Every proof starts at this bound; only the test-only refusal
+// enumeration raises it, and only to measure how deep the walk would have had
+// to go.
+//
+// The walk charges TWO levels per nested Go frame -- one for the call
+// (callFunction) and one for the body it enters (function -> blockWithCurrent)
+// -- so the bound admits half its value in nested frames. At 64 that was 32
+// frames, which a recursive-descent parser exceeds as a matter of course:
+// proving cmd/compile/internal/syntax.Parse over the whole package needs depth
+// 65, i.e. 33 frames (TestS319CallbackProofSyntaxParseDepth). The bound is a
+// resource guard against an unbounded descent, not a rule; the step budget
+// above is the cost bound that actually binds -- Parse spends 10426 of 20000
+// steps -- and every body summary is memoized by its obligation, so a deeper
+// bound buys reach without buying re-walks.
+const dependencyCallbackProofDepthBound = 256
 
 // dependencyFunctionCallbackLifetimeProof proves, from the exact package
 // sources selected for the dependency worker, that a package function cannot
@@ -1065,13 +1076,15 @@ func dependencyCallbackSameFrame(active dependencyCallbackActiveFrame, supplied 
 			continue
 		}
 		if value.tainted() || other.tainted() {
-			// A func-typed parameter re-bound to another local closure is a
-			// change of code, not of callback position: the new closure holds
-			// the callback only where the entry closure already held it, and
-			// which literal each one is says nothing about where it lives. What
-			// the new code does with it is proved by the generalized body
-			// summary below, which walks this body with these actuals.
-			if !dependencyCallbackClosureKeepsCallbackPlaces(value, other) {
+			// A func-typed parameter re-bound to another local function
+			// value -- another closure, or another method value such as
+			// p.constDecl -- is a change of code, not of callback position:
+			// the new value holds the callback only where the entry value
+			// already held it, and which declaration or literal each one is
+			// says nothing about where it lives. What the new code does with
+			// it is proved by the generalized body summary below, which walks
+			// this body with these actuals.
+			if !dependencyCallbackKeepsCallbackPlaces(value, other) {
 				return false, false, "argument " + name + " identity changed across tainted state"
 			}
 		}
@@ -1246,6 +1259,11 @@ func (p *dependencyCallbackProof) recursiveBodyStoresCallback(decl *ast.FuncDecl
 		return true
 	}
 	if depth > p.depthLimit {
+		// Fail closed, but on the record: an exhausted bound used to answer
+		// "this body stores a callback" with no refusal at all, so the outer
+		// refusal named the generalized body and the operator could not tell a
+		// rule from a budget.
+		p.refuse(decl, fmt.Sprintf("generalized body summary bounds exceeded depth=%d steps=%d", depth, p.steps))
 		return true
 	}
 	if depth > p.maxDepth {
@@ -1679,20 +1697,23 @@ func dependencyCallbackReachSnapshot(value dependencyCallbackValue) string {
 	return b.String()
 }
 
-// dependencyCallbackClosureKeepsCallbackPlaces reports whether re-binding a
-// func-typed parameter from the local closure a frame was entered with to
-// another local closure leaves the callback where it already was: every place
-// the new closure holds it is a place the entry closure held it too. Holding it
-// in fewer places is admitted -- that only shrinks what this argument could
-// retain -- but not in one more. Which literal each closure is, and the
-// callback-free graph each navigates to reach those places, are free to differ:
-// they are code and shape, not the callback's position. Neither side may be a
-// callback with no literal: that is the original callback itself, or the
-// unknown value a pointer of unproven origin yields, and neither is a local
-// closure over the callback.
-func dependencyCallbackClosureKeepsCallbackPlaces(entry, current dependencyCallbackValue) bool {
+// dependencyCallbackKeepsCallbackPlaces reports whether re-binding a func-typed
+// parameter from the local function value a frame was entered with to another
+// local function value leaves the callback where it already was: every place the
+// new value holds it is a place the entry value held it too. Holding it in fewer
+// places is admitted -- that only shrinks what this argument could retain -- but
+// not in one more. Which code each value is, and the callback-free graph each
+// navigates to reach those places, are free to differ: they are code and shape,
+// not the callback's position.
+//
+// Both sides must be a function value whose body this proof walks wherever it is
+// called (dependencyCallbackProvableFunctionValue). That is what discharges the
+// coinductive assumption: the generalized body summary re-walks this body with
+// these actuals and refuses any store of a callback-bearing value, and a call of
+// the new value proves its body rather than escaping into an opaque callee.
+func dependencyCallbackKeepsCallbackPlaces(entry, current dependencyCallbackValue) bool {
 	entry, current = dependencyCallbackResolvedValue(entry), dependencyCallbackResolvedValue(current)
-	if entry.callback == nil || current.callback == nil || entry.callback.lit == nil || current.callback.lit == nil {
+	if !dependencyCallbackProvableFunctionValue(entry) || !dependencyCallbackProvableFunctionValue(current) {
 		return false
 	}
 	if entry.escaped != current.escaped || entry.callable != current.callable {
@@ -1712,6 +1733,22 @@ func dependencyCallbackClosureKeepsCallbackPlaces(entry, current dependencyCallb
 		}
 	}
 	return true
+}
+
+// dependencyCallbackProvableFunctionValue reports a function value this proof
+// can follow into: a local closure -- a callback WITH a literal -- or a method
+// value bound to a source-visible declaration, which callWithResolvedCallee
+// proves by walking that declaration with the receiver the value captured.
+//
+// Everything else is fail-closed. A callback with no literal is the original
+// callback itself, or the unknown value a pointer of unproven origin yields. An
+// object with no binding is a method value a join erased, and a tainted callee
+// without one already refuses at the call.
+func dependencyCallbackProvableFunctionValue(value dependencyCallbackValue) bool {
+	if value.callback != nil {
+		return value.callback.lit != nil
+	}
+	return value.object != nil && value.object.boundMethod != nil
 }
 
 // dependencyCallbackPlaceLimit bounds one place walk, so a cyclic or very wide

@@ -89,7 +89,10 @@ func Parse(cb func(error)) {
 
 // Sprint: #281; Story: #810; Story-ID: 48c1146a3ab0
 func TestS281CallbackProofUnreachableCalleeMiniPrinter(t *testing.T) {
-	const levels = 80
+	// Derived from the bound, not pinned: the point of the fixture is a chain
+	// the walk could not possibly descend, so it has to outgrow the bound
+	// whenever the bound moves.
+	levels := dependencyCallbackProofDepthBound + 16
 	if levels <= dependencyCallbackProofDepthBound {
 		t.Fatalf("mini printer chain %d must exceed the depth bound %d", levels, dependencyCallbackProofDepthBound)
 	}
