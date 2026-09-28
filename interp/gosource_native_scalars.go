@@ -206,6 +206,25 @@ func (r *Runner) goSourceCanonicalNativeType(name string) string {
 	return strings.Repeat("*", pointers) + goSourcePackageBase(qualifier) + "." + typeName
 }
 
+// goSourceNativeTypePathIdentity gives an imported named type one unambiguous
+// package-path spelling. Source types arrive under a per-file import alias;
+// worker-authenticated NativeType values already use the package path.
+func (r *Runner) goSourceNativeTypePathIdentity(name string) (string, bool) {
+	pointers := len(name) - len(strings.TrimLeft(name, "*"))
+	bare := name[pointers:]
+	dot := strings.LastIndex(bare, ".")
+	if dot < 0 {
+		return "", false
+	}
+	qualifier, typeName := bare[:dot], bare[dot+1:]
+	if path := r.bashPPImports[qualifier]; path != "" {
+		qualifier = path
+	} else if !r.goSourceImportsPath(qualifier) {
+		return "", false
+	}
+	return strings.Repeat("*", pointers) + qualifier + "." + typeName, true
+}
+
 // goSourceNativeTypeIdentical reports whether two names denote one imported
 // type. It answers only for imported types; a local name is compared as text
 // by the caller, exactly as before.

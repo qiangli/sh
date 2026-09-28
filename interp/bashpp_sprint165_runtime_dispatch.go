@@ -203,5 +203,17 @@ func (r *Runner) goSourceNativeAssertIdentical(iv *bashPPInterfaceValue, asserte
 	if answer.Kind != "bool" {
 		return false, true, fmt.Errorf("gosource: type identity of %s answered %s", bashPPTypeText(asserted), answer.Kind)
 	}
+	// A dependency value carries the worker-authenticated package-path identity
+	// of its dynamic type. Prefer that stable identity when a large interpreted
+	// package has materialised another object for a per-file import spelling:
+	// the reflect registry's object miss must not make *go/ast.Ident cease to be
+	// the *ast.Ident named by this source file.
+	if answer.Text != "true" && value.NativeType != "" {
+		dynamic, dynamicOK := r.goSourceNativeTypePathIdentity(value.NativeType)
+		target, targetOK := r.goSourceNativeTypePathIdentity(bashPPTypeText(asserted))
+		if dynamicOK && targetOK && dynamic == target {
+			return true, true, nil
+		}
+	}
 	return answer.Text == "true", true, nil
 }

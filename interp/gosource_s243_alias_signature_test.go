@@ -37,6 +37,31 @@ func TestS243AliasSignatureImportIdentity(t *testing.T) {
 	}
 }
 
+func TestS319NativeTypePathIdentity(t *testing.T) {
+	r := &Runner{bashPPImports: map[string]string{
+		"fileA": "go/ast",
+		"fileB": "go/ast",
+		"other": "example.com/ast",
+	}}
+	for _, tc := range []struct {
+		name string
+		want string
+		ok   bool
+	}{
+		{"*fileA.Ident", "*go/ast.Ident", true},
+		{"*fileB.Ident", "*go/ast.Ident", true},
+		{"*go/ast.Ident", "*go/ast.Ident", true},
+		{"*other.Ident", "*example.com/ast.Ident", true},
+		{"*ast.Ident", "", false},
+		{"Ident", "", false},
+	} {
+		got, ok := r.goSourceNativeTypePathIdentity(tc.name)
+		if got != tc.want || ok != tc.ok {
+			t.Errorf("%s: got %q, %v; want %q, %v", tc.name, got, ok, tc.want, tc.ok)
+		}
+	}
+}
+
 func TestS281SignatureImportIdentity(t *testing.T) {
 	named := func(name string) *syntax.BashPPNamedType {
 		return &syntax.BashPPNamedType{Name: &syntax.Lit{Value: name}}

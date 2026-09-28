@@ -225,6 +225,132 @@ func main() {
 	if got.stdout != want || got.stderr != "" || got.status != 0 {
 		t.Fatalf("outcome=%+v; want stdout %q", got, want)
 	}
+
+	// The imported go/types call above is native. Keep a mapped-package
+	// reduction of the interpreted package path too: go/types declares
+	// TypeName in object.go, constructs the universe object in universe.go,
+	// and asserts it while resolving the declaration from typexpr.go. The
+	// final body is the first TestTypeSetString case to take all three steps.
+	out, stderr, err := runGoSourcePackages(t, `package main
+import typeset "test/p"
+func main() { typeset.Check("{E}; type E interface{comparable}") }
+`, map[string]string{
+		"a.go": `package typeset
+import "go/ast"
+type Type interface { Underlying() Type }
+type Object interface { Name() string; Type() Type }
+type object struct { name string; typ Type }
+func (obj *object) Name() string { return obj.name }
+func (obj *object) Type() Type { return obj.typ }
+type TypeName struct { object }
+type Named struct { obj *TypeName; fromRHS Type }
+func (typ *Named) Underlying() Type { return typ.fromRHS }
+func NewTypeName(name string) *TypeName { return &TypeName{object: object{name: name}} }
+func NewNamed(obj *TypeName, rhs Type) *Named {
+	typ := &Named{obj: obj, fromRHS: rhs}
+	obj.typ = typ
+	return typ
+}
+type Scope struct { elems map[string]Object }
+func NewScope() *Scope { return &Scope{elems: make(map[string]Object)} }
+func (s *Scope) Insert(obj Object) { s.elems[obj.Name()] = obj }
+func resolve(name string, obj Object) Object { return obj }
+func (s *Scope) Lookup(name string) Object { return resolve(name, s.elems[name]) }
+type declInfo struct { tdecl *ast.TypeSpec }
+var Universe = NewScope()
+var universeComparable Object
+func init() {
+	obj := NewTypeName("comparable")
+	NewNamed(obj, nil)
+	Universe.Insert(obj)
+	universeComparable = Universe.Lookup("comparable")
+}
+type Checker struct {
+	objMap map[*TypeName]*declInfo
+	objects []*TypeName
+}
+`,
+		"b.go": `package typeset
+import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+)
+func Check(body string) {
+	src := "package p; type T interface" + body
+	file, err := parser.ParseFile(token.NewFileSet(), "p.go", src, parser.AllErrors|parser.SkipObjectResolution)
+	if err != nil { panic(err) }
+	check := &Checker{objMap: make(map[*TypeName]*declInfo)}
+	var tdecl *ast.TypeSpec
+	for _, decl := range file.Decls {
+		gen := decl.(*ast.GenDecl)
+		for _, spec := range gen.Specs {
+			tspec := spec.(*ast.TypeSpec)
+			obj := NewTypeName(tspec.Name.Name)
+			NewNamed(obj, nil)
+			check.objects = append(check.objects, obj)
+			check.objMap[obj] = &declInfo{tdecl: tspec}
+			if obj.Name() == "T" { tdecl = tspec }
+		}
+	}
+	check.report(tdecl.Type)
+}
+`,
+		"c.go": `package typeset
+import (
+	"fmt"
+	"go/ast"
+)
+func (check *Checker) lookup(name string) Object {
+	if obj := Universe.Lookup(name); obj != nil { return obj }
+	for _, obj := range check.objects {
+		if obj.Name() == name { return obj }
+	}
+	return nil
+}
+func (check *Checker) typ(expr ast.Expr) bool {
+	switch expr := expr.(type) {
+	case *ast.Ident:
+		obj := check.lookup(expr.Name)
+		predeclared := obj == universeComparable
+		_, gotType := obj.(*TypeName)
+		_, gotNamed := obj.Type().(*Named)
+		if !gotType || !gotNamed { return false }
+		if predeclared {
+			return true
+		}
+		return check.objDecl(obj)
+	case *ast.InterfaceType:
+		for _, field := range expr.Methods.List {
+			if !check.parseUnion(field.Type) { return false }
+		}
+		return true
+	}
+	return false
+}
+func flattenUnion(list []ast.Expr, expr ast.Expr) []ast.Expr { return append(list, expr) }
+func (check *Checker) parseTilde(expr ast.Expr) bool {
+	x := expr
+	if unary, _ := x.(*ast.UnaryExpr); unary != nil { x = unary.X }
+	return check.typ(x)
+}
+func (check *Checker) parseUnion(expr ast.Expr) bool {
+	for _, term := range flattenUnion(nil, expr) {
+		if !check.parseTilde(term) { return false }
+	}
+	return true
+}
+func (check *Checker) objDecl(obj Object) bool {
+	tname := obj.(*TypeName)
+	info := check.objMap[tname]
+	return check.typ(info.tdecl.Type)
+}
+func (check *Checker) report(expr ast.Expr) { fmt.Println(check.typ(expr)) }
+`,
+	})
+	if err != nil || out != "true\n" || stderr != "" {
+		t.Fatalf("interpreted universe reduction: err=%v stdout=%q stderr=%q", err, out, stderr)
+	}
 }
 
 // s809NativeTypeSetStringReport runs the same bodies through go/types here.
