@@ -619,6 +619,7 @@ func callbackProofReceiverTypes(root reflect.Value,method string)(names []string
   return nil
  }
  if err:=walk(root,0);err!=nil{return nil,err};for name:=range types{names=append(names,name)};sort.Strings(names);if len(names)==0{return nil,fmt.Errorf("callback proof found no concrete method receiver")};return names,nil
+}
 func nativeSignatureTypeIdentity(t reflect.Type)string{
  if id,ok:=originalTypeIdentities[t];ok&&id.PackagePath!="" {return id.PackagePath+"."+id.Name}
  if t.Name()!="" {if path:=t.PkgPath();path!="" {return path+"."+t.Name()};return t.String()}
