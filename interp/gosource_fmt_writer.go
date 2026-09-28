@@ -22,15 +22,13 @@ func (r *Runner) goSourceLocalFmtWriterCall(ctx context.Context, call *syntax.Ba
 	if name != "Fprint" && name != "Fprintln" && name != "Fprintf" {
 		return nil, false, nil
 	}
-	writer, err := r.bashPPBridgeExpr(call.ArgExprs[0])
+	writer, writerCell, typeName, err := r.goSourceLocalFmtWriter(call.ArgExprs[0])
 	if err != nil {
 		return nil, true, err
 	}
-	if writer.Kind != "pointer" && writer.Kind != "struct" || writer.Type == "" {
+	if typeName == "" {
 		return nil, false, nil
 	}
-	typeName := bashPPLocalTypeName(writer.Type)
-	typeName = trimLeadingStars(typeName)
 	fn := r.bashPPMethods[typeName]["Write"]
 	if fn == nil || fn.decl == nil || len(fn.params()) != 1 {
 		return nil, false, nil
@@ -79,7 +77,7 @@ func (r *Runner) goSourceLocalFmtWriterCall(ctx context.Context, call *syntax.Ba
 		}
 		data = []byte(values[0].stringText())
 	}
-	written, err := r.goSourceCallLocalWrite(ctx, typeName, writer, data, paramType)
+	written, err := r.goSourceCallLocalWrite(ctx, typeName, writer, writerCell, data, paramType)
 	if err != nil {
 		return nil, true, err
 	}
@@ -87,6 +85,35 @@ func (r *Runner) goSourceLocalFmtWriterCall(ctx context.Context, call *syntax.Ba
 		{Kind: "int", Type: "int", Text: strconv.Itoa(written)},
 		{Kind: "nil", Type: "error"},
 	}, true, nil
+}
+
+// goSourceLocalFmtWriter resolves an interpreter-owned pointer before bridge
+// encoding it. A writer such as cmd/compile/internal/syntax.dumper retains the
+// entire AST it is traversing; serialising that graph before every tiny Write
+// is both unnecessary and quadratic as the writer's maps grow.
+func (r *Runner) goSourceLocalFmtWriter(expr syntax.BashPPExpr) (bashPPBridgeValue, *bashPPCell, string, error) {
+	if typ, ok := r.goSourceStaticExprType(expr); ok && !r.bashPPNativeType(typ) && !r.bashPPNativeExpr(expr) {
+		if pointer, ok := r.bashPPUnderlyingType(typ).(*syntax.BashPPPointerType); ok {
+			if named, ok := pointer.Element.(*syntax.BashPPNamedType); ok && named.Name != nil {
+				ptr, err := r.bashPPPointerExprValue(expr)
+				if err != nil {
+					return bashPPBridgeValue{}, nil, "", err
+				}
+				cell := bashPPPointerCell(ptr)
+				cell.declType, cell.typeName = typ, named.Name.Value
+				return bashPPBridgeValue{}, cell, named.Name.Value, nil
+			}
+		}
+	}
+	writer, err := r.bashPPBridgeExpr(expr)
+	if err != nil {
+		return bashPPBridgeValue{}, nil, "", err
+	}
+	if writer.Kind != "pointer" && writer.Kind != "struct" || writer.Type == "" {
+		return writer, nil, "", nil
+	}
+	typeName := trimLeadingStars(bashPPLocalTypeName(writer.Type))
+	return writer, nil, typeName, nil
 }
 
 func goSourceFmtPlainArgs(name string, raw []bashPPBridgeValue, spread bool) ([]byte, bool) {
@@ -236,10 +263,13 @@ func goSourceFmtBuiltinScalarType(typ string) bool {
 	return false
 }
 
-func (r *Runner) goSourceCallLocalWrite(ctx context.Context, typeName string, recv bashPPBridgeValue, data []byte, paramType syntax.BashPPTypeExpr) (int, error) {
-	cell, err := r.goSourceLocalWriterCell(recv, typeName)
-	if err != nil {
-		return 0, err
+func (r *Runner) goSourceCallLocalWrite(ctx context.Context, typeName string, recv bashPPBridgeValue, cell *bashPPCell, data []byte, paramType syntax.BashPPTypeExpr) (int, error) {
+	if cell == nil {
+		var err error
+		cell, err = r.goSourceLocalWriterCell(recv, typeName)
+		if err != nil {
+			return 0, err
+		}
 	}
 	bound, ok := r.bashPPBindMethodReceiver(cell, "Write", true, recv.Origin == 0)
 	if !ok {
