@@ -53,6 +53,18 @@ import (
 // bashPPReadCellValue, bashPPStructuredCell, bashPPDescribeCell,
 // bashPPBridgeCell, goSourceUntypedNilCell, lookupVarUnhosted, and every
 // private `copyCell := *source`.
+//
+// WHAT KEEPS THE DISCIPLINE. Two tests in bashpp_cell_share_test.go and
+// bashpp_cell_share_scan_test.go hold the two halves of it in place, so that
+// neither a new field nor a new reader can slip past by accident:
+//
+//   - TestBashPPCellFieldsCopied fails when a field is added to [bashPPCell]
+//     without being added to [bashPPCell.storeFields] — the one whole-cell
+//     store — and pins the single field that store must NOT touch.
+//   - TestBashPPCellReadersTakeAView scans package source for a function that
+//     reads a looked-up cell's published fields without taking a view. The
+//     functions that still do are listed in the test; it is a ratchet, not a
+//     clean bill of health.
 
 // shareGuard arms cell for concurrent host access.
 //
