@@ -148,6 +148,14 @@ func TestPreparedProgramCacheAcrossCopiedCompilerRoots(t *testing.T) {
 	goBinary := filepath.Join(runtime.GOROOT(), "bin", "go")
 	firstRoot := filepath.Join(dir, "TestScript-one", "testgoroot")
 	secondRoot := filepath.Join(dir, "TestScript-two", "testgoroot")
+	for _, root := range []string{firstRoot, secondRoot} {
+		if err := os.MkdirAll(filepath.Dir(root), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(runtime.GOROOT(), root); err != nil {
+			t.Fatal(err)
+		}
+	}
 	firstDuration, firstOutput := runPreparedCacheChildEnv(t, cache, sourceDir,
 		preparedCopiedCompilerEnv+"=1", "BASHPP_GO="+goBinary, "GOROOT="+firstRoot)
 	secondDuration, secondOutput := runPreparedCacheChildEnv(t, cache, sourceDir,
@@ -157,6 +165,18 @@ func TestPreparedProgramCacheAcrossCopiedCompilerRoots(t *testing.T) {
 	}
 	if got := preparedCacheEntries(t, cache); got != 1 {
 		t.Fatalf("cache entries after copied compiler roots = %d, want one; first=%s second=%s", got, firstDuration, secondDuration)
+	}
+
+	// Without a pinned SDK, the ambient GOROOT remains part of the cache
+	// identity. A separate test root may otherwise supply a different source
+	// tree for imports even when the top-level compiler files are identical.
+	unpinnedCache := filepath.Join(dir, "unpinned-cache")
+	_, _ = runPreparedCacheChildEnv(t, unpinnedCache, sourceDir,
+		"BASHPP_GO=", "GOROOT="+firstRoot)
+	_, _ = runPreparedCacheChildEnv(t, unpinnedCache, sourceDir,
+		"BASHPP_GO=", "GOROOT="+secondRoot)
+	if got := preparedCacheEntries(t, unpinnedCache); got != 2 {
+		t.Fatalf("cache entries without a pinned SDK = %d, want two distinct GOROOT identities", got)
 	}
 }
 
