@@ -9,6 +9,7 @@ import (
 	"go/printer"
 	"go/token"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -145,23 +146,143 @@ func dependencyCallbackQualifiedType(name string) (path, typ string) {
 	return name[:dot], name[dot+1:]
 }
 
+// dependencyCallbackProofSourceDiagnostic reports why the proof never ran. A
+// proof that cannot READ the dependency is a refusal like any other, and it
+// used to be the one refusal that said nothing at all: the transport then
+// named the general callback rule for what was really an unreadable package.
+// Story #1086 hit exactly that, and the same silence had already hidden an
+// exhausted depth bound once (dependencyCallbackProofDepthBound). One bounded
+// line per refused load, under the diagnostic env the rest of the proof uses.
+func dependencyCallbackProofSourceDiagnostic(path, name string, err error) {
+	if os.Getenv(dependencyCallbackProofDiagnosticEnv) == "" {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "gosource callback proof sources unavailable for %s.%s: %v\n", path, name, err)
+}
+
+// dependencyCallbackProofSourcesUsable reports whether one `go list` answer
+// names a package this proof can read in full: a directory, at least one Go
+// file, and no cgo file (a cgo package has sources the proof cannot parse).
+func dependencyCallbackProofSourcesUsable(facts bashPPPackageFacts) bool {
+	return facts.Dir != "" && len(facts.CgoFiles) == 0 && len(facts.GoFiles) > 0
+}
+
+// dependencyCallbackProofSources locates the exact package sources the
+// dependency worker links, so the lifetime proof reads the code that will
+// actually run.
+//
+// The first listing is the module context every other dependency resolution in
+// the bridge uses (bashPPModuleRequest). That is the answer whenever the
+// program's own module can name the import path, and nothing below changes it.
+//
+// It is not always able to. Whether a directory can name an import path is a
+// property of THAT DIRECTORY, not of the dependency: an interpreted program
+// whose cwd lies inside a second GOROOT tree makes every `cmd/...` path
+// ambiguous between the configured GOROOT and the main module rooted at the
+// cwd, and `go list` then answers with an error and no directory at all. The
+// worker is unaffected -- it is compiled from its own scratch directory, where
+// only the configured toolchain resolves -- so the proof would refuse a
+// callback whose code it could have read, which is what story #1086 observed
+// for cmd/compile/internal/syntax.Parse under an interpreted
+// cmd/compile/internal/types2.
+//
+// So a failed listing is retried once in a neutral empty directory: the same
+// context the worker's own build resolves in. The retry is admitted only if it
+// lands inside the GOROOT of the toolchain that BUILDS the worker, which is the
+// one copy the worker can have linked -- a build from the program's directory
+// would have failed on the same ambiguity, so a session that is running at all
+// linked the toolchain's copy. Anything else refuses, unread.
+func dependencyCallbackProofSources(ctx context.Context, req bashPPEvalRequest, path string) (bashPPPackageFacts, error) {
+	module := bashPPModuleRequest(req)
+	facts, err := bashPPGoListFacts(ctx, module, path)
+	if err == nil && dependencyCallbackProofSourcesUsable(facts) {
+		return facts, nil
+	}
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return bashPPPackageFacts{}, ctxErr
+	}
+	listed := err
+	if listed == nil {
+		listed = fmt.Errorf("%s names no readable package in %s", path, module.Dir)
+		if facts.Error != nil && facts.Error.Err != "" {
+			listed = fmt.Errorf("%s in %s: %s", path, module.Dir, facts.Error.Err)
+		}
+	}
+	scratch, err := os.MkdirTemp("", "gosource-callback-proof-")
+	if err != nil {
+		return bashPPPackageFacts{}, listed
+	}
+	defer os.RemoveAll(scratch)
+	neutral := module
+	neutral.Dir = scratch
+	neutral.BuildEnv = setEnvString(module.internalBuildEnv(), "PWD", scratch)
+	retry, err := bashPPGoListFacts(ctx, neutral, path)
+	if err != nil || !dependencyCallbackProofSourcesUsable(retry) {
+		return bashPPPackageFacts{}, listed
+	}
+	root := dependencyCallbackProofToolchainRoot(ctx, neutral)
+	if !retry.Standard || root == "" || !dependencyCallbackProofWithin(retry.Dir, filepath.Join(root, "src")) {
+		return bashPPPackageFacts{}, listed
+	}
+	return retry, nil
+}
+
+// dependencyCallbackProofToolchainRoot is the GOROOT of the toolchain that
+// builds the dependency worker, asked of that toolchain itself rather than
+// read out of the request environment, which need not carry one.
+func dependencyCallbackProofToolchainRoot(ctx context.Context, req bashPPEvalRequest) string {
+	cmd := exec.CommandContext(ctx, req.internalBuildGo(), "env", "GOROOT")
+	cmd.Dir, cmd.Env = req.Dir, req.internalBuildEnv()
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// dependencyCallbackProofWithin reports whether dir is root or sits under it,
+// comparing cleaned absolute paths so neither a shared prefix of two sibling
+// names nor a trailing separator can pass for containment.
+func dependencyCallbackProofWithin(dir, root string) bool {
+	if dir == "" || root == "" {
+		return false
+	}
+	absoluteDir, err := filepath.Abs(dir)
+	if err != nil {
+		return false
+	}
+	absoluteRoot, err := filepath.Abs(root)
+	if err != nil {
+		return false
+	}
+	relative, err := filepath.Rel(absoluteRoot, absoluteDir)
+	if err != nil {
+		return false
+	}
+	return relative == "." || relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator))
+}
+
 func loadDependencyFunctionCallbackLifetimeProof(ctx context.Context, req bashPPEvalRequest, path, name, receiverType string, dispatchTypes []string, callbackArgs []int) bool {
-	facts, err := bashPPGoListFacts(ctx, req, path)
-	if err != nil || facts.Dir == "" || len(facts.CgoFiles) != 0 || len(facts.GoFiles) == 0 {
+	facts, err := dependencyCallbackProofSources(ctx, req, path)
+	if err != nil {
+		dependencyCallbackProofSourceDiagnostic(path, name, err)
 		return false
 	}
 	files := make([]*ast.File, 0, len(facts.GoFiles))
 	fset := token.NewFileSet()
 	for _, file := range facts.GoFiles {
 		if filepath.IsAbs(file) || filepath.Base(file) != file {
+			dependencyCallbackProofSourceDiagnostic(path, name, fmt.Errorf("listed file %q is not a plain name in %s", file, facts.Dir))
 			return false
 		}
 		data, err := os.ReadFile(filepath.Join(facts.Dir, file))
 		if err != nil {
+			dependencyCallbackProofSourceDiagnostic(path, name, err)
 			return false
 		}
 		parsed, err := parser.ParseFile(fset, file, data, parser.SkipObjectResolution)
 		if err != nil {
+			dependencyCallbackProofSourceDiagnostic(path, name, err)
 			return false
 		}
 		files = append(files, parsed)
