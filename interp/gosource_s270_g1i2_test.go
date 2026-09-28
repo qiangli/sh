@@ -88,9 +88,11 @@ func main() {
 	}
 }
 
-// A test function the dependency's testing.tRunner calls back into may fail
-// with an interpreter diagnostic; that diagnostic is the program's outcome
-// rather than a bare exit status 1.
+// A test function the dependency's testing.tRunner calls back into runs to
+// completion. It first pinned the diagnostic `sync.OnceValue` produced
+// ("retained original function callbacks") as the program's outcome;
+// 89f34b5f admitted synchronous original method callbacks, so the body now
+// passes and the retained t.Cleanup still runs after it.
 func TestGoSourceS270G1i2TestBodyDiagnostic(t *testing.T) {
 	xtest := gosource.PackageSpec{Path: "example.com/lib_test", Sources: []gosource.Source{s249Source("lib_test.go", `package lib_test
 
@@ -131,8 +133,8 @@ func main() {
 }
 `)
 	got, err := runS249PackageTestMain(t, []gosource.Source{driver}, []gosource.PackageSpec{xtest})
-	if err == nil || !strings.Contains(err.Error(), "retained original function callbacks") {
-		t.Fatalf("err=%v outcome=%+v; want the test body's diagnostic as the program error", err, got)
+	if err != nil || !strings.Contains(got.stdout, "PASS") {
+		t.Fatalf("err=%v outcome=%+v; want both test bodies to pass", err, got)
 	}
 	// testing.T.Cleanup retains its function until the test finishes.
 	if !strings.Contains(got.stdout, "body ran\ncleanup ran\n") {
