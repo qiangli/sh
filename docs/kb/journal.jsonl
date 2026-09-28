@@ -66,3 +66,4 @@
 {"op":"supersede","slug":"prove-callback-interface-dispatch-from-observed-receiver-provena","id":"01a0e76f-a579-76c2-b770-935cd2b7c8e6","tool":"codex-gpt5.6-sol-k","host":"dragon","episode":"weave-issue-219","at":"2026-09-28T09:54:08.895097Z"}
 {"op":"supersede","slug":"prove-callback-interface-dispatch-by-source-visible-method-super","id":"01a0e74e-c421-7971-837a-fd6950d856a6","tool":"codex-gpt5.6-sol-k","host":"dragon","episode":"weave-issue-219","at":"2026-09-28T09:54:08.897242Z"}
 {"op":"update","slug":"prove-callback-interface-dispatch-from-observed-receiver-provena","id":"01a0e76f-a579-76c2-b770-935cd2b7c8e6","tool":"codex-gpt5.6-sol-k","host":"dragon","episode":"weave-issue-219","at":"2026-09-28T09:54:51.440065Z"}
+{"op":"update","slug":"prove-callback-interface-dispatch-from-observed-receiver-provena","id":"01a0e76f-a579-76c2-b770-935cd2b7c8e6","tool":"codex-gpt5.6-sol-k","host":"dragon","episode":"weave-issue-219","at":"2026-09-28T10:06:14.613368Z"}
