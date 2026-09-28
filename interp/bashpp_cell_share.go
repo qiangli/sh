@@ -123,10 +123,45 @@ func (c *bashPPCell) publish(value *bashPPCell) {
 	snapshot := *value.view()
 	c.lock()
 	defer c.unlock()
-	// Written back as part of the struct store, never cleared separately: a
-	// window with a nil guard would let a concurrent lock() skip the mutex.
-	snapshot.guard = c.guard
-	*c = snapshot
+	c.storeFields(&snapshot)
+}
+
+// storeFields copies every field of value into c EXCEPT the guard, which is
+// the one field a store must leave alone.
+//
+// A plain `*c = *value` would write the guard word too — with the same pointer
+// in it, but a write all the same. Every reader begins by asking whether the
+// cell has a guard at all, and that question is asked WITHOUT holding one:
+// there is nothing to lock yet. A store that rewrote the word would race with
+// exactly the test that decides whether to lock, which is how the guard's own
+// field showed up in T4b's race reports as [bashPPCell.view] against
+// [bashPPCell.publish]. Leaving the word alone makes it write-once —
+// [bashPPCell.shareGuard] sets it before the cell can be reached from a second
+// goroutine and nothing writes it again — so an unlocked read of it is sound.
+//
+// The field list is exhaustive by test: TestBashPPCellFieldsCopied in
+// bashpp_cell_share_test.go fails when a field is added to [bashPPCell]
+// without being added here.
+func (c *bashPPCell) storeFields(value *bashPPCell) {
+	c.vr = value.vr
+	c.exactScalar = value.exactScalar
+	c.scalarKind = value.scalarKind
+	c.negativeZero = value.negativeZero
+	c.nonFinite = value.nonFinite
+	c.hasNonFinite = value.hasNonFinite
+	c.nonFiniteComplex = value.nonFiniteComplex
+	c.hasNonFiniteComplex = value.hasNonFiniteComplex
+	c.channel = value.channel
+	c.channelOwner = value.channelOwner
+	c.object = value.object
+	c.valueMeta = value.valueMeta
+	c.typeName = value.typeName
+	c.pointer = value.pointer
+	c.nilPointer = value.nilPointer
+	c.declType = value.declType
+	c.pointerValue = value.pointerValue
+	c.interfaceValue = value.interfaceValue
+	c.constant = value.constant
 }
 
 // viewConstant is [bashPPCell.view] for a caller that needs only the `const`
