@@ -15,12 +15,25 @@ import (
 // visible to declaration evaluation, so this lookup is deliberately keyed by
 // the authenticated go/types identity rather than by display text alone.
 func (r *Runner) goSourceImportedScalarUnderlying(name string) (string, bool) {
-	if strings.HasPrefix(name, "*") {
+	typ, ok := r.goSourceImportedScalarType(name)
+	if !ok {
 		return "", false
+	}
+	basic := types.Unalias(typ).Underlying().(*types.Basic)
+	return basic.Name(), true
+}
+
+// goSourceImportedScalarType returns the authenticated export type for an
+// imported defined scalar. Text is used only to select within the import's
+// metadata; the returned go/types object is the authority for both its
+// underlying representation and method set.
+func (r *Runner) goSourceImportedScalarType(name string) (types.Type, bool) {
+	if strings.HasPrefix(name, "*") {
+		return nil, false
 	}
 	dot := strings.LastIndex(name, ".")
 	if dot < 0 {
-		return "", false
+		return nil, false
 	}
 	qualifier, typeName := name[:dot], name[dot+1:]
 	path := r.bashPPImports[qualifier]
@@ -32,13 +45,13 @@ func (r *Runner) goSourceImportedScalarUnderlying(name string) (string, bool) {
 		typ = r.goSourceImportedScalarByPackageName(qualifier, typeName)
 	}
 	if typ == nil {
-		return "", false
+		return nil, false
 	}
 	basic, ok := types.Unalias(typ).Underlying().(*types.Basic)
 	if !ok || basic.Info()&(types.IsBoolean|types.IsInteger|types.IsFloat|types.IsComplex|types.IsString) == 0 {
-		return "", false
+		return nil, false
 	}
-	return basic.Name(), true
+	return typ, true
 }
 
 // goSourceScalarUnderlying resolves the basic representation of a scalar
@@ -153,6 +166,54 @@ func (r *Runner) goSourceNativeScalarCell(cell *bashPPCell) bool {
 		}
 	}
 	return r.goSourceImportedTypeName(name)
+}
+
+// goSourceBindImportedScalarMethod hands a selector path rooted in local
+// storage back to the dependency when its terminal type is an imported
+// defined scalar. The local aggregate owns the bytes, while the authenticated
+// export type owns the method body and method set.
+func (r *Runner) goSourceBindImportedScalarMethod(root *bashPPCell, edges []bashPPEmbedEdge, typ syntax.BashPPTypeExpr, method string) (*bashPPFunc, bool) {
+	resolved, ok := r.goSourceImportedScalarMethodType(typ, method)
+	if !ok {
+		return nil, false
+	}
+	value, meta, err := r.bashPPReadCellValue(root)
+	if err == nil {
+		value, meta, err = bashPPReadSelection(value, meta, edges)
+	}
+	if err != nil {
+		r.goSourceRuntimeFault(err)
+		return nil, true
+	}
+	receiver, err := r.bashPPBridgeCollection(value, meta, resolved)
+	if err != nil {
+		r.exit.fatal(err)
+		return nil, true
+	}
+	bound, err := r.bashPPBindNativeMethod(r.ectx, receiver, method)
+	if err != nil {
+		r.exit.fatal(err)
+		return nil, true
+	}
+	fn := &bashPPFunc{native: &bound}
+	if sig := syntax.BashPPTypeExprFromText(bound.Type); sig != nil {
+		if ft, ok := sig.(*syntax.BashPPFuncType); ok {
+			fn.lit = &syntax.BashPPFuncLit{Params: ft.Params, Results: ft.Results}
+		}
+	}
+	return fn, true
+}
+
+func (r *Runner) goSourceImportedScalarMethodType(typ syntax.BashPPTypeExpr, method string) (syntax.BashPPTypeExpr, bool) {
+	// Follow aliases, which inherit their target's methods, but never defined
+	// types: a local `type P token.Pos` has the same representation and none of
+	// token.Pos' methods.
+	resolved := r.bashPPCanonicalAssignableType(typ)
+	nativeType, ok := r.goSourceImportedScalarType(bashPPTypeText(resolved))
+	if !ok || types.NewMethodSet(nativeType).Lookup(nil, method) == nil {
+		return nil, false
+	}
+	return resolved, true
 }
 
 // goSourceImportedTypeName reports whether name qualifies a type with an
