@@ -157,6 +157,11 @@ func nativeTypePackage(spelled string) string {
 // types qualified "main." — against an interface method specification.
 func (r *Runner) goSourceNativeSignatureMatches(text, identity string, method bashPPInterfaceMethod) bool {
 	if identity != "" {
+		// reflect.Type.String spells the predeclared empty interface as
+		// "interface {}", while the Bash++ type tree canonicalises both that
+		// spelling and its `any` alias as "interface{}". Keep the authenticated
+		// type identity, but compare those equivalent canonical spellings.
+		identity = strings.ReplaceAll(identity, "interface {}", "interface{}")
 		return identity == r.bashPPCanonicalSignatureFields(method.spec.Params)+"->"+
 			r.bashPPCanonicalSignatureFields(method.spec.Results)
 	}

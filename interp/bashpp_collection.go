@@ -434,10 +434,10 @@ func (r *Runner) bashPPResolvedArrayLengths(typ syntax.BashPPTypeExpr) syntax.Ba
 }
 
 // bashPPPredeclaredAliases spells the predeclared aliases by the types they
-// name — byte is uint8 and rune is int32, wherever they occur in a type —
-// so `byte(1)` is a uint8 to a type switch and []byte is []uint8 to an
-// assignment. A declaration of either name in the program shadows the
-// predeclared one and is left as declared.
+// name — byte is uint8, rune is int32, and any is interface{}, wherever they
+// occur in a type — so `byte(1)` is a uint8 to a type switch and []byte is
+// []uint8 to an assignment. A declaration of any alias name in the program
+// shadows the predeclared one and is left as declared.
 func (r *Runner) bashPPPredeclaredAliases(typ syntax.BashPPTypeExpr) syntax.BashPPTypeExpr {
 	if typ == nil {
 		return nil
@@ -473,6 +473,7 @@ func (r *Runner) bashPPPredeclaredAliases(typ syntax.BashPPTypeExpr) syntax.Bash
 var bashPPPredeclaredAliasTypes = map[string]syntax.BashPPTypeExpr{
 	"byte": &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "uint8"}},
 	"rune": &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "int32"}},
+	"any":  &syntax.BashPPInterfaceType{},
 }
 
 func (r *Runner) bashPPCanonicalAssignableType(typ syntax.BashPPTypeExpr) syntax.BashPPTypeExpr {

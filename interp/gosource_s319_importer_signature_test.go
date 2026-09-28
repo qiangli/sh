@@ -78,3 +78,38 @@ type Importer interface { Import(string) (*Package, error) }
 		}
 	}
 }
+
+// Sprint: #319; Story: #1084; Story-ID: 7decf01bdd39
+//
+// A mapped package passes *testing.T to testing.TB before every test body.
+// Reflection spells T.Error's variadic empty-interface parameter as
+// "interface {}", while go/types preserves the source alias "any" in TB's
+// method specification. They are the same predeclared type and must compare
+// equal in the authenticated signature path.
+func TestGoSourceS319MappedReceiverAnySignature(t *testing.T) {
+	empty := types.NewInterfaceType(nil, nil).Complete()
+	params := types.NewTuple(types.NewVar(0, nil, "args", types.NewSlice(empty)))
+	sig := types.NewSignatureType(nil, nil, nil, params, nil, true)
+	spec := bashPPImportedMethodSpec("Error", sig)
+	method := bashPPInterfaceMethod{spec: spec, sig: bashPPMethodSpecSignature(spec), name: "Error"}
+	r := &Runner{bashPPGoSource: true}
+
+	if !r.goSourceNativeSignatureMatches("func(...interface {})", "...interface {}->", method) {
+		t.Fatalf("*testing.T.Error authenticated signature did not match testing.TB.Error: native=%q mapped=%q canonical=%q", "...interface {}->", method.sig, r.bashPPCanonicalSignatureFields(spec.Params)+"->"+r.bashPPCanonicalSignatureFields(spec.Results))
+	}
+
+	shadowSpec := &syntax.BashPPMethodSpec{
+		Name: &syntax.Lit{Value: "Error"},
+		Params: []*syntax.BashPPField{{
+			FieldTypeExpr: &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "any"}},
+			Ellipsis:      syntax.NewPos(0, 1, 1),
+		}},
+	}
+	shadow := &Runner{bashPPGoSource: true, bashPPTypes: map[string]bashPPType{
+		"any": {underlying: "string", typeExpr: &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "any"}}},
+	}}
+	shadowMethod := bashPPInterfaceMethod{spec: shadowSpec, sig: bashPPMethodSpecSignature(shadowSpec), name: "Error"}
+	if shadow.goSourceNativeSignatureMatches("func(...interface {})", "...interface {}->", shadowMethod) {
+		t.Fatal("a declared type named any was confused with the predeclared empty-interface alias")
+	}
+}

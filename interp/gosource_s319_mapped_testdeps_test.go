@@ -158,3 +158,58 @@ func main() {
 		t.Fatalf("Runner stdout=%q stderr=%q, want %q", stdout.String(), stderr.String(), want)
 	}
 }
+
+// TestGoSourceS319MappedTestingTBReceiver is the focused TestBranchElimIf
+// reduction. The SSA helper testConfigArch accepts testing.TB, so its first
+// call assigns the mapped test callback's *testing.T receiver to that native
+// interface. In reflection T.Error is func(...interface {}), whereas the
+// mapped TB method is sourced as Error(...any); the authenticated signatures
+// must identify those as the same method.
+func TestGoSourceS319MappedTestingTBReceiver(t *testing.T) {
+	pkg := gosource.PackageSpec{
+		Path: "example.com/receiver_test",
+		Sources: []gosource.Source{{Name: "receiver_test.go", Data: []byte(`package receiver_test
+
+import (
+	"fmt"
+	"testing"
+)
+
+func requireTB(tb testing.TB) { tb.Helper() }
+
+func TestReceiver(t *testing.T) {
+	requireTB(t)
+	fmt.Println("receiver ok")
+}
+`)}},
+	}
+	driver := gosource.Source{Name: "_testmain.go", Data: []byte(`package main
+
+import (
+	"os"
+	"testing"
+	"testing/internal/testdeps"
+
+	_receiver "example.com/receiver_test"
+)
+
+var tests = []testing.InternalTest{{"TestReceiver", _receiver.TestReceiver}}
+var benchmarks = []testing.InternalBenchmark{}
+var fuzzTargets = []testing.InternalFuzzTarget{}
+var examples = []testing.InternalExample{}
+
+func main() {
+	m := testing.MainStart(testdeps.TestDeps{}, tests, benchmarks, fuzzTargets, examples)
+	os.Exit(m.Run())
+}
+`)}
+
+	got, err := runS249PackageTestMain(t, []gosource.Source{driver}, []gosource.PackageSpec{pkg})
+	if err != nil {
+		t.Fatalf("Runner: %v; stderr: %s", err, got.stderr)
+	}
+	want := s249GoSourceOutcome{stdout: "receiver ok\nPASS\n"}
+	if got != want {
+		t.Fatalf("Runner %+v; want %+v", got, want)
+	}
+}

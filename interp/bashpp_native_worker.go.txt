@@ -624,6 +624,7 @@ func nativeSignatureTypeIdentity(t reflect.Type)string{
  if id,ok:=originalTypeIdentities[t];ok&&id.PackagePath!="" {return id.PackagePath+"."+id.Name}
  if t.Name()!="" {if path:=t.PkgPath();path!="" {return path+"."+t.Name()};return t.String()}
  switch t.Kind(){
+ case reflect.Interface:if t.NumMethod()==0{return "interface{}"}
  case reflect.Pointer:return "*"+nativeSignatureTypeIdentity(t.Elem())
  case reflect.Slice:return "[]"+nativeSignatureTypeIdentity(t.Elem())
  case reflect.Array:return "["+strconv.FormatInt(int64(t.Len()),10)+"]"+nativeSignatureTypeIdentity(t.Elem())
