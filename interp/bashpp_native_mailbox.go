@@ -3,6 +3,7 @@ package interp
 import (
 	"encoding/json"
 	"fmt"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"unsafe"
@@ -167,4 +168,6 @@ func mailboxCallback(q response)(request,bool,error){
 	return imports, implementation
 }
 
-func bashPPMailboxYield() {}
+// The request goroutine is also the mailbox server. Yielding on an empty poll
+// lets parallel callback frames produce the request or reply it is waiting for.
+func bashPPMailboxYield() { runtime.Gosched() }
