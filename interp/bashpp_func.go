@@ -829,6 +829,9 @@ func (r *Runner) bashPPBindLocalSelector(c *syntax.BashPPCall, root *bashPPCell)
 		if fn, handled := r.bashPPBindFuncField(root, edges, sel); handled {
 			return fn, fn != nil
 		}
+		if fn, handled := r.goSourceBindImportedScalarMethod(root, edges, typ, method); handled {
+			return fn, fn != nil
+		}
 		r.errf("type %s has no method %s\n", bashPPTypeText(typ), method)
 		r.exit.code = 2
 		return nil, false
