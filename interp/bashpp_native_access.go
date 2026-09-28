@@ -63,6 +63,8 @@ func (r *Runner) bashPPNativeExpr(expr syntax.BashPPExpr) bool {
 			}
 		}
 		return r.bashPPNativeExpr(x.X)
+	case *syntax.BashPPTypeAssertExpr:
+		return r.goSourceNativeTypeAssert(x)
 	case *syntax.BashPPIdent:
 		// A pointer whose pointee is a native handle — new(runtime.MemStats)
 		// — is the dependency's value as much as the handle itself: its
@@ -71,6 +73,20 @@ func (r *Runner) bashPPNativeExpr(expr syntax.BashPPExpr) bool {
 		return r.bashPPNativeCellValue(x.Name.Value) != nil || r.bashPPNativePointerExpr(x)
 	}
 	return false
+}
+
+// goSourceNativeTypeAssert reports a single-result assertion to a concrete
+// dependency-owned type: `specs[i-1].(*ast.ValueSpec)` yields the dependency's
+// value, so a selector or comparison built on it must read through the worker.
+// Without this the operand fell to the scalar evaluator and compared the
+// handle's wire text instead of its identity. Interface assertions keep their
+// own paths: an interpreter value may implement a dependency interface.
+func (r *Runner) goSourceNativeTypeAssert(x *syntax.BashPPTypeAssertExpr) bool {
+	if !r.bashPPGoSource || x == nil || x.TypeToken != nil || x.Assert == nil || !r.bashPPNativeType(x.Assert) {
+		return false
+	}
+	_, iface := r.bashPPInterfaceType(x.Assert)
+	return !iface
 }
 
 // bashPPNativePointerExpr reports an expression bound to an original pointer

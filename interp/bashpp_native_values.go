@@ -535,6 +535,14 @@ func (r *Runner) bashPPBridgeExpr(expr syntax.BashPPExpr) (bashPPBridgeValue, er
 		}
 	case *syntax.BashPPParenExpr:
 		return r.bashPPBridgeExpr(x.X)
+	case *syntax.BashPPTypeAssertExpr:
+		if r.goSourceNativeTypeAssert(x) {
+			_, cell, err := r.bashPPTypeAssert(x, false)
+			if err != nil {
+				return bashPPBridgeValue{}, err
+			}
+			return r.bashPPBridgeCell(cell)
+		}
 	case *syntax.BashPPIdent:
 		if x.Name.Value == "nil" {
 			return bashPPBridgeValue{Kind: "nil"}, nil
