@@ -1782,16 +1782,20 @@ func (r *Runner) bashPPBindMethodReceiver(cell *bashPPCell, method string, addre
 				return nil, false
 			}
 			copyCell = bashPPCell{declType: typ, typeName: cell.typeName}
-			if r.bashPPGoSource && meta != nil {
-				copyCell.vr = expand.Variable{Set: true, Kind: expand.Object, Obj: value}
-				copyCell.valueMeta = meta
-				copyCell.object = &bashPPObjectIdentity{collection: meta}
-			} else {
-				bashPPStoreCellValue(&copyCell, value, meta)
-			}
+			// The pointee is stored the way every other read of a value is.
+			// Boxing it here instead once kept Go-source collection storage
+			// out of expand.NewObject's validation, but bashPPStoreCellValue
+			// now keeps trusted collection payloads verbatim itself, and it
+			// alone honours the metadata kinds a receiver can also have:
+			// `kind: "scalar"` - what a dependency-decoded named numeric
+			// element carries - becomes a scalar cell rather than an object
+			// one no arithmetic, conversion or comparison can read.
+			bashPPStoreCellValue(&copyCell, value, meta)
 		}
 		if copyCell.vr.Kind == expand.Object {
-			if meta := bashPPCellMeta(&copyCell); bashPPValueMeta(meta) {
+			if meta := bashPPCellMeta(&copyCell); bashPPScalarMetaKind(meta) {
+				bashPPStoreCellValue(&copyCell, copyCell.vr.Obj, meta)
+			} else if bashPPValueMeta(meta) {
 				value, copiedMeta := bashPPCopyArrayValue(copyCell.vr.Obj, meta)
 				if r.bashPPGoSource {
 					// A typed value copy copies fields, not referenced storage.

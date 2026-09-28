@@ -208,6 +208,74 @@ func main() {
 	}
 }
 
+// A testing callback receives values decoded from the dependency bridge through
+// callback-frame storage, not through the original frame's locals. When a
+// value receiver is copied from a range variable over a named-scalar slice, the
+// receiver copy must keep scalar metadata as a scalar cell; otherwise the
+// method body sees its receiver as an object and rejects arithmetic/conversion
+// reads.
+func TestGoSourceS319TestingCallbackNamedScalarValueReceiver(t *testing.T) {
+	xtest := gosource.PackageSpec{Path: "example.com/parampropbits_test", Sources: []gosource.Source{s249Source("parampropbits_test.go", `package parampropbits_test
+
+import (
+	"encoding/json"
+	"fmt"
+	"testing"
+)
+
+type propBits uint32
+
+func (i propBits) String() string { return fmt.Sprintf("<%d>", uint64(i)) }
+
+func propBitsToString[T interface{ String() string }](sl []T) string {
+	var out string
+	for i, f := range sl {
+		out += fmt.Sprintf("%d: %s\n", i, f.String())
+	}
+	return out
+}
+
+func TestFuncProperties(t *testing.T) {
+	var decoded struct {
+		Flags []propBits
+	}
+	if err := json.Unmarshal([]byte("{\"Flags\":[42]}"), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if got := propBitsToString(decoded.Flags); got != "0: <42>\n" {
+		t.Fatalf("propBits string = %q", got)
+	}
+}
+`)}}
+	driver := s249Source("_testmain.go", `package main
+
+import (
+	"os"
+	"testing"
+	"testing/internal/testdeps"
+	_xtest "example.com/parampropbits_test"
+)
+
+var tests = []testing.InternalTest{{"TestFuncProperties", _xtest.TestFuncProperties}}
+var benchmarks = []testing.InternalBenchmark{}
+var fuzzTargets = []testing.InternalFuzzTarget{}
+var examples = []testing.InternalExample{}
+
+func main() {
+	m := testing.MainStart(testdeps.TestDeps{}, tests, benchmarks, fuzzTargets, examples)
+	os.Exit(m.Run())
+}
+`)
+
+	got, err := runS249PackageTestMain(t, []gosource.Source{driver}, []gosource.PackageSpec{xtest})
+	if err != nil {
+		t.Fatalf("Runner: %v; stderr: %s", err, got.stderr)
+	}
+	if want := (s249GoSourceOutcome{stdout: "PASS\n"}); got != want {
+		t.Fatalf("Runner %+v; want %+v", got, want)
+	}
+}
+
 // A mapped test package executes its body in the interpreter even though the
 // generated test main reaches it through testing's native descriptor wrapper.
 // Interface results must survive both the native call and the interpreted
