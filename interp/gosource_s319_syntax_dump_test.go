@@ -18,11 +18,10 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
-// TestS319SyntaxParseThenFdump keeps the real compiler-syntax AST between the
-// parser and its reflection-based dumper. Small hand-built Expr graphs miss
-// the parser-grown []Expr capacity tail whose nil interface used to cross as
-// a scalar string in an Expr slot.
-func TestS319SyntaxParseThenFdump(t *testing.T) {
+// s319GCSyntaxSources returns the compiler syntax package as interpreted
+// sources, so its parser and reflection-based dumper both run under Bash#.
+func s319GCSyntaxSources(t *testing.T) []gosource.Source {
+	t.Helper()
 	entries, err := os.ReadDir(filepath.Join("..", "gosource", "internal", "gcsyntax"))
 	if err != nil {
 		t.Fatal(err)
@@ -39,7 +38,12 @@ func TestS319SyntaxParseThenFdump(t *testing.T) {
 		}
 		sources = append(sources, gosource.Source{Name: name, Data: data})
 	}
-	parsedSource := []byte("package p\nfunc f() { h(a(), b.c, d) }\n")
+	return sources
+}
+
+func s319RunSyntaxFdump(t *testing.T, parsedSource []byte) {
+	t.Helper()
+	sources := s319GCSyntaxSources(t)
 	main := gosource.Source{Name: "main.go", Data: []byte(fmt.Sprintf(`package main
 import (
 	"io"
@@ -69,6 +73,24 @@ func main() {
 	if err := runner.Run(ctx, program.File); err != nil {
 		t.Fatalf("run: %v; stdout=%q stderr=%q", err, stdout.String(), stderr.String())
 	}
+}
+
+func TestS319SyntaxParseThenFdump(t *testing.T) {
+	s319RunSyntaxFdump(t, []byte("package p\nfunc f() { h(a(), b.c, d) }\n"))
+}
+
+// TestS319SyntaxParserFdumpThroughput reduces cmd/compile/internal/syntax's
+// TestDump end to end: the interpreted parser builds a package-sized AST and
+// the interpreted dumper writes it through fmt.Fprintf(p, format, args...).
+// The retained *dumper.Write receiver must stay in the interpreter; one
+// dependency round trip per fragment cannot finish this dump within 60s.
+func TestS319SyntaxParserFdumpThroughput(t *testing.T) {
+	var parsedSource strings.Builder
+	parsedSource.WriteString("package p\n")
+	for i := 0; i < 10; i++ {
+		fmt.Fprintf(&parsedSource, "func f%d(x int) int { if x > %d { return x + %d }; return x - %d }\n", i, i, i, i)
+	}
+	s319RunSyntaxFdump(t, []byte(parsedSource.String()))
 }
 
 func TestS319ReflectedInterfaceSliceCapacityTail(t *testing.T) {

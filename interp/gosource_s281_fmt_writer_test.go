@@ -71,3 +71,41 @@ func main() {
 		t.Fatalf("local fmt writer crossed to dependency helper %d times; steps=%v", got, steps)
 	}
 }
+
+func TestGoSourceS319VariadicFmtWriterFormatsBeforeLocalWrite(t *testing.T) {
+	source := `package main
+
+import "fmt"
+
+type sink struct{ data string }
+func (s *sink) Write(p []byte) (int, error) { s.data += string(p); return len(p), nil }
+
+type label int
+func (n label) String() string { return fmt.Sprintf("label:%d", int(n)) }
+
+func emit(s *sink, format string, args ...any) { fmt.Fprintf(s, format, args...) }
+
+func main() {
+	var s sink
+	emit(&s, "%s/%T/%04d", label(3), int16(4), int8(5))
+	fmt.Println(s.data)
+}
+`
+	var stdout, stderr bytes.Buffer
+	runner, err := New(Lang(syntax.LangBashPP), Dir(t.TempDir()), StdIO(nil, &stdout, &stderr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	program, err := gosource.Parse(strings.NewReader(source), filepath.Join(runner.Dir, "fmtwriter-spread.go"), gosource.Options{RunMain: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	if err := runner.Run(ctx, program.File); err != nil {
+		t.Fatalf("run: %v; stdout=%q stderr=%q", err, stdout.String(), stderr.String())
+	}
+	if got, want := stdout.String(), "label:3/int16/0005\n"; got != want || stderr.Len() != 0 {
+		t.Fatalf("stdout=%q stderr=%q, want stdout %q", got, stderr.String(), want)
+	}
+}

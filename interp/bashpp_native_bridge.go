@@ -182,13 +182,17 @@ type bashPPBridgeRequest struct {
 	Selector        string `json:"selector"`
 	// Instance is the type-argument suffix of an instantiated imported
 	// generic function; the helper resolves Selector+Instance.
-	Instance   string              `json:"instance,omitempty"`
-	Receiver   *bashPPBridgeValue  `json:"receiver,omitempty"`
-	Args       []bashPPBridgeValue `json:"args,omitempty"`
-	Spread     bool                `json:"spread,omitempty"`
-	SourceFile string              `json:"source_file,omitempty"`
-	SourceLine int                 `json:"source_line,omitempty"`
-	LogPrint   string              `json:"log_print,omitempty"`
+	Instance string              `json:"instance,omitempty"`
+	Receiver *bashPPBridgeValue  `json:"receiver,omitempty"`
+	Args     []bashPPBridgeValue `json:"args,omitempty"`
+	Spread   bool                `json:"spread,omitempty"`
+	// FormatOnly redirects fmt.Fprint* to its fmt.Sprint* counterpart in the
+	// worker. The writer is interpreter-owned, so only the formatted bytes
+	// return across the bridge and its Write body runs locally.
+	FormatOnly string `json:"format_only,omitempty"`
+	SourceFile string `json:"source_file,omitempty"`
+	SourceLine int    `json:"source_line,omitempty"`
+	LogPrint   string `json:"log_print,omitempty"`
 	// Values and Error answer a callback the dependency raised; they are set
 	// only when Op is "callback-reply". Sprint #118 Story #54 (c3a60493cde9).
 	Values []bashPPBridgeValue `json:"values,omitempty"`
