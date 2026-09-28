@@ -91,15 +91,24 @@ func (r *Runner) goSourceNativeImplements(cell *bashPPCell, dynamic syntax.BashP
 		return true, nil
 	case err == nil && answer.Kind == "bool":
 		// Refused: name the method that is missing or wrong.
-		if err := r.goSourceNativeMethodSetMismatch(value, spelled, expected); err != nil {
+		matched, err := r.goSourceNativeMethodSetMismatch(value, spelled, expected)
+		if err != nil {
 			return true, err
+		}
+		// The helper's generated mirror and the dependency's original package
+		// type are distinct reflect.Type objects. Exact authenticated method
+		// identities are the structural interface proof when that artifact is
+		// the only reason reflect.AssignableTo answered false.
+		if matched {
+			return true, nil
 		}
 		return true, fmt.Errorf("BASHPP-EINTERFACE-MISSING: %s does not implement interface", spelled)
 	case err != nil && strings.Contains(err.Error(), "unregistered bridge type"):
 		// An interface the helper could not materialise — one whose
 		// signature spells a type it does not mirror — is still checked
 		// method by method against the handle's own member metadata.
-		return true, r.goSourceNativeMethodSetMismatch(value, spelled, expected)
+		_, mismatch := r.goSourceNativeMethodSetMismatch(value, spelled, expected)
+		return true, mismatch
 	case err != nil:
 		return true, err
 	}
@@ -110,7 +119,9 @@ func (r *Runner) goSourceNativeImplements(cell *bashPPCell, dynamic syntax.BashP
 // handle's members as the dependency reports them: a member the dependency
 // does not have is missing, a member whose reported Go type is not the
 // expected signature is wrong. It returns nil when every method matches.
-func (r *Runner) goSourceNativeMethodSetMismatch(value bashPPBridgeValue, spelled string, expected *bashPPInterfaceMethods) error {
+
+func (r *Runner) goSourceNativeMethodSetMismatch(value bashPPBridgeValue, spelled string, expected *bashPPInterfaceMethods) (matched bool, err error) {
+	matched = true
 	for _, key := range expected.order {
 		method := expected.byName[key]
 		name := method.name
@@ -121,15 +132,16 @@ func (r *Runner) goSourceNativeMethodSetMismatch(value bashPPBridgeValue, spelle
 		member, err := r.bashPPNativeAccess(r.ectx, "method-type", value, name)
 		if err != nil || member.Kind != "string" || !strings.HasPrefix(member.Text, "func(") {
 			if goSourceUnexportedName(name) && method.pkg != "" && method.pkg == nativeTypePackage(value.NativeType) {
+				matched = false
 				continue
 			}
-			return fmt.Errorf("BASHPP-EINTERFACE-MISSING: %s does not implement interface (missing method %s)", spelled, name)
+			return false, fmt.Errorf("BASHPP-EINTERFACE-MISSING: %s does not implement interface (missing method %s)", spelled, name)
 		}
-		if !r.goSourceNativeSignatureMatches(member.Text, method) {
-			return fmt.Errorf("BASHPP-EINTERFACE-SIGNATURE: %s method %s has wrong signature", spelled, name)
+		if !r.goSourceNativeSignatureMatches(member.Text, member.Signature, method) {
+			return false, fmt.Errorf("BASHPP-EINTERFACE-SIGNATURE: %s method %s has wrong signature", spelled, name)
 		}
 	}
-	return nil
+	return matched, nil
 }
 
 func nativeTypePackage(spelled string) string {
@@ -143,7 +155,11 @@ func nativeTypePackage(spelled string) string {
 // goSourceNativeSignatureMatches compares a method type the dependency
 // spelled — reflect's "func([]uint8) (int, error)", with the program's own
 // types qualified "main." — against an interface method specification.
-func (r *Runner) goSourceNativeSignatureMatches(text string, method bashPPInterfaceMethod) bool {
+func (r *Runner) goSourceNativeSignatureMatches(text, identity string, method bashPPInterfaceMethod) bool {
+	if identity != "" {
+		return identity == r.bashPPCanonicalSignatureFields(method.spec.Params)+"->"+
+			r.bashPPCanonicalSignatureFields(method.spec.Results)
+	}
 	typ, ok := syntax.BashPPTypeExprFromText(bashPPStripLocalPackage(text)).(*syntax.BashPPFuncType)
 	if !ok {
 		return false

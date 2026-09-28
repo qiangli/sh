@@ -50,6 +50,39 @@ func goSourceDeclaredName(name string) string {
 	return name
 }
 
+// goSourceLinkedPackagePath resolves a flattening tag to the authenticated
+// import path carried by the package-map source that owns the declaration.
+// The tag alone is only a linker-local hygiene key; it must never be treated
+// as an import identity without this source provenance.
+func (r *Runner) goSourceLinkedPackagePath(tag string) string {
+	if r.bashPPGoSourceFile == nil || tag == "" {
+		return ""
+	}
+	for _, stmt := range r.bashPPGoSourceFile.Stmts {
+		var name *syntax.Lit
+		switch d := stmt.Cmd.(type) {
+		case *syntax.BashPPDecl:
+			name = d.Name
+		case *syntax.BashPPFuncDecl:
+			name = d.Name
+			if d.Receiver != nil && d.Receiver.RecvType != nil {
+				name = d.Receiver.RecvType
+			}
+		}
+		if name == nil || goSourceLinkedPackage(name.Value) != tag {
+			continue
+		}
+		pos := name.Pos()
+		if !pos.IsValid() {
+			pos = stmt.Pos()
+		}
+		if source, ok := r.bashPPGoSourceFile.SourceAt(pos); ok {
+			return source.PackagePath
+		}
+	}
+	return ""
+}
+
 // goSourceUnexportedName reports whether a method name is qualified by its
 // package: one that does not begin with an upper-case letter.
 func goSourceUnexportedName(name string) bool {

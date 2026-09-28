@@ -473,34 +473,52 @@ func bashPPStructLiteralOwner(typ syntax.BashPPTypeExpr) bool {
 // textual mismatches reach this fallback; ordinary identical signatures need
 // no alias walk.
 func (r *Runner) bashPPAliasedSignatureEqual(aParams, aResults, bParams, bResults []*syntax.BashPPField) bool {
+	return r.bashPPCanonicalSignatureFields(aParams) == r.bashPPCanonicalSignatureFields(bParams) &&
+		r.bashPPCanonicalSignatureFields(aResults) == r.bashPPCanonicalSignatureFields(bResults)
+}
+
+// bashPPCanonicalSignatureFields gives signature positions a stable identity
+// across source aliases, mapped-package hygiene names, and native import
+// spellings. It is also the host half of the authenticated method identity
+// returned by the dependency worker.
+func (r *Runner) bashPPCanonicalSignatureFields(fields []*syntax.BashPPField) string {
 	aliases := r.bashPPDeclaredAliasBindings()
-	canonical := func(fields []*syntax.BashPPField) string {
-		text := bashPPFieldsSignature(fields)
-		// An alias may name another alias; the substitution repeats until
-		// the spelling settles, bounded so a cycle cannot spin.
-		for i := 0; i <= len(aliases); i++ {
-			fields = bashPPSubstituteFields(fields, aliases)
-			next := bashPPFieldsSignature(fields)
-			if next == text {
-				break
-			}
-			text = next
+	text := bashPPFieldsSignature(fields)
+	// An alias may name another alias; the substitution repeats until
+	// the spelling settles, bounded so a cycle cannot spin.
+	for i := 0; i <= len(aliases); i++ {
+		fields = bashPPSubstituteFields(fields, aliases)
+		next := bashPPFieldsSignature(fields)
+		if next == text {
+			break
 		}
-		// Linked files may bind the same native package under different
-		// aliases. Compare their import identities, while local declarations
-		// continue to use the current lexical type scope.
-		return bashPPBridgeFieldsTextIn(fields, func(named *syntax.BashPPNamedType) (string, bool) {
-			if name, ok := r.bashPPScopedLocalTypeName(named); ok {
-				return name, true
-			}
-			alias, member, qualified := strings.Cut(named.Name.Value, ".")
-			if path := r.goSourceSignatureImportPath(alias, member); qualified && path != "" {
-				return path + "." + member, true
-			}
-			return "", false
-		})
+		text = next
 	}
-	return canonical(aParams) == canonical(bParams) && canonical(aResults) == canonical(bResults)
+	// Linked files may bind the same native package under different aliases.
+	// Compare their import identities, while local declarations continue to
+	// use the current lexical type scope.
+	return bashPPBridgeFieldsTextIn(fields, func(named *syntax.BashPPNamedType) (string, bool) {
+		// A package map flattens package-level declarations under a
+		// linker-local hygiene name. Recover the declaration's authenticated
+		// source path before comparing it with a native method signature;
+		// for example, __gosource_pkg_N_Package and types.Package are both
+		// go/types.Package. An unproven marker remains distinct.
+		if named.Name != nil {
+			if tag := goSourceLinkedPackage(named.Name.Value); tag != "" {
+				if path := r.goSourceLinkedPackagePath(tag); path != "" {
+					return path + "." + goSourceDeclaredName(named.Name.Value), true
+				}
+			}
+		}
+		if name, ok := r.bashPPScopedLocalTypeName(named); ok {
+			return name, true
+		}
+		alias, member, qualified := strings.Cut(named.Name.Value, ".")
+		if path := r.goSourceSignatureImportPath(alias, member); qualified && path != "" {
+			return path + "." + member, true
+		}
+		return "", false
+	})
 }
 
 func (r *Runner) goSourceSignatureImportPath(alias, member string) string {

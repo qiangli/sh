@@ -26,6 +26,7 @@ import (
  "path/filepath"
  "reflect"
  "strconv"
+ "strings"
  "sync"
  "time"
  "unsafe"
@@ -52,6 +53,7 @@ type value struct {
  Length int `json:"length,omitempty"`
  Capacity int `json:"capacity,omitempty"`
  Interface string `json:"interface,omitempty"`
+ Signature string `json:"signature,omitempty"`
  Session string `json:"session,omitempty"`
  Kind string `json:"kind"`
  Type string `json:"type,omitempty"`
@@ -577,10 +579,30 @@ func memberMethod(rv reflect.Value,name string) reflect.Value {
  if rv.CanAddr(){return rv.Addr().MethodByName(name)}
  return reflect.Value{}
 }
+func nativeSignatureTypeIdentity(t reflect.Type)string{
+ if id,ok:=originalTypeIdentities[t];ok&&id.PackagePath!="" {return id.PackagePath+"."+id.Name}
+ if t.Name()!="" {if path:=t.PkgPath();path!="" {return path+"."+t.Name()};return t.String()}
+ switch t.Kind(){
+ case reflect.Pointer:return "*"+nativeSignatureTypeIdentity(t.Elem())
+ case reflect.Slice:return "[]"+nativeSignatureTypeIdentity(t.Elem())
+ case reflect.Array:return "["+strconv.FormatInt(int64(t.Len()),10)+"]"+nativeSignatureTypeIdentity(t.Elem())
+ case reflect.Map:return "map["+nativeSignatureTypeIdentity(t.Key())+"]"+nativeSignatureTypeIdentity(t.Elem())
+ case reflect.Chan:prefix:="chan ";if t.ChanDir()==reflect.RecvDir{prefix="<-chan "}else if t.ChanDir()==reflect.SendDir{prefix="chan<- "};return prefix+nativeSignatureTypeIdentity(t.Elem())
+ case reflect.Func:return "func("+nativeMethodSignatureIdentity(t,0,false)+")"
+ }
+ return t.String()
+}
+func nativeMethodSignatureIdentity(t reflect.Type,start int,outer bool)string{
+ params:=make([]string,0,t.NumIn()-start)
+ for i:=start;i<t.NumIn();i++ {typ:=t.In(i);if t.IsVariadic()&&i==t.NumIn()-1{params=append(params,"..."+nativeSignatureTypeIdentity(typ.Elem()))}else{params=append(params,nativeSignatureTypeIdentity(typ))}}
+ results:=make([]string,t.NumOut());for i:=range results{results[i]=nativeSignatureTypeIdentity(t.Out(i))}
+ sep:="->";if !outer{sep=")("}
+ return strings.Join(params,",")+sep+strings.Join(results,",")
+}
 func access(rv reflect.Value,q request)([]value,string){
  // Interface admission asks for the type's method set, not an addressable
  // value's auto-addressed bound methods. No receiver or function is retained.
- if q.Op=="method-type" {typ:=rv.Type();method,ok:=typ.MethodByName(q.Selector);if !ok{return nil,"unknown exported method "+q.Selector};start:=1;if typ.Kind()==reflect.Interface{start=0};in:=make([]reflect.Type,method.Type.NumIn()-start);for i:=range in{in[i]=method.Type.In(i+start)};out:=make([]reflect.Type,method.Type.NumOut());for i:=range out{out[i]=method.Type.Out(i)};sig:=reflect.FuncOf(in,out,method.Type.IsVariadic());return []value{encode(reflect.ValueOf(sig.String()))},""}
+ if q.Op=="method-type" {typ:=rv.Type();method,ok:=typ.MethodByName(q.Selector);if !ok{return nil,"unknown exported method "+q.Selector};start:=1;if typ.Kind()==reflect.Interface{start=0};in:=make([]reflect.Type,method.Type.NumIn()-start);for i:=range in{in[i]=method.Type.In(i+start)};out:=make([]reflect.Type,method.Type.NumOut());for i:=range out{out[i]=method.Type.Out(i)};sig:=reflect.FuncOf(in,out,method.Type.IsVariadic());result:=encode(reflect.ValueOf(sig.String()));result.Signature=nativeMethodSignatureIdentity(method.Type,start,true);return []value{result},""}
 
  if q.Op=="byte-set" {if rv.Kind()!=reflect.Slice||rv.Type().Elem().Kind()!=reflect.Uint8||len(q.Args)!=2{return nil,"native indexed writes require a byte slice"};index,err:=decode(q.Args[0],nil);if err!=nil{return nil,err.Error()};var i int64;switch index.Kind(){case reflect.Int,reflect.Int8,reflect.Int16,reflect.Int32,reflect.Int64:i=index.Int();case reflect.Uint,reflect.Uint8,reflect.Uint16,reflect.Uint32,reflect.Uint64:if index.Uint()>uint64(rv.Len()){return nil,"byte index out of range"};i=int64(index.Uint());default:return nil,"byte index must be an integer"};if i<0||i>=int64(rv.Len()){return nil,"byte index out of range"};element,err:=decode(q.Args[1],rv.Type().Elem());if err!=nil{return nil,err.Error()};rv.Index(int(i)).Set(element);return []value{encode(reflect.ValueOf(true))},""}
 
