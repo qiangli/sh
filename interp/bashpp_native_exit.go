@@ -107,6 +107,9 @@ func (r *Runner) bashPPNativeRequest(ctx context.Context, req bashPPEvalRequest,
 	if handled, err := r.goSourceLocalTimeSleep(ctx, req, q); handled {
 		return nil, err
 	}
+	if values, handled := goSourceLocalNativeWriter(req, q); handled {
+		return values, nil
+	}
 	if value, handled := r.goSourceReflectedFunctionPointer(q); handled {
 		return []bashPPBridgeValue{value}, nil
 	}
@@ -114,6 +117,12 @@ func (r *Runner) bashPPNativeRequest(ctx context.Context, req bashPPEvalRequest,
 		return values, err
 	}
 	q.PointerReadOnly = nativePointerReadOnlyRequest(req, q)
+	if q.Receiver != nil && q.Selector != "Write" {
+		req.Bridge.revokeLocalWriter(*q.Receiver)
+	}
+	if bashPPNativeRequestTrace != nil {
+		bashPPNativeRequestTrace(q)
+	}
 	values, err := req.Bridge.request(ctx, req, q)
 	if err == nil {
 		r.goSourceRememberValueOf(ctx, req, q, values)
@@ -147,6 +156,8 @@ func (r *Runner) bashPPNativeRequest(ctx context.Context, req bashPPEvalRequest,
 	}
 	return values, err
 }
+
+var bashPPNativeRequestTrace func(bashPPBridgeRequest)
 
 // errBashPPNativeExited unwinds the interpreter after the program's status has
 // already been recorded. It carries no diagnostic of its own.
