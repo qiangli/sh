@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -85,12 +86,22 @@ func TestS319SyntaxParseThenFdump(t *testing.T) {
 // The retained *dumper.Write receiver must stay in the interpreter; one
 // dependency round trip per fragment cannot finish this dump within 60s.
 func TestS319SyntaxParserFdumpThroughput(t *testing.T) {
+	var bridgedWrites atomic.Int64
+	bashPPNativeRequestTrace = func(q bashPPBridgeRequest) {
+		if q.Selector == "Write" {
+			bridgedWrites.Add(1)
+		}
+	}
+	defer func() { bashPPNativeRequestTrace = nil }()
 	var parsedSource strings.Builder
 	parsedSource.WriteString("package p\n")
 	for i := 0; i < 10; i++ {
 		fmt.Fprintf(&parsedSource, "func f%d(x int) int { if x > %d { return x + %d }; return x - %d }\n", i, i, i, i)
 	}
 	s319RunSyntaxFdump(t, []byte(parsedSource.String()))
+	if got := bridgedWrites.Load(); got != 0 {
+		t.Fatalf("standard output writer crossed the dependency bridge %d times", got)
+	}
 }
 
 func TestS319ReflectedInterfaceSliceCapacityTail(t *testing.T) {

@@ -22,6 +22,14 @@ func (s *bashPPNativeSession) rememberNativeHandleType(v bashPPBridgeValue) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if v.LocalWriter == "" {
+		delete(s.localWriters, v.Handle)
+	} else {
+		if s.localWriters == nil {
+			s.localWriters = make(map[uint64]string)
+		}
+		s.localWriters[v.Handle] = v.LocalWriter
+	}
 	if v.NativeTypeID == 0 {
 		delete(s.handleTypes, v.Handle)
 		return

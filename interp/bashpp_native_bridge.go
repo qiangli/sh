@@ -78,9 +78,12 @@ type bashPPBridgeValue struct {
 	Callable     string `json:"-"`
 	NativeType   string `json:"native_type,omitempty"`
 	NativeTypeID uint64 `json:"native_type_id,omitempty"`
-	Callbacks    bool   `json:"callbacks,omitempty"`
-	Function     bool   `json:"function,omitempty"`
-	Origin       uint64 `json:"origin,omitempty"`
+	// LocalWriter authenticates standard dependency writers whose Write can
+	// run against the Runner's matching sink without a bridge round trip.
+	LocalWriter string `json:"local_writer,omitempty"`
+	Callbacks   bool   `json:"callbacks,omitempty"`
+	Function    bool   `json:"function,omitempty"`
+	Origin      uint64 `json:"origin,omitempty"`
 	// Storage identifies interpreter-owned slice backing storage within this
 	// session. Offset, Length and Capacity describe one view into that backing.
 	// The worker uses them only while refreshing authenticated storage; they
@@ -257,6 +260,7 @@ func bashPPNativeNoOutputReply(req bashPPEvalRequest, q bashPPBridgeRequest, rep
 type bashPPNativeSession struct {
 	// Type facts are authenticated on this connection; no native values are cached.
 	handleTypes         map[uint64]uint64
+	localWriters        map[uint64]string
 	typeFacts           map[bashPPNativeTypeFactKey]bashPPBridgeValue // protected by mu
 	interfaceAdmissions map[goSourceNativeAdmissionKey]bool
 	callbackProofs      map[string]bool // immutable source proofs, protected by mu

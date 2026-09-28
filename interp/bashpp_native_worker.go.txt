@@ -16,6 +16,7 @@ import (
  "go/token"
  "encoding/json"
  "fmt"
+ bppIO "io"
  "go/ast"
  "go/parser"
  bppLog "log"
@@ -57,6 +58,7 @@ type value struct {
  Function bool `json:"function,omitempty"`
  NativeType string `json:"native_type,omitempty"`
  NativeTypeID uint64 `json:"native_type_id,omitempty"`
+ LocalWriter string `json:"local_writer,omitempty"`
  Origin uint64 `json:"origin,omitempty"`
  Storage uint64 `json:"storage,omitempty"`
  Offset int `json:"offset,omitempty"`
@@ -260,8 +262,16 @@ func nativeTypeID(t reflect.Type) string {if t.Kind()==reflect.Pointer{return "*
 // Tokens are keyed by reflect.Type itself, never its potentially ambiguous String.
 var nativeTypeTokens=struct{sync.Mutex;next uint64;ids map[reflect.Type]uint64}{ids:map[reflect.Type]uint64{}}
 func nativeTypeToken(t reflect.Type)uint64{if t.Kind()==reflect.Interface{return 0};nativeTypeTokens.Lock();defer nativeTypeTokens.Unlock();if id:=nativeTypeTokens.ids[t];id!=0{return id};nativeTypeTokens.next++;nativeTypeTokens.ids[t]=nativeTypeTokens.next;return nativeTypeTokens.next}
+var localWriterState=struct{sync.Mutex;revoked map[*bppOS.File]bool}{revoked:map[*bppOS.File]bool{}}
+func localWriterName(v reflect.Value)string{
+ if v.Type()==reflect.TypeOf(bppIO.Discard){return "discard"}
+ if v.Type()!=reflect.TypeFor[*bppOS.File]()||v.IsNil(){return ""};file:=v.Interface().(*bppOS.File);name:="";if file==bppOS.Stdout{name="stdout"}else if file==bppOS.Stderr{name="stderr"};if name==""{return ""}
+ localWriterState.Lock();revoked:=localWriterState.revoked[file];localWriterState.Unlock();if revoked{return ""};return name
+}
+func revokeLocalWriter(v reflect.Value){if v.Type()!=reflect.TypeFor[*bppOS.File]()||v.IsNil(){return};file:=v.Interface().(*bppOS.File);if file!=bppOS.Stdout&&file!=bppOS.Stderr{return};localWriterState.Lock();localWriterState.revoked[file]=true;localWriterState.Unlock()}
 func encodeHandle(v reflect.Value,result value)value {
  result.NativeTypeID=nativeTypeToken(v.Type())
+ result.LocalWriter=localWriterName(v)
  if v.Kind()==reflect.Pointer&&v.IsNil(){result.Kind="nil";return result}
  if v.Kind()==reflect.Chan&&v.IsNil(){result.NilChannel=true}
  // A pointer the interpreter transported under an origin stays that origin's
@@ -862,7 +872,7 @@ func dispatch(q request)(reply response){
   defer companionUnseal()
  }
  fn:=symbols[q.Selector+q.Instance]
- if q.Receiver!=nil {receiver,err:=decode(*q.Receiver,nil);if err!=nil{reply.Error=err.Error();return}
+ if q.Receiver!=nil {receiver,err:=decode(*q.Receiver,nil);if err!=nil{reply.Error=err.Error();return};if q.Op=="call"&&q.Selector!="Write"{revokeLocalWriter(receiver)}
   switch q.Op {case "deref","deref-set","len","cap","index","index-pointer","unsafe-slice","slice","field","field-set","field-pointer","member","method-type","receiver_field","byte-set","index-set","kind","keys":reply.Values,reply.Error=access(receiver,q);return}
   if q.Selector==""&&receiver.Kind()==reflect.Func{fn=receiver}else{fn=memberMethod(receiver,q.Selector)}}
  if q.Op=="new" {typ:=resolveType(q.Selector);if typ==nil{reply.Error="unregistered bridge type "+strconv.Quote(q.Selector);return};reply.Values=[]value{encode(reflect.New(typ).Elem())};return}

@@ -17,6 +17,66 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
+func TestGoSourceS319StandardWritersStayLocal(t *testing.T) {
+	var mu sync.Mutex
+	writes := 0
+	bashPPNativeRequestTrace = func(q bashPPBridgeRequest) {
+		if q.Selector == "Write" {
+			mu.Lock()
+			writes++
+			mu.Unlock()
+		}
+	}
+	defer func() { bashPPNativeRequestTrace = nil }()
+
+	source := `package main
+import (
+	"fmt"
+	"io"
+	"os"
+)
+func main() {
+	fmt.Print("a")
+	var stdout io.Writer = os.Stdout
+	stdout.Write([]byte("b"))
+	fmt.Print("c")
+	var stderr io.Writer = os.Stderr
+	stderr.Write([]byte("err"))
+	io.Discard.Write([]byte("discarded"))
+	f, err := os.Create("ordinary.txt")
+	if err != nil { panic(err) }
+	f.Write([]byte("file"))
+	f.Close()
+	os.Remove("ordinary.txt")
+	if err := os.Stdout.Close(); err != nil { panic(err) }
+	if n, err := stdout.Write([]byte("closed")); n != 0 || err == nil { panic("closed stdout write") }
+}
+`
+	var stdout, stderr bytes.Buffer
+	runner, err := New(Lang(syntax.LangBashPP), Dir(t.TempDir()), StdIO(nil, &stdout, &stderr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	program, err := gosource.Parse(strings.NewReader(source), filepath.Join(runner.Dir, "standard-writers.go"), gosource.Options{RunMain: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.Run(context.Background(), program.File); err != nil {
+		t.Fatalf("run: %v; stdout=%q stderr=%q", err, stdout.String(), stderr.String())
+	}
+	if got, want := stdout.String(), "abc"; got != want {
+		t.Fatalf("stdout=%q, want %q", got, want)
+	}
+	if got, want := stderr.String(), "err"; got != want {
+		t.Fatalf("stderr=%q, want %q", got, want)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if writes != 2 {
+		t.Fatalf("dependency writer bridge count=%d, want the ordinary file and closed stdout writes", writes)
+	}
+}
+
 func TestGoSourceS281LocalFmtWriterStaysInInterpreter(t *testing.T) {
 	var mu sync.Mutex
 	steps := map[string]int{}
