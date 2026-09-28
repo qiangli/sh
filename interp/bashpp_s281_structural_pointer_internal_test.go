@@ -72,7 +72,7 @@ func main() {
 		t.Fatal(err)
 	}
 	binary := filepath.Join(dir, "worker")
-	if err := bashPPBuildWorkerImportcfg(context.Background(), goBin, t.TempDir(), os.Environ(), dir, path, binary); err != nil {
+	if err := bashPPBuildWorkerImportcfg(context.Background(), goBin, t.TempDir(), os.Environ(), "", dir, path, binary); err != nil {
 		t.Fatalf("build generated dependency worker: %v", err)
 	}
 	if output, err := exec.Command(binary).CombinedOutput(); err != nil {

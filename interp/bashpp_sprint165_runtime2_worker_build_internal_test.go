@@ -48,7 +48,7 @@ func TestBashPPWorkerImportcfgContextDeadlineNotLost(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
-	_, err := bashPPWorkerImportcfg(ctx, goBinary, t.TempDir(), os.Environ(), []string{"runtime"})
+	_, err := bashPPWorkerImportcfg(ctx, goBinary, t.TempDir(), os.Environ(), "", []string{"runtime"})
 	if err == nil {
 		t.Fatal("want an error, got nil")
 	}
@@ -70,7 +70,7 @@ func TestBashPPBuildWorkerImportcfgContextDeadlineNotLost(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 
-	err := bashPPBuildWorkerImportcfg(ctx, goBinary, dir, os.Environ(), dir, source, filepath.Join(dir, "worker"))
+	err := bashPPBuildWorkerImportcfg(ctx, goBinary, dir, os.Environ(), "", dir, source, filepath.Join(dir, "worker"))
 	if err == nil {
 		t.Fatal("want an error, got nil")
 	}

@@ -593,13 +593,20 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 			return fmt.Errorf("gosource: build dependency bridge: %w: %s", err, diagnostics.String())
 		}
 	} else if len(req.MappedCompanions) > 0 {
-		build := exec.CommandContext(ctx, req.internalBuildGo(), "build", "-p", "2", "-overlay="+file.overlay, "-o", binary, file.buildPath)
-		build.Dir, build.Env = file.sourceDir, setEnvString(buildEnv, "PWD", file.sourceDir)
-		var diagnostics bytes.Buffer
-		build.Stdout, build.Stderr = &diagnostics, &diagnostics
-		if err = build.Run(); err != nil {
+		// The worker imports a mapped companion package (possibly internal, e.g.
+		// cmd/compile/internal/ssa) whose overlaid form beside its assembly is
+		// what the native side must link. `go build` of the worker would re-apply
+		// cmd/go's DIRECTORY internal rule to EVERY worker import from the
+		// companion's directory, refusing an internal package the identity rule
+		// already admitted for this program (testing/internal/testdeps under the
+		// authenticated test-main fact sits in a different tree entirely). The
+		// importcfg route compiles the worker directly and lists its dependency
+		// closure by path, so the companion is exported from the overlay while
+		// the admitted internal imports are never re-decided. See D8 and
+		// bashPPBuildWorkerImportcfg.
+		if err = bashPPBuildWorkerImportcfg(ctx, req.internalBuildGo(), file.sourceDir, setEnvString(buildEnv, "PWD", file.sourceDir), file.overlay, file.work, file.Name(), binary); err != nil {
 			cleanup()
-			return fmt.Errorf("gosource: build mapped companion dependency bridge: %w: %s", err, diagnostics.String())
+			return err
 		}
 	} else if policy == bashPPScratchSourceRoot {
 		// go:embed patterns resolve against the worker's logical location;
@@ -612,7 +619,7 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 			cleanup()
 			return fmt.Errorf("gosource: build dependency bridge: %w: %s", err, diagnostics.String())
 		}
-	} else if err = bashPPBuildWorkerImportcfg(ctx, req.internalBuildGo(), bashPPModuleRequest(req).Dir, buildEnv, filepath.Dir(file.Name()), file.Name(), binary); err != nil {
+	} else if err = bashPPBuildWorkerImportcfg(ctx, req.internalBuildGo(), bashPPModuleRequest(req).Dir, buildEnv, "", filepath.Dir(file.Name()), file.Name(), binary); err != nil {
 		// The importcfg route: the worker's imports were decided at the
 		// check (identity-keyed, D8); cmd/go's directory rule does not
 		// re-decide them. See bashpp_sprint165_runtime2_worker_build.go.

@@ -61,9 +61,17 @@ func bashPPWorkerImportPaths(source string) ([]string, error) {
 
 // bashPPWorkerImportcfg lists the export data of the worker's dependency
 // closure in the module context, in the importcfg form the compiler and the
-// linker read. Packages without export data (unsafe) are omitted.
-func bashPPWorkerImportcfg(ctx context.Context, goBinary, dir string, env []string, imports []string) ([]byte, error) {
-	args := append([]string{"list", "-export", "-deps", "-p", "2", "-f", "{{if .Export}}packagefile {{.ImportPath}}={{.Export}}{{end}}"}, imports...)
+// linker read. Packages without export data (unsafe) are omitted. A non-empty
+// overlay is threaded to the listing so a mapped companion's dependency is
+// exported from the overlaid package (the generated helper beside its assembly)
+// rather than from its original interpreted source.
+func bashPPWorkerImportcfg(ctx context.Context, goBinary, dir string, env []string, overlay string, imports []string) ([]byte, error) {
+	args := []string{"list", "-export", "-deps", "-p", "2"}
+	if overlay != "" {
+		args = append(args, "-overlay="+overlay)
+	}
+	args = append(args, "-f", "{{if .Export}}packagefile {{.ImportPath}}={{.Export}}{{end}}")
+	args = append(args, imports...)
 	list := exec.CommandContext(ctx, goBinary, args...)
 	list.Dir, list.Env = dir, env
 	var out, diagnostics bytes.Buffer
@@ -86,8 +94,11 @@ func bashPPWorkerImportcfg(ctx context.Context, goBinary, dir string, env []stri
 
 // bashPPBuildWorkerImportcfg compiles and links the worker source into binary.
 // work is the private scratch directory the source already lives in; every
-// intermediate artifact is written there and removed with it.
-func bashPPBuildWorkerImportcfg(ctx context.Context, goBinary, dir string, env []string, work, source, binary string) error {
+// intermediate artifact is written there and removed with it. A non-empty
+// overlay is threaded to the dependency listing so a mapped companion's
+// package is exported from its overlaid form; the compile and link steps read
+// the worker source directly and never re-apply cmd/go's directory rule.
+func bashPPBuildWorkerImportcfg(ctx context.Context, goBinary, dir string, env []string, overlay, work, source, binary string) error {
 	data, err := os.ReadFile(source)
 	if err != nil {
 		return err
@@ -96,7 +107,7 @@ func bashPPBuildWorkerImportcfg(ctx context.Context, goBinary, dir string, env [
 	if err != nil {
 		return err
 	}
-	cfg, err := bashPPWorkerImportcfg(ctx, goBinary, dir, env, imports)
+	cfg, err := bashPPWorkerImportcfg(ctx, goBinary, dir, env, overlay, imports)
 	if err != nil {
 		return err
 	}
