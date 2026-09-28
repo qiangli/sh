@@ -437,6 +437,21 @@ func (r *Runner) bashPPEvalTypedValue(expr syntax.BashPPExpr, expected syntax.Ba
 		}
 		return value, &bashPPCollectionMeta{kind: "interface", typ: expected, interfaceValue: iv}, nil
 	}
+	// unsafe.Pointer is a named basic type to the Go type checker, rather than
+	// a *T shape, but its runtime value still names interpreter storage. In a
+	// typed aggregate slot such as reflect.SliceHeader.Data, route conversions
+	// like unsafe.Pointer(&slice[0]) through the pointer evaluator before the
+	// scalar fallback tries to evaluate the address expression arithmetically.
+	if r.bashPPGoSource && r.goSourceUnsafePointerType(expected) {
+		if goSourceNilLiteral(expr) {
+			return nil, bashPPPointerMeta(expected), nil
+		}
+		ptr, err := r.bashPPPointerExprValue(expr)
+		if err != nil {
+			return nil, nil, err
+		}
+		return ptr, bashPPPointerMeta(expected), nil
+	}
 	if pointerType, ok := r.bashPPPointerType(expected); ok {
 		if id, nilIdent := expr.(*syntax.BashPPIdent); nilIdent && id.Name.Value == "nil" {
 			return nil, bashPPPointerMeta(expected), nil
