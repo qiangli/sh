@@ -515,7 +515,7 @@ func (r *Runner) goSourceNativeSequenceContents(native *bashPPBridgeValue, expec
 			return nil, nil, true, fmt.Errorf("BASHPP-ECOLLECTION-ELEMENT: %v", err)
 		}
 		out = append(out, value)
-		meta.sequence = append(meta.sequence, child)
+		meta.sequence = append(meta.sequence, bashPPBridgeNestedMeta(child))
 	}
 	return out, meta, true, nil
 }

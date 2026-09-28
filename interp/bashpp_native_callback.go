@@ -657,6 +657,7 @@ func (r *Runner) bashPPBridgeContents(v bashPPBridgeValue, typ syntax.BashPPType
 		if named, ok := dynamic.(*syntax.BashPPNamedType); ok && named.Name != nil {
 			payload.typeName = named.Name.Value
 		}
+		innerMeta = bashPPBridgeNestedMeta(innerMeta)
 		bashPPStoreCellValue(payload, inner, innerMeta)
 		iv := &bashPPInterfaceValue{cell: payload, dynamic: dynamic}
 		return inner, &bashPPCollectionMeta{kind: "interface", typ: typ, interfaceValue: iv}, nil
@@ -707,7 +708,7 @@ func (r *Runner) bashPPBridgeContents(v bashPPBridgeValue, typ syntax.BashPPType
 			if err != nil {
 				return nil, nil, err
 			}
-			out[field.name], meta.mapping[field.name] = value, child
+			out[field.name], meta.mapping[field.name] = value, bashPPBridgeNestedMeta(child)
 		}
 		return out, meta, nil
 	case *syntax.BashPPCollectionType:
@@ -726,7 +727,7 @@ func (r *Runner) bashPPBridgeContents(v bashPPBridgeValue, typ syntax.BashPPType
 				if err != nil {
 					return nil, nil, err
 				}
-				if _, err := r.bashPPSprint165MapStore(out, meta, key, keyMeta, shape.Key, value, child); err != nil {
+				if _, err := r.bashPPSprint165MapStore(out, meta, key, bashPPBridgeNestedMeta(keyMeta), shape.Key, value, bashPPBridgeNestedMeta(child)); err != nil {
 					return nil, nil, err
 				}
 			}
@@ -743,7 +744,7 @@ func (r *Runner) bashPPBridgeContents(v bashPPBridgeValue, typ syntax.BashPPType
 				return nil, nil, err
 			}
 			out = append(out, value)
-			meta.sequence = append(meta.sequence, child)
+			meta.sequence = append(meta.sequence, bashPPBridgeNestedMeta(child))
 		}
 		return out, meta, nil
 	}
@@ -774,6 +775,19 @@ func bashPPBridgeCarrierText(v bashPPBridgeValue, value any) bool {
 		return false
 	}
 	return v.Kind != "string"
+}
+
+// bashPPBridgeNestedMeta drops the scalar tag bashPPBridgeContents puts on a
+// scalar result: the tag keeps a top-level callback result's declared type
+// (sh 36121727), but inside a struct, map, sequence or interface payload a
+// scalar is stored bare, as every reader of a collection expects. A tagged
+// element made a range variable over a written-back slice (sort.Strings)
+// bind as an object.
+func bashPPBridgeNestedMeta(meta *bashPPCollectionMeta) *bashPPCollectionMeta {
+	if bashPPScalarComparableMeta(meta) {
+		return nil
+	}
+	return meta
 }
 
 func bashPPBridgeDynamicType(name string) syntax.BashPPTypeExpr {

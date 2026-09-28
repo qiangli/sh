@@ -637,7 +637,7 @@ func applyNativeSliceBuffers(runner *Runner, q bashPPBridgeRequest, reply bashPP
 				if err != nil {
 					return fmt.Errorf("gosource: invalid native slice writeback: %w", err)
 				}
-				values[j], metas[j] = value, meta
+				values[j], metas[j] = value, bashPPBridgeNestedMeta(meta)
 			}
 		} else {
 			for j, v := range wire.Value.Elements {
