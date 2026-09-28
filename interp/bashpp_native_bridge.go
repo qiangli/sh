@@ -91,6 +91,7 @@ type bashPPBridgeValue struct {
 	Length    int                          `json:"length,omitempty"`
 	Capacity  int                          `json:"capacity,omitempty"`
 	Interface string                       `json:"interface,omitempty"`
+	Signature string                       `json:"signature,omitempty"`
 	Session   string                       `json:"session,omitempty"`
 	Kind      string                       `json:"kind"`
 	Type      string                       `json:"type,omitempty"`
