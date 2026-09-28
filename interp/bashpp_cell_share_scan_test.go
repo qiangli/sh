@@ -37,14 +37,19 @@ import (
 //   - an identifier anywhere assigned from `.view()` is clean, which is the
 //     fix this lane applied;
 //   - a store is not a read: writers answer to the guard, not to this scan.
+//     That covers the WHOLE selector chain an assignment targets, so
+//     `cell.vr.Str = text` is one store into cell.vr and not a read of it;
+//   - an identifier whose guard the function both takes and releases reads
+//     under that guard, which is the discipline's other half: a read-modify
+//     -write of one binding — the attribute merge in [Runner.setVar], the
+//     scalar stores in bashPPForAssign and bashPPIncDec — has to happen inside
+//     a single region, and a snapshot cannot express it. The scan trusts such a
+//     function as far as the guard reaches; what keeps it honest is the rule in
+//     bashpp_cell_share.go that a guarded region moves fields and does nothing
+//     else, which is short enough to check by eye at each of the six sites.
 var bashPPCellDirectReaders = []string{
-	"Get",
-	"bashPPApplyMapUpdate",
-	"bashPPApplySliceUpdate",
-	"bashPPAssign",
 	"bashPPBindBuiltinResult",
 	"bashPPBooleanExprShape",
-	"bashPPBuiltinAssign",
 	"bashPPCallbackFunctionCapture",
 	"bashPPChannelOperation",
 	"bashPPCollectionAssign",
@@ -53,27 +58,21 @@ var bashPPCellDirectReaders = []string{
 	"bashPPConstantScalarExpr",
 	"bashPPEvalConstIntExpr",
 	"bashPPEvalTypedValue",
-	"bashPPForAssign",
 	"bashPPGoArgWord",
 	"bashPPGoSourceTaskFunc",
-	"bashPPIncDec",
 	"bashPPInvoke",
 	"bashPPLookupSelectorFunc",
 	"bashPPMakeInterfaceValue",
-	"bashPPMixedImportArg",
 	"bashPPNativeArgCells",
 	"bashPPNilFuncCall",
 	"bashPPRangeScalarValue",
 	"bashPPReflectValueReceiver",
-	"bashPPResolveWord",
 	"bashPPShortDecl",
 	"bashPPSprint165StoredBridgeScalar",
 	"bashPPSwitchConstantExpr",
 	"bashPPTestingArguments",
-	"delVar",
 	"goSourceMethodExprType",
 	"goSourceNativeAssignCall",
-	"goSourceParallelDecl",
 	"goSourcePrintReferenceKind",
 	"goSourcePrintReferenceOperand",
 	"goSourceReceiveAssign",
@@ -81,7 +80,27 @@ var bashPPCellDirectReaders = []string{
 	"goSourceUnsafeIntegerOperand",
 	"goSourceValueSwitchTag",
 	"goSourceWaitGroupNamed",
-	"setVar",
+}
+
+// markStore marks an assignment target and every selector it is reached
+// through as written. `cell.vr.Str = text` stores into cell.vr; the key of an
+// indexed target is NOT on that chain and stays a read.
+func markStore(writes map[ast.Node]bool, target ast.Expr) {
+	for {
+		writes[target] = true
+		switch x := target.(type) {
+		case *ast.SelectorExpr:
+			target = x.X
+		case *ast.IndexExpr:
+			target = x.X
+		case *ast.StarExpr:
+			target = x.X
+		case *ast.ParenExpr:
+			target = x.X
+		default:
+			return
+		}
+	}
 }
 
 func bashPPCellPtrType(e ast.Expr) bool {
@@ -149,19 +168,31 @@ func TestBashPPCellReadersTakeAView(t *testing.T) {
 				continue
 			}
 			looked, viewed := map[string]bool{}, map[string]bool{}
+			locked, unlocked := map[string]bool{}, map[string]bool{}
 			writes := map[ast.Node]bool{}
 			ast.Inspect(fn.Body, func(n ast.Node) bool {
 				switch x := n.(type) {
+				case *ast.CallExpr:
+					if sel, ok := x.Fun.(*ast.SelectorExpr); ok {
+						if id, ok := sel.X.(*ast.Ident); ok {
+							switch sel.Sel.Name {
+							case "lock":
+								locked[id.Name] = true
+							case "unlock":
+								unlocked[id.Name] = true
+							}
+						}
+					}
 				case *ast.UnaryExpr:
 					// Taking an address is a handle to write through.
 					if x.Op == token.AND {
 						writes[x.X] = true
 					}
 				case *ast.IncDecStmt:
-					writes[x.X] = true
+					markStore(writes, x.X)
 				case *ast.AssignStmt:
 					for _, lhs := range x.Lhs {
-						writes[lhs] = true
+						markStore(writes, lhs)
 					}
 					if len(x.Lhs) != len(x.Rhs) {
 						return true
@@ -189,6 +220,11 @@ func TestBashPPCellReadersTakeAView(t *testing.T) {
 				}
 				return true
 			})
+			for name := range locked {
+				if unlocked[name] {
+					viewed[name] = true
+				}
+			}
 			ast.Inspect(fn.Body, func(n ast.Node) bool {
 				sel, ok := n.(*ast.SelectorExpr)
 				if !ok || writes[ast.Node(sel)] || !guarded[sel.Sel.Name] {

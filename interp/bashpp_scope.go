@@ -416,7 +416,10 @@ var _ expand.Environ = bashPPEnviron{}
 
 func (e bashPPEnviron) Get(name string) expand.Variable {
 	if cell := e.scope.lookup(name); cell != nil {
-		return cell.vr
+		// Every expansion of a `var` binding comes through here, including one
+		// evaluated in an interpreted task that names a cell its launcher also
+		// holds, so the value is read through its guard.
+		return cell.viewVar()
 	}
 	return e.parent.Get(name)
 }

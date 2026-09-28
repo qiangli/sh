@@ -1811,7 +1811,7 @@ func (r *Runner) delVar(name string) {
 	// check — which is what `const` marking the variable readonly buys.
 	if r.bashPPScope != nil {
 		if cell := r.bashPPScope.lookup(name); cell != nil {
-			r.refuseDeclarationUnset(name, cell.constant)
+			r.refuseDeclarationUnset(name, cell.viewConstant())
 			return
 		}
 	}

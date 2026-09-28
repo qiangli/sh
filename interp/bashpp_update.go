@@ -127,7 +127,7 @@ func (r *Runner) bashPPApplyUpdate(target syntax.BashPPExpr, op string, rhs synt
 // lands in that payload even if the RHS rebinds the variable that named it.
 func (r *Runner) bashPPApplySliceUpdate(target *syntax.BashPPIndexExpr, collection *syntax.BashPPCollectionType, op string, rhs syntax.BashPPExpr, pos syntax.Pos) {
 	if root, ok := bashPPCollectionRoot(target); ok {
-		if cell := r.bashPPScope.lookup(root); cell != nil {
+		if cell := r.bashPPScope.lookup(root).view(); cell != nil {
 			if cell.constant || cell.vr.ReadOnly || cell.object != nil && cell.object.readonly {
 				r.bashPPUpdateError(target.Pos(), "WRITE", "BASHPP-EREADONLY-MUTATION: cannot mutate readonly slice")
 				return
@@ -220,7 +220,7 @@ func (r *Runner) bashPPApplyMapUpdate(target *syntax.BashPPIndexExpr, collection
 	// and mutated in place. The readonly guard only applies when the operand
 	// names a variable that could itself be readonly.
 	if root, ok := bashPPCollectionRoot(target); ok {
-		cell := r.bashPPScope.lookup(root)
+		cell := r.bashPPScope.lookup(root).view()
 		if cell == nil {
 			r.bashPPUpdateError(target.Pos(), "TARGET", "undefined map target "+root)
 			return
@@ -423,7 +423,7 @@ func (r *Runner) bashPPWriteUpdatePointer(ptr *bashPPPointer, value any, kind co
 	if target.object != nil && target.object.readonly {
 		return fmt.Errorf("BASHPP-EREADONLY-MUTATION: cannot mutate readonly value %q", target.object.owner)
 	}
-	if target.constant || target.vr.ReadOnly {
+	if guard := target.view(); guard.constant || guard.vr.ReadOnly {
 		return fmt.Errorf("BASHPP-EREADONLY-MUTATION: cannot mutate readonly or constant value")
 	}
 	if len(ptr.path) == 0 {

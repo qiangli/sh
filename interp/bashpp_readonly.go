@@ -118,8 +118,9 @@ func (r *Runner) bashPPAssign(ctx context.Context, assign *syntax.BashPPAssign) 
 	}
 	target := bashPPWordSource(assign.Target)
 	cell := r.bashPPScope.lookup(target)
-	if syntax.BashPPValidIdent(target) && cell != nil && cell.pointer && assign.ValueExpr != nil {
-		value, meta, err := r.bashPPEvalTypedValue(assign.ValueExpr, cell.declType)
+	binding := cell.view()
+	if syntax.BashPPValidIdent(target) && binding != nil && binding.pointer && assign.ValueExpr != nil {
+		value, meta, err := r.bashPPEvalTypedValue(assign.ValueExpr, binding.declType)
 		if errors.Is(err, errBashPPScalarInterrupted) {
 			return
 		}
@@ -128,7 +129,10 @@ func (r *Runner) bashPPAssign(ctx context.Context, assign *syntax.BashPPAssign) 
 			r.exit = exitStatus{code: 2}
 			return
 		}
-		if cell.constant || cell.vr.ReadOnly {
+		// The RHS above ran guest code, which could have marked the binding
+		// readonly, so this guard asks the cell again rather than the snapshot
+		// the shape decision was made on.
+		if guard := cell.view(); guard.constant || guard.vr.ReadOnly {
 			r.errf("BASHPP-EREADONLY-MUTATION: cannot mutate readonly value through pointer\n")
 			r.exit = exitStatus{code: 2}
 			return
@@ -136,12 +140,14 @@ func (r *Runner) bashPPAssign(ctx context.Context, assign *syntax.BashPPAssign) 
 		bashPPStoreCellValue(cell, value, meta)
 		return
 	}
-	if !syntax.BashPPValidIdent(target) || cell == nil || cell.object == nil || !cell.object.readonly {
+	// No guest code ran on the way here: the block above returns whenever it
+	// evaluates anything, so the shape snapshot is still what the cell holds.
+	if !syntax.BashPPValidIdent(target) || binding == nil || binding.object == nil || !binding.object.readonly {
 		r.errf("bash++: mutation is only implemented for readonly objects\n")
 		r.exit = exitStatus{code: 2}
 		return
 	}
-	r.errf("BASHPP-EREADONLY-MUTATION: cannot assign to readonly value %q\n", cell.object.owner)
+	r.errf("BASHPP-EREADONLY-MUTATION: cannot assign to readonly value %q\n", binding.object.owner)
 	r.exit = exitStatus{code: 2}
 }
 
@@ -170,7 +176,7 @@ func (r *Runner) bashPPBuiltinAssign(assign *syntax.BashPPAssign) {
 		r.bashPPBuiltinError("TYPE", "assignment target %q is not declared", target)
 		return
 	}
-	if cell.constant || cell.vr.ReadOnly {
+	if guard := cell.view(); guard.constant || guard.vr.ReadOnly {
 		r.errf("BASHPP-EREADONLY-MUTATION: cannot assign to readonly value %q\n", target)
 		r.exit = exitStatus{code: 2}
 		return
@@ -187,13 +193,13 @@ func (r *Runner) bashPPBuiltinAssign(assign *syntax.BashPPAssign) {
 		}
 		return
 	}
-	owner := cell.object
+	owner := cell.view().object
 	cell.publish(result)
 	// The target keeps naming its own storage: append that reused the backing
 	// array returns the source identity, and one that reallocated returns a
 	// fresh one, but either way this variable is what owns it here.
-	if cell.object != nil && cell.object.owner == "" && owner != nil {
-		cell.object.owner = owner.owner
+	if stored := cell.view(); stored.object != nil && stored.object.owner == "" && owner != nil {
+		stored.object.owner = owner.owner
 	}
 }
 
@@ -627,7 +633,7 @@ func (r *Runner) bashPPResolveWord(w *syntax.Word) (string, bool) {
 	if !ok || len(parts) == 0 {
 		return "", false
 	}
-	cell := r.bashPPScope.lookup(root)
+	cell := r.bashPPScope.lookup(root).view()
 	if cell == nil || cell.vr.Kind != expand.Object {
 		return "", false
 	}
@@ -806,7 +812,7 @@ func (r *Runner) bashPPMixedImportArg(arg *syntax.Word) string {
 	if !syntax.BashPPValidIdent(name) || r.bashPPScope == nil {
 		return name
 	}
-	cell := r.bashPPScope.lookup(name)
+	cell := r.bashPPScope.lookup(name).view()
 	if cell == nil || cell.vr.Kind != expand.String || cell.interfaceValue != nil || cell.pointer {
 		return name
 	}
