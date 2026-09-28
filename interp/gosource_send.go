@@ -47,6 +47,12 @@ func (r *Runner) goSourceChannelOperand(expr syntax.BashPPExpr, word *syntax.Wor
 		r.bashPPGoSendError(expr, fmt.Errorf("Go channel operand has no value"))
 		return nil, false
 	}
+	// One snapshot for the whole operand decision. The identifier branch above
+	// names storage a task can alias, and the decision reads the declared type,
+	// the shell value, the channel and its owner — a bundle that must come from
+	// one store. Everything the decision hands the cell to (goSourceNativeChannel)
+	// reads the snapshot too.
+	cell = cell.view()
 	typ, _ := r.bashPPUnderlyingType(cell.declType).(*syntax.BashPPChanType)
 	if typ != nil && (((operation == "send" || operation == "close") && typ.Direction == "recv") || (operation == "receive" && typ.Direction == "send")) {
 		r.bashPPGoSendError(expr, fmt.Errorf("cannot %s on %s-only channel", operation, typ.Direction))

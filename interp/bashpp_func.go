@@ -2759,11 +2759,12 @@ func (r *Runner) bashPPShortDeclCall(ctx context.Context, d *syntax.BashPPShortD
 			declared := resultTypes[i]
 			base := strings.TrimPrefix(declared, "*")
 			if _, ok := r.bashPPTypes[base]; ok {
+				pointer := r.bashPPDeclaredPointer(declared)
 				target.typeName = base
-				target.pointer = r.bashPPDeclaredPointer(declared)
+				target.pointer = pointer
 				// A pointer binding's text is always empty, so the result cell
 				// is what distinguishes a live pointer from a nil one.
-				target.nilPointer = target.pointer && target.pointerValue == nil && results[i] == ""
+				target.nilPointer = pointer && target.view().pointerValue == nil && results[i] == ""
 			}
 		}
 	}

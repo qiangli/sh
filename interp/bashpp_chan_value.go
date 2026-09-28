@@ -45,7 +45,7 @@ func (r *Runner) bashPPChanElem(chanWord *syntax.Word) string {
 	if r.bashPPScope == nil {
 		return ""
 	}
-	cell := r.bashPPScope.lookup(r.literal(chanWord))
+	cell := r.bashPPScope.lookup(r.literal(chanWord)).view()
 	if cell == nil || cell.channel == nil {
 		return ""
 	}

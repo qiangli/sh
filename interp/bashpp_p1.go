@@ -1945,7 +1945,7 @@ func (r *Runner) bashPPDirectChannel(w *syntax.Word) (*bashPPChannel, *bashPPCon
 	if !ok || !syntax.BashPPValidIdent(lit.Value) {
 		return nil, nil
 	}
-	cell := r.bashPPScope.lookup(lit.Value)
+	cell := r.bashPPScope.lookup(lit.Value).view()
 	if cell == nil {
 		return nil, nil
 	}

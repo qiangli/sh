@@ -344,7 +344,7 @@ func (r *Runner) bashPPRangeScalar(ctx context.Context, rng *syntax.BashPPRange)
 		return false
 	}
 	if root, ok := bashPPCollectionRoot(rng.Expr); ok && r.bashPPScope != nil {
-		cell := r.bashPPScope.lookup(root)
+		cell := r.bashPPScope.lookup(root).view()
 		if cell != nil {
 			if cell.channel != nil {
 				return false

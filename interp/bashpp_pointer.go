@@ -135,7 +135,7 @@ func (r *Runner) bashPPPointerExprType(expr syntax.BashPPExpr, ptr *bashPPPointe
 	case *syntax.BashPPParenExpr:
 		return r.bashPPPointerExprType(x.X, ptr)
 	case *syntax.BashPPIdent:
-		if cell := r.bashPPScope.lookup(x.Name.Value); cell != nil && cell.pointer {
+		if cell := r.bashPPScope.lookup(x.Name.Value).view(); cell != nil && cell.pointer {
 			return cell.declType
 		}
 	case *syntax.BashPPSelectorExpr, *syntax.BashPPIndexExpr, *syntax.BashPPSliceExpr:
@@ -251,7 +251,7 @@ func (r *Runner) bashPPSliceToArrayPointer(conv *syntax.BashPPConvertExpr, targe
 		return nil, false, nil
 	}
 	if ident, direct := operand.(*syntax.BashPPIdent); direct {
-		cell := r.bashPPScope.lookup(ident.Name.Value)
+		cell := r.bashPPScope.lookup(ident.Name.Value).view()
 		if cell != nil && cell.pointer {
 			return nil, false, nil
 		}
@@ -355,7 +355,7 @@ func (r *Runner) bashPPPointerExprValue(expr syntax.BashPPExpr) (ptr *bashPPPoin
 		}
 		return r.bashPPPointerForStorage(cell, alloc, true), nil
 	case *syntax.BashPPIdent:
-		cell := r.bashPPScope.lookup(x.Name.Value)
+		cell := r.bashPPScope.lookup(x.Name.Value).view()
 		if cell == nil || !cell.pointer {
 			if native := r.goSourceNativePointerCell(x.Name.Value); native != nil {
 				return nil, &bashPPNativePointerValueError{value: native}
@@ -519,11 +519,14 @@ ordinaryAddress:
 	if cell == nil {
 		return nil, fmt.Errorf("BASHPP-EPOINTER-TARGET: undefined pointer target %s", root)
 	}
-	if cell.constant {
+	// The pointer must name the REAL storage, so cell itself is what goes into
+	// target; every field this decision reads comes from one snapshot of it.
+	stored := cell.view()
+	if stored.constant {
 		return nil, fmt.Errorf("BASHPP-ENONADDRESSABLE: constant %s is not addressable", root)
 	}
 	ptr := &bashPPPointer{target: cell}
-	typ := cell.declType
+	typ := stored.declType
 	// Taking a typed variable's address needs its storage and declared type,
 	// not its current value metadata. Atomic operations may be updating that
 	// metadata concurrently before this address reaches the atomic lock.
@@ -535,12 +538,12 @@ ordinaryAddress:
 		return ptr, nil
 	}
 	meta := bashPPCellMeta(cell)
-	if cell.pointer {
+	if stored.pointer {
 		if _, direct := expr.(*syntax.BashPPIdent); !direct {
-			if cell.pointerValue == nil {
+			if stored.pointerValue == nil {
 				return nil, errBashPPNilDereference
 			}
-			base := cell.pointerValue
+			base := stored.pointerValue
 			ptr = &bashPPPointer{target: base.target, path: append([]bashPPPointerStep(nil), base.path...), elem: base.elem}
 			typ = base.elem
 			_, meta, _, _ = base.read()
@@ -550,7 +553,7 @@ ordinaryAddress:
 		typ = meta.typ
 	}
 	if typ == nil {
-		typ = bashPPInferredCellType(cell)
+		typ = bashPPInferredCellType(stored)
 	}
 	var descend func(syntax.BashPPExpr) error
 	descend = func(node syntax.BashPPExpr) error {
@@ -567,7 +570,7 @@ ordinaryAddress:
 			// this walker does not build, so it is refused rather than
 			// silently resolved to the wrong address.
 			inner, isIdent := x.X.(*syntax.BashPPIdent)
-			if isIdent && cell.pointer && inner.Name.Value == root {
+			if isIdent && stored.pointer && inner.Name.Value == root {
 				return nil
 			}
 			return fmt.Errorf("BASHPP-ENONADDRESSABLE: operand is not addressable")
@@ -1105,11 +1108,11 @@ func (r *Runner) bashPPBindPointerExpr(name string, expr syntax.BashPPExpr) bool
 		}
 		value, typ = ptr, &syntax.BashPPPointerType{Element: ptr.elem}
 	case *syntax.BashPPIdent:
-		cell := r.bashPPScope.lookup(x.Name.Value)
-		if cell == nil || !cell.pointer {
+		operand := r.bashPPScope.lookup(x.Name.Value).view()
+		if operand == nil || !operand.pointer {
 			return false
 		}
-		value, typ = cell.pointerValue, cell.declType
+		value, typ = operand.pointerValue, operand.declType
 	case *syntax.BashPPDerefExpr:
 		ptr, err := r.bashPPPointerExprValue(x.X)
 		if err != nil {
@@ -1152,8 +1155,10 @@ func (r *Runner) bashPPBindPointerExpr(name string, expr syntax.BashPPExpr) bool
 		}
 	}
 	bashPPStoreCellValue(cell, value, meta)
-	if cell.object != nil && cell.object.owner == "" {
-		cell.object.owner = name
+	if stored := cell.view(); stored.object != nil && stored.object.owner == "" {
+		// The identity pointer keeps its identity through the snapshot, so
+		// naming its owner through one is the same store.
+		stored.object.owner = name
 	}
 	return true
 }

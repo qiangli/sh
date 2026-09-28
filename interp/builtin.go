@@ -5784,7 +5784,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					continue
 				}
 				if r.bashPPScope != nil {
-					if cell := r.bashPPScope.lookup(arg); cell != nil && cell.channel != nil {
+					if cell := r.bashPPScope.lookup(arg).view(); cell != nil && cell.channel != nil {
 						r.errf("bash++: channel capabilities cannot be exported\n")
 						exit.code = 2
 						continue

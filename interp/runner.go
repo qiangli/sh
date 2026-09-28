@@ -8119,7 +8119,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			// The typed cell check covers `export ch`; the exact active-handle
 			// scan is defense in depth for `export saved=$ch` and concatenation.
 			if cm.Variant.Value == "export" {
-				cell := r.bashPPScope.lookup(as.Name.Value)
+				cell := r.bashPPScope.lookup(as.Name.Value).view()
 				if (cell != nil && cell.channel != nil) || r.bashPPVariableHasRuntimeHandle(vr) {
 					r.errf("%sexport: channel capabilities cannot be exported\n", r.bashErrPrefix(r.curStmtPos))
 					r.exit.code = 1

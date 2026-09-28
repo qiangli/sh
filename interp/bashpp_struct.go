@@ -1361,9 +1361,11 @@ func (r *Runner) bashPPPointerElementAssign(target *syntax.BashPPIndexExpr, rhs 
 	// operand, so that an index expression along the way -- `(*p)[next()][k]`
 	// -- is not evaluated a second time just to answer a readonly question.
 	if root, named := bashPPCollectionRoot(target.X); named && r.bashPPScope != nil {
-		owner := r.bashPPScope.lookup(root)
+		owner := r.bashPPScope.lookup(root).view()
 		if owner != nil && owner.pointer && owner.pointerValue != nil {
-			owner = owner.pointerValue.target
+			// The pointee is storage a task can alias too, so the hop takes its
+			// own snapshot rather than reading the cell the pointer names.
+			owner = owner.pointerValue.target.view()
 		}
 		if owner != nil {
 			if owner.object != nil && owner.object.readonly {

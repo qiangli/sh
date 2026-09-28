@@ -734,7 +734,7 @@ func (r *Runner) bashPPChannel(w *syntax.Word) (*bashPPChannel, bool) {
 		return nil, false
 	}
 	c := r.bashPPConcurrent
-	cell := r.bashPPScope.lookup(name)
+	cell := r.bashPPScope.lookup(name).view()
 	if cell == nil || cell.channel == nil || cell.channelOwner != c {
 		r.errf("bash++: %s is not a channel in this task group\n", name)
 		r.exit.code = 2
