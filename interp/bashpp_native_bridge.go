@@ -455,7 +455,6 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 	mailboxImports, mailboxSource := bashPPMailboxWorkerSource(mailbox != nil)
 	source = strings.Replace(source, "//CALLBACKMAILBOXIMPORTS", mailboxImports, 1)
 	source = strings.Replace(source, "//CALLBACKMAILBOX", mailboxSource, 1)
-	source = strings.Replace(source, "//CONNECTION", "const bridgeNetwork = "+strconv.Quote(bridgeNetwork)+"\nconst bridgeAddress = "+strconv.Quote(listener.Addr().String())+"\nconst bridgeAuth = "+strconv.Quote(auth)+"\nconst callbackMailboxPath = "+strconv.Quote(mailboxPath), 1)
 	stdoutDrain := req.Stdout != nil
 	if _, isFile := req.Stdout.(*os.File); isFile {
 		stdoutDrain = false
@@ -465,14 +464,17 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 		stderrDrain = false
 	}
 	sharedDrain := stdoutDrain && stderrDrain && bashPPSameWriter(req.Stderr, req.Stdout)
-	var barrierWrites strings.Builder
+	linkValues := map[string]string{
+		"bridgeNetwork":       bridgeNetwork,
+		"bridgeAddress":       listener.Addr().String(),
+		"callbackMailboxPath": mailboxPath,
+	}
 	if stdoutDrain {
-		fmt.Fprintf(&barrierWrites, "if _, err := bppOS.Stdout.Write([]byte(%q)); err == nil { outputBarrierStdoutSequence++; answer.OutputBarrierStdout = outputBarrierStdoutSequence }\n", stdoutMarker)
+		linkValues["bridgeStdoutBarrier"] = "1"
 	}
 	if stderrDrain && !sharedDrain {
-		fmt.Fprintf(&barrierWrites, "if _, err := bppOS.Stderr.Write([]byte(%q)); err == nil { outputBarrierStderrSequence++; answer.OutputBarrierStderr = outputBarrierStderrSequence }\n", stderrMarker)
+		linkValues["bridgeStderrBarrier"] = "1"
 	}
-	source = strings.Replace(source, "//OUTPUTBARRIER", barrierWrites.String(), 1)
 	scratchEnv := req.RuntimeEnv
 	if scratchEnv == nil {
 		scratchEnv = req.Env
@@ -505,6 +507,13 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 		cleanup()
 		return err
 	}
+	authPath := filepath.Join(filepath.Dir(file.Name()), "bridge-auth")
+	if err = os.WriteFile(authPath, []byte(auth), 0600); err != nil {
+		cleanup()
+		return err
+	}
+	linkValues["bridgeAuthPath"] = authPath
+	buildLDFlags := bashPPWorkerBuildLDFlags(linkValues)
 	binary := file.Name() + ".bin"
 	buildEnv := setEnvString(req.internalBuildEnv(), "CGO_ENABLED", "0")
 	if len(req.CgoPackages) > 0 {
@@ -543,7 +552,7 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 			}
 			paths = append(paths, path)
 		}
-		args := append([]string{"build", "-p", "2", "-overlay=" + file.overlay, "-o", binary}, paths...)
+		args := append([]string{"build", "-p", "2", "-ldflags=" + buildLDFlags, "-overlay=" + file.overlay, "-o", binary}, paths...)
 		build := exec.CommandContext(ctx, req.internalBuildGo(), args...)
 		build.Dir, build.Env = bashPPModuleRequest(req).Dir, buildEnv
 		var diagnostics bytes.Buffer
@@ -584,7 +593,7 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 			cleanup()
 			return err
 		}
-		build := exec.CommandContext(ctx, req.internalBuildGo(), "build", "-p", "2", "-overlay="+file.overlay, "-o", binary, ".")
+		build := exec.CommandContext(ctx, req.internalBuildGo(), "build", "-p", "2", "-ldflags="+buildLDFlags, "-overlay="+file.overlay, "-o", binary, ".")
 		build.Dir, build.Env = file.sourceDir, companionEnv
 		var diagnostics bytes.Buffer
 		build.Stdout, build.Stderr = &diagnostics, &diagnostics
@@ -604,14 +613,14 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 		// closure by path, so the companion is exported from the overlay while
 		// the admitted internal imports are never re-decided. See D8 and
 		// bashPPBuildWorkerImportcfg.
-		if err = bashPPBuildWorkerImportcfg(ctx, req.internalBuildGo(), file.sourceDir, setEnvString(buildEnv, "PWD", file.sourceDir), file.overlay, file.work, file.Name(), binary); err != nil {
+		if err = bashPPBuildWorkerImportcfg(ctx, req.internalBuildGo(), file.sourceDir, setEnvString(buildEnv, "PWD", file.sourceDir), file.overlay, file.work, file.Name(), binary, linkValues); err != nil {
 			cleanup()
 			return err
 		}
 	} else if policy == bashPPScratchSourceRoot {
 		// go:embed patterns resolve against the worker's logical location;
 		// only cmd/go's overlay gives the worker one inside the source root.
-		build := exec.CommandContext(ctx, req.internalBuildGo(), "build", "-p", "2", "-overlay="+file.overlay, "-o", binary, file.buildPath)
+		build := exec.CommandContext(ctx, req.internalBuildGo(), "build", "-p", "2", "-ldflags="+buildLDFlags, "-overlay="+file.overlay, "-o", binary, file.buildPath)
 		build.Dir, build.Env = bashPPModuleRequest(req).Dir, buildEnv
 		var diagnostics bytes.Buffer
 		build.Stdout, build.Stderr = &diagnostics, &diagnostics
@@ -619,7 +628,7 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 			cleanup()
 			return fmt.Errorf("gosource: build dependency bridge: %w: %s", err, diagnostics.String())
 		}
-	} else if err = bashPPBuildWorkerImportcfg(ctx, req.internalBuildGo(), bashPPModuleRequest(req).Dir, buildEnv, "", filepath.Dir(file.Name()), file.Name(), binary); err != nil {
+	} else if err = bashPPBuildWorkerImportcfg(ctx, req.internalBuildGo(), bashPPModuleRequest(req).Dir, buildEnv, "", filepath.Dir(file.Name()), file.Name(), binary, linkValues); err != nil {
 		// The importcfg route: the worker's imports were decided at the
 		// check (identity-keyed, D8); cmd/go's directory rule does not
 		// re-decide them. See bashpp_sprint165_runtime2_worker_build.go.

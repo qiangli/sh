@@ -22,6 +22,9 @@ package interp
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"go/parser"
 	"go/token"
@@ -31,6 +34,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // bashPPWorkerImportPaths reads the import paths of the generated worker
@@ -98,7 +102,7 @@ func bashPPWorkerImportcfg(ctx context.Context, goBinary, dir string, env []stri
 // overlay is threaded to the dependency listing so a mapped companion's
 // package is exported from its overlaid form; the compile and link steps read
 // the worker source directly and never re-apply cmd/go's directory rule.
-func bashPPBuildWorkerImportcfg(ctx context.Context, goBinary, dir string, env []string, overlay, work, source, binary string) error {
+func bashPPBuildWorkerImportcfg(ctx context.Context, goBinary, dir string, env []string, overlay, work, source, binary string, linkValues map[string]string) error {
 	data, err := os.ReadFile(source)
 	if err != nil {
 		return err
@@ -129,8 +133,157 @@ func bashPPBuildWorkerImportcfg(ctx context.Context, goBinary, dir string, env [
 		}
 		return nil
 	}
-	if err := run("tool", "compile", "-p", "main", "-importcfg", importcfg, "-o", archive, "-pack", source); err != nil {
+	cache, err := openBashPPWorkerArchiveCache(ctx, data, cfg, goBinary, env)
+	if err != nil {
 		return err
 	}
-	return run("tool", "link", "-importcfg", importcfg, "-buildmode=exe", "-o", binary, archive)
+	if cache != nil {
+		defer cache.close()
+		archive = cache.path
+	}
+	if cache == nil || cache.owned {
+		compiled := archive
+		if cache != nil {
+			compiled = cache.temp
+		}
+		if err := run("tool", "compile", "-p", "main", "-importcfg", importcfg, "-o", compiled, "-pack", source); err != nil {
+			return err
+		}
+		if cache != nil {
+			if err := os.Rename(compiled, archive); err != nil {
+				return fmt.Errorf("gosource: publish dependency bridge cache: %w", err)
+			}
+		}
+	}
+	linkArgs := []string{"tool", "link", "-importcfg", importcfg, "-buildmode=exe"}
+	for _, value := range bashPPWorkerLinkValues(linkValues) {
+		linkArgs = append(linkArgs, "-X", value)
+	}
+	linkArgs = append(linkArgs, "-o", binary, archive)
+	return run(linkArgs...)
+}
+
+const bashPPWorkerCacheFormat = "bashpp-worker-archive-v1"
+
+type bashPPWorkerArchiveCache struct {
+	path, temp, lock string
+	owned            bool
+	stop, stopped    chan struct{}
+}
+
+// openBashPPWorkerArchiveCache shares only the expensive compilation of the
+// generated dependency worker. The reexec launcher's private directory and
+// authenticated interpreter identity bound the cache to one parent program;
+// each child still links a fresh binary with fresh connection credentials.
+func openBashPPWorkerArchiveCache(ctx context.Context, source, importcfg []byte, goBinary string, env []string) (*bashPPWorkerArchiveCache, error) {
+	dir, interpreterID := os.Getenv(reexecPreparedCacheEnv), os.Getenv(reexecInterpreterIDEnv)
+	if dir == "" || interpreterID == "" {
+		return nil, nil
+	}
+	if !filepath.IsAbs(dir) {
+		return nil, fmt.Errorf("gosource: dependency bridge cache directory must be absolute")
+	}
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return nil, fmt.Errorf("gosource: create dependency bridge cache: %w", err)
+	}
+	h := sha256.New()
+	for _, value := range [][]byte{[]byte(bashPPWorkerCacheFormat), []byte(interpreterID), []byte(goBinary), source, importcfg} {
+		h.Write(value)
+		h.Write([]byte{0})
+	}
+	for _, name := range []string{"GOROOT", "GOTOOLCHAIN", "GOOS", "GOARCH", "GOEXPERIMENT", "GOAMD64", "GOARM64", "GO386", "GOMIPS", "GOMIPS64", "GOPPC64", "GORISCV64", "CGO_ENABLED"} {
+		h.Write([]byte(name))
+		h.Write([]byte{'='})
+		for _, entry := range env {
+			key, value, ok := strings.Cut(entry, "=")
+			if ok && strings.EqualFold(key, name) {
+				h.Write([]byte(value))
+				break
+			}
+		}
+		h.Write([]byte{0})
+	}
+	key := hex.EncodeToString(h.Sum(nil))
+	cache := &bashPPWorkerArchiveCache{
+		path: filepath.Join(dir, "worker-"+key+".a"),
+		lock: filepath.Join(dir, "worker-"+key+".lock"),
+	}
+	for {
+		if info, err := os.Stat(cache.path); err == nil && info.Mode().IsRegular() && info.Size() > 0 {
+			return cache, nil
+		}
+		lock, err := os.OpenFile(cache.lock, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+		if err == nil {
+			_ = lock.Close()
+			tmp, err := os.CreateTemp(dir, ".worker-*.a")
+			if err != nil {
+				_ = os.Remove(cache.lock)
+				return nil, err
+			}
+			cache.temp = tmp.Name()
+			_ = tmp.Close()
+			cache.owned = true
+			cache.stop, cache.stopped = make(chan struct{}), make(chan struct{})
+			go cache.keepLockFresh()
+			return cache, nil
+		}
+		if !errors.Is(err, os.ErrExist) {
+			return nil, fmt.Errorf("gosource: lock dependency bridge cache: %w", err)
+		}
+		if info, statErr := os.Stat(cache.lock); statErr == nil && time.Since(info.ModTime()) > 15*time.Minute {
+			_ = os.Remove(cache.lock)
+			continue
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+func (c *bashPPWorkerArchiveCache) close() {
+	if c == nil || !c.owned {
+		return
+	}
+	close(c.stop)
+	<-c.stopped
+	_ = os.Remove(c.temp)
+	_ = os.Remove(c.lock)
+	c.owned = false
+}
+
+func (c *bashPPWorkerArchiveCache) keepLockFresh() {
+	defer close(c.stopped)
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case now := <-ticker.C:
+			_ = os.Chtimes(c.lock, now, now)
+		case <-c.stop:
+			return
+		}
+	}
+}
+
+func bashPPWorkerLinkValues(values map[string]string) []string {
+	names := make([]string, 0, len(values))
+	for name := range values {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	out := make([]string, 0, len(names))
+	for _, name := range names {
+		out = append(out, "main."+name+"="+values[name])
+	}
+	return out
+}
+
+func bashPPWorkerBuildLDFlags(values map[string]string) string {
+	var flags []string
+	for _, value := range bashPPWorkerLinkValues(values) {
+		flags = append(flags, "-X", strconv.Quote(value))
+	}
+	return strings.Join(flags, " ")
 }

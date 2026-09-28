@@ -35,7 +35,16 @@ import (
 //IMPORTS
 )
 
-//CONNECTION
+// These session values are filled by the linker's -X flag. Keeping them out of
+// this large generated source lets self-reexec children share its compiled
+// archive while every linked helper still receives fresh connection secrets.
+var bridgeNetwork = ""
+var bridgeAddress = ""
+var bridgeAuthPath = ""
+var bridgeAuth = ""
+var callbackMailboxPath = ""
+var bridgeStdoutBarrier = ""
+var bridgeStderrBarrier = ""
 
 //EMBEDS
 
@@ -839,11 +848,17 @@ var outputBarrierStdoutSequence uint64
 var outputBarrierStderrSequence uint64
 func sendAnswer(answer response){
  outbound.Lock();defer outbound.Unlock()
- _ = bppOS.Stdout
- //OUTPUTBARRIER
+ if bridgeStdoutBarrier!="" {if _,err:=bppOS.Stdout.Write([]byte(bridgeAuth+"-stdout"));err==nil{outputBarrierStdoutSequence++;answer.OutputBarrierStdout=outputBarrierStdoutSequence}}
+ if bridgeStderrBarrier!="" {if _,err:=bppOS.Stderr.Write([]byte(bridgeAuth+"-stderr"));err==nil{outputBarrierStderrSequence++;answer.OutputBarrierStderr=outputBarrierStderrSequence}}
  _ = outbound.encoder.Encode(answer)
 }
+func loadBridgeAuth(){
+ if bridgeAuth!="" {return}
+ data,err:=bppOS.ReadFile(bridgeAuthPath);if err!=nil{panic(err)}
+ bridgeAuth=string(data)
+}
 func main(){
+ loadBridgeAuth()
  openCallbackMailbox()
  conn,err:=net.Dial(bridgeNetwork,bridgeAddress);if err!=nil{panic(err)};defer conn.Close()
  encoder:=json.NewEncoder(conn);if err=encoder.Encode(bridgeAuth);err!=nil{return};decoder:=json.NewDecoder(conn)
