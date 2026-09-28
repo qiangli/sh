@@ -2999,6 +2999,13 @@ func (p *dependencyCallbackProof) assign(lhs ast.Expr, value dependencyCallbackV
 	case *ast.SelectorExpr:
 		base := p.value(lhs.X, env)
 		if !value.tainted() {
+			// An authenticated receiver snapshot only proves the dynamic types
+			// that occupied its interface fields when the call began. A method
+			// body may replace one of those fields before dispatching through it.
+			// Preserve provenance carried by a tracked RHS, but represent an
+			// opaque RHS as an interface value with no observed implementations;
+			// keeping the old snapshot here would unsoundly prove a future value.
+			p.replaceInterfaceField(base, lhs.Sel.Name, value, make(map[*dependencyCallbackObject]bool))
 			if base.object == nil || !base.object.owned || base.object.escaped {
 				p.markEscaped([]dependencyCallbackValue{value})
 				return true
@@ -3054,6 +3061,44 @@ func (p *dependencyCallbackProof) assign(lhs ast.Expr, value dependencyCallbackV
 		return p.refuse(lhs, "assignment target cannot prove callback-bearing value local")
 	}
 	return true
+}
+
+// replaceInterfaceField updates a source-visible interface slot even when its
+// containing receiver is escaped. Escaped ownership controls whether storing a
+// callback is safe; it must not freeze the dynamic-type provenance used to
+// prove a later callback-bearing interface dispatch.
+func (p *dependencyCallbackProof) replaceInterfaceField(receiver dependencyCallbackValue, name string, value dependencyCallbackValue, seen map[*dependencyCallbackObject]bool) bool {
+	receiver = dependencyCallbackResolvedValue(receiver)
+	if receiver.object == nil || receiver.object.typ == "" || seen[receiver.object] {
+		return false
+	}
+	seen[receiver.object] = true
+	shape := p.types[receiver.object.typ]
+	if field, ok := shape.fields[name]; ok {
+		if !p.interfaceType(field.typ) {
+			return false
+		}
+		value = dependencyCallbackResolvedValue(value)
+		if value.object == nil {
+			value = dependencyCallbackSyntheticChild(receiver.object, field.typ, false)
+		}
+		if receiver.object.fields == nil {
+			receiver.object.fields = make(map[string]dependencyCallbackValue)
+		}
+		receiver.object.fields[name] = value
+		return true
+	}
+	for _, embedded := range shape.embedded {
+		child := receiver.object.fields[embedded]
+		if child.object == nil {
+			child = dependencyCallbackSyntheticChild(receiver.object, embedded, false)
+			receiver.object.fields[embedded] = child
+		}
+		if p.replaceInterfaceField(child, name, value, seen) {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *dependencyCallbackProof) currentResultName(name string) bool {
@@ -3523,6 +3568,11 @@ func dependencyCallbackMarkObjectEscaped(obj *dependencyCallbackObject, seen map
 	}
 	seen[obj] = true
 	obj.escaped = true
+	// Once a receiver alias crosses a call or another escape boundary, that
+	// code may replace an interface slot with a dynamic type which was not in
+	// the authenticated entry snapshot. Existing concrete object types remain
+	// useful, but snapshot-derived interface dispatch provenance does not.
+	obj.dispatchTypes = nil
 	for _, field := range obj.fields {
 		field = dependencyCallbackResolvedValue(field)
 		dependencyCallbackMarkObjectEscaped(field.object, seen)
