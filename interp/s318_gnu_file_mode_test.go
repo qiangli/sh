@@ -59,3 +59,24 @@ func TestS318GNUScriptFileMode(t *testing.T) {
 		})
 	}
 }
+
+// glibc's stdout printf fails an overflowing %s precision on Linux, but
+// `printf -v` formats through Bash's own buffer (printf7.sub line 88).
+func TestS318PrintfVarOverflowingStringPrecision(t *testing.T) {
+	src := "TOOBIG=9223372036854775825\nprintf -v VAR \"%.${TOOBIG}s\" XY\necho \"[$VAR]\"\n"
+	file, err := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(bytes.NewReader([]byte(src)), "./s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	r, err := New(Dir(t.TempDir()), StdIO(nil, &buf, &buf), WithBashCompatErrors(true), WithBashSource([]byte(src)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Run(context.Background(), file); err != nil {
+		buf.WriteString(err.Error())
+	}
+	if got := buf.String(); got != "[XY]\n" {
+		t.Fatalf("got %q, want %q", got, "[XY]\n")
+	}
+}

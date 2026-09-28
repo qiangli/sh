@@ -1149,6 +1149,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			return nil
 		}
 		defer func() { r.ecfg.OnPercentN = prevOnPercentN }()
+		prevPrintfAssign := r.ecfg.PrintfAssign
+		r.ecfg.PrintfAssign = assignTo != ""
+		defer func() { r.ecfg.PrintfAssign = prevPrintfAssign }()
 		for {
 			s, n, err := expand.Format(r.ecfg, format, args)
 			stop := errors.Is(err, expand.ErrPrintfStop)

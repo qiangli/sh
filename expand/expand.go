@@ -158,6 +158,10 @@ type Config struct {
 	// the count to the named variable. If nil, %n is a no-op.
 	OnPercentN func(name string, n int) error
 
+	// PrintfAssign marks a Format call for `printf -v`, which Bash formats
+	// into its own buffer rather than through the C library's stdout.
+	PrintfAssign bool
+
 	// OnNameRefCircular is called when expanding a parameter whose
 	// nameref chain loops back on itself between distinct names (e.g.
 	// x→v→w→x). It receives the originating variable name. Bash emits a
@@ -1086,7 +1090,7 @@ func ansiCEscape(s, ctypeLocale string) string {
 func FormatBPercent(cfg *Config, s string) (string, error) {
 	cfg = prepareConfig(cfg)
 	sb := cfg.strBuilder()
-	_, err := formatIntoMode(sb, s, nil, cfg.StartTime, nil, "", false, true, nil, nil)
+	_, err := formatIntoMode(sb, s, nil, cfg.StartTime, nil, "", false, true, false, nil, nil)
 	if err == errPrintfStop {
 		return sb.String(), errPrintfStop
 	}
@@ -1100,7 +1104,7 @@ func Format(cfg *Config, format string, args []string) (string, int, error) {
 	cfg = prepareConfig(cfg)
 	sb := cfg.strBuilder()
 
-	consumed, err := formatIntoMode(sb, format, args, cfg.StartTime, printfTimeLocation(cfg), printfCTypeLocale(cfg), printfDecimalComma(cfg), false, cfg.OnFormatWarning, cfg.OnPercentN)
+	consumed, err := formatIntoMode(sb, format, args, cfg.StartTime, printfTimeLocation(cfg), printfCTypeLocale(cfg), printfDecimalComma(cfg), false, cfg.PrintfAssign, cfg.OnFormatWarning, cfg.OnPercentN)
 	if err == errPrintfStop {
 		// `\c` told printf to stop emitting output from a %b arg
 		// (or `\c` directly in format). Surface what's already in
@@ -1336,7 +1340,7 @@ func strftime(format string, t time.Time) string {
 }
 
 func formatInto(sb *strings.Builder, format string, args []string, startTime time.Time, warn func(string)) (int, error) {
-	return formatIntoMode(sb, format, args, startTime, nil, "", false, false, warn, nil)
+	return formatIntoMode(sb, format, args, startTime, nil, "", false, false, false, warn, nil)
 }
 
 // formatIntoMode is the inner worker for [Format]. percentB switches the
@@ -1344,7 +1348,7 @@ func formatInto(sb *strings.Builder, format string, args []string, startTime tim
 // preserved with their backslash (bash only honors those escapes in
 // format strings, not in `%b` arg). onPercentN is invoked by `%n` to
 // store the byte count into the variable named by the next arg.
-func formatIntoMode(sb *strings.Builder, format string, args []string, startTime time.Time, loc *time.Location, ctypeLocale string, decimalComma bool, percentB bool, warn func(string), onPercentN func(string, int) error) (int, error) {
+func formatIntoMode(sb *strings.Builder, format string, args []string, startTime time.Time, loc *time.Location, ctypeLocale string, decimalComma bool, percentB bool, toVar bool, warn func(string), onPercentN func(string, int) error) (int, error) {
 	if loc == nil {
 		loc = time.Local
 	}
@@ -1818,7 +1822,10 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 				c = 's'
 				fallthrough
 			case 's', 'b', 'd', 'i', 'u', 'o', 'x', 'X', 'f', 'F', 'e', 'E', 'g', 'G':
-				if precisionOverflow && c == 's' && runtime.GOOS == "linux" {
+				// glibc's stdout printf fails an overflowing %s precision;
+				// `printf -v` formats through Bash's own buffer and prints
+				// the string (printf7.sub: `printf -v VAR "%.${TOOBIG}s" XY`).
+				if precisionOverflow && c == 's' && runtime.GOOS == "linux" && !toVar {
 					return 0, fmt.Errorf("printf: Value too large for defined data type")
 				}
 				// Bash ignores the `0` flag for string conversions
@@ -1842,7 +1849,7 @@ func formatIntoMode(sb *strings.Builder, format string, args []string, startTime
 					// Apply width/precision via Go's %s after the
 					// escape-processed bytes are captured.
 					var bsb strings.Builder
-					_, err := formatIntoMode(&bsb, arg, nil, startTime, loc, ctypeLocale, decimalComma, true, warn, nil)
+					_, err := formatIntoMode(&bsb, arg, nil, startTime, loc, ctypeLocale, decimalComma, true, toVar, warn, nil)
 					if err == ErrPrintfStop {
 						// Surface the partial output and signal stop.
 						sb.WriteString(bsb.String())
