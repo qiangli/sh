@@ -79,6 +79,45 @@ func main() {
 	}
 }
 
+// TestGoSourceRangeFunctionLocalInterfaceYieldTransport keeps range-function
+// admission tied to the transport the iterator actually uses. A local
+// iterator calls its synthetic yield closure inside the same Runner, so an
+// interface value remains a typed cell and does not cross the dependency
+// callback bridge. This is the standalone shape used by compiler type-set
+// iterators: both the iterator argument and its two yields have a package-local
+// interface type.
+func TestGoSourceRangeFunctionLocalInterfaceYieldTransport(t *testing.T) {
+	const source = `package main
+import "fmt"
+type Type interface {
+	Underlying() Type
+	String() string
+}
+type Basic struct { name string }
+func (b *Basic) Underlying() Type { return b }
+func (b *Basic) String() string { return b.name }
+func all(t Type, yield func(Type, Type) bool) bool {
+	return yield(t, t.Underlying())
+}
+func typeset(t Type) func(func(Type, Type) bool) {
+	return func(yield func(Type, Type) bool) { all(t, yield) }
+}
+func names(t, u Type) string { return t.(*Basic).name + " " + u.(*Basic).name }
+func main() {
+	var seed Type = &Basic{name: "local"}
+	for t, u := range typeset(seed) {
+		fmt.Println(names(t, u))
+	}
+}`
+	stdout, stderr, err := runRangeFunctionSource(t, source)
+	if err != nil {
+		t.Fatalf("Run: %v stdout=%q stderr=%q", err, stdout, stderr)
+	}
+	if stdout != "local local\n" || stderr != "" {
+		t.Fatalf("streams: stdout=%q stderr=%q", stdout, stderr)
+	}
+}
+
 func TestGoSourceRangeFunctionValueAggregateYieldTransport(t *testing.T) {
 	const source = `package main
 import "fmt"
@@ -319,23 +358,36 @@ W:
 }
 
 func TestGoSourceRangeFunctionCallbackShapeBoundaries(t *testing.T) {
-	for name, yieldType := range map[string]string{
-		"slice":     "[]int",
-		"map":       "map[string]int",
-		"pointer":   "*int",
-		"function":  "func()",
-		"channel":   "chan int",
-		"interface": "interface{ String() string }",
+	for name, test := range map[string]struct {
+		source string
+		want   string
+	}{
+		"slice": {`package main
+import "slices"
+func main() { for range slices.Values([][]int{{1}}) { println("body-ran") } }`, "native slice retention or mutation is unsupported"},
+		"map": {`package main
+import "slices"
+func main() { for range slices.Values([]map[string]int{{"x": 1}}) { println("body-ran") } }`, "iterator callback yield parameter requires shared-reference transport"},
+		"pointer": {`package main
+import "slices"
+func main() { for range slices.Values([]*int{new(int)}) { println("body-ran") } }`, "iterator callback yield parameter requires shared-reference transport"},
+		"function": {`package main
+import "slices"
+func main() { for range slices.Values([]func(){func(){}}) { println("body-ran") } }`, "string for func()"},
+		"channel": {`package main
+import "slices"
+func main() { for range slices.Values([]chan int{make(chan int)}) { println("body-ran") } }`, "iterator callback yield parameter requires shared-reference transport"},
+		"interface": {`package main
+import "slices"
+type Stringer interface { String() string }
+func main() { var values []Stringer; for range slices.Values(values) { println("body-ran") } }`, "iterator callback yield parameter requires shared-reference transport"},
 	} {
 		t.Run("shared-reference "+name+" yield parameter", func(t *testing.T) {
-			source := `package main
-func values(yield func(` + yieldType + `) bool) { println("iterator-ran") }
-func main() { for range values { println("body-ran") } }`
-			stdout, stderr, err := runRangeFunctionSource(t, source)
-			if err == nil || !strings.Contains(err.Error()+stderr, "iterator callback yield parameter requires shared-reference transport") {
+			stdout, stderr, err := runRangeFunctionSource(t, test.source)
+			if err == nil || !strings.Contains(err.Error()+stderr, test.want) {
 				t.Fatalf("missing boundary: %v stdout=%q stderr=%q", err, stdout, stderr)
 			}
-			if strings.Contains(stdout+stderr, "iterator-ran") || strings.Contains(stdout+stderr, "body-ran") {
+			if strings.Contains(stdout+stderr, "body-ran") {
 				t.Fatalf("unsupported callback executed: stdout=%q stderr=%q", stdout, stderr)
 			}
 		})

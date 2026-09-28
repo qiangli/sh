@@ -96,13 +96,13 @@ func (r *Runner) goSourceIteratorYield(fn *bashPPFunc) (*syntax.BashPPFuncType, 
 		if param.variadic {
 			return nil, fmt.Errorf("iterator callback yield parameters must not be variadic")
 		}
-		// A range iterator can cross the dependency callback boundary. Admit
+		// A native range iterator crosses the dependency callback boundary. Admit
 		// exactly the shapes supported by that boundary: scalars and aggregate
 		// values with copy semantics, or imported values that remain behind an
-		// authenticated dependency handle. Local reference-bearing shapes must
-		// fail before the iterator runs; copying one would silently sever its
-		// aliases.
-		if !r.bashPPCallbackValueType(param.typ) && !r.bashPPCallbackNativeType(param.typ) {
+		// authenticated dependency handle. An interpreted iterator calls its
+		// synthetic yield closure inside this Runner, so its typed cells do not
+		// need dependency transport and retain reference identity here.
+		if fn.native != nil && !r.bashPPCallbackValueType(param.typ) && !r.bashPPCallbackNativeType(param.typ) {
 			return nil, fmt.Errorf("iterator callback yield parameter requires shared-reference transport: %s", bashPPTypeText(param.typ))
 		}
 	}
@@ -235,7 +235,7 @@ func (r *Runner) goSourceRangeFunction(ctx context.Context, rng *syntax.BashPPRa
 	return true
 }
 
-func (r *Runner) goSourceInvokeRangeYield(ctx context.Context, fn *bashPPFunc, args []string, cells []*bashPPCell) []string {
+func (r *Runner) goSourceInvokeRangeYield(ctx context.Context, fn *bashPPFunc, args []string, cells []*bashPPCell, interfaces []*bashPPInterfaceValue) []string {
 	state := fn.rangeYield
 	// Capture the state found on entry, then mark the body running before
 	// checking it: Go's own generated check sets #state = RF_PANIC
@@ -270,7 +270,28 @@ func (r *Runner) goSourceInvokeRangeYield(ctx context.Context, fn *bashPPFunc, a
 		if i >= len(cells) || cells[i] == nil {
 			continue
 		}
-		value, meta, err := r.bashPPReadCellValue(cells[i])
+		// The value carrier and its separately recorded interface identity must
+		// come from snapshots. Callback arguments can name captured cells shared
+		// with another interpreted task, whose direct fields are not authoritative.
+		snapshot := *cells[i].view()
+		snapshot.guard = nil
+		cell := &snapshot
+		// Interface identity is carried beside the legacy argument strings.
+		// Ordinary function parameters consume that side channel while entering
+		// their frame; a synthetic range yield has no ordinary frame, so join it
+		// back to the value cell here before binding the iteration variable.
+		if i < len(interfaces) && interfaces[i] != nil && cell.interfaceValue == nil {
+			cell.interfaceValue = interfaces[i]
+		}
+		var value any
+		var meta *bashPPCollectionMeta
+		var err error
+		if cell.interfaceValue != nil {
+			value = cell.vrValue()
+			meta = &bashPPCollectionMeta{kind: "interface", typ: cell.declType, interfaceValue: cell.interfaceValue}
+		} else {
+			value, meta, err = r.bashPPReadCellValue(cell)
+		}
 		if err != nil {
 			r.exit.fatal(err)
 			return nil
@@ -280,7 +301,7 @@ func (r *Runner) goSourceInvokeRangeYield(ctx context.Context, fn *bashPPFunc, a
 		// range binding the native metadata it needs instead of rendering the
 		// handle as text. Interfaces already carry richer dynamic-type metadata
 		// from bashPPReadCellValue and keep it unchanged.
-		if meta == nil && cells[i].vr.Kind == expand.Object && r.bashPPCallbackNativeType(params[i].typ) {
+		if meta == nil && cell.vr.Kind == expand.Object && r.bashPPCallbackNativeType(params[i].typ) {
 			meta = &bashPPCollectionMeta{kind: "native", typ: params[i].typ}
 		}
 		values[i], metas[i] = value, meta

@@ -2226,7 +2226,7 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 		return r.bashPPInvokeRuntimeErrorMethod(fn)
 	}
 	if fn.rangeYield != nil {
-		return r.goSourceInvokeRangeYield(ctx, fn, args, callCells)
+		return r.goSourceInvokeRangeYield(ctx, fn, args, callCells, callInterfaces)
 	}
 	if fn.collectYield != nil {
 		return r.goSourceInvokeCollectYield(fn, args, callCells)
