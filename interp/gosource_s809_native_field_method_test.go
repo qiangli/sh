@@ -116,8 +116,9 @@ func s809NativeAliasReport(t *testing.T) string {
 }
 
 // s809TypeSetBodies are TestTypeSetString's own interface bodies, including
-// the constraint form that mixes a method, comparable and a union.
-var s809TypeSetBodies = []string{"{}", "{int}", "{m()}", "{comparable}", "{error}", "{m(); comparable; int|float32|string}"}
+// the declared constraint that resolves comparable through the universe while
+// checking E.
+var s809TypeSetBodies = []string{"{}", "{int}", "{m()}", "{comparable}", "{error}", "{m(); comparable; int|float32|string}", "{E}; type E interface{comparable}"}
 
 // The same chain over a field whose declared type is the dependency's own
 // struct rather than a scalar: `tdecl.Name.NamePos.IsValid()` crosses two
@@ -195,7 +196,7 @@ import (
 )
 
 func main() {
-	for _, body := range []string{"{}", "{int}", "{m()}", "{comparable}", "{error}", "{m(); comparable; int|float32|string}"} {
+	for _, body := range []string{"{}", "{int}", "{m()}", "{comparable}", "{error}", "{m(); comparable; int|float32|string}", "{E}; type E interface{comparable}"} {
 		src := "package p; type T interface" + body
 		fset := token.NewFileSet()
 		file, err := parser.ParseFile(fset, "p.go", src, parser.AllErrors|parser.SkipObjectResolution)
