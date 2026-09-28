@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"sync"
 	"sync/atomic"
+	"time"
 	"unsafe"
 )
 
@@ -168,6 +169,22 @@ func mailboxCallback(q response)(request,bool,error){
 	return imports, implementation
 }
 
-// The request goroutine is also the mailbox server. Yielding on an empty poll
-// lets parallel callback frames produce the request or reply it is waiting for.
-func bashPPMailboxYield() { runtime.Gosched() }
+// The request goroutine is also the mailbox server. Yield briefly on an empty
+// poll so parallel callback frames can publish work, then sleep with a bounded
+// backoff. Gosched alone leaves the idle owner permanently runnable; with many
+// testing callbacks it competes once per callback step with the frames and the
+// control reader it exists to serve. This mirrors the worker-side wait policy.
+func bashPPMailboxWaitYield(spin *uint32) {
+	*spin++
+	if *spin < 64 {
+		runtime.Gosched()
+		return
+	}
+	delay := time.Microsecond
+	if *spin > 512 {
+		delay = 50 * time.Microsecond
+	} else if *spin > 128 {
+		delay = 10 * time.Microsecond
+	}
+	time.Sleep(delay)
+}

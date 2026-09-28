@@ -926,12 +926,14 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 	if err != nil {
 		return nil, s.closedWriteError(ctx, err)
 	}
+	var mailboxSpin uint32
 	for {
 		s.mu.Lock()
 		mailboxActive := requestMailbox != nil && callbacks != nil && s.activeCallbacks == callbacks
 		s.mu.Unlock()
 		if mailboxActive {
 			if slot, callback, ok := requestMailbox.take(); ok {
+				mailboxSpin = 0
 				callbackFrames := testingFrames
 				if !testingBarrier {
 					callbackFrames = nil
@@ -991,10 +993,11 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 			case <-s.done:
 				event = 4
 			default:
-				bashPPMailboxYield()
+				bashPPMailboxWaitYield(&mailboxSpin)
 				continue
 			}
 		} else {
+			mailboxSpin = 0
 			select {
 			case callback = <-callbacks:
 				event = 1
@@ -1006,6 +1009,7 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 				event = 4
 			}
 		}
+		mailboxSpin = 0
 		switch event {
 		case 1:
 			// The callback installs a write barrier on the interpreter's
