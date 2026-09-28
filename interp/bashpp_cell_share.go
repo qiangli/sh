@@ -51,8 +51,10 @@ import (
 // called by every reader that decides among several fields of one value —
 // bashPPScalarFromCell, bashPPCellMeta, (*bashPPPointer).read,
 // bashPPReadCellValue, bashPPStructuredCell, bashPPDescribeCell,
-// bashPPBridgeCell, goSourceUntypedNilCell, lookupVarUnhosted, and every
-// private `copyCell := *source`.
+// bashPPBridgeCell, goSourceUntypedNilCell, lookupVarUnhosted,
+// [Runner.bashPPShortDecl] — which views the binding on its right-hand side
+// once per source and copies out of that view — and every private
+// `copyCell := *source`.
 //
 // WHAT KEEPS THE DISCIPLINE. Two tests in bashpp_cell_share_test.go and
 // bashpp_cell_share_scan_test.go hold the two halves of it in place, so that
