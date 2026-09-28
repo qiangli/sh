@@ -14,7 +14,7 @@ import (
 )
 
 func (r *Runner) goSourceLocalFmtWriterCall(ctx context.Context, call *syntax.BashPPCall) ([]bashPPBridgeValue, bool, error) {
-	if !r.bashPPGoSource || call == nil || call.Ellipsis.IsValid() || len(call.Fun) != 2 ||
+	if !r.bashPPGoSource || call == nil || len(call.Fun) != 2 ||
 		r.bashPPImports[call.Fun[0].Value] != "fmt" || len(call.ArgExprs) == 0 {
 		return nil, false, nil
 	}
@@ -40,15 +40,74 @@ func (r *Runner) goSourceLocalFmtWriterCall(ctx context.Context, call *syntax.Ba
 		return nil, false, nil
 	}
 
-	values := make([]any, 0, len(call.ArgExprs)-1)
+	raw := make([]bashPPBridgeValue, 0, len(call.ArgExprs)-1)
 	for _, expr := range call.ArgExprs[1:] {
 		value, err := r.bashPPBridgeExpr(expr)
 		if err != nil {
 			return nil, true, err
 		}
+		raw = append(raw, value)
+	}
+	data, local := goSourceFmtPlainArgs(name, raw, call.Ellipsis.IsValid())
+	if !local {
+		formatted := map[string]string{"Fprint": "Sprint", "Fprintln": "Sprintln", "Fprintf": "Sprintf"}[name]
+		q := bashPPBridgeRequest{
+			Op:         "call",
+			Selector:   call.Fun[0].Value + "." + name,
+			Args:       raw,
+			Spread:     call.Ellipsis.IsValid(),
+			FormatOnly: formatted,
+		}
+		if r.bashPPGoSourceFile != nil && call.Pos().IsValid() {
+			if source, ok := r.bashPPGoSourceFile.SourceAt(call.Pos()); ok {
+				q.SourceFile = source.Name
+				q.SourceLine = int(call.Pos().Line())
+				q.sourceProgram = source.PackagePath == ""
+			}
+		}
+		q.argCells = r.bashPPNativeArgCells(call.ArgExprs[1:], raw)
+		req, err := r.bashPPEvalRequest()
+		if err != nil {
+			return nil, true, err
+		}
+		values, err := r.bashPPNativeRequest(ctx, req, q)
+		if err != nil {
+			return nil, true, err
+		}
+		if len(values) != 1 || values[0].Kind != "string" {
+			return nil, true, fmt.Errorf("gosource: fmt.%s returned an invalid formatted value", formatted)
+		}
+		data = []byte(values[0].stringText())
+	}
+	written, err := r.goSourceCallLocalWrite(ctx, typeName, writer, data, paramType)
+	if err != nil {
+		return nil, true, err
+	}
+	return []bashPPBridgeValue{
+		{Kind: "int", Type: "int", Text: strconv.Itoa(written)},
+		{Kind: "nil", Type: "error"},
+	}, true, nil
+}
+
+func goSourceFmtPlainArgs(name string, raw []bashPPBridgeValue, spread bool) ([]byte, bool) {
+	values := make([]any, 0, len(raw))
+	for i, value := range raw {
+		if spread && i == len(raw)-1 {
+			if value.Kind != "slice" || value.Length < 0 || value.Length > len(value.Elements) {
+				return nil, false
+			}
+			for _, element := range value.Elements[:value.Length] {
+				plain, ok := goSourceFmtPlainValue(element)
+				if !ok {
+					return nil, false
+				}
+				values = append(values, plain)
+			}
+			continue
+		}
 		plain, ok := goSourceFmtPlainValue(value)
 		if !ok {
-			return nil, false, nil
+			return nil, false
 		}
 		values = append(values, plain)
 	}
@@ -60,22 +119,17 @@ func (r *Runner) goSourceLocalFmtWriterCall(ctx context.Context, call *syntax.Ba
 		_, _ = fmt.Fprintln(&buf, values...)
 	case "Fprintf":
 		if len(values) == 0 {
-			return nil, false, nil
+			return nil, false
 		}
 		format, ok := values[0].(string)
 		if !ok {
-			return nil, false, nil
+			return nil, false
 		}
 		_, _ = fmt.Fprintf(&buf, format, values[1:]...)
+	default:
+		return nil, false
 	}
-	written, err := r.goSourceCallLocalWrite(ctx, typeName, writer, buf.Bytes(), paramType)
-	if err != nil {
-		return nil, true, err
-	}
-	return []bashPPBridgeValue{
-		{Kind: "int", Type: "int", Text: strconv.Itoa(written)},
-		{Kind: "nil", Type: "error"},
-	}, true, nil
+	return buf.Bytes(), true
 }
 
 func trimLeadingStars(s string) string {
@@ -114,20 +168,56 @@ func goSourceFmtPlainValue(value bashPPBridgeValue) (any, bool) {
 		return constant.BoolVal(scalar.value), true
 	case constant.Int:
 		if value.Kind == "uint" {
-			if n, err := strconv.ParseUint(value.Text, 10, 64); err == nil {
-				return n, true
+			n, err := strconv.ParseUint(value.Text, 10, 64)
+			if err != nil {
+				return nil, false
 			}
+			switch value.Type {
+			case "uint8", "byte":
+				return uint8(n), true
+			case "uint16":
+				return uint16(n), true
+			case "uint32":
+				return uint32(n), true
+			case "uint64":
+				return n, true
+			case "uintptr":
+				return uintptr(n), true
+			default:
+				return uint(n), true
+			}
+		}
+		n, err := strconv.ParseInt(value.Text, 10, 64)
+		if err != nil {
 			return nil, false
 		}
-		if n, err := strconv.ParseInt(value.Text, 10, 64); err == nil {
+		switch value.Type {
+		case "int8":
+			return int8(n), true
+		case "int16":
+			return int16(n), true
+		case "int32", "rune":
+			return int32(n), true
+		case "int64":
 			return n, true
+		default:
+			return int(n), true
 		}
-		return nil, false
 	case constant.Float:
 		n, ok := constant.Float64Val(scalar.value)
-		return n, ok
+		if !ok {
+			return nil, false
+		}
+		if value.Type == "float32" {
+			return float32(n), true
+		}
+		return n, true
 	case constant.Complex:
-		return bashPPComplexNumber(scalar.value), true
+		n := bashPPComplexNumber(scalar.value)
+		if value.Type == "complex64" {
+			return complex64(n), true
+		}
+		return n, true
 	}
 	return nil, false
 }
