@@ -18,9 +18,13 @@ import (
 	"time"
 
 	"mvdan.cc/sh/v3/gosource"
+	"mvdan.cc/sh/v3/lower"
 )
 
-const preparedCacheChildEnv = "BASHPP_S281_PREPARED_CHILD"
+const (
+	preparedCacheChildEnv     = "BASHPP_S281_PREPARED_CHILD"
+	preparedCopiedCompilerEnv = "BASHPP_S319_COPIED_COMPILER"
+)
 
 func TestPreparedProgramCacheAcrossChildren(t *testing.T) {
 	if os.Getenv(preparedCacheChildEnv) == "1" {
@@ -35,7 +39,11 @@ func TestPreparedProgramCacheAcrossChildren(t *testing.T) {
 			sources = append(sources, gosource.Source{Name: path, Data: data})
 		}
 		started := time.Now()
-		program, err := gosource.Load(sources, gosource.Options{RunMain: true, ImportPath: "cmd/compile"})
+		options := gosource.Options{RunMain: true, ImportPath: "cmd/compile"}
+		if os.Getenv(preparedCopiedCompilerEnv) == "1" {
+			options.Importer = lower.NewModuleImporter(dir)
+		}
+		program, err := gosource.Load(sources, options)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -114,7 +122,49 @@ func TestPreparedProgramCacheAcrossChildren(t *testing.T) {
 	})
 }
 
+// TestPreparedProgramCacheAcrossCopiedCompilerRoots models cmd/compile's
+// TestScript setup. Each script gets a private test GOROOT and copies the same
+// interpreted test binary over its compile tool. The launcher pins BASHPP_GO
+// to the authenticated SDK which prepares the program, so the program-visible
+// test GOROOT must not give identical compiler sources a fresh prepared entry.
+// Sprint: #319; Story: #1083; Story-ID: 91b27c7c0b52.
+func TestPreparedProgramCacheAcrossCopiedCompilerRoots(t *testing.T) {
+	dir := t.TempDir()
+	cache := filepath.Join(dir, "cache")
+	sourceDir := filepath.Join(dir, "compiler")
+	if err := os.Mkdir(sourceDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	sdkDir := filepath.Join(runtime.GOROOT(), "src", "cmd", "compile")
+	for _, name := range []string{"doc.go", "main.go", "script_test.go"} {
+		data, err := os.ReadFile(filepath.Join(sdkDir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(sourceDir, name), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	goBinary := filepath.Join(runtime.GOROOT(), "bin", "go")
+	firstRoot := filepath.Join(dir, "TestScript-one", "testgoroot")
+	secondRoot := filepath.Join(dir, "TestScript-two", "testgoroot")
+	firstDuration, firstOutput := runPreparedCacheChildEnv(t, cache, sourceDir,
+		preparedCopiedCompilerEnv+"=1", "BASHPP_GO="+goBinary, "GOROOT="+firstRoot)
+	secondDuration, secondOutput := runPreparedCacheChildEnv(t, cache, sourceDir,
+		preparedCopiedCompilerEnv+"=1", "BASHPP_GO="+goBinary, "GOROOT="+secondRoot)
+	if firstOutput != secondOutput {
+		t.Fatalf("copied compiler outputs differ:\nfirst:  %s\nsecond: %s", firstOutput, secondOutput)
+	}
+	if got := preparedCacheEntries(t, cache); got != 1 {
+		t.Fatalf("cache entries after copied compiler roots = %d, want one; first=%s second=%s", got, firstDuration, secondDuration)
+	}
+}
+
 func runPreparedCacheChild(t *testing.T, cache, source string) (time.Duration, string) {
+	return runPreparedCacheChildEnv(t, cache, source)
+}
+
+func runPreparedCacheChildEnv(t *testing.T, cache, source string, extraEnv ...string) (time.Duration, string) {
 	t.Helper()
 	self, err := os.Executable()
 	if err != nil {
@@ -127,6 +177,7 @@ func runPreparedCacheChild(t *testing.T, cache, source string) (time.Duration, s
 		"BASHPP_REEXEC_PREPARED_CACHE="+cache,
 		"BASHPP_REEXEC_INTERPRETER_ID=focused-test-binary",
 	)
+	command.Env = append(command.Env, extraEnv...)
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("prepared child: %v: %s", err, output)

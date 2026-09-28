@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 	"time"
 
 	"mvdan.cc/sh/v3/syntax"
@@ -118,7 +119,18 @@ func preparedProgramKey(interpreterID string, sources []Source, options Options)
 	write(goos)
 	write(goarch)
 	write(os.Getenv("GOEXPERIMENT"))
-	for _, name := range []string{"GOROOT", "GOTOOLCHAIN", "GOFLAGS", "CGO_ENABLED", "BASHPP_GO"} {
+	toolchainEnv := []string{"GOROOT", "GOTOOLCHAIN", "GOFLAGS", "CGO_ENABLED", "BASHPP_GO"}
+	if filepath.IsAbs(strings.TrimSpace(os.Getenv("BASHPP_GO"))) {
+		// An absolute BASHPP_GO is the embedder's exact SDK selection; the
+		// resolver returns it before consulting GOROOT. Reexec launchers use
+		// this route while preserving the interpreted program's GOROOT, which
+		// cmd/compile's TestScript replaces with a different testgoroot for
+		// every script. Those roots affect the running compiler, not how these
+		// identical sources are prepared, so including them here defeats the
+		// launcher's shared cache and prepares the test main once per child.
+		toolchainEnv = toolchainEnv[1:]
+	}
+	for _, name := range toolchainEnv {
 		write(os.Getenv(name))
 	}
 	optionsKey, _ := json.Marshal(struct {
