@@ -1255,14 +1255,16 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 			} else if meta != nil {
 				value, meta = bashPPCopyArrayValue(value, meta)
 				r.bashPPDeclareName(name, bashPPCollectionVariable(value))
-				cell := r.bashPPScope.lookup(name)
-				cell.object = &bashPPObjectIdentity{owner: name, collection: meta}
+				bound := r.bashPPScope.lookup(name)
+				bound.object = &bashPPObjectIdentity{owner: name, collection: meta}
 				if root, rootOK := bashPPCollectionRoot(d.Expr); rootOK {
-					if source := r.bashPPScope.lookup(root); source != nil && source.object != nil {
-						cell.object = source.object
+					// The root binding is storage a task can alias, so its
+					// identity edge is read off ONE snapshot of it.
+					if source := r.bashPPScope.lookup(root).view(); source != nil && source.object != nil {
+						bound.object = source.object
 					}
 				}
-				cell.valueMeta = meta
+				bound.valueMeta = meta
 			} else {
 				cell := r.goSourceCollectionReadCell(d.Expr, value, meta)
 				r.bashPPDeclareName(name, cell.vr)
@@ -1290,7 +1292,8 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 			}
 			target.object = &bashPPObjectIdentity{owner: name, collection: meta}
 			if root, rootOK := bashPPCollectionRoot(d.Expr); rootOK {
-				if source := r.bashPPScope.lookup(root); source != nil && source.object != nil {
+				// See the index branch: one snapshot of the root.
+				if source := r.bashPPScope.lookup(root).view(); source != nil && source.object != nil {
 					target.object = source.object
 				}
 			}
@@ -1303,9 +1306,9 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 				name := d.Lhs[0].Value
 				if meta != nil && meta.interfaceValue != nil {
 					r.bashPPDeclareName(name, expand.Variable{Set: true, Kind: expand.String})
-					cell := r.bashPPScope.lookup(name)
-					bashPPStoreCellValue(cell, value, meta)
-					cell.declType = meta.typ
+					bound := r.bashPPScope.lookup(name)
+					bashPPStoreCellValue(bound, value, meta)
+					bound.declType = meta.typ
 				} else if meta != nil && meta.kind == "pointer" {
 					r.bashPPDeclarePointerRead(name, value, meta)
 				} else if bashPPScalarMetaKind(meta) {
@@ -1317,14 +1320,15 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 				} else if meta != nil {
 					value, meta = bashPPCopyArrayValue(value, meta)
 					r.bashPPDeclareName(name, expand.NewObject(value))
-					cell := r.bashPPScope.lookup(name)
-					cell.object = &bashPPObjectIdentity{owner: name, collection: meta}
+					bound := r.bashPPScope.lookup(name)
+					bound.object = &bashPPObjectIdentity{owner: name, collection: meta}
 					if root, rootOK := bashPPCollectionRoot(d.Expr); rootOK {
-						if source := r.bashPPScope.lookup(root); source != nil && source.object != nil {
-							cell.object = source.object
+						// See the index branch: one snapshot of the root.
+						if source := r.bashPPScope.lookup(root).view(); source != nil && source.object != nil {
+							bound.object = source.object
 						}
 					}
-					cell.valueMeta = meta
+					bound.valueMeta = meta
 				} else {
 					cell := r.goSourceCollectionReadCell(d.Expr, value, meta)
 					r.bashPPDeclareName(name, cell.vr)
@@ -1349,7 +1353,14 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 		}
 		var source *bashPPCell
 		if ident, ok := d.Expr.(*syntax.BashPPIdent); ok {
-			source = r.bashPPScope.lookup(ident.Name.Value)
+			// ONE snapshot for every field read below, and for the scalar tail
+			// after this block. `xx := x` names storage an interpreted `go`
+			// statement may be republishing, and what the copies take out of it
+			// — the interface payload, the collection identity, the pointer
+			// triple, the channel and its owner, the declared type — is one
+			// published bundle. Reading the fields off the cell would let a
+			// rebinding land between two of them and bind half of each value.
+			source = r.bashPPScope.lookup(ident.Name.Value).view()
 			// `xx := x` with x an interface copies the interface value whole,
 			// whatever its dynamic value's carrier; the scalar path below
 			// would keep the text and drop the dynamic type.
@@ -1566,7 +1577,11 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 		if len(d.Rhs) == 1 {
 			sourceName := bashPPWordSource(d.Rhs[0])
 			if syntax.BashPPValidIdent(sourceName) {
-				source := r.bashPPScope.lookup(sourceName)
+				// `y := x` spelled as a word: one snapshot answers the whole
+				// question — which carrier x holds, the collection it names and
+				// that collection's identity, or the interface payload. Read
+				// off the cell they could come from two different values.
+				source := r.bashPPScope.lookup(sourceName).view()
 				if source != nil && source.vr.Kind == expand.Object {
 					value, meta := source.vr.Obj, bashPPCellMeta(source)
 					identity := source.object
@@ -1576,12 +1591,12 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 					}
 					vr := bashPPCollectionVariable(value)
 					r.bashPPDeclareName(name, vr)
-					cell := r.bashPPScope.lookup(name)
+					bound := r.bashPPScope.lookup(name)
 					if identity == nil {
 						identity = &bashPPObjectIdentity{owner: name}
 					}
-					cell.object = identity
-					cell.valueMeta = meta
+					bound.object = identity
+					bound.valueMeta = meta
 					return
 				}
 				if source != nil && source.interfaceValue != nil {
@@ -1596,18 +1611,20 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 			return
 		}
 		r.bashPPDeclareName(name, vr)
-		if cell := r.bashPPScope.lookup(name); cell != nil && len(d.Rhs) == 1 {
-			cell.scalarKind = bashPPWordScalarKind(d.Rhs[0], vr)
+		if bound := r.bashPPScope.lookup(name); bound != nil && len(d.Rhs) == 1 {
+			bound.scalarKind = bashPPWordScalarKind(d.Rhs[0], vr)
 			if r.bashPPGoSource {
-				cell.scalarKind = bashPPScalarFromString(bashPPWordSource(d.Rhs[0])).value.Kind()
+				bound.scalarKind = bashPPScalarFromString(bashPPWordSource(d.Rhs[0])).value.Kind()
 			}
 		}
 		if len(d.Rhs) == 1 {
 			if channel, owner := r.bashPPDirectChannel(d.Rhs[0]); channel != nil {
-				cell := r.bashPPScope.lookup(name)
-				cell.channel, cell.channelOwner = channel, owner
-				if source := r.bashPPScope.lookup(bashPPWordSource(d.Rhs[0])); source != nil {
-					cell.declType = source.declType
+				bound := r.bashPPScope.lookup(name)
+				bound.channel, bound.channelOwner = channel, owner
+				// The named channel's declared type comes off a snapshot of
+				// the binding it is read from, which a task may be rebinding.
+				if source := r.bashPPScope.lookup(bashPPWordSource(d.Rhs[0])).view(); source != nil {
+					bound.declType = source.declType
 				}
 			}
 		}
@@ -1625,8 +1642,8 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 		if r.exit.code != 0 {
 			return
 		}
-		if cell := r.bashPPScope.lookup(lhs.Value); cell != nil {
-			cell.scalarKind = bashPPWordScalarKind(d.Rhs[i], values[i])
+		if bound := r.bashPPScope.lookup(lhs.Value); bound != nil {
+			bound.scalarKind = bashPPWordScalarKind(d.Rhs[i], values[i])
 		}
 	}
 }

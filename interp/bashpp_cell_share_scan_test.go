@@ -24,10 +24,11 @@ import (
 // interface word is a pointer into unrelated memory, which is how Sprint 281
 // T4c's probe corpus ended up reporting races inside syntax nodes.
 //
-// T4c fixed every such reader its corpus reached. The rest are listed below
-// and still to be audited. The point of the scan is the RATCHET: a new
-// function cannot read a looked-up cell's fields directly without either
-// taking a view or being added here on purpose.
+// T4c fixed every such reader its corpus reached and T4f the last of them,
+// bashPPShortDecl. What is listed below is the one reader that reads such a
+// cell on purpose, with the reason it may. The point of the scan is the
+// RATCHET: a new function cannot read a looked-up cell's fields directly
+// without either taking a view or being added here on purpose.
 //
 // The scan is deliberately syntactic and deliberately narrow:
 //   - the guarded field set is read out of (*bashPPCell).storeFields, so it
@@ -53,9 +54,6 @@ var bashPPCellDirectReaders = []string{
 	// `go` statement of the callee has run yet, so nothing can have aliased it.
 	// Reading back the fields it just stored is a private read.
 	"bashPPInvoke",
-	// Being audited by lane T4f: field-by-field copies from a looked-up source
-	// cell (bashpp_p1.go ~1097-1103, 1261, 1293, 1323, 1356-1380).
-	"bashPPShortDecl",
 }
 
 // markStore marks an assignment target and every selector it is reached
