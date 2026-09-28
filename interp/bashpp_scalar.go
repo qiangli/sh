@@ -679,14 +679,6 @@ func (r *Runner) bashPPScalarFromCell(cell *bashPPCell) bashPPScalar {
 			value = bashPPScalarFromString(text)
 		}
 	}
-	// A shell assignment retains its spelling even when that spelling is not
-	// a literal of the cell's declared kind. Try the ordinary shell scalar
-	// forms before leaving an unknown carrier: 09 is a floating scalar which
-	// can be read as an int, while text such as abc remains a string until the
-	// typed operand boundary reports its conversion error.
-	if value.value == nil || value.value.Kind() == constant.Unknown {
-		value = bashPPScalarFromString(text)
-	}
 	if r.bashPPGoSource && cell.scalarKind == constant.Float && (value.value == nil || value.value.Kind() == constant.Unknown) {
 		if parts := strings.Split(text, "/"); len(parts) == 2 {
 			numerator := constant.MakeFromLiteral(parts[0], token.FLOAT, 0)
@@ -695,6 +687,14 @@ func (r *Runner) bashPPScalarFromCell(cell *bashPPCell) bashPPScalar {
 				value.value = constant.BinaryOp(numerator, token.QUO, denominator)
 			}
 		}
+	}
+	// A shell assignment retains its spelling even when that spelling is not
+	// a literal of the cell's declared kind. After decoding any exact Go float
+	// carrier, try the ordinary shell scalar forms before leaving an unknown
+	// value: 09 is a floating scalar which can be read as an int, while text
+	// such as abc remains a string until typed-operand conversion reports it.
+	if value.value == nil || value.value.Kind() == constant.Unknown {
+		value = bashPPScalarFromString(text)
 	}
 	value.runtime = !cell.constant
 	value.negativeZero = cell.negativeZero
