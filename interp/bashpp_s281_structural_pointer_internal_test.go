@@ -72,7 +72,9 @@ func main() {
 		t.Fatal(err)
 	}
 	binary := filepath.Join(dir, "worker")
-	if err := bashPPBuildWorkerImportcfg(context.Background(), goBin, t.TempDir(), os.Environ(), "", dir, path, binary, nil); err != nil {
+	if err := bashPPBuildWorkerImportcfg(context.Background(), goBin, t.TempDir(), os.Environ(), "", dir, path, binary, map[string]string{
+		"bridgeAuth": "0123456789abcdef0123456789abcdef",
+	}); err != nil {
 		t.Fatalf("build generated dependency worker: %v", err)
 	}
 	if output, err := exec.Command(binary).CombinedOutput(); err != nil {
