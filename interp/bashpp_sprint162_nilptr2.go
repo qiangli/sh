@@ -118,7 +118,7 @@ func (r *Runner) goSourceRecoverAssign(assign *syntax.BashPPAssign) bool {
 	// The source was typechecked: the target is an interface variable, and
 	// the value keeps that variable's static type, as a dependency result
 	// assigned to one does (goSourceNativeAssignCall).
-	if target := r.bashPPScope.lookup(assign.Names[0].Value); target != nil {
+	if target := r.bashPPScope.lookup(assign.Names[0].Value).view(); target != nil {
 		if _, iface := r.bashPPInterfaceType(target.declType); iface {
 			cell.declType = target.declType
 			cell.typeName = target.typeName

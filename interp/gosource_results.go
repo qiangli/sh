@@ -52,7 +52,7 @@ func (r *Runner) goSourceNativeAssignCall(ctx context.Context, assign *syntax.Ba
 	cells := make([]*bashPPCell, len(values))
 	for i, value := range values {
 		var expected syntax.BashPPTypeExpr
-		if target := r.bashPPScope.lookup(assign.Names[i].Value); target != nil {
+		if target := r.bashPPScope.lookup(assign.Names[i].Value).view(); target != nil {
 			expected = target.declType
 		} else if i < len(assign.Call.ResultTypes) {
 			expected = assign.Call.ResultTypes[i]

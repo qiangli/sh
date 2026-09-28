@@ -211,7 +211,7 @@ func (r *Runner) bashPPCallbackFunctionCapture(fn *bashPPFunc) (map[*bashPPCell]
 	capture := make(map[*bashPPCell]bool)
 	for name := range free {
 		if cell := fn.scope.lookup(name); cell != nil {
-			if cell.constant || r.bashPPGoSourceSharable(cell) {
+			if cell.viewConstant() || r.bashPPGoSourceSharable(cell) {
 				capture[cell] = true
 			}
 		}

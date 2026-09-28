@@ -8,7 +8,7 @@ func (r *Runner) bashPPChannelOperation(word *syntax.Word, operation string) (*b
 		return nil, false
 	}
 	name := r.literal(word)
-	cell := r.bashPPScope.lookup(name)
+	cell := r.bashPPScope.lookup(name).view()
 	if typ, ok := cell.declType.(*syntax.BashPPChanType); ok {
 		forbidden := typ.Direction == "send" && operation == "receive" || typ.Direction == "recv" && operation != "receive"
 		if forbidden {

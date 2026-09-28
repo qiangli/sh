@@ -738,7 +738,7 @@ func (r *Runner) bashPPLookupSelectorFunc(c *syntax.BashPPCall) (*bashPPFunc, bo
 		cell := r.bashPPCellForWord(c.Args[0])
 		var actualType syntax.BashPPTypeExpr
 		if cell != nil {
-			actualType = cell.declType
+			actualType = cell.view().declType
 			if actualType == nil {
 				if meta := bashPPCellMeta(cell); meta != nil {
 					actualType = meta.typ

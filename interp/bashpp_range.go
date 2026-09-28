@@ -403,7 +403,7 @@ func (r *Runner) bashPPRangeScalarValue(ctx context.Context, rng *syntax.BashPPR
 			iterationType = bashPPRangeNamedType(value.typ)
 		}
 		if ident, ok := rng.Expr.(*syntax.BashPPIdent); ok && r.bashPPScope != nil {
-			if cell := r.bashPPScope.lookup(ident.Name.Value); cell != nil && cell.declType != nil {
+			if cell := r.bashPPScope.lookup(ident.Name.Value).view(); cell != nil && cell.declType != nil {
 				iterationType = cell.declType
 			}
 		}

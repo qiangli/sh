@@ -842,7 +842,7 @@ func (r *Runner) bashPPEvalConstIntExpr(expr goast.Expr) (value constant.Value, 
 		}
 		return nil, false
 	case *goast.Ident:
-		cell := r.bashPPScope.lookup(x.Name)
+		cell := r.bashPPScope.lookup(x.Name).view()
 		if cell == nil || !cell.constant {
 			return nil, false
 		}

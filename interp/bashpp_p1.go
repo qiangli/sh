@@ -592,7 +592,7 @@ func (r *Runner) bashPPConstantScalarExpr(expr syntax.BashPPExpr, targetBase str
 			return true
 		}
 		cell := r.bashPPScope.lookup(x.Name.Value)
-		return cell != nil && cell.constant || cell == nil && targetBase == "string"
+		return cell != nil && cell.viewConstant() || cell == nil && targetBase == "string"
 	case *syntax.BashPPParenExpr:
 		return r.bashPPConstantScalarExpr(x.X, targetBase)
 	case *syntax.BashPPUnaryExpr:
@@ -2247,7 +2247,7 @@ func (r *Runner) bashPPSwitchConstantExpr(tag bashPPScalar, expr syntax.BashPPEx
 			return true
 		}
 		if r.bashPPScope != nil {
-			if cell := r.bashPPScope.lookup(x.Name.Value); cell != nil && cell.constant {
+			if cell := r.bashPPScope.lookup(x.Name.Value); cell != nil && cell.viewConstant() {
 				return true
 			}
 		}
