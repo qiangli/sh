@@ -935,21 +935,25 @@ func (r *Runner) bashPPGoSourceObjectCarrier(value any, meta *bashPPCollectionMe
 
 // bashPPStoreCellValue publishes one value, with its shape, into cell.
 //
-// Every store below is part of ONE published value: the payload carrier, the
-// pointer triple, the meta edges and the scalar carrier flags have to change
-// together or a reader sees a value that was never assigned. So the whole body
-// runs under the cell's guard when the cell is one an interpreted goroutine can
-// also reach; see bashpp_cell_share.go. Nothing in here evaluates guest code or
-// blocks, and the one field belonging to a DIFFERENT cell — the interface
-// payload's shell value — is read before the guard is taken, so no region ever
-// holds two cell guards at once.
+// Every field it sets is part of ONE value: the payload carrier, the pointer
+// triple, the meta edges and the scalar carrier flags have to change together
+// or a reader sees a binding that was never assigned. So they are published as
+// a bundle when the cell is one an interpreted goroutine can also reach; see
+// bashpp_cell_share.go.
 func bashPPStoreCellValue(cell *bashPPCell, value any, meta *bashPPCollectionMeta) {
-	var innerVar expand.Variable
-	if meta != nil && meta.interfaceValue != nil && meta.interfaceValue.cell != nil {
-		innerVar = meta.interfaceValue.cell.viewVar()
-	}
-	cell.lock()
-	defer cell.unlock()
+	// Build the new binding in a private cell and store it in one go. Doing the
+	// work on a copy is what keeps the guarded region to a single struct store:
+	// the body below renders text, validates object payloads and reads the
+	// interface payload's own cell, none of which may happen under a guard.
+	next := *cell.view()
+	bashPPFillCellValue(&next, value, meta)
+	cell.publish(&next)
+}
+
+// bashPPFillCellValue is [bashPPStoreCellValue] on a cell no other goroutine
+// can see yet. It is a separate function so that every path out of it — there
+// are seven — lands on the single publishing store above.
+func bashPPFillCellValue(cell *bashPPCell, value any, meta *bashPPCollectionMeta) {
 	if meta != nil && meta.interfaceValue != nil {
 		cell.pointer, cell.pointerValue, cell.nilPointer = false, nil, false
 		cell.interfaceValue = meta.interfaceValue
@@ -958,7 +962,7 @@ func bashPPStoreCellValue(cell *bashPPCell, value any, meta *bashPPCollectionMet
 		if meta.interfaceValue.nilIface || meta.interfaceValue.cell == nil {
 			cell.vr = expand.Variable{Set: true, Kind: expand.String}
 		} else {
-			cell.vr = innerVar
+			cell.vr = meta.interfaceValue.cell.viewVar()
 		}
 		return
 	}

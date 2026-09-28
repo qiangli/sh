@@ -32,6 +32,27 @@ import (
 // that snapshot. The guest keeps its unspecified-but-harmless race; the host
 // gets a well-defined one of the values that were actually stored. A cell that
 // was never aliased has a nil guard and pays nothing.
+//
+// THE DISCIPLINE. A guarded region moves struct fields and does nothing else.
+// It must not evaluate guest code, render a value whose String method could
+// re-enter the interpreter, write a diagnostic, or reach for a SECOND cell's
+// guard. There is no lock ordering to get wrong because no region ever holds
+// two. Where a store needed one of those things — the scalar text in
+// [Runner.bashPPWriteUpdatePointer], the whole body of [bashPPStoreCellValue],
+// the readonly diagnostics in [Runner.setVar], the right-hand side in
+// bashPPForAssign, the interface payload's own value — it is computed first and
+// only the stores are bracketed.
+//
+// WHERE THE GUARD IS TAKEN. Writers: [bashPPCell.publish] (every whole-cell
+// rebinding), [bashPPStoreCellValue] (every typed store), [Runner.setVar]
+// (a shell assignment writing through a `var` binding),
+// [Runner.bashPPWriteUpdatePointer], and the two statement handlers that mutate
+// a scalar binding in place. Readers: [bashPPCell.view] and its narrow forms,
+// called by every reader that decides among several fields of one value —
+// bashPPScalarFromCell, bashPPCellMeta, (*bashPPPointer).read,
+// bashPPReadCellValue, bashPPStructuredCell, bashPPDescribeCell,
+// bashPPBridgeCell, goSourceUntypedNilCell, lookupVarUnhosted, and every
+// private `copyCell := *source`.
 
 // shareGuard arms cell for concurrent host access.
 //
