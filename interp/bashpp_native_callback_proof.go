@@ -2987,7 +2987,21 @@ func (p *dependencyCallbackProof) value(expr ast.Expr, env map[string]dependency
 		return p.value(expr.X, env)
 	case *ast.SelectorExpr:
 		base := p.value(expr.X, env)
-		return p.field(base, expr.Sel.Name, map[string]bool{})
+		result := p.field(base, expr.Sel.Name, map[string]bool{})
+		// A selector that names a method rather than a field builds a method
+		// value: it captures the whole receiver, so it can reach every callback
+		// the receiver reaches. field only knows about declared and embedded
+		// fields, so it reads such a selection as an empty, clean value; when the
+		// receiver is callback-bearing that is unsound, because storing the method
+		// value retains the callback. Wrap the receiver in a synthetic holder so
+		// the method value stays tainted exactly when the receiver is.
+		if !result.tainted() && base.tainted() && p.selectsMethod(base, expr.Sel.Name) {
+			return dependencyCallbackValue{object: &dependencyCallbackObject{
+				synthetic: true,
+				fields:    map[string]dependencyCallbackValue{dependencyCallbackElementField: base},
+			}}
+		}
+		return result
 	case *ast.FuncLit:
 		captures := dependencyCallbackFuncLitCaptures(expr, env)
 		closureEnv := make(map[string]dependencyCallbackValue, len(captures))
@@ -3308,6 +3322,13 @@ func (p *dependencyCallbackProof) callWithResolvedCallee(call *ast.CallExpr, cal
 		decl, actual := p.method(receiver, fun.Sel.Name, map[string]bool{})
 		if decl == nil {
 			if carriesCallback {
+				// The receiver is an interface value with no concrete binding
+				// this proof can resolve. Its true dynamic type is one of the
+				// source-visible types that declare a method of this name; proving
+				// every such method is a sound superset of proving the real one.
+				if p.proveInterfaceDispatch(call, fun.Sel.Name, args, depth) {
+					return true
+				}
 				return p.refuse(fun, "tainted method call target is not source-visible")
 			}
 			return true
@@ -3432,6 +3453,18 @@ func dependencyCallbackFunctionName(decl *ast.FuncDecl) string {
 	return receiver + "." + decl.Name.Name
 }
 
+// selectsMethod reports whether name resolves to a source-visible method of the
+// receiver's type, directly or through embedding, rather than a declared field.
+// It is the test that distinguishes a method value from a field selection.
+func (p *dependencyCallbackProof) selectsMethod(receiver dependencyCallbackValue, name string) bool {
+	receiver = dependencyCallbackResolvedValue(receiver)
+	if receiver.object == nil {
+		return false
+	}
+	decl, _ := p.method(receiver, name, map[string]bool{})
+	return decl != nil
+}
+
 func (p *dependencyCallbackProof) method(receiver dependencyCallbackValue, name string, seen map[string]bool) (*ast.FuncDecl, dependencyCallbackValue) {
 	receiver = dependencyCallbackResolvedValue(receiver)
 	if receiver.object == nil || receiver.object.typ == "" || seen[receiver.object.typ] {
@@ -3452,6 +3485,41 @@ func (p *dependencyCallbackProof) method(receiver dependencyCallbackValue, name 
 		}
 	}
 	return nil, dependencyCallbackValue{}
+}
+
+// proveInterfaceDispatch discharges a tainted call whose receiver is an
+// interface value the proof cannot bind to a concrete type. The dynamic type at
+// runtime is some source-visible type that declares a method of this name;
+// which one is not statically known, so the proof stands in for it with every
+// candidate. Each candidate is proved against a synthetic receiver of its own
+// type -- unowned and escaped, because an interface's dynamic value is not
+// storage this call site owns -- so a candidate that retains the callback in a
+// field, a global, or an asynchronous launch refuses exactly as a direct call to
+// it would. If every candidate leaves the callback where it found it the call is
+// admitted; a package with no such method, like any other unresolved tainted
+// target, stays refused.
+func (p *dependencyCallbackProof) proveInterfaceDispatch(call *ast.CallExpr, name string, args []dependencyCallbackValue, depth int) bool {
+	types := make([]string, 0, len(p.methods))
+	for typ, methods := range p.methods {
+		if methods[name] != nil {
+			types = append(types, typ)
+		}
+	}
+	if len(types) == 0 {
+		return false
+	}
+	sort.Strings(types)
+	for _, typ := range types {
+		receiver := dependencyCallbackValue{object: &dependencyCallbackObject{
+			typ:     typ,
+			escaped: true,
+			fields:  make(map[string]dependencyCallbackValue),
+		}}
+		if !p.callFunction(call, p.methods[typ][name], args, receiver, depth) {
+			return false
+		}
+	}
+	return true
 }
 
 // field resolves both declared fields and fields reached through embedding.

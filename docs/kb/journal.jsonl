@@ -62,3 +62,4 @@
 {"op":"add","slug":"materialize-embedded-interface-graphs-for-native-reflect","id":"01a0e418-c80f-76ae-918e-0268c524b37b","tool":"aurelia-s88-a","host":"dragon","episode":"weave-issue-183","at":"2026-09-27T18:20:24.464782Z"}
 {"op":"add","slug":"cache-interpreted-reexec-preparation-never-compiler-outputs","id":"01a0e494-dab7-7b2b-9f4d-3f70ee236d4d","tool":"aurelia-s88-n","host":"dragon","episode":"weave-issue-196","at":"2026-09-27T20:35:55.706357Z"}
 {"op":"add","slug":"materialize-scalar-metadata-before-value-receiver-copies","id":"01a0e735-95bc-7d2f-a79e-af652dacb6e4","tool":"codex-gpt-5.5-g","host":"dragon","episode":"weave-issue-215","at":"2026-09-28T08:50:43.77456Z"}
+{"op":"add","slug":"prove-callback-interface-dispatch-by-source-visible-method-super","id":"01a0e74e-c421-7971-837a-fd6950d856a6","tool":"codex-gpt-5.5-k","host":"dragon","episode":"weave-issue-219","at":"2026-09-28T09:18:14.051123Z"}
