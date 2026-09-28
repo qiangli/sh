@@ -33,7 +33,16 @@ import (
 // Go tool identity probes (-V=full) are answered by the native launcher from
 // an authenticated, per-replay identity. They never enter the interpreted
 // program: its startup may itself use the Go command, whose tool-ID lookup
-// would otherwise invoke the same replacement launcher recursively.
+// would otherwise invoke the same replacement launcher recursively. That
+// identity is content-addressed — the interpreter payload and the plan,
+// including the contents of every plan argument naming a file — so a later
+// session replaying the same program reports the same Go tool identity and the
+// build cache carries its output forward. See bashPPReexecReplayIdentity.
+// Replays are admitted rather than started on demand: the Go command schedules
+// a tool invocation as if it were a short-lived process, so every launcher
+// derived from one plan shares a bound on how many replays run at once and
+// refuses a replay tree deeper than [reexecReplayDepthLimitEnv]. Operators may
+// retune both through [reexecReplayLimitEnv] and [reexecReplayDepthLimitEnv].
 // The launcher also forwards os.Interrupt and SIGTERM to its replayed child and
 // waits for it, so signalling the launcher process terminates the replayed
 // program rather than leaving it running after the launcher exits.
@@ -61,7 +70,27 @@ const reexecArgv0Env = "BASHPP_REEXEC_ARGV0"
 const (
 	reexecPreparedCacheEnv = "BASHPP_REEXEC_PREPARED_CACHE"
 	reexecInterpreterIDEnv = "BASHPP_REEXEC_INTERPRETER_ID"
+	// reexecReplayDepthEnv counts the replays already above a launcher
+	// process. Each launcher raises it for its own child, so a launcher a
+	// replayed program reaches through its own Go tool discovery can tell that
+	// it is nested rather than starting a fresh replay tree.
+	reexecReplayDepthEnv = "BASHPP_REEXEC_REPLAY_DEPTH"
+	// reexecReplayLimitEnv overrides how many replays one launcher admits at a
+	// single depth; the default is the host's CPU count, and a value below one
+	// admits every replay immediately. reexecReplayDepthLimitEnv overrides the
+	// depth beyond which a replay is refused as launcher recursion; the default
+	// is reexecReplayDepthLimit and a value below one refuses none.
+	reexecReplayLimitEnv      = "BASHPP_REEXEC_REPLAY_LIMIT"
+	reexecReplayDepthLimitEnv = "BASHPP_REEXEC_REPLAY_DEPTH_LIMIT"
 )
+
+// reexecReplayDepthLimit is the default nesting the launcher admits. Replaying
+// a program which replaces a Go tool with its own launcher nests one deep: the
+// replay's package discovery may reach the replacement, whose replay may do so
+// again. Legitimate nesting is therefore shallow and a deeper tree is a
+// launcher cycle, which the guard reports instead of multiplying processes
+// until the host is exhausted.
+const reexecReplayDepthLimit = 4
 
 // goSourceReexecArgv0 reports the argv[0] the Go-source program should observe.
 // A reexec launcher supplies its invoked identity through the Runner's own
@@ -112,6 +141,41 @@ func (r *Runner) goSourceExecutableCall(ctx context.Context, call *syntax.BashPP
 	}, true, nil
 }
 
+// bashPPReexecReplayIdentity derives the identity a launcher reports for the
+// program it replays, from authenticated content alone: the interpreter payload
+// digest and the plan, including the digest of every plan argument which names
+// a readable file. A Go tool identity keys the build cache, so deriving it from
+// the session's temporary launcher workspace instead — as the first version of
+// this launcher did — gave the same program a fresh identity in every session,
+// and every session recompiled every package the replayed tool produced. A
+// content-addressed identity lets one session's output serve the next, and
+// changes as soon as one of the program's own inputs does.
+func bashPPReexecReplayIdentity(interpreterID string, plan []string) string {
+	hash := sha256.New()
+	field := func(text string) {
+		// Length-prefixed: an argument boundary must not be forgeable by an
+		// argument which contains the separator.
+		fmt.Fprintf(hash, "%d\x00%s", len(text), text)
+	}
+	field("bashpp-reexec-replay-v1")
+	field(interpreterID)
+	for i, arg := range plan {
+		field(arg)
+		if i == 0 {
+			// plan[0] is the interpreter, already named by interpreterID.
+			continue
+		}
+		digest, err := bashPPGoDigest(arg)
+		if err != nil {
+			// A flag, an import path, the plan's program-argument separator, or
+			// a file this process may not read. Its text is already hashed.
+			continue
+		}
+		field(digest)
+	}
+	return fmt.Sprintf("%x", hash.Sum(nil))
+}
+
 func (s *bashPPNativeSession) goSourceReexecLauncher(ctx context.Context, req bashPPEvalRequest, plan []string, tempDir string) (string, error) {
 	s.reexecMu.Lock()
 	defer s.reexecMu.Unlock()
@@ -140,52 +204,157 @@ func (s *bashPPNativeSession) goSourceReexecLauncher(ctx context.Context, req ba
 	quotedBuildGo := strconv.Quote(req.internalBuildGo())
 	quotedPreparedCache := strconv.Quote(preparedCache)
 	quotedInterpreterID := strconv.Quote(interpreterID)
-	replayHash := sha256.New()
-	_, _ = replayHash.Write([]byte(interpreterID))
-	for _, arg := range plan {
-		_, _ = replayHash.Write([]byte{0})
-		_, _ = replayHash.Write([]byte(arg))
-	}
-	_, _ = replayHash.Write([]byte{0})
-	_, _ = replayHash.Write([]byte(s.reexecDir))
-	quotedReplayID := strconv.Quote(fmt.Sprintf("%x", replayHash.Sum(nil)))
+	quotedReplayID := strconv.Quote(bashPPReexecReplayIdentity(interpreterID, plan))
+	quotedReplaySlots := strconv.Quote(filepath.Join(s.reexecDir, "replay-slots"))
+	quotedArgv0Env := strconv.Quote(reexecArgv0Env)
+	quotedPreparedCacheEnv := strconv.Quote(reexecPreparedCacheEnv)
+	quotedInterpreterIDEnv := strconv.Quote(reexecInterpreterIDEnv)
+	quotedDepthEnv := strconv.Quote(reexecReplayDepthEnv)
+	quotedLimitEnv := strconv.Quote(reexecReplayLimitEnv)
+	quotedDepthLimitEnv := strconv.Quote(reexecReplayDepthLimitEnv)
+	quotedDepthLimit := strconv.Itoa(reexecReplayDepthLimit)
 	source := `package main
 import (
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
+	"time"
+)
+const (
+	argv0Env = ` + quotedArgv0Env + `
+	preparedCacheEnv = ` + quotedPreparedCacheEnv + `
+	interpreterIDEnv = ` + quotedInterpreterIDEnv + `
+	depthEnv = ` + quotedDepthEnv + `
+	limitEnv = ` + quotedLimitEnv + `
+	depthLimitEnv = ` + quotedDepthLimitEnv + `
+	replayID = ` + quotedReplayID + `
+	replaySlots = ` + quotedReplaySlots + `
+	defaultDepthLimit = ` + quotedDepthLimit + `
 )
 func main() {
 	plan := []string{` + strings.Join(quoted, ",") + `}
 	if len(os.Args) == 2 && os.Args[1] == "-V=full" {
-		versionProbe(` + quotedReplayID + `)
+		versionProbe(replayID)
 		return
 	}
-	os.Exit(run(plan, os.Stdin, os.Stdout))
+	depth := setting(depthEnv, 0)
+	if limit := setting(depthLimitEnv, defaultDepthLimit); limit > 0 && depth >= limit {
+		fmt.Fprintf(os.Stderr, "gosource reexec %q: replay nesting reached depth %d of %d; the replayed program re-enters this launcher through its own tool discovery\n", plan, depth, limit)
+		os.Exit(127)
+	}
+	release := admit(depth)
+	code := run(plan, depth, os.Stdin, os.Stdout)
+	release()
+	os.Exit(code)
 }
-func command(plan []string) *exec.Cmd {
+// setting reads a non-negative integer launcher setting, falling back to
+// fallback when the variable is unset or unreadable. A malformed value must not
+// fail a replay: the setting only bounds how replays are scheduled.
+func setting(name string, fallback int) int {
+	text := strings.TrimSpace(os.Getenv(name))
+	if text == "" {
+		return fallback
+	}
+	value, err := strconv.Atoi(text)
+	if err != nil {
+		return fallback
+	}
+	return value
+}
+// admit reserves one of this launcher's replay slots and reports its release. A
+// replay is a whole interpreter, but the Go command schedules a tool invocation
+// as if it were a short-lived process: one go build starts -p of them, and each
+// replay's own package discovery starts another go build which does the same.
+// Nothing else relates one replay to another, so unadmitted the live replay
+// count is the product of every nesting level's -p instead of a property of the
+// host. The slots live beside the launcher, so every copy of it — a replacement
+// tool installed into a test GOROOT is a copy — draws on one bound, and each
+// depth draws on its own so a replay waiting for its child never holds the slot
+// that child needs. Bookkeeping never denies a replay: an unusable slot
+// directory admits immediately.
+func admit(depth int) func() {
+	limit := setting(limitEnv, runtime.NumCPU())
+	if limit < 1 {
+		return func() {}
+	}
+	dir := filepath.Join(replaySlots, strconv.Itoa(depth))
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return func() {}
+	}
+	for {
+		for slot := 0; slot < limit; slot++ {
+			name := filepath.Join(dir, "slot-" + strconv.Itoa(slot))
+			file, err := os.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+			if err == nil {
+				_ = file.Close()
+				return hold(name)
+			}
+			if !errors.Is(err, os.ErrExist) {
+				return func() {}
+			}
+			// A launcher killed outright leaves its slot file behind. Its
+			// holder refreshes the file while it runs, so an unrefreshed slot
+			// is free.
+			if info, statErr := os.Stat(name); statErr == nil && time.Since(info.ModTime()) > 5*time.Second {
+				_ = os.Remove(name)
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+func hold(name string) func() {
+	done := make(chan struct{})
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case now := <-ticker.C:
+				_ = os.Chtimes(name, now, now)
+			case <-done:
+				return
+			}
+		}
+	}()
+	return func() { close(done); <-stopped; _ = os.Remove(name) }
+}
+func command(plan []string, depth int) *exec.Cmd {
 	args := append(append([]string(nil), plan[1:]...), os.Args[1:]...)
 	cmd := exec.Command(plan[0], args...)
+	private := []string{"BASHPP_GO", argv0Env, preparedCacheEnv, interpreterIDEnv, depthEnv}
 	for _, entry := range os.Environ() {
 		name, _, _ := strings.Cut(entry, "=")
-		if !strings.EqualFold(name, "BASHPP_GO") && !strings.EqualFold(name, "BASHPP_REEXEC_ARGV0") && !strings.EqualFold(name, "BASHPP_REEXEC_PREPARED_CACHE") && !strings.EqualFold(name, "BASHPP_REEXEC_INTERPRETER_ID") { cmd.Env = append(cmd.Env, entry) }
+		keep := true
+		for _, hidden := range private {
+			if strings.EqualFold(name, hidden) { keep = false; break }
+		}
+		if keep { cmd.Env = append(cmd.Env, entry) }
 	}
 	cmd.Env = append(cmd.Env, "BASHPP_GO=" + ` + quotedBuildGo + `)
-	cmd.Env = append(cmd.Env, "BASHPP_REEXEC_PREPARED_CACHE=" + ` + quotedPreparedCache + `)
-	cmd.Env = append(cmd.Env, "BASHPP_REEXEC_INTERPRETER_ID=" + ` + quotedInterpreterID + `)
+	cmd.Env = append(cmd.Env, preparedCacheEnv + "=" + ` + quotedPreparedCache + `)
+	cmd.Env = append(cmd.Env, interpreterIDEnv + "=" + ` + quotedInterpreterID + `)
+	// Count this replay for every launcher the replayed program reaches, so a
+	// nested replay draws on its own slots and a launcher cycle is refused
+	// instead of multiplying interpreters. See admit.
+	cmd.Env = append(cmd.Env, depthEnv + "=" + strconv.Itoa(depth + 1))
 	// Propagate the launcher's own invoked argv[0] so the replayed program keeps
 	// the executable identity it was invoked under (e.g. go tool compile), rather
 	// than the interpreter's reconstructed source name. See goSourceReexecArgv0.
-	cmd.Env = append(cmd.Env, "BASHPP_REEXEC_ARGV0=" + os.Args[0])
+	cmd.Env = append(cmd.Env, argv0Env + "=" + os.Args[0])
 	return cmd
 }
-func run(plan []string, stdin *os.File, stdout *os.File) int {
-	cmd := command(plan)
+func run(plan []string, depth int, stdin *os.File, stdout *os.File) int {
+	cmd := command(plan, depth)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = stdin, stdout, os.Stderr
 	return wait(plan, cmd)
 }
