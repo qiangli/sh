@@ -61,3 +61,4 @@
 {"op":"add","slug":"store-bridge-scalar-metadata-as-scalar-cells","id":"01a0e2c7-3821-7897-8338-8fed7431291c","tool":"codex-gpt-5.5-n","host":"dragon","episode":"weave-issue-170","at":"2026-09-27T12:11:41.98873Z"}
 {"op":"add","slug":"materialize-embedded-interface-graphs-for-native-reflect","id":"01a0e418-c80f-76ae-918e-0268c524b37b","tool":"aurelia-s88-a","host":"dragon","episode":"weave-issue-183","at":"2026-09-27T18:20:24.464782Z"}
 {"op":"add","slug":"cache-interpreted-reexec-preparation-never-compiler-outputs","id":"01a0e494-dab7-7b2b-9f4d-3f70ee236d4d","tool":"aurelia-s88-n","host":"dragon","episode":"weave-issue-196","at":"2026-09-27T20:35:55.706357Z"}
+{"op":"add","slug":"materialize-scalar-metadata-before-value-receiver-copies","id":"01a0e735-95bc-7d2f-a79e-af652dacb6e4","tool":"codex-gpt-5.5-g","host":"dragon","episode":"weave-issue-215","at":"2026-09-28T08:50:43.77456Z"}
