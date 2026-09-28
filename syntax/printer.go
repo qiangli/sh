@@ -262,6 +262,7 @@ type Printer struct {
 	minify          bool
 	singleLine      bool
 	joinBslashNewl  bool
+	inArithm        int // depth of $((...)) being printed
 	funcNextLine    bool
 	bashCompatArith bool
 
@@ -364,9 +365,10 @@ func (p *Printer) wantsNewline(pos Pos, escapingNewline bool) bool {
 }
 
 func (p *Printer) bslashNewl() {
-	if p.joinBslashNewl {
+	if p.joinBslashNewl && p.inArithm == 0 {
 		// The source line is consumed; the following word's spacePad
-		// writes the separating space.
+		// writes the separating space. Line breaks inside $((...)) are
+		// kept: bash's declare -f reprints them (comsub-posix2.sub).
 		p.line++
 		return
 	}
@@ -805,7 +807,9 @@ func (p *Printer) wordPart(wp, next WordPart) {
 		if wp.Unsigned {
 			p.w.WriteString("# ")
 		}
+		p.inArithm++
 		p.arithmExpr(wp.X, false, false)
+		p.inArithm--
 		p.w.WriteString("))")
 	case *ExtGlob:
 		p.w.WriteString(wp.Op.String())

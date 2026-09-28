@@ -1922,7 +1922,9 @@ func indexedNegativeOffset(vr expand.Variable, n int) int {
 func (r *Runner) unsetArrayElem(name, idx string) bool {
 	if idx == "*" || idx == "@" {
 		vr := r.lookupVar(name)
-		if vr.Kind == expand.Indexed {
+		// Bash 5.2 empties the array; BASH_COMPAT=51 and earlier unset the
+		// whole variable (quotearray3.sub).
+		if vr.Kind == expand.Indexed && !r.bashCompatAtMost(51) {
 			vr.Set = true
 			vr.List = []string{}
 			vr.ListSet = nil
@@ -3319,9 +3321,13 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 				}
 				r.expandErr(fmt.Errorf("%s: line %d: %s: %s",
 					prefix, as.Value.Pos().Line(), s, err))
+				// The caller's assignment-error path discards the command
+				// (POSIX mode: exits), stopping later assignments in it;
+				// Bash also drops the rest of the input line
+				// (`x+=7 y=4; echo` prints nothing, arith9.sub).
 				r.exit.code = 1
-				if r.bashCompatErrors && !r.interactiveShell {
-					r.exit.exiting = true
+				if r.bashCompatErrors && !r.interactiveShell && !r.opts[optPosix] {
+					r.discardRestOfLine = r.curStmtPos.Line()
 				}
 			}
 			rhs, err := arithEval(s)
@@ -3907,4 +3913,13 @@ func (r *Runner) assignVal(name string, prev expand.Variable, as *syntax.Assign,
 		panic(fmt.Sprintf("unexpected conversion of kind %d", prev.Kind))
 	}
 	return name, prev
+}
+
+// bashCompatAtMost reports whether $BASH_COMPAT selects Bash level n or
+// earlier. It takes "5.1" and "51" alike; unset or unparsable means the
+// current level.
+func (r *Runner) bashCompatAtMost(n int) bool {
+	v := strings.ReplaceAll(strings.TrimSpace(r.envGet("BASH_COMPAT")), ".", "")
+	level, err := strconv.Atoi(v)
+	return err == nil && level > 0 && level <= n
 }

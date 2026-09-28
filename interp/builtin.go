@@ -1239,10 +1239,15 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			exit.exiting = true
 			return exit
 		default:
-			// Bash exits a non-interactive script on a malformed break or
-			// continue invocation, even outside POSIX mode.
+			// Bash discards the rest of the input line and reads the next
+			// one (errors10.sub: "after continue: 2", POSIX mode too). A
+			// one-line `bash -c` string therefore looks like an exit.
 			exit = failf(2, "%s: too many arguments\n", name)
-			exit.exiting = !r.interactiveShell
+			if !r.interactiveShell {
+				exit.exiting = true
+				exit.discarding = true
+				r.discardRestOfLine = r.curStmtPos.Line()
+			}
 			return exit
 		}
 	case "pwd":
@@ -2258,6 +2263,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			// "Implicit" caller: print line + source of the
 			// immediate caller, or "0 NULL" if at the top level.
 			if len(r.callStack) == 0 {
+				if r.commandString || r.filename == "" {
+					// `bash -c caller` has no frame at all.
+					exit.code = 1
+					break
+				}
 				r.outf("0 NULL\n")
 				break
 			}
@@ -2272,8 +2282,12 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			exit.code = 1
 			return exit
 		}
-		if level < len(r.callStack)-1 {
-			idx := len(r.callStack) - 1 - level
+		// The outermost frame (the top-level caller, "main") is reported
+		// only when it came from a script file: `bash script` prints
+		// "4 main script" (dbg-support.tests), a `bash -c` string has no
+		// such frame and fails.
+		if idx := len(r.callStack) - 1 - level; level < len(r.callStack) &&
+			(idx > 0 || (!r.commandString && r.callStack[idx].source != "")) {
 			frame := r.callStack[idx]
 			funcName := "main"
 			if idx > 0 {

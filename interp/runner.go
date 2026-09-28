@@ -466,6 +466,7 @@ func (r *Runner) expandErr(err error) {
 	if err == nil {
 		return
 	}
+	origErr := err
 	var unsetParam expand.UnsetParameterError
 	if r.bashCompatErrors {
 		if strings.Contains(err.Error(), "readonly variable") {
@@ -597,7 +598,13 @@ func (r *Runner) expandErr(err error) {
 		// error mode retains its previous continuation behavior.
 		r.exit.code = 1
 		r.lastExpandExit = exitStatus{code: 1}
-		if r.bashCompatErrors && !r.interactiveShell {
+		// A `((...))` command only fails with $? = 1 and the line goes on
+		// (nameref11.sub: `declare -n r; ((r=0)) ; unset -n r`).
+		// So does $((...)) (arith10.sub: `: $(( a[""]=25 )); declare -p a`);
+		// only a parameter expansion (`${r=}` on an empty nameref) discards.
+		var identArith *expand.ArithmError
+		if r.bashCompatErrors && !r.interactiveShell && !strings.Contains(errMsg, "((: ") &&
+			!errors.As(origErr, &identArith) {
 			r.exit.exiting = true
 			if !r.opts[optPosix] {
 				r.discardExpansionLine()
@@ -1029,10 +1036,22 @@ func (r *Runner) bashArithmError(expr syntax.ArithmExpr, err error, command bool
 	if strings.Contains(bashMsg, "expression recursion level exceeded") {
 		return fmt.Errorf("%s%s", r.bashErrPrefix(r.curStmtPos), bashMsg)
 	}
+	// In $((...)) Bash's error token runs to the end of the source text,
+	// so it ends in exactly the whitespace the source had before `))`:
+	// $((2**-1)) -> "1", $(( 2**-1 )) -> "1 " (arith.tests).
+	srcTrail := ""
+	if !command {
+		if exprTextOverride != "" {
+			// Text re-parsed from an expansion arrives trimmed and has no
+			// source positions; read the whitespace before the `))` of the
+			// statement's $((...)) instead (arith.tests: `$(( 4 ? : $A ))`).
+			srcTrail = r.stmtArithmExpTrail()
+		} else if src := r.arithmSourceText(expr, true); src != "" {
+			srcTrail = src[len(strings.TrimRight(src, " \t")):]
+		}
+	}
 	if !command && strings.Contains(bashMsg, "assignment requires lvalue") {
-		// Bash omits the parser's trailing token space for an invalid
-		// increment in an arithmetic expansion such as $((--x++)).
-		bashMsg = strings.ReplaceAll(bashMsg, `error token is "++ "`, `error token is "++"`)
+		bashMsg = strings.ReplaceAll(bashMsg, `error token is "++ "`, `error token is "++`+srcTrail+`"`)
 	}
 	if strings.Contains(bashMsg, "not a valid identifier") {
 		if command {
@@ -1151,20 +1170,24 @@ func (r *Runner) bashArithmError(expr syntax.ArithmExpr, err error, command bool
 				tokenText = ": " + right + " "
 				exactToken = true
 				if !command {
-					exprText = strings.TrimRight(exprText, " \t")
-					tokenText = strings.TrimRight(tokenText, " \t")
+					exprText = strings.TrimRight(exprText, " \t") + srcTrail
+					tokenText = strings.TrimRight(tokenText, " \t") + srcTrail
 				}
 			} else if word, _ := b2.Y.(*syntax.Word); arithWordEmpty(word) {
 				if b2.OpPos == b.OpPos {
 					tokenText = branchText(b2.X)
 					if command {
 						tokenText += " "
+					} else {
+						tokenText += srcTrail
 					}
 					bashMsg = "`:' expected for conditional expression"
 				} else {
 					tokenText = ":"
 					if command {
 						tokenText += " "
+					} else {
+						tokenText += srcTrail
 					}
 					bashMsg = "expression expected"
 				}
@@ -1190,6 +1213,7 @@ func (r *Runner) bashArithmError(expr syntax.ArithmExpr, err error, command bool
 					tokenText = strings.TrimPrefix(strings.TrimSpace(printArithm(b.Y)), "-")
 				}
 				if !command {
+					tokenText += srcTrail
 					exactToken = true
 				}
 			}
@@ -1273,7 +1297,10 @@ func (r *Runner) bashArithmError(expr syntax.ArithmExpr, err error, command bool
 		strings.Contains(bashMsg, "error token is") {
 		compactErrSep = true
 	}
-	if command && strings.TrimSpace(exprText) == "++" &&
+	// `((++))` and `(( ++))` report "++" / "+"; with whitespace before
+	// `))` Bash keeps it in both (arith1.sub: `(( ++ ))`).
+	if src := r.arithmSourceText(expr, true); command && strings.TrimSpace(exprText) == "++" &&
+		!strings.HasSuffix(src, " ") && !strings.HasSuffix(src, "\t") &&
 		strings.Contains(bashMsg, "arithmetic syntax error: operand expected") {
 		exprText = "++"
 		bashMsg = strings.ReplaceAll(bashMsg, `error token is "+ "`, `error token is "+"`)
@@ -1419,6 +1446,39 @@ func (r *Runner) sourceOffset(pos syntax.Pos) (int, bool) {
 		return 0, false
 	}
 	return i, true
+}
+
+// stmtArithmExpTrail returns the whitespace just before the closing `))` of
+// the first $((...)) in the current statement's source line, or "".
+func (r *Runner) stmtArithmExpTrail() string {
+	start, ok := r.sourceOffset(r.curStmtPos)
+	if !ok || start < 0 || start > len(r.bashSource) {
+		return ""
+	}
+	end := r.sourceLineEndOffset(r.curStmtPos.Line())
+	if end < start || end > len(r.bashSource) {
+		return ""
+	}
+	line := string(r.bashSource[start:end])
+	open := strings.Index(line, "$((")
+	if open < 0 {
+		return ""
+	}
+	depth := 0
+	for i := open + 1; i < len(line); i++ {
+		switch line[i] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				// line[i-1] is the first `)` of the closing `))`.
+				inner := line[:i-1]
+				return inner[len(strings.TrimRight(inner, " \t")):]
+			}
+		}
+	}
+	return ""
 }
 
 func (r *Runner) sourceLineEndOffset(line uint) int {
@@ -5879,6 +5939,7 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		if expandErr != nil && r.bashCompatErrors && !r.interactiveShell {
 			var arithErr *expand.ArithmError
 			if errors.As(expandErr, &arithErr) &&
+				!strings.Contains(expandErr.Error(), "not a valid identifier") &&
 				(arithErr.Standalone || strings.Contains(expandErr.Error(), "arithmetic syntax error")) {
 				// An arithmetic expansion error discards this input line;
 				// POSIX mode exits the shell instead.
