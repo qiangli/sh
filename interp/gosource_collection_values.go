@@ -151,6 +151,18 @@ func (r *Runner) goSourceMaterializeBuiltinBridgeCollection(arg *bashPPBuiltinAr
 		}
 		arg.value, arg.meta, arg.typ = value, meta, typ
 		return nil
+	case "nil":
+		// A typed nil slice — a dependency result, or the native nil an
+		// assignment minted for a dependency-owned slice variable — has no
+		// contents to fetch: it is the interpreter's own zero-valued slice.
+		// Pointer and channel nils keep their handles untouched.
+		typ := bashPPBridgeDynamicType(native.Type)
+		if shape, ok := typ.(*syntax.BashPPCollectionType); !ok || shape.Kind != "slice" {
+			return nil
+		}
+		value, meta := r.bashPPZeroValue(typ)
+		arg.value, arg.meta, arg.typ = value, meta, typ
+		return nil
 	case "handle":
 		typ := bashPPBridgeDynamicType(native.Type)
 		value, meta, claimed, err := r.goSourceNativeSequenceContents(native, typ)

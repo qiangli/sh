@@ -18,7 +18,10 @@ func (r *Runner) goSourceNativeNilCandidate(target *bashPPCell, expr syntax.Bash
 	if !ok || v == nil {
 		return nil
 	}
-	if !strings.HasPrefix(v.Type, "*") && !strings.HasPrefix(v.Type, "chan ") && !strings.HasPrefix(v.Type, "chan<-") && !strings.HasPrefix(v.Type, "<-chan ") {
+	// A slice the dependency returned is nilable too; its wire spelling is
+	// "[]T", which cannot be an array — those spell their length as "[N]T"
+	// and keep refusing nil on the paths below.
+	if !strings.HasPrefix(v.Type, "*") && !strings.HasPrefix(v.Type, "chan ") && !strings.HasPrefix(v.Type, "chan<-") && !strings.HasPrefix(v.Type, "<-chan ") && !strings.HasPrefix(v.Type, "[]") {
 		return nil
 	}
 	wireType := v.Type
