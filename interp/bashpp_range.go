@@ -93,8 +93,17 @@ func (r *Runner) goSourceIteratorYield(fn *bashPPFunc) (*syntax.BashPPFuncType, 
 		return nil, fmt.Errorf("iterator yield accepts at most two parameters")
 	}
 	for _, param := range yieldParams {
-		if param.variadic || !r.bashPPCallbackScalarType(param.typ) {
-			return nil, fmt.Errorf("iterator callback requires scalar yield parameters")
+		if param.variadic {
+			return nil, fmt.Errorf("iterator callback yield parameters must not be variadic")
+		}
+		// A range iterator can cross the dependency callback boundary. Admit
+		// exactly the shapes supported by that boundary: scalars and aggregate
+		// values with copy semantics, or imported values that remain behind an
+		// authenticated dependency handle. Local reference-bearing shapes must
+		// fail before the iterator runs; copying one would silently sever its
+		// aliases.
+		if !r.bashPPCallbackValueType(param.typ) && !r.bashPPCallbackNativeType(param.typ) {
+			return nil, fmt.Errorf("iterator callback yield parameter requires shared-reference transport: %s", bashPPTypeText(param.typ))
 		}
 	}
 	return yield, nil
@@ -254,22 +263,38 @@ func (r *Runner) goSourceInvokeRangeYield(ctx context.Context, fn *bashPPFunc, a
 		r.exit.fatal(fmt.Errorf("gosource: iterator yield argument count mismatch"))
 		return nil
 	}
-	values := make([]string, len(args))
+	values := make([]any, len(args))
+	metas := make([]*bashPPCollectionMeta, len(args))
 	for i := range args {
 		values[i] = args[i]
-		if i < len(cells) && cells[i] != nil {
-			values[i] = cells[i].vr.String()
+		if i >= len(cells) || cells[i] == nil {
+			continue
 		}
+		value, meta, err := r.bashPPReadCellValue(cells[i])
+		if err != nil {
+			r.exit.fatal(err)
+			return nil
+		}
+		// An imported non-scalar callback parameter is deliberately kept as
+		// the dependency-owned handle produced by goSourceCallbackCell. Give
+		// range binding the native metadata it needs instead of rendering the
+		// handle as text. Interfaces already carry richer dynamic-type metadata
+		// from bashPPReadCellValue and keep it unchanged.
+		if meta == nil && cells[i].vr.Kind == expand.Object && r.bashPPCallbackNativeType(params[i].typ) {
+			meta = &bashPPCollectionMeta{kind: "native", typ: params[i].typ}
+		}
+		values[i], metas[i] = value, meta
 	}
 	savedScope := r.bashPPScope
 	r.bashPPScope = fn.scope
 	var key, value any
+	var keyMeta, valueMeta *bashPPCollectionMeta
 	var keyType, valueType syntax.BashPPTypeExpr
 	if len(values) > 0 {
-		key, keyType = values[0], params[0].typ
+		key, keyMeta, keyType = values[0], metas[0], params[0].typ
 	}
 	if len(values) > 1 {
-		value, valueType = values[1], params[1].typ
+		value, valueMeta, valueType = values[1], metas[1], params[1].typ
 	}
 	// A defer executed directly in the body binds to the enclosing function,
 	// so divert it to the state's buffer for the length of the body. A frame
@@ -277,7 +302,7 @@ func (r *Runner) goSourceInvokeRangeYield(ctx context.Context, fn *bashPPFunc, a
 	// only the body's own defers are captured here.
 	savedSink := r.bashPPRangeDefer
 	r.bashPPRangeDefer = &state.deferBuf
-	more := r.bashPPRangeIteration(ctx, state.rng, key, keyType, value, nil, valueType)
+	more := r.bashPPRangeIterationKeyMeta(ctx, state.rng, key, keyMeta, keyType, value, valueMeta, valueType)
 	r.bashPPRangeDefer = savedSink
 	r.bashPPScope = savedScope
 	// A labeled break/continue/goto that still needs to unwind past this range
