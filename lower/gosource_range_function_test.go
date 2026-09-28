@@ -53,6 +53,53 @@ func main() {
 	}
 }
 
+func TestGoSourceRangeFunctionTypedInterfaceYieldTransport(t *testing.T) {
+	const source = `package main
+import (
+	"fmt"
+	"go/types"
+)
+func typeset(seed types.Type) func(func(types.Type, types.Type) bool) {
+	return func(yield func(types.Type, types.Type) bool) {
+		yield(seed, types.Typ[types.String])
+	}
+}
+func cond(t, u types.Type) bool { return t.String() == "int" && u.String() == "string" }
+func main() {
+	for t, u := range typeset(types.Typ[types.Int]) {
+		fmt.Println(cond(t, u), t.String(), u.String())
+	}
+}`
+	stdout, stderr, err := runRangeFunctionSource(t, source)
+	if err != nil {
+		t.Fatalf("Run: %v stdout=%q stderr=%q", err, stdout, stderr)
+	}
+	if stdout != "true int string\n" || stderr != "" {
+		t.Fatalf("streams: stdout=%q stderr=%q", stdout, stderr)
+	}
+}
+
+func TestGoSourceRangeFunctionValueAggregateYieldTransport(t *testing.T) {
+	const source = `package main
+import "fmt"
+type Pair struct { Left, Right int }
+func values(yield func(Pair, [2]string) bool) {
+	yield(Pair{Left: 3, Right: 5}, [2]string{"go", "types"})
+}
+func main() {
+	for pair, words := range values {
+		fmt.Println(pair.Left+pair.Right, words[0], words[1])
+	}
+}`
+	stdout, stderr, err := runRangeFunctionSource(t, source)
+	if err != nil {
+		t.Fatalf("Run: %v stdout=%q stderr=%q", err, stdout, stderr)
+	}
+	if stdout != "8 go types\n" || stderr != "" {
+		t.Fatalf("streams: stdout=%q stderr=%q", stdout, stderr)
+	}
+}
+
 func TestGoSourceRangeFunctionYieldAfterFalsePanics(t *testing.T) {
 	const source = `package main
 import "fmt"
@@ -272,18 +319,27 @@ W:
 }
 
 func TestGoSourceRangeFunctionCallbackShapeBoundaries(t *testing.T) {
-	t.Run("aggregate yield parameter", func(t *testing.T) {
-		const source = `package main
-func values(yield func([]int) bool) { println("iterator-ran"); yield([]int{1}) }
+	for name, yieldType := range map[string]string{
+		"slice":     "[]int",
+		"map":       "map[string]int",
+		"pointer":   "*int",
+		"function":  "func()",
+		"channel":   "chan int",
+		"interface": "interface{ String() string }",
+	} {
+		t.Run("shared-reference "+name+" yield parameter", func(t *testing.T) {
+			source := `package main
+func values(yield func(` + yieldType + `) bool) { println("iterator-ran") }
 func main() { for range values { println("body-ran") } }`
-		stdout, stderr, err := runRangeFunctionSource(t, source)
-		if err == nil || !strings.Contains(err.Error()+stderr, "iterator callback requires scalar yield parameters") {
-			t.Fatalf("missing boundary: %v stdout=%q stderr=%q", err, stdout, stderr)
-		}
-		if strings.Contains(stdout+stderr, "iterator-ran") || strings.Contains(stdout+stderr, "body-ran") {
-			t.Fatalf("unsupported callback executed: stdout=%q stderr=%q", stdout, stderr)
-		}
-	})
+			stdout, stderr, err := runRangeFunctionSource(t, source)
+			if err == nil || !strings.Contains(err.Error()+stderr, "iterator callback yield parameter requires shared-reference transport") {
+				t.Fatalf("missing boundary: %v stdout=%q stderr=%q", err, stdout, stderr)
+			}
+			if strings.Contains(stdout+stderr, "iterator-ran") || strings.Contains(stdout+stderr, "body-ran") {
+				t.Fatalf("unsupported callback executed: stdout=%q stderr=%q", stdout, stderr)
+			}
+		})
+	}
 
 	for name, source := range map[string]string{
 		"non-bool yield result":  `package main; func bad(yield func(int) int) {}; func main() { for range bad {} }`,
