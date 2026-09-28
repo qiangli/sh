@@ -1580,7 +1580,7 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 				// `y := x` spelled as a word: one snapshot answers the whole
 				// question — which carrier x holds, the collection it names and
 				// that collection's identity, or the interface payload. Read
-				// off the cell they could come from two different values.
+				// off the cell, they could come from two different values.
 				source := r.bashPPScope.lookup(sourceName).view()
 				if source != nil && source.vr.Kind == expand.Object {
 					value, meta := source.vr.Obj, bashPPCellMeta(source)
