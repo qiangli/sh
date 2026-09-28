@@ -531,7 +531,11 @@ func (r *Runner) bashPPEvalTypedValue(expr syntax.BashPPExpr, expected syntax.Ba
 		return value, meta, nil
 	}
 	if id, ok := expr.(*syntax.BashPPIdent); ok {
-		if cell := r.bashPPScope.lookup(id.Name.Value); cell != nil && cell.vr.Kind == expand.Object {
+		// The object kind, the carried value and the collection meta describe
+		// ONE store, and everything below chooses among them — a materialized
+		// carrier, a type check, an array copy. They come from one snapshot so
+		// a rebinding cannot make the check and the copied value disagree.
+		if cell := r.bashPPScope.lookup(id.Name.Value).view(); cell != nil && cell.vr.Kind == expand.Object {
 			meta := bashPPCellMeta(cell)
 			// A non-plain tuple assignment is lowered through result temporaries.
 			// A dependency result in one of those cells is still a native carrier,

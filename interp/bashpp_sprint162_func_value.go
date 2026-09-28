@@ -71,12 +71,16 @@ func (r *Runner) bashPPNilFuncCall(c *syntax.BashPPCall) bool {
 	if !r.bashPPFuncTypedCell(cell) {
 		return false
 	}
-	switch cell.vr.Kind {
+	// "Is this binding the nil func value" is a question about one store: the
+	// kind and the text it selects on must not come from different ones, or a
+	// rebinding between them reports nil for a func that was just installed.
+	vr := cell.viewVar()
+	switch vr.Kind {
 	case expand.String:
-		_, closure := r.bashPPClosure(cell.vr.Str)
-		return cell.vr.Str == "" && !closure
+		_, closure := r.bashPPClosure(vr.Str)
+		return vr.Str == "" && !closure
 	case expand.Object:
-		native, ok := cell.vr.Obj.(*bashPPBridgeValue)
+		native, ok := vr.Obj.(*bashPPBridgeValue)
 		return ok && native != nil && native.Kind == "nil"
 	}
 	return false

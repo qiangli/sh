@@ -320,7 +320,10 @@ func (c *bashPPCloner) cloneCell(cell *bashPPCell) *bashPPCell {
 		c.cells[cell] = nil
 		return nil
 	}
-	if c.goSourceTask && !cell.constant {
+	// An ALREADY-shared cell reached again through an unrelated edge is live
+	// under another goroutine's writes, so even this one marker is read through
+	// the guard; see bashpp_cell_share.go.
+	if c.goSourceTask && !cell.viewConstant() {
 		// Exact Go lexical capture has already selected every outer binding
 		// a carried original callable can access. Omit unrelated locals:
 		// reading even their scalar slots can race with a task using &local.

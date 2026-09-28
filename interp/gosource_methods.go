@@ -54,7 +54,9 @@ func (r *Runner) goSourceLocalMethod(expr *syntax.BashPPSelectorExpr, afterArgs 
 			}
 			receiver = &bashPPCell{declType: typ}
 			bashPPStoreCellValue(receiver, value, meta)
-			if len(ptr.path) == 0 && ptr.target.interfaceValue != nil {
+			// A pointer straight at a binding can name a cell a task shares,
+			// so the payload word decides through the guard.
+			if len(ptr.path) == 0 && ptr.target.viewInterface() != nil {
 				receiver = ptr.target
 			}
 		}
@@ -72,13 +74,16 @@ func (r *Runner) goSourceLocalMethod(expr *syntax.BashPPSelectorExpr, afterArgs 
 	if native, claimed, err := r.goSourceNativeReceiverMethod(receiver, expr.Sel.Value); claimed {
 		return native, err
 	}
-	if receiver.interfaceValue != nil {
+	// The receiver can be the shared cell itself, so the payload is read once
+	// and the method binds against THAT payload rather than re-reading a word
+	// a concurrent rebinding may already have replaced.
+	if iface := receiver.viewInterface(); iface != nil {
 		// The interface lookup faults at the method name, including
 		// selectors whose dot and method name occupy different lines.
 		oldPos := r.curStmtPos
 		r.curStmtPos = expr.Sel.Pos()
 		defer func() { r.curStmtPos = oldPos }()
-		fn, ok = r.bashPPBindInterfaceMethod(receiver.interfaceValue, expr.Sel.Value)
+		fn, ok = r.bashPPBindInterfaceMethod(iface, expr.Sel.Value)
 	} else {
 		typ := bashPPSelectorCellType(receiver)
 		sel := r.bashPPResolveSelection(typ, expr.Sel.Value, true, expr.ReceiverAddressable)

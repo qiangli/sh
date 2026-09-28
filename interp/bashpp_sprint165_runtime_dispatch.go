@@ -98,9 +98,16 @@ func (r *Runner) goSourceNativeReceiverMethod(receiver *bashPPCell, method strin
 	if !r.bashPPGoSource || receiver == nil {
 		return nil, false, nil
 	}
+	// Each unwrap step reads the payload word ONCE: the receiver can be a cell
+	// a task shares, and testing the word and then dereferencing it again
+	// could descend into a different store's interface value.
 	cell := receiver
-	for cell != nil && cell.interfaceValue != nil && !cell.interfaceValue.nilIface {
-		cell = cell.interfaceValue.cell
+	for cell != nil {
+		iface := cell.viewInterface()
+		if iface == nil || iface.nilIface {
+			break
+		}
+		cell = iface.cell
 	}
 	handle := r.goSourceDependencyHandle(cell)
 	if handle == nil {
@@ -119,7 +126,7 @@ func (r *Runner) goSourceNativeReceiverMethod(receiver *bashPPCell, method strin
 	}
 	if handle.NativeType != "" {
 		value.Callable = handle.NativeType + "." + method
-		if cell.pointer {
+		if cell.view().pointer {
 			value.Callable = "*" + value.Callable
 		}
 	}

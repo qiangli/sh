@@ -65,10 +65,17 @@ func (r *Runner) bashPPNativeArgCells(exprs []syntax.BashPPExpr, args []bashPPBr
 			continue
 		}
 		cell := r.bashPPScope.lookup(ident.Name.Value)
-		if cell == nil || cell.pointer || cell.interfaceValue != nil || cell.vr.Kind != expand.Object {
+		if cell == nil {
 			continue
 		}
-		view, ok := cell.vr.Obj.([]any)
+		// The identity test below compares the binding's CURRENT backing array
+		// with the one the bridge captured, so every field it screens on has to
+		// come from the same store; the cell itself is still what is recorded.
+		snapshot := cell.view()
+		if snapshot.pointer || snapshot.interfaceValue != nil || snapshot.vr.Kind != expand.Object {
+			continue
+		}
+		view, ok := snapshot.vr.Obj.([]any)
 		captured := args[i].sliceView.view
 		if !ok || len(view) != len(captured) || len(view) > 0 && &view[0] != &captured[0] {
 			continue

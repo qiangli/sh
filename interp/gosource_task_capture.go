@@ -300,14 +300,18 @@ func (r *Runner) bashPPGoSourceTaskFunc(call *syntax.BashPPCall) (*bashPPFunc, *
 			r.exit.fatal(err)
 			return nil, nil
 		}
-		if cell == nil || cell.vr.Kind != expand.String {
+		// The kind test, the closure the handle names and the handle pinned
+		// into the task must all describe ONE store, or the task is pinned to
+		// a callable other than the one that was resolved.
+		vr := cell.viewVar()
+		if vr.Kind != expand.String {
 			return nil, nil
 		}
-		fn, ok := r.bashPPClosure(cell.vr.Str)
+		fn, ok := r.bashPPClosure(vr.Str)
 		if !ok {
 			return nil, nil
 		}
-		return r.goSourcePinTaskCallable(call, fn, cell.vr.Str)
+		return r.goSourcePinTaskCallable(call, fn, vr.Str)
 	}
 	if len(call.Fun) != 1 {
 		if len(call.Fun) > 1 && r.bashPPScope.lookup(call.Fun[0].Value) != nil {
@@ -341,17 +345,20 @@ func (r *Runner) bashPPGoSourceTaskFunc(call *syntax.BashPPCall) (*bashPPFunc, *
 	// task — ran the local one, so the capture set was computed from a
 	// function that was never launched.
 	if cell := r.bashPPScope.lookup(name); cell != nil {
-		if cell.vr.Kind != expand.String {
+		// As above: one snapshot decides the shadowing binding's kind, the
+		// closure it names and the handle the task is pinned to.
+		vr := cell.viewVar()
+		if vr.Kind != expand.String {
 			// The name is bound here to something that is not a function
 			// value. It still shadows the declared func, so there is no
 			// original body to launch through this analysis.
 			return nil, nil
 		}
-		fn, ok := r.bashPPClosure(cell.vr.Str)
+		fn, ok := r.bashPPClosure(vr.Str)
 		if !ok {
 			return nil, nil
 		}
-		return r.goSourcePinTaskCallable(call, fn, cell.vr.Str)
+		return r.goSourcePinTaskCallable(call, fn, vr.Str)
 	}
 	// A closure held in a shell variable: the cell's value is the handle, so
 	// the exact function is resolvable without running anything.

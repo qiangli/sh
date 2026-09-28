@@ -208,7 +208,10 @@ func (r *Runner) bashPPGoArgWord(call *syntax.BashPPCall, i int, expr syntax.Bas
 		}
 		cell.object = &bashPPObjectIdentity{owner: name, collection: meta}
 		if root, ok := bashPPCollectionRoot(expr); ok {
-			if source := r.bashPPScope.lookup(root); source != nil && source.object != nil {
+			// The root binding can be aliased into a task; the identity is
+			// taken from one snapshot of it rather than tested and then
+			// re-read, which could carry a different store's identity.
+			if source := r.bashPPScope.lookup(root).view(); source != nil && source.object != nil {
 				cell.object = source.object
 			}
 		}

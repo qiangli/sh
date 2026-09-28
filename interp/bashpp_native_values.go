@@ -243,8 +243,10 @@ func (r *Runner) bashPPReflectValueReceiver(req bashPPEvalRequest, call *syntax.
 				return nil
 			}
 			cell := r.bashPPScope.lookup(x.Name.Value)
-			if cell != nil && cell.interfaceValue != nil && !cell.interfaceValue.nilIface {
-				return cell.interfaceValue.cell
+			// One read of the payload word: testing it and then dereferencing
+			// it again could unwrap a different store's interface value.
+			if iface := cell.viewInterface(); iface != nil && !iface.nilIface {
+				return iface.cell
 			}
 			return cell
 		}
@@ -257,8 +259,11 @@ func (r *Runner) bashPPReflectValueReceiver(req bashPPEvalRequest, call *syntax.
 	if cell == nil {
 		return
 	}
-	elem := cell.declType
-	typeName := cell.typeName
+	// The reflect.Value being built describes one value, so the declared type
+	// and the type name that stands in for it are taken together.
+	snapshot := cell.view()
+	elem := snapshot.declType
+	typeName := snapshot.typeName
 	if typeName == "" {
 		typeName = bashPPTypeText(elem)
 	}

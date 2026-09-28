@@ -48,16 +48,9 @@ import (
 //     bashpp_cell_share.go that a guarded region moves fields and does nothing
 //     else, which is short enough to check by eye at each of the six sites.
 var bashPPCellDirectReaders = []string{
-	"bashPPEvalTypedValue",
-	"bashPPGoArgWord",
-	"bashPPGoSourceTaskFunc",
 	"bashPPInvoke",
 	"bashPPMakeInterfaceValue",
-	"bashPPNativeArgCells",
-	"bashPPNilFuncCall",
-	"bashPPReflectValueReceiver",
 	"bashPPShortDecl",
-	"bashPPSprint165StoredBridgeScalar",
 }
 
 // markStore marks an assignment target and every selector it is reached

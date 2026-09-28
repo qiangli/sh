@@ -37,11 +37,13 @@ func (r *Runner) bashPPSprint165StoredBridgeScalar(expr syntax.BashPPExpr, expec
 	if !ok || r.bashPPScope == nil {
 		return nil, nil, false, nil
 	}
-	cell := r.bashPPScope.lookup(id.Name.Value)
-	if cell == nil || cell.vr.Kind != expand.Object {
+	// One snapshot answers the whole question: the kind test, the bridge-value
+	// assertion and the value handed on all have to describe ONE store.
+	vr := r.bashPPScope.lookup(id.Name.Value).viewVar()
+	if vr.Kind != expand.Object {
 		return nil, nil, false, nil
 	}
-	native, ok := cell.vr.Obj.(*bashPPBridgeValue)
+	native, ok := vr.Obj.(*bashPPBridgeValue)
 	if !ok || native == nil {
 		return nil, nil, false, nil
 	}
@@ -50,7 +52,7 @@ func (r *Runner) bashPPSprint165StoredBridgeScalar(expr syntax.BashPPExpr, expec
 	default:
 		return nil, nil, false, nil
 	}
-	return r.bashPPCollectionBridgeValue(cell.vr.Obj, expected)
+	return r.bashPPCollectionBridgeValue(vr.Obj, expected)
 }
 
 func bashPPSprint165MapPart(text string) string {
