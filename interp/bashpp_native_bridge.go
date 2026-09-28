@@ -1400,13 +1400,7 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 			imports.WriteString(strings.Replace(text, alias+" ", "_ ", 1))
 		}
 	}
-	localTypeEntries := map[string]bool{}
-	for _, local := range req.LocalTypes {
-		localTypeEntries[local.Name] = true
-		if local.WireType != "" {
-			localTypeEntries[local.WireType] = true
-		}
-	}
+	localTypeEntries := bashPPNativeLocalTypeEntries(req.LocalTypes)
 	for _, typ := range req.GenericTypes {
 		if localTypeEntries[typ] {
 			continue
@@ -1570,6 +1564,27 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 	source = strings.Replace(source, "//UNMAPPEDFRAMES", unmappedFrames.String(), 1)
 	source = strings.Replace(source, "//FORCESGC", forcing.String(), 1)
 	return source, nil
+}
+
+// bashPPNativeLocalTypeEntries returns every spelling already represented by
+// a generated local helper declaration. WireType is source-oriented text and
+// can contain presentation whitespace (for example Pair[int, string]), while
+// GenericTypes uses the compact bridge spelling (Pair[int,string]). Record the
+// canonical spelling as well so worker generation does not emit a second
+// reflect.TypeFor entry naming an undeclared flattened source generic.
+func bashPPNativeLocalTypeEntries(locals []bashPPLocalType) map[string]bool {
+	entries := make(map[string]bool, len(locals)*2)
+	for _, local := range locals {
+		entries[local.Name] = true
+		if local.WireType == "" {
+			continue
+		}
+		entries[local.WireType] = true
+		if typ := syntax.BashPPTypeExprFromText(local.WireType); typ != nil {
+			entries[bashPPBridgeTypeText(typ)] = true
+		}
+	}
+	return entries
 }
 
 // bashPPNativeSyntheticTypeImports finds package-qualified names that appear
