@@ -1054,6 +1054,10 @@ func (r *Runner) bashPPBridgeCollection(value any, meta *bashPPCollectionMeta, t
 		result.Kind = "slice"
 		visibleLength := bashPPSequenceLen(meta, value)
 		viewCapacity := bashPPSequenceCap(meta, value)
+		var children []*bashPPCollectionMeta
+		if meta != nil {
+			children = meta.sequence
+		}
 		inferredArray := false
 		if meta != nil {
 			result.Kind = meta.kind
@@ -1080,7 +1084,7 @@ func (r *Runner) bashPPBridgeCollection(value any, meta *bashPPCollectionMeta, t
 			result.Type = "[" + strconv.Itoa(len(value)) + "]" + r.bashPPBridgeTypeIdentity(collection.Element)
 		}
 		if r.bashPPGoSource && result.Kind == "slice" {
-			if visibleLength < 0 || viewCapacity < visibleLength || viewCapacity > cap(value) {
+			if visibleLength < 0 || viewCapacity < visibleLength || viewCapacity > cap(value) || (meta != nil && viewCapacity > cap(children)) {
 				return result, fmt.Errorf("gosource: invalid interpreter slice shape len=%d cap=%d", visibleLength, viewCapacity)
 			}
 			view := value[:visibleLength:viewCapacity]
@@ -1089,11 +1093,17 @@ func (r *Runner) bashPPBridgeCollection(value any, meta *bashPPCollectionMeta, t
 			result.Length = visibleLength
 			result.Capacity = viewCapacity
 			value = view[:viewCapacity]
+			// Capacity-tail elements are observable after reslicing. Their
+			// zero-value metadata lives in the metadata backing array even though
+			// its logical length, like the payload's, stops at visibleLength.
+			if meta != nil {
+				children = children[:viewCapacity]
+			}
 		}
 		for i, item := range value {
 			var child *bashPPCollectionMeta
-			if meta != nil && i < len(meta.sequence) {
-				child = meta.sequence[i]
+			if i < len(children) {
+				child = children[i]
 			}
 			converted, err := r.bashPPBridgeCollection(item, child, collection.Element)
 			if err != nil {

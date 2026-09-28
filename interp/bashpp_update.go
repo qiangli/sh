@@ -75,7 +75,7 @@ func (r *Runner) bashPPApplyUpdate(target syntax.BashPPExpr, op string, rhs synt
 		return
 	}
 	current, meta, expected, err := ptr.read()
-	if err != nil || meta != nil {
+	if err != nil || meta != nil && !bashPPScalarMetaKind(meta) {
 		if err == nil {
 			err = fmt.Errorf("target is not scalar")
 		}
