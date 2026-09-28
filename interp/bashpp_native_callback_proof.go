@@ -3390,9 +3390,11 @@ func (p *dependencyCallbackProof) callWithCallee(call *ast.CallExpr, callee depe
 func (p *dependencyCallbackProof) callWithResolvedCallee(call *ast.CallExpr, callee dependencyCallbackValue, args []dependencyCallbackValue, env map[string]dependencyCallbackValue, depth int) bool {
 	if callee.callback != nil {
 		if callee.callback.lit == nil {
+			p.invalidateEscapedDispatchProvenance(env)
 			return true
 		}
 		if dependencyCallbackCalleeCannotReachCallback(args, dependencyCallbackValue{}, callee) {
+			p.invalidateEscapedDispatchProvenance(env)
 			p.markEscaped(append(append([]dependencyCallbackValue{}, args...), callee))
 			return true
 		}
@@ -3446,6 +3448,7 @@ func (p *dependencyCallbackProof) callWithResolvedCallee(call *ast.CallExpr, cal
 	// clean, invoking it cannot expose a callback carried elsewhere in the
 	// containing object. Tainted fields are represented as callbacks above.
 	if callee.callable && !tainted {
+		p.invalidateEscapedDispatchProvenance(env)
 		p.markEscaped(args)
 		return true
 	}
@@ -3459,6 +3462,7 @@ func (p *dependencyCallbackProof) callWithResolvedCallee(call *ast.CallExpr, cal
 	switch fun := call.Fun.(type) {
 	case *ast.Ident:
 		if dependencyCallbackCalleeCannotReachCallback(args, dependencyCallbackValue{}, callee) {
+			p.invalidateEscapedDispatchProvenance(env)
 			p.markEscaped(args)
 			return true
 		}
@@ -3480,6 +3484,7 @@ func (p *dependencyCallbackProof) callWithResolvedCallee(call *ast.CallExpr, cal
 	case *ast.SelectorExpr:
 		receiver := p.value(fun.X, env)
 		if dependencyCallbackCalleeCannotReachCallback(args, receiver, callee) {
+			p.invalidateEscapedDispatchProvenance(env)
 			p.markEscaped(append(append([]dependencyCallbackValue{}, args...), receiver))
 			return true
 		}
@@ -3502,7 +3507,54 @@ func (p *dependencyCallbackProof) callWithResolvedCallee(call *ast.CallExpr, cal
 	if tainted || callee.tainted() {
 		return p.refuse(call, "tainted call target is not source-visible")
 	}
+	p.invalidateEscapedDispatchProvenance(env)
 	return true
+}
+
+// invalidateEscapedDispatchProvenance forgets entry-snapshot interface types
+// after a call whose body the proof does not inspect. Even when that call has
+// no arguments, it may mutate a receiver through an alias retained before the
+// proved method began. Only already-escaped objects are affected: an opaque
+// no-argument call cannot acquire an otherwise local object.
+func (p *dependencyCallbackProof) invalidateEscapedDispatchProvenance(env map[string]dependencyCallbackValue) {
+	objects := make(map[*dependencyCallbackObject]bool)
+	closures := make(map[*dependencyCallbackClosure]bool)
+	cells := make(map[*dependencyCallbackCell]bool)
+	var visitValue func(dependencyCallbackValue)
+	var visitClosure func(*dependencyCallbackClosure)
+	var visitObject func(*dependencyCallbackObject)
+	visitValue = func(value dependencyCallbackValue) {
+		for value.cell != nil && !cells[value.cell] {
+			cells[value.cell] = true
+			value = value.cell.value
+		}
+		visitObject(value.object)
+		visitClosure(value.callback)
+	}
+	visitClosure = func(closure *dependencyCallbackClosure) {
+		if closure == nil || closures[closure] {
+			return
+		}
+		closures[closure] = true
+		for _, value := range closure.env {
+			visitValue(value)
+		}
+	}
+	visitObject = func(object *dependencyCallbackObject) {
+		if object == nil || objects[object] {
+			return
+		}
+		objects[object] = true
+		if object.escaped {
+			object.dispatchTypes = nil
+		}
+		for _, value := range object.fields {
+			visitValue(value)
+		}
+	}
+	for _, value := range env {
+		visitValue(value)
+	}
 }
 
 func (p *dependencyCallbackProof) proveObservedInterfaceDispatch(call *ast.CallExpr, receiver dependencyCallbackValue, name string, args []dependencyCallbackValue, depth int) bool {
