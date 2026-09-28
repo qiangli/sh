@@ -2363,7 +2363,7 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 				cell.pointer = r.bashPPDeclaredPointer(param.declared)
 				cell.nilPointer = cell.pointer && args[i] == ""
 				if r.bashPPGoSource && cell.pointer {
-					cell.nilPointer = cell.pointerValue == nil
+					cell.nilPointer = cell.view().pointerValue == nil
 				}
 			}
 		}

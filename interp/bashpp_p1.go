@@ -984,7 +984,7 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 				}
 				return
 			}
-			r.bashPPDeclareName(d.Lhs[0].Value, cell.vr)
+			r.bashPPDeclareName(d.Lhs[0].Value, cell.viewVar())
 			if target := r.bashPPScope.lookup(d.Lhs[0].Value); target != nil {
 				target.publish(cell)
 			}
@@ -997,7 +997,7 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 				r.exit.fatal(err)
 				return
 			}
-			r.bashPPDeclareName(d.Lhs[0].Value, cell.vr)
+			r.bashPPDeclareName(d.Lhs[0].Value, cell.viewVar())
 			if target := r.bashPPScope.lookup(d.Lhs[0].Value); target != nil {
 				target.publish(cell)
 			}
@@ -1118,7 +1118,7 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 				r.exit.fatal(err)
 				return
 			}
-			r.bashPPDeclareName(d.Lhs[0].Value, cell.vr)
+			r.bashPPDeclareName(d.Lhs[0].Value, cell.viewVar())
 			if target := r.bashPPScope.lookup(d.Lhs[0].Value); target != nil {
 				target.publish(cell)
 			}

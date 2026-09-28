@@ -775,7 +775,7 @@ func (r *Runner) bashPPMakeInterfaceValue(expr syntax.BashPPExpr, expected synta
 		return &bashPPInterfaceValue{dynamic: cell.declType, cell: cell}, cell.vr, nil
 	}
 	if id, ok := expr.(*syntax.BashPPIdent); ok {
-		if source := r.bashPPScope.lookup(id.Name.Value); source != nil && source.interfaceValue != nil {
+		if source := r.bashPPScope.lookup(id.Name.Value).view(); source != nil && source.interfaceValue != nil {
 			// A front-end temporary bound from the untyped nil literal has
 			// no type to implement anything; it is the nil interface.
 			if goSourceUntypedNilCell(source) {

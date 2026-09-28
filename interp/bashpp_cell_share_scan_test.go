@@ -48,8 +48,13 @@ import (
 //     bashpp_cell_share.go that a guarded region moves fields and does nothing
 //     else, which is short enough to check by eye at each of the six sites.
 var bashPPCellDirectReaders = []string{
+	// bashPPInvoke binds each parameter of the frame it is entering: the cell it
+	// looks up was declared by this goroutine a few statements earlier, and no
+	// `go` statement of the callee has run yet, so nothing can have aliased it.
+	// Reading back the fields it just stored is a private read.
 	"bashPPInvoke",
-	"bashPPMakeInterfaceValue",
+	// Being audited by lane T4f: field-by-field copies from a looked-up source
+	// cell (bashpp_p1.go ~1097-1103, 1261, 1293, 1323, 1356-1380).
 	"bashPPShortDecl",
 }
 
