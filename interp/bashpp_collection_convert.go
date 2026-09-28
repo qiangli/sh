@@ -95,7 +95,7 @@ func (r *Runner) bashPPCollectionOperand(expr syntax.BashPPExpr) (any, *bashPPCo
 		if r.bashPPScope == nil {
 			return nil, nil, false
 		}
-		cell := r.bashPPScope.lookup(id.Name.Value)
+		cell := r.bashPPScope.lookup(id.Name.Value).view()
 		if cell == nil || cell.vr.Kind != expand.Object {
 			return nil, nil, false
 		}

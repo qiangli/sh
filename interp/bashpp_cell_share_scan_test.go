@@ -48,11 +48,6 @@ import (
 //     bashpp_cell_share.go that a guarded region moves fields and does nothing
 //     else, which is short enough to check by eye at each of the six sites.
 var bashPPCellDirectReaders = []string{
-	"bashPPBindBuiltinResult",
-	"bashPPBooleanExprShape",
-	"bashPPCollectionAssign",
-	"bashPPCollectionOperand",
-	"bashPPComplexShortDecl",
 	"bashPPEvalTypedValue",
 	"bashPPGoArgWord",
 	"bashPPGoSourceTaskFunc",

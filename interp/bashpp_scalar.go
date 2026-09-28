@@ -2290,7 +2290,7 @@ func (r *Runner) bashPPBooleanExprShape(expr syntax.BashPPExpr) (known, boolean 
 			return true, true
 		}
 		if r.bashPPScope != nil {
-			if cell := r.bashPPScope.lookup(x.Name.Value); cell != nil && cell.vr.Kind != expand.Object && !cell.pointer && cell.interfaceValue == nil {
+			if cell := r.bashPPScope.lookup(x.Name.Value).view(); cell != nil && cell.vr.Kind != expand.Object && !cell.pointer && cell.interfaceValue == nil {
 				return true, r.bashPPScalarFromCell(cell).value.Kind() == constant.Bool
 			}
 		}

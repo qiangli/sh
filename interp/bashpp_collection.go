@@ -1551,7 +1551,7 @@ func bashPPExprText(expr syntax.BashPPExpr) string {
 
 func (r *Runner) bashPPCollectionAssign(target *syntax.BashPPIndexExpr, rhs syntax.BashPPExpr) {
 	root, ok := bashPPCollectionRoot(target)
-	cell := r.bashPPScope.lookup(root)
+	cell := r.bashPPScope.lookup(root).view()
 	rootMeta := bashPPCellMeta(cell)
 	if !ok || cell == nil || rootMeta == nil {
 		r.errf("BASHPP-ECOLLECTION-ASSIGN: indexed target is not a collection\n")

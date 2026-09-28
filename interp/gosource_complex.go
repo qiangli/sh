@@ -21,15 +21,15 @@ func (r *Runner) bashPPComplexShortDecl(d *syntax.BashPPShortDecl) bool {
 	if d.Call == nil || len(d.Lhs) != 1 {
 		return false
 	}
-	if cell, handled, err := r.goSourceComplexBuiltinCell(d.Call); handled {
+	if result, handled, err := r.goSourceComplexBuiltinCell(d.Call); handled {
 		if err != nil {
 			r.errf("%v\n", err)
 			r.exit = exitStatus{code: 2}
 			return true
 		}
-		r.bashPPDeclareName(d.Lhs[0].Value, cell.vr)
+		r.bashPPDeclareName(d.Lhs[0].Value, result.vr)
 		if target := r.bashPPScope.lookup(d.Lhs[0].Value); target != nil {
-			target.publish(cell)
+			target.publish(result)
 		}
 		return true
 	}

@@ -851,10 +851,13 @@ func (r *Runner) bashPPBindBuiltinResult(d *syntax.BashPPShortDecl, result *bash
 	}
 	cell := r.bashPPScope.lookup(name)
 	cell.publish(result)
-	if cell.object == nil && cell.vr.Kind == expand.Object {
-		cell.object = &bashPPObjectIdentity{owner: name, collection: cell.valueMeta}
-	} else if cell.object != nil && cell.object.owner == "" {
-		cell.object.owner = name
+	// One snapshot of what publish() just stored: the identity pointer, the
+	// value kind and the collection meta are the same bundle, and naming an
+	// owner through the snapshot's pointer is the same store.
+	if stored := cell.view(); stored.object == nil && stored.vr.Kind == expand.Object {
+		cell.object = &bashPPObjectIdentity{owner: name, collection: stored.valueMeta}
+	} else if stored.object != nil && stored.object.owner == "" {
+		stored.object.owner = name
 	}
 }
 
