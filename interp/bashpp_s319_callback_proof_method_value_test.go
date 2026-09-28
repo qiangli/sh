@@ -215,6 +215,126 @@ func Clean(cb func()) {
 	}
 }
 
+// TestS319CallbackProofInterfaceDispatchNativeCollision keeps interface
+// dispatch from being fooled by a name collision with a native target. The
+// candidate set is built from method names alone, so without further gating a
+// callback handed to native code would be admitted whenever the dependency
+// source happens to declare a clean method of the same name. Two gates hold:
+// a selector whose base names an imported package is a package-level call, not
+// interface dispatch; and dispatch only fires for method names declared by a
+// source-visible interface type, because only such a name can be an interface
+// method call on a source-visible dynamic type.
+//
+// Sprint: #319; Story: #1088; Story-ID: 00446a7bd51a
+func TestS319CallbackProofInterfaceDispatchNativeCollision(t *testing.T) {
+	t.Run("imported_package_qualifier", func(t *testing.T) {
+		// sync.OnceValue retains the callback in the closure it returns; the
+		// source's own clean OnceValue interface method and implementation must
+		// not stand in for it.
+		source := `package dep
+import "sync"
+type Oncer interface{ OnceValue(cb func() string) string }
+type T struct{}
+func (t *T) OnceValue(cb func() string) string { return cb() }
+func Retain(cb func() string) string {
+	once := sync.OnceValue(cb)
+	return once()
+}`
+		ok, reason := dependencyCallbackProveSource(t, source, "Retain", []int{0})
+		if ok {
+			t.Fatal("package-qualified native call incorrectly admitted via same-named source method")
+		}
+		if !strings.Contains(reason, "tainted method call target is not source-visible") {
+			t.Fatalf("refused for the wrong reason: got %q", reason)
+		}
+	})
+
+	t.Run("no_interface_declares_method", func(t *testing.T) {
+		// The receiver is an opaque value whose dynamic type could be native; a
+		// concrete source method named Emit is not evidence that the call
+		// dispatches to it, because no source interface declares Emit.
+		source := `package dep
+type T struct{}
+func (t *T) Emit(cb func()) { cb() }
+func Retain(x any, cb func()) {
+	x.Emit(cb)
+}`
+		ok, reason := dependencyCallbackProveSource(t, source, "Retain", []int{1})
+		if ok {
+			t.Fatal("non-interface method call incorrectly admitted via same-named source method")
+		}
+		if !strings.Contains(reason, "tainted method call target is not source-visible") {
+			t.Fatalf("refused for the wrong reason: got %q", reason)
+		}
+	})
+}
+
+// TestS319CallbackProofMethodValueCallRetention closes the calling half of the
+// method-value gap: invoking a stored method value runs the bound method's
+// body with the captured receiver, so a body that leaks the receiver's
+// callback must refuse even though the call site itself has clean arguments.
+//
+// Sprint: #319; Story: #1088; Story-ID: 00446a7bd51a
+func TestS319CallbackProofMethodValueCallRetention(t *testing.T) {
+	source := `package dep
+type T struct{ f func() }
+var saved func()
+func (t *T) Run() { saved = t.f }
+func Retain(cb func()) {
+	t := &T{f: cb}
+	m := t.Run
+	m()
+}`
+	ok, reason := dependencyCallbackProveSource(t, source, "Retain", []int{0})
+	if ok {
+		t.Fatal("calling a method value whose method leaks the receiver's callback incorrectly admitted")
+	}
+	if !strings.Contains(reason, "package global") {
+		t.Fatalf("refused for the wrong reason: got %q", reason)
+	}
+}
+
+// TestS319CallbackProofMethodValueCallClean keeps the call-time proof precise:
+// a method value over a callback-bearing receiver whose method only invokes
+// the callback synchronously is admitted, both when called directly and when
+// handed through interface dispatch as testdir's expr.Eval(ctxt.match) does.
+//
+// Sprint: #319; Story: #1088; Story-ID: 00446a7bd51a
+func TestS319CallbackProofMethodValueCallClean(t *testing.T) {
+	t.Run("direct_call", func(t *testing.T) {
+		source := `package dep
+type T struct{ f func() }
+func (t *T) Run() { t.f() }
+func Retain(cb func()) {
+	t := &T{f: cb}
+	m := t.Run
+	m()
+}`
+		ok, reason := dependencyCallbackProveSource(t, source, "Retain", []int{0})
+		if !ok {
+			t.Fatalf("clean method value call refused: %s", reason)
+		}
+	})
+
+	t.Run("through_interface_dispatch", func(t *testing.T) {
+		// The full testdir shape: a method value over a callback-bearing
+		// context is the callback handed to recursive interface dispatch.
+		source := dependencyCallbackConstraintSource + `
+type ctx struct{ f func(tag string) bool }
+
+func (c *ctx) match(tag string) bool { return c.f(tag) }
+
+func MatchCtx(x Expr, cb func(tag string) bool) bool {
+	c := &ctx{f: cb}
+	return x.Eval(c.match)
+}`
+		ok, reason := dependencyCallbackProveSource(t, source, "MatchCtx", []int{1})
+		if !ok {
+			t.Fatalf("method value through interface dispatch refused: %s", reason)
+		}
+	})
+}
+
 // TestS319CallbackProofOnceValuePath covers the other cmd/internal/testdir
 // coordinate named by the story: stdlibImportcfg is initialized with
 // sync.OnceValue(func() string { ... }). A clean OnceValue thunk must not taint

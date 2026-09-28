@@ -121,6 +121,13 @@ type dependencyCallbackObject struct {
 	scalar    bool
 	general   bool
 	fields    map[string]dependencyCallbackValue
+
+	// boundMethod, when non-nil, marks this object as a method value: calling
+	// it runs boundMethod's body with the receiver stored under
+	// dependencyCallbackElementField. A join of two method values drops the
+	// binding, and a tainted callee without one refuses, so losing the field
+	// is fail-closed rather than an admit.
+	boundMethod *ast.FuncDecl
 }
 
 type dependencyCallbackClosure struct {
@@ -252,13 +259,18 @@ type dependencyCallbackProof struct {
 	types     map[string]dependencyCallbackType
 	typeSpecs map[string]*ast.TypeSpec
 	funcTypes map[string]bool
-	globals   map[string]bool
-	consts    map[string]bool
-	active    map[string]dependencyCallbackActiveFrame
-	done      map[string][]dependencyCallbackCompletedFrame
-	results   []map[string]bool
-	defers    [][]dependencyCallbackDeferred
-	steps     int
+	// imports holds every package name the proved files import, by declared
+	// alias or path basename. A selector whose base names one of these is a
+	// package-level call to code outside the proved sources, never interface
+	// dispatch over them.
+	imports map[string]bool
+	globals map[string]bool
+	consts  map[string]bool
+	active  map[string]dependencyCallbackActiveFrame
+	done    map[string][]dependencyCallbackCompletedFrame
+	results []map[string]bool
+	defers  [][]dependencyCallbackDeferred
+	steps   int
 
 	// labels holds every label declared by a statement list currently being
 	// walked, so that a goto nested inside it resolves to an edge. Go forbids
@@ -309,9 +321,24 @@ func newDependencyCallbackProof(files []*ast.File) *dependencyCallbackProof {
 	p := &dependencyCallbackProof{
 		funcs: make(map[string][]*ast.FuncDecl), methods: make(map[string]map[string]*ast.FuncDecl),
 		types: make(map[string]dependencyCallbackType), typeSpecs: make(map[string]*ast.TypeSpec), funcTypes: make(map[string]bool), globals: make(map[string]bool), consts: make(map[string]bool), active: make(map[string]dependencyCallbackActiveFrame), done: make(map[string][]dependencyCallbackCompletedFrame),
+		imports:   make(map[string]bool),
 		stepLimit: dependencyCallbackProofStepBudget, depthLimit: dependencyCallbackProofDepthBound,
 	}
 	for _, file := range files {
+		for _, imp := range file.Imports {
+			name := ""
+			if imp.Name != nil {
+				name = imp.Name.Name
+			} else if path, err := strconv.Unquote(imp.Path.Value); err == nil {
+				if slash := strings.LastIndex(path, "/"); slash >= 0 {
+					path = path[slash+1:]
+				}
+				name = path
+			}
+			if name != "" && name != "_" && name != "." {
+				p.imports[name] = true
+			}
+		}
 		for _, decl := range file.Decls {
 			gen, ok := decl.(*ast.GenDecl)
 			if !ok || gen.Tok != token.TYPE {
@@ -2683,14 +2710,15 @@ func (c *dependencyCallbackGraphCloner) object(obj *dependencyCallbackObject) *d
 		return clone
 	}
 	clone := &dependencyCallbackObject{
-		typ:       obj.typ,
-		lineage:   dependencyCallbackObjectLineage(obj),
-		owned:     obj.owned,
-		escaped:   obj.escaped,
-		synthetic: obj.synthetic,
-		scalar:    obj.scalar,
-		general:   obj.general,
-		fields:    make(map[string]dependencyCallbackValue, len(obj.fields)),
+		typ:         obj.typ,
+		lineage:     dependencyCallbackObjectLineage(obj),
+		owned:       obj.owned,
+		escaped:     obj.escaped,
+		synthetic:   obj.synthetic,
+		scalar:      obj.scalar,
+		general:     obj.general,
+		boundMethod: obj.boundMethod,
+		fields:      make(map[string]dependencyCallbackValue, len(obj.fields)),
 	}
 	c.objects[obj] = clone
 	for name, field := range obj.fields {
@@ -2994,12 +3022,20 @@ func (p *dependencyCallbackProof) value(expr ast.Expr, env map[string]dependency
 		// fields, so it reads such a selection as an empty, clean value; when the
 		// receiver is callback-bearing that is unsound, because storing the method
 		// value retains the callback. Wrap the receiver in a synthetic holder so
-		// the method value stays tainted exactly when the receiver is.
-		if !result.tainted() && base.tainted() && p.selectsMethod(base, expr.Sel.Name) {
-			return dependencyCallbackValue{object: &dependencyCallbackObject{
-				synthetic: true,
-				fields:    map[string]dependencyCallbackValue{dependencyCallbackElementField: base},
-			}}
+		// the method value stays tainted exactly when the receiver is, and record
+		// the bound declaration so calling the value proves that body with the
+		// captured receiver.
+		if !result.tainted() && base.tainted() {
+			resolved := dependencyCallbackResolvedValue(base)
+			if resolved.object != nil {
+				if decl, actual := p.method(resolved, expr.Sel.Name, map[string]bool{}); decl != nil {
+					return dependencyCallbackValue{object: &dependencyCallbackObject{
+						synthetic:   true,
+						boundMethod: decl,
+						fields:      map[string]dependencyCallbackValue{dependencyCallbackElementField: actual},
+					}}
+				}
+			}
 		}
 		return result
 	case *ast.FuncLit:
@@ -3272,6 +3308,12 @@ func (p *dependencyCallbackProof) callWithResolvedCallee(call *ast.CallExpr, cal
 		}
 		return ok
 	}
+	// A method value carries its receiver: calling it runs the bound method's
+	// body with that receiver, which is what makes the call provable rather
+	// than an opaque invocation of a tainted function.
+	if bound := dependencyCallbackResolvedValue(callee); bound.object != nil && bound.object.boundMethod != nil {
+		return p.callFunction(call, bound.object.boundMethod, args, bound.object.fields[dependencyCallbackElementField], depth)
+	}
 	tainted := false
 	for i := range args {
 		tainted = tainted || args[i].tainted()
@@ -3303,7 +3345,11 @@ func (p *dependencyCallbackProof) callWithResolvedCallee(call *ast.CallExpr, cal
 		}
 		decls := p.funcs[fun.Name]
 		if len(decls) != 1 {
-			if tainted {
+			// A tainted callee value with no resolvable body -- for example a
+			// method value whose binding a join erased -- can reach a callback
+			// through the receiver it carries, so it refuses like tainted
+			// arguments do.
+			if tainted || callee.tainted() {
 				return p.refuse(fun, "tainted call target is not exactly one local function")
 			}
 			return true
@@ -3315,7 +3361,7 @@ func (p *dependencyCallbackProof) callWithResolvedCallee(call *ast.CallExpr, cal
 			p.markEscaped(append(append([]dependencyCallbackValue{}, args...), receiver))
 			return true
 		}
-		carriesCallback := tainted || receiver.tainted()
+		carriesCallback := tainted || receiver.tainted() || callee.tainted()
 		if !carriesCallback {
 			p.markEscaped(append(args, receiver))
 		}
@@ -3335,7 +3381,7 @@ func (p *dependencyCallbackProof) callWithResolvedCallee(call *ast.CallExpr, cal
 		}
 		return p.callFunction(call, decl, args, actual, depth)
 	}
-	if tainted {
+	if tainted || callee.tainted() {
 		return p.refuse(call, "tainted call target is not source-visible")
 	}
 	return true
@@ -3453,18 +3499,6 @@ func dependencyCallbackFunctionName(decl *ast.FuncDecl) string {
 	return receiver + "." + decl.Name.Name
 }
 
-// selectsMethod reports whether name resolves to a source-visible method of the
-// receiver's type, directly or through embedding, rather than a declared field.
-// It is the test that distinguishes a method value from a field selection.
-func (p *dependencyCallbackProof) selectsMethod(receiver dependencyCallbackValue, name string) bool {
-	receiver = dependencyCallbackResolvedValue(receiver)
-	if receiver.object == nil {
-		return false
-	}
-	decl, _ := p.method(receiver, name, map[string]bool{})
-	return decl != nil
-}
-
 func (p *dependencyCallbackProof) method(receiver dependencyCallbackValue, name string, seen map[string]bool) (*ast.FuncDecl, dependencyCallbackValue) {
 	receiver = dependencyCallbackResolvedValue(receiver)
 	if receiver.object == nil || receiver.object.typ == "" || seen[receiver.object.typ] {
@@ -3498,7 +3532,23 @@ func (p *dependencyCallbackProof) method(receiver dependencyCallbackValue, name 
 // it would. If every candidate leaves the callback where it found it the call is
 // admitted; a package with no such method, like any other unresolved tainted
 // target, stays refused.
+//
+// Two gates keep the name-based candidate set from standing in for native
+// code. A selector whose base names an imported package is a package-level
+// call to code outside the proved sources, so no source method can model it.
+// And the candidate set is only evidence when some source-visible interface
+// declares the method name: only then is the call an interface method call
+// whose dynamic type ranges over source-visible implementations, rather than
+// a call on a native value that happens to share a method name with them.
 func (p *dependencyCallbackProof) proveInterfaceDispatch(call *ast.CallExpr, name string, args []dependencyCallbackValue, depth int) bool {
+	if fun, ok := call.Fun.(*ast.SelectorExpr); ok {
+		if base, ok := fun.X.(*ast.Ident); ok && p.imports[base.Name] {
+			return false
+		}
+	}
+	if !p.interfaceDeclaresMethod(name) {
+		return false
+	}
 	types := make([]string, 0, len(p.methods))
 	for typ, methods := range p.methods {
 		if methods[name] != nil {
@@ -3520,6 +3570,47 @@ func (p *dependencyCallbackProof) proveInterfaceDispatch(call *ast.CallExpr, nam
 		}
 	}
 	return true
+}
+
+// interfaceDeclaresMethod reports whether any source-visible interface type
+// declares a method of this name, directly or through an embedded
+// source-visible interface.
+func (p *dependencyCallbackProof) interfaceDeclaresMethod(name string) bool {
+	for typeName := range p.typeSpecs {
+		if p.interfaceTypeDeclares(typeName, name, map[string]bool{}) {
+			return true
+		}
+	}
+	return false
+}
+
+func (p *dependencyCallbackProof) interfaceTypeDeclares(typeName, method string, seen map[string]bool) bool {
+	if seen[typeName] {
+		return false
+	}
+	seen[typeName] = true
+	spec := p.typeSpecs[typeName]
+	if spec == nil {
+		return false
+	}
+	iface, ok := spec.Type.(*ast.InterfaceType)
+	if !ok || iface.Methods == nil {
+		return false
+	}
+	for _, field := range iface.Methods.List {
+		if len(field.Names) == 0 {
+			if embedded, ok := field.Type.(*ast.Ident); ok && p.interfaceTypeDeclares(embedded.Name, method, seen) {
+				return true
+			}
+			continue
+		}
+		for _, declared := range field.Names {
+			if declared.Name == method {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // field resolves both declared fields and fields reached through embedding.
