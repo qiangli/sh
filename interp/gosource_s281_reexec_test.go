@@ -75,6 +75,20 @@ func main() {
 }
 `
 
+const s319ReexecVersionCycleSource = `package main
+import (
+	"os"
+)
+func main() {
+	launcher, err := os.Executable()
+	if err != nil { panic(err) }
+	replacement := os.Getenv("BASHPP_S319_REPLACEMENT_TOOL")
+	data, err := os.ReadFile(launcher)
+	if err != nil { panic(err) }
+	if err := os.WriteFile(replacement, data, 0755); err != nil { panic(err) }
+}
+`
+
 const s281ReexecArgv0Source = `package main
 import (
 	"fmt"
@@ -138,9 +152,9 @@ func TestGoSourceS281SelfReexecLauncher(t *testing.T) {
 }
 
 // TestGoSourceS281SelfReexecLauncherArgv0 copies the generated launcher to the
-// name of a replacement tool. Both a normal child replay and the Go command's
-// -V=full probe must observe that invoked name, not the reconstructed source
-// filename or the host test binary.
+// name of a replacement tool. Both a normal child replay and the native
+// launcher's -V=full identity must observe that invoked name, not the
+// reconstructed source filename or the host test binary.
 func TestGoSourceS281SelfReexecLauncherArgv0(t *testing.T) {
 	args := os.Args
 	for len(args) > 0 && args[0] != "--" {
@@ -185,8 +199,9 @@ func TestGoSourceS281SelfReexecLauncherArgv0(t *testing.T) {
 	if err != nil {
 		t.Fatalf("version probe: %v: %s", err, output)
 	}
-	if want := name + " version go1.27.1\n"; !strings.Contains(string(output), want) {
-		t.Fatalf("version probe output = %q, want %q", output, want)
+	versionName := strings.TrimSuffix(name, ".exe")
+	if want := versionName + " version devel buildID="; !strings.HasPrefix(string(output), want) {
+		t.Fatalf("version probe output = %q, want prefix %q", output, want)
 	}
 }
 
@@ -281,10 +296,9 @@ func TestGoSourceS281SelfReexecReplacementToolIsolation(t *testing.T) {
 }
 
 // TestGoSourceS281SelfReexecVersionProbeSingleflight models the Go command's
-// toolID probe. Each Go command caches -V=full only in-process, so parallel
-// script tests otherwise replay the entire interpreted replacement compiler
-// once per command. The replay launcher must obtain the real replay result,
-// but share that stable tool identity across its own processes.
+// toolID probe. Parallel commands must receive the same native-launcher
+// identity without entering the replay plan, while a build configuration that
+// can change tool behavior must receive a different identity.
 func TestGoSourceS281SelfReexecVersionProbeSingleflight(t *testing.T) {
 	args := os.Args
 	for len(args) > 0 && args[0] != "--" {
@@ -360,18 +374,85 @@ func TestGoSourceS281SelfReexecVersionProbeSingleflight(t *testing.T) {
 	}
 	output := runS281ReexecSourceProgram(t, s281ReexecVersionFanoutSource, nil, nil,
 		[]string{self, "-test.run=^TestGoSourceS281SelfReexecVersionProbeSingleflight$", "--"})
-	if got, want := strings.Count(output, "compile version go1.27.1\n"), 16; got != want {
-		t.Errorf("version output count = %d, want %d; output=%q", got, want, output)
+	var lines []string
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		if strings.Contains(line, " version devel buildID=") {
+			lines = append(lines, line)
+		}
 	}
-	if got, want := strings.Count(output, "compile version go1.27.1 X:cachekey\n"), 1; got != want {
-		t.Errorf("experiment version output count = %d, want %d; output=%q", got, want, output)
+	if len(lines) != 17 {
+		t.Fatalf("version output lines = %d, want 17; output=%q", len(lines), output)
 	}
-	data, err := os.ReadFile(marker)
+	if !strings.HasPrefix(lines[0], "bashpp-reexec-launcher version devel buildID=") {
+		t.Fatalf("version output = %q, want Go tool identity", lines[0])
+	}
+	for i, line := range lines[1:16] {
+		if line != lines[0] {
+			t.Fatalf("parallel version output %d = %q, want %q", i+1, line, lines[0])
+		}
+	}
+	if lines[16] == lines[0] {
+		t.Fatalf("GOEXPERIMENT did not change tool identity: %q", lines[16])
+	}
+	if data, err := os.ReadFile(marker); err == nil {
+		t.Fatalf("version probes entered replay plan: %q", data)
+	} else if !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+}
+
+// TestGoSourceS319ReexecVersionProbeDoesNotEnterPlan models a Go command
+// probing an interpreted replacement compiler. Replaying the compiler to
+// answer its identity probe enters package discovery, which invokes the same
+// replacement compiler and forms an unbounded process recursion. The native
+// launcher must answer -V=full without entering the replay plan at all.
+func TestGoSourceS319ReexecVersionProbeDoesNotEnterPlan(t *testing.T) {
+	args := os.Args
+	for len(args) > 0 && args[0] != "--" {
+		args = args[1:]
+	}
+	if len(args) == 2 && args[1] == "-V=full" {
+		marker := os.Getenv("BASHPP_S319_VERSION_REENTRY_MARKER")
+		file, err := os.OpenFile(marker, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := file.WriteString("reentered\n"); err != nil {
+			t.Fatal(err)
+		}
+		if err := file.Close(); err != nil {
+			t.Fatal(err)
+		}
+		_, _ = io.WriteString(os.Stdout, "compile version go1.27.1\n")
+		return
+	}
+	dir := t.TempDir()
+	replacement := filepath.Join(dir, "compile")
+	if runtime.GOOS == "windows" {
+		replacement += ".exe"
+	}
+	marker := filepath.Join(dir, "version-reentry")
+	t.Setenv("BASHPP_S319_REPLACEMENT_TOOL", replacement)
+	t.Setenv("BASHPP_S319_VERSION_REENTRY_MARKER", marker)
+	self, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := len(data); got != 2 {
-		t.Fatalf("replayed version probes = %d, want 2 configurations", got)
+	runS281ReexecSourceProgram(t, s319ReexecVersionCycleSource, nil, nil,
+		[]string{self, "-test.run=^TestGoSourceS319ReexecVersionProbeDoesNotEnterPlan$", "--"})
+	command := exec.Command(replacement, "-V=full")
+	command.Env = s281WithoutEnv(os.Environ(), "GOSH_PROG")
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("version probe: %v: %s", err, output)
+	}
+	if !strings.HasPrefix(string(output), "compile version ") {
+		t.Fatalf("version probe output = %q, want compiler version line", output)
+	}
+	if data, err := os.ReadFile(marker); err == nil {
+		t.Fatalf("version probe entered replay plan: %q", data)
+	} else if !os.IsNotExist(err) {
+		t.Fatal(err)
 	}
 }
 

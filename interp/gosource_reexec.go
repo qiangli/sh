@@ -5,6 +5,7 @@ package interp
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"os/exec"
@@ -29,9 +30,10 @@ import (
 // program environment, but pins the private BASHPP_GO selector to the
 // authenticated SDK used to build interpreter helpers. Thus a test may replace
 // a tool in its GOROOT without making the replaying front end compile itself.
-// Concurrent Go tool identity probes (-V=full) are single-flighted and their
-// successful output is cached for the launcher's lifetime and relevant build
-// configuration, rather than starting one interpreter per probing go command.
+// Go tool identity probes (-V=full) are answered by the native launcher from
+// an authenticated, per-replay identity. They never enter the interpreted
+// program: its startup may itself use the Go command, whose tool-ID lookup
+// would otherwise invoke the same replacement launcher recursively.
 // The launcher also forwards os.Interrupt and SIGTERM to its replayed child and
 // waits for it, so signalling the launcher process terminates the replayed
 // program rather than leaving it running after the launcher exits.
@@ -136,14 +138,20 @@ func (s *bashPPNativeSession) goSourceReexecLauncher(ctx context.Context, req ba
 		quoted = append(quoted, strconv.Quote(arg))
 	}
 	quotedBuildGo := strconv.Quote(req.internalBuildGo())
-	quotedVersionCache := strconv.Quote(filepath.Join(s.reexecDir, "tool-version"))
 	quotedPreparedCache := strconv.Quote(preparedCache)
 	quotedInterpreterID := strconv.Quote(interpreterID)
+	replayHash := sha256.New()
+	_, _ = replayHash.Write([]byte(interpreterID))
+	for _, arg := range plan {
+		_, _ = replayHash.Write([]byte{0})
+		_, _ = replayHash.Write([]byte(arg))
+	}
+	_, _ = replayHash.Write([]byte{0})
+	_, _ = replayHash.Write([]byte(s.reexecDir))
+	quotedReplayID := strconv.Quote(fmt.Sprintf("%x", replayHash.Sum(nil)))
 	source := `package main
 import (
-	"bytes"
 	"crypto/sha256"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -151,12 +159,12 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
-	"time"
 )
 func main() {
 	plan := []string{` + strings.Join(quoted, ",") + `}
 	if len(os.Args) == 2 && os.Args[1] == "-V=full" {
-		os.Exit(versionProbe(plan, ` + quotedVersionCache + `))
+		versionProbe(` + quotedReplayID + `)
+		return
 	}
 	os.Exit(run(plan, os.Stdin, os.Stdout))
 }
@@ -212,61 +220,14 @@ func wait(plan []string, cmd *exec.Cmd) int {
 	fmt.Fprintf(os.Stderr, "gosource reexec %q: %v\n", plan, err)
 	return 127
 }
-func versionProbe(plan []string, cache string) int {
-	identity := filepath.Base(os.Args[0]) + "\x00" + os.Getenv("GOOS") + "\x00" + os.Getenv("GOARCH") + "\x00" + os.Getenv("GOEXPERIMENT")
-	cache += fmt.Sprintf("-%x", sha256.Sum256([]byte(identity)))
-	lock := cache + ".lock"
-	for {
-		if output, err := os.ReadFile(cache); err == nil {
-			_, _ = os.Stdout.Write(output)
-			return 0
-		}
-		file, err := os.OpenFile(lock, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
-		if err == nil {
-			_ = file.Close()
-			return populateVersionCache(plan, cache, lock)
-		}
-		if !errors.Is(err, os.ErrExist) {
-			return run(plan, os.Stdin, os.Stdout)
-		}
-		if info, statErr := os.Stat(lock); statErr == nil && time.Since(info.ModTime()) > 30*time.Second {
-			_ = os.Remove(lock)
-			continue
-		}
-		time.Sleep(10 * time.Millisecond)
+func versionProbe(replayID string) {
+	name := filepath.Base(os.Args[0])
+	if ext := filepath.Ext(name); strings.EqualFold(ext, ".exe") {
+		name = strings.TrimSuffix(name, ext)
 	}
-}
-func populateVersionCache(plan []string, cache, lock string) int {
-	done := make(chan struct{})
-	stopped := make(chan struct{})
-	go func() {
-		defer close(stopped)
-		ticker := time.NewTicker(time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case now := <-ticker.C:
-				_ = os.Chtimes(lock, now, now)
-			case <-done:
-				return
-			}
-		}
-	}()
-	defer func() { close(done); <-stopped; _ = os.Remove(lock) }()
-	var output bytes.Buffer
-	cmd := command(plan)
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, &output, os.Stderr
-	if code := wait(plan, cmd); code != 0 {
-		return code
-	}
-	if temp, err := os.CreateTemp(filepath.Dir(cache), ".tool-version-"); err == nil {
-		name := temp.Name()
-		if _, err = temp.Write(output.Bytes()); err == nil { err = temp.Close() } else { _ = temp.Close() }
-		if err == nil { err = os.Rename(name, cache) }
-		if err != nil { _ = os.Remove(name) }
-	}
-	_, _ = os.Stdout.Write(output.Bytes())
-	return 0
+	identity := replayID + "\x00" + name + "\x00" + os.Getenv("GOOS") + "\x00" + os.Getenv("GOARCH") + "\x00" + os.Getenv("GOEXPERIMENT")
+	buildID := fmt.Sprintf("%x", sha256.Sum256([]byte(identity)))
+	fmt.Printf("%s version devel buildID=%s\n", name, buildID)
 }
 `
 	sourcePath := filepath.Join(s.reexecDir, "bashpp-reexec-launcher.go")

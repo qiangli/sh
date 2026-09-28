@@ -36,8 +36,8 @@ func main() {
 // launcher installs a signal handler and waits for the child, so a SIGINT or
 // SIGTERM delivered to the launcher process alone (not its process group) is
 // forwarded to the child, which exits rather than continuing to run after the
-// launcher returns. Both the ordinary replay path and the -V=full version-probe
-// path route through the same wait helper, so both are exercised.
+// launcher returns. The -V=full identity path has no child to signal and is
+// covered separately by the reexec version-probe tests.
 //
 // This asserts only the launcher's direct-child behavior; it establishes
 // nothing about any further interpreter-helper grandchildren. The baseline
@@ -54,8 +54,6 @@ func TestGoSourceS281SelfReexecForwardsInterrupt(t *testing.T) {
 	}{
 		{name: "run/SIGINT", signal: syscall.SIGINT},
 		{name: "run/SIGTERM", signal: syscall.SIGTERM},
-		{name: "version-probe/SIGINT", args: []string{"-V=full"}, signal: syscall.SIGINT},
-		{name: "version-probe/SIGTERM", args: []string{"-V=full"}, signal: syscall.SIGTERM},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s281AssertLauncherForwards(t, tc.args, tc.signal)
