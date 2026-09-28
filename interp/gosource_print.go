@@ -83,7 +83,7 @@ func (r *Runner) goSourcePrintReferenceKind(expr syntax.BashPPExpr) string {
 	case *syntax.BashPPParenExpr:
 		return r.goSourcePrintReferenceKind(x.X)
 	case *syntax.BashPPIdent:
-		cell := r.bashPPScope.lookup(x.Name.Value)
+		cell := r.bashPPScope.lookup(x.Name.Value).view()
 		if cell == nil {
 			return ""
 		}
@@ -136,7 +136,7 @@ func (r *Runner) goSourcePrintReferenceOperand(expr syntax.BashPPExpr) bool {
 		if x.Name.Value == "nil" || r.bashPPScope == nil {
 			return false
 		}
-		cell := r.bashPPScope.lookup(x.Name.Value)
+		cell := r.bashPPScope.lookup(x.Name.Value).view()
 		if cell == nil {
 			return false
 		}

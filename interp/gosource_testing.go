@@ -276,7 +276,7 @@ func (r *Runner) bashPPTestingArguments(call *syntax.BashPPCall) (*goSourceTesti
 	if !r.bashPPGoSource || r.goSourceTesting == nil || len(call.Fun) != 2 || r.bashPPScope == nil {
 		return nil, nil, false, nil
 	}
-	cell := r.bashPPScope.lookup(call.Fun[0].Value)
+	cell := r.bashPPScope.lookup(call.Fun[0].Value).view()
 	if cell == nil {
 		return nil, nil, false, nil
 	}

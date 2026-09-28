@@ -45,7 +45,7 @@ func (r *Runner) goSourceMethodExprType(x syntax.BashPPExpr) (syntax.BashPPTypeE
 			}
 			// A type declaration leaves a marker cell of its own; a variable
 			// of the same name carries a value type, and it wins.
-			if cell := r.bashPPScope.lookup(name); cell != nil && (cell.interfaceValue != nil || bashPPSelectorCellType(cell) != nil) {
+			if cell := r.bashPPScope.lookup(name).view(); cell != nil && (cell.interfaceValue != nil || bashPPSelectorCellType(cell) != nil) {
 				return nil, false
 			}
 			var typ syntax.BashPPTypeExpr = &syntax.BashPPNamedType{Name: v.Name}

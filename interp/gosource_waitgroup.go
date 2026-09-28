@@ -124,7 +124,7 @@ func (r *Runner) goSourceWaitGroupBody(expr syntax.BashPPExpr) (syntax.BashPPExp
 func (r *Runner) goSourceWaitGroupNamed(name string) (*bashPPFunc, bool) {
 	if r.bashPPScope != nil {
 		if cell := r.bashPPScope.lookup(name); cell != nil {
-			fn, ok := r.bashPPClosure(cell.vr.Str)
+			fn, ok := r.bashPPClosure(cell.viewVar().Str)
 			return fn, ok && fn.native == nil
 		}
 	}

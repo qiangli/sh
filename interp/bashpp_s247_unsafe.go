@@ -150,7 +150,7 @@ func (r *Runner) goSourceUnsafeIntegerOperand(expr syntax.BashPPExpr) bool {
 	case *syntax.BashPPConvertExpr:
 		return goSourceUnsafeIntegerType(r.bashPPUnderlyingType(r.bashPPConvertTarget(x)))
 	case *syntax.BashPPIdent:
-		cell := r.bashPPScope.lookup(x.Name.Value)
+		cell := r.bashPPScope.lookup(x.Name.Value).view()
 		if cell == nil || cell.pointer {
 			return false
 		}

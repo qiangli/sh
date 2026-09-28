@@ -63,14 +63,6 @@ var bashPPCellDirectReaders = []string{
 	"bashPPReflectValueReceiver",
 	"bashPPShortDecl",
 	"bashPPSprint165StoredBridgeScalar",
-	"bashPPTestingArguments",
-	"goSourceMethodExprType",
-	"goSourcePrintReferenceKind",
-	"goSourcePrintReferenceOperand",
-	"goSourceReceiveAssign",
-	"goSourceUnsafeIntegerOperand",
-	"goSourceValueSwitchTag",
-	"goSourceWaitGroupNamed",
 }
 
 // markStore marks an assignment target and every selector it is reached

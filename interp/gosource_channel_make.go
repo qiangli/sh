@@ -219,7 +219,7 @@ func (r *Runner) goSourceReceiveAssign(assign *syntax.BashPPAssign) bool {
 		if name.Value == "_" {
 			continue
 		}
-		cell := r.bashPPScope.lookup(name.Value)
+		cell := r.bashPPScope.lookup(name.Value).view()
 		if cell == nil || cell.constant || cell.vr.ReadOnly {
 			r.exit.fatal(fmt.Errorf("gosource: receive assignment target %s is not mutable", name.Value))
 			return true

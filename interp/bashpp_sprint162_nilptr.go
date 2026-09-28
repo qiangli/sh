@@ -286,7 +286,7 @@ func (r *Runner) goSourceValueSwitchTag(expr syntax.BashPPExpr) bool {
 		if x.Name.Value == "nil" {
 			return true
 		}
-		cell := r.bashPPScope.lookup(x.Name.Value)
+		cell := r.bashPPScope.lookup(x.Name.Value).view()
 		if cell == nil {
 			return r.bashPPFuncs[x.Name.Value] != nil
 		}
