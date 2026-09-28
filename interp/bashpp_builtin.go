@@ -52,7 +52,10 @@ func (r *Runner) bashPPBuiltinArg(w *syntax.Word) bashPPBuiltinArg {
 	if text == "nil" {
 		return bashPPBuiltinArg{text: text}
 	}
-	if cell := r.bashPPCellForWord(w); cell != nil {
+	// One snapshot describes the argument: the kind test and the payload it
+	// selects, and every later reader of arg.cell, answer about one store of
+	// a cell an interpreted goroutine may be rebinding.
+	if cell := r.bashPPCellForWord(w).view(); cell != nil {
 		arg := bashPPBuiltinArg{cell: cell, typ: cell.declType, channel: cell.channel, text: text}
 		if arg.typ == nil && cell.typeName != "" {
 			arg.typ = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: cell.typeName}}

@@ -510,7 +510,9 @@ func (r *Runner) bashPPRangeCollection(ctx context.Context, rng *syntax.BashPPRa
 	}
 	var cell *bashPPCell
 	if ok {
-		cell = r.bashPPScope.lookup(root)
+		// One snapshot: the channel test and every operand test below decide
+		// about the same store of a possibly shared cell.
+		cell = r.bashPPScope.lookup(root).view()
 		if cell == nil || cell.channel != nil {
 			return false
 		}

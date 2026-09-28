@@ -623,8 +623,8 @@ func (r *Runner) bashPPLookupFunc(c *syntax.BashPPCall) (*bashPPFunc, bool) {
 		}
 	}
 	if len(c.Fun) >= 1 && r.bashPPScope != nil {
-		if cell := r.bashPPScope.lookup(c.Fun[0].Value); cell != nil && cell.vr.Kind == expand.Object {
-			if handle, ok := cell.vr.Obj.(*polyglot.Handle); ok {
+		if vr := r.bashPPScope.lookup(c.Fun[0].Value).viewVar(); vr.Kind == expand.Object {
+			if handle, ok := vr.Obj.(*polyglot.Handle); ok {
 				var middle []*syntax.Lit
 				if len(c.Fun) > 2 {
 					middle = c.Fun[1 : len(c.Fun)-1]
@@ -703,7 +703,7 @@ func (r *Runner) bashPPLookupSelectorFunc(c *syntax.BashPPCall) (*bashPPFunc, bo
 	// deterministic even when the import registry contains the same name.
 	if cell := r.bashPPScope.lookup(owner); cell != nil {
 		_, typeName := r.bashPPTypes[owner]
-		if !typeName || cell.interfaceValue != nil || bashPPSelectorCellType(cell) != nil {
+		if !typeName || cell.viewInterface() != nil || bashPPSelectorCellType(cell) != nil {
 			return r.bashPPBindLocalSelector(c, cell)
 		}
 	}
@@ -761,6 +761,7 @@ func (r *Runner) bashPPLookupSelectorFunc(c *syntax.BashPPCall) (*bashPPFunc, bo
 }
 
 func bashPPSelectorCellType(cell *bashPPCell) syntax.BashPPTypeExpr {
+	cell = cell.view()
 	if cell == nil {
 		return nil
 	}
@@ -785,13 +786,16 @@ func bashPPSelectorCellType(cell *bashPPCell) syntax.BashPPTypeExpr {
 // materializing intermediate shell values would lose both.
 func (r *Runner) bashPPBindLocalSelector(c *syntax.BashPPCall, root *bashPPCell) (*bashPPFunc, bool) {
 	method := c.Fun[len(c.Fun)-1].Value
-	if len(c.Fun) == 2 && root.interfaceValue != nil {
+	// The interface test and the payload it binds come from one snapshot;
+	// root itself stays live because the field path below binds against the
+	// receiver's own storage.
+	if rootView := root.view(); len(c.Fun) == 2 && rootView.interfaceValue != nil {
 		oldPos := r.curStmtPos
 		if r.bashPPGoSource {
 			r.curStmtPos = c.Fun[1].Pos()
 		}
 		defer func() { r.curStmtPos = oldPos }()
-		return r.bashPPBindInterfaceMethod(root.interfaceValue, method)
+		return r.bashPPBindInterfaceMethod(rootView.interfaceValue, method)
 	}
 	typ := bashPPSelectorCellType(root)
 	if typ == nil {

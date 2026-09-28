@@ -74,6 +74,10 @@ func (r *Runner) goSourceBuiltinArg(call *syntax.BashPPCall, index int) (bashPPB
 }
 
 func (r *Runner) goSourceBuiltinCellArg(cell *bashPPCell, text string) bashPPBuiltinArg {
+	// One snapshot describes the argument: the kind test and the payload it
+	// selects, and every later reader of arg.cell, answer about one store of
+	// a cell an interpreted goroutine may be rebinding.
+	cell = cell.view()
 	arg := bashPPBuiltinArg{cell: cell, typ: cell.declType, channel: cell.channel, text: text}
 	if cell.interfaceValue != nil {
 		arg.meta = &bashPPCollectionMeta{kind: "interface", typ: cell.declType, interfaceValue: cell.interfaceValue}

@@ -19,6 +19,8 @@ import (
 // or as the pointee of a pointer — the *strings.Builder a local function
 // returned, `&b` of an imported type — or nil for an interpreter-owned cell.
 func (r *Runner) goSourceDependencyHandle(cell *bashPPCell) *bashPPBridgeValue {
+	// The carrier test and the payload it selects answer from one snapshot.
+	cell = cell.view()
 	if cell == nil {
 		return nil
 	}
@@ -63,7 +65,7 @@ func (r *Runner) goSourceOriginalMethodCall(name, method string) bool {
 	if !r.bashPPGoSource || r.bashPPScope == nil {
 		return false
 	}
-	cell := r.bashPPScope.lookup(name)
+	cell := r.bashPPScope.lookup(name).view()
 	if cell == nil {
 		return false
 	}

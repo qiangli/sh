@@ -139,6 +139,7 @@ func (r *Runner) goSourceNativeScalarReceiver(expr syntax.BashPPExpr) bool {
 // defined type. A handle, pointer, interface or channel cell already reaches
 // the dependency by its own route and is not this case.
 func (r *Runner) goSourceNativeScalarCell(cell *bashPPCell) bool {
+	cell = cell.view()
 	if !r.bashPPGoSource || cell == nil {
 		return false
 	}

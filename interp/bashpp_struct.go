@@ -740,7 +740,10 @@ func (r *Runner) bashPPReadExpr(expr syntax.BashPPExpr) (value any, meta *bashPP
 		}
 		return r.bashPPReadCellValue(cell)
 	case *syntax.BashPPIdent:
-		cell := r.bashPPScope.lookup(x.Name.Value)
+		// One snapshot: the pointer test, the object test and the payload
+		// they select must all answer about the same store of a cell an
+		// interpreted goroutine may be rebinding. See bashpp_cell_share.go.
+		cell := r.bashPPScope.lookup(x.Name.Value).view()
 		if cell != nil && cell.pointer {
 			return cell.pointerValue, bashPPPointerMeta(cell.declType), nil
 		}
@@ -1040,7 +1043,10 @@ func (r *Runner) bashPPStructuredAssign(target, rhs syntax.BashPPExpr) {
 		return
 	}
 	root, ok := bashPPCollectionRoot(target)
-	cell := r.bashPPScope.lookup(root)
+	// One snapshot: the pointer test here and the object identity the
+	// readonly rules below consult describe the same store of the root, and
+	// nothing writes back through this cell.
+	cell := r.bashPPScope.lookup(root).view()
 	if ok && cell != nil && cell.pointer || r.goSourceComputedPointerField(target) {
 		if index, indexed := target.(*syntax.BashPPIndexExpr); indexed && r.bashPPGoSource {
 			// A fault met at the target — a write into a nil map — is the

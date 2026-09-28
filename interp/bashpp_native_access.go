@@ -85,7 +85,7 @@ func (r *Runner) bashPPNativePointerExpr(expr syntax.BashPPExpr) bool {
 		if r.bashPPScope == nil {
 			return false
 		}
-		cell := r.bashPPScope.lookup(x.Name.Value)
+		cell := r.bashPPScope.lookup(x.Name.Value).view()
 		if cell == nil || !cell.pointer || cell.pointerValue == nil {
 			return false
 		}
@@ -525,7 +525,7 @@ func (r *Runner) bashPPNativeLocalBase(expr syntax.BashPPExpr) (any, *bashPPColl
 	if !ok || r.bashPPScope == nil {
 		return nil, nil, false
 	}
-	cell := r.bashPPScope.lookup(id.Name.Value)
+	cell := r.bashPPScope.lookup(id.Name.Value).view()
 	if cell == nil || r.bashPPNativeCellValue(id.Name.Value) != nil {
 		return nil, nil, false
 	}

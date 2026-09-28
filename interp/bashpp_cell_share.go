@@ -192,3 +192,19 @@ func (c *bashPPCell) viewVar() expand.Variable {
 	defer c.guard.Unlock()
 	return c.vr
 }
+
+// viewInterface is [bashPPCell.view] for a caller that needs only the
+// interface payload, without copying the whole cell. The payload pointer is
+// published as part of the bundle, and whatever it points at is built before
+// the store, so one guarded word answers the whole question.
+func (c *bashPPCell) viewInterface() *bashPPInterfaceValue {
+	if c == nil {
+		return nil
+	}
+	if c.guard == nil {
+		return c.interfaceValue
+	}
+	c.guard.Lock()
+	defer c.guard.Unlock()
+	return c.interfaceValue
+}

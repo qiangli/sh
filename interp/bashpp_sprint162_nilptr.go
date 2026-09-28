@@ -222,7 +222,7 @@ func (r *Runner) goSourceFuncComparable(name string) (bashPPComparableValue, boo
 	if !r.bashPPGoSource {
 		return bashPPComparableValue{}, false
 	}
-	cell := r.bashPPScope.lookup(name)
+	cell := r.bashPPScope.lookup(name).view()
 	if cell == nil {
 		if fn := r.bashPPFuncs[name]; fn != nil {
 			typ := &syntax.BashPPFuncType{Params: fn.params(), Results: fn.results()}
@@ -429,7 +429,8 @@ func (r *Runner) goSourceNilFuncCallee(call *syntax.BashPPCall) bool {
 	if !r.bashPPGoSource || call == nil || call.CalleeExpr != nil || call.FuncLit != nil || len(call.Fun) != 1 || r.bashPPScope == nil {
 		return false
 	}
-	cell := r.bashPPScope.lookup(call.Fun[0].Value)
+	// Every test below names another of the cell's fields; one snapshot.
+	cell := r.bashPPScope.lookup(call.Fun[0].Value).view()
 	if cell == nil || cell.pointer || cell.interfaceValue != nil {
 		return false
 	}
@@ -637,7 +638,7 @@ func (r *Runner) goSourceStructuredIdent(id *syntax.BashPPIdent) bool {
 	if !r.bashPPGoSource || r.bashPPScope == nil {
 		return false
 	}
-	cell := r.bashPPScope.lookup(id.Name.Value)
+	cell := r.bashPPScope.lookup(id.Name.Value).view()
 	return cell != nil && (cell.pointer || cell.vr.Kind == expand.Object)
 }
 
@@ -672,7 +673,7 @@ func (r *Runner) goSourceNilInterfaceOperand(expr syntax.BashPPExpr) bool {
 	if !ok {
 		return false
 	}
-	cell := r.bashPPScope.lookup(id.Name.Value)
+	cell := r.bashPPScope.lookup(id.Name.Value).view()
 	return cell != nil && cell.interfaceValue != nil && cell.interfaceValue.nilIface && cell.vr.Kind != expand.Object
 }
 

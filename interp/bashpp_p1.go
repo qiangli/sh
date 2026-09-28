@@ -1089,6 +1089,11 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 			r.bashPPDeclareName(d.Lhs[0].Value, expand.Variable{Set: true, Kind: expand.String, Str: values[0]})
 			target := r.bashPPScope.lookup(d.Lhs[0].Value)
 			if target != nil && source != nil {
+				// One snapshot read, one guarded bundle written: the
+				// asserted value's fields belong together, and both ends
+				// may be named by an interpreted goroutine.
+				source := source.view()
+				target.lock()
 				target.vr = source.vr
 				target.typeName = source.typeName
 				target.declType = source.declType
@@ -1096,6 +1101,7 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 				target.pointer, target.nilPointer, target.pointerValue = source.pointer, source.nilPointer, source.pointerValue
 				target.object, target.valueMeta = source.object, source.valueMeta
 				target.interfaceValue = source.interfaceValue
+				target.unlock()
 			}
 			if len(d.Lhs) == 2 {
 				r.bashPPDeclareName(d.Lhs[1].Value, expand.Variable{Set: true, Kind: expand.String, Str: values[1]})

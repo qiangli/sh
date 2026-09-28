@@ -20,6 +20,7 @@ import (
 // bashPPFuncTypedCell reports whether a binding is declared with a function
 // type, so an argument naming it travels as the cell rather than as text.
 func (r *Runner) bashPPFuncTypedCell(cell *bashPPCell) bool {
+	cell = cell.view()
 	if cell == nil || cell.declType == nil {
 		return false
 	}
@@ -31,10 +32,11 @@ func (r *Runner) bashPPFuncTypedCell(cell *bashPPCell) bool {
 // value by handle — a closure's literal signature or a declared function's —
 // or nil when the cell holds no function value.
 func (r *Runner) bashPPFuncValueType(cell *bashPPCell) syntax.BashPPTypeExpr {
-	if cell == nil || cell.vr.Kind != expand.String {
+	vr := cell.viewVar()
+	if vr.Kind != expand.String {
 		return nil
 	}
-	fn, ok := r.bashPPClosure(cell.vr.Str)
+	fn, ok := r.bashPPClosure(vr.Str)
 	if !ok {
 		return nil
 	}

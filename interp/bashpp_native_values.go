@@ -535,7 +535,7 @@ func (r *Runner) bashPPBridgeExpr(expr syntax.BashPPExpr) (bashPPBridgeValue, er
 			return bashPPBridgeValue{Kind: "nil"}, nil
 		}
 		if r.bashPPScope != nil {
-			if cell := r.bashPPScope.lookup(x.Name.Value); cell != nil {
+			if cell := r.bashPPScope.lookup(x.Name.Value).view(); cell != nil {
 				switch {
 				case cell.pointer || cell.interfaceValue != nil:
 					return r.bashPPBridgeCell(cell)

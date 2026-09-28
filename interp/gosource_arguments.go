@@ -25,6 +25,10 @@ func (r *Runner) goSourceCallArguments(call *syntax.BashPPCall, fn *bashPPFunc) 
 			return nil, false, err
 		}
 		for _, cell := range results {
+			// One snapshot: the task-group test and the argument copy must
+			// describe the same store of a cell the callee's launcher may be
+			// rebinding. See bashpp_cell_share.go.
+			cell = cell.view()
 			if cell.channel != nil && cell.channelOwner != r.bashPPConcurrent {
 				return nil, false, fmt.Errorf("channel belongs to another task group")
 			}

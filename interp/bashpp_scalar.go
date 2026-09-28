@@ -467,7 +467,9 @@ func (r *Runner) bashPPExprScalarType(expr syntax.BashPPExpr) syntax.BashPPTypeE
 		if r.bashPPScope == nil {
 			return nil
 		}
-		cell := r.bashPPScope.lookup(x.Name.Value)
+		// The declared type, the collection meta, the type name and the
+		// scalar kind are consulted in turn; one snapshot answers for all.
+		cell := r.bashPPScope.lookup(x.Name.Value).view()
 		if cell == nil {
 			return nil
 		}
@@ -1409,7 +1411,7 @@ func (r *Runner) bashPPComparableExpr(expr syntax.BashPPExpr) (bashPPComparableV
 		if x.Name.Value == "nil" {
 			return bashPPComparableValue{nilLiteral: true}, nil
 		}
-		if cell := r.bashPPScope.lookup(x.Name.Value); cell != nil {
+		if cell := r.bashPPScope.lookup(x.Name.Value).view(); cell != nil {
 			if cell.interfaceValue != nil {
 				return bashPPComparableValue{value: cell.interfaceValue, meta: &bashPPCollectionMeta{kind: "interface", typ: cell.declType}}, nil
 			}

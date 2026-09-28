@@ -22,9 +22,9 @@ func (r *Runner) bashPPScopedClosureCallee(name string) (*bashPPFunc, bool) {
 	if r.bashPPScope == nil {
 		return nil, false
 	}
-	cell := r.bashPPScope.lookup(name)
-	if cell == nil || cell.vr.Kind != expand.String {
+	vr := r.bashPPScope.lookup(name).viewVar()
+	if vr.Kind != expand.String {
 		return nil, false
 	}
-	return r.bashPPClosure(cell.vr.Str)
+	return r.bashPPClosure(vr.Str)
 }

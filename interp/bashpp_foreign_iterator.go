@@ -26,11 +26,11 @@ func (r *Runner) bashPPRangeForeignIterator(ctx context.Context, rng *syntax.Bas
 	if rng.Chan == nil || r.bashPPScope == nil {
 		return false
 	}
-	cell := r.bashPPScope.lookup(r.literal(rng.Chan))
-	if cell == nil || cell.vr.Kind != expand.Object {
+	vr := r.bashPPScope.lookup(r.literal(rng.Chan)).viewVar()
+	if vr.Kind != expand.Object {
 		return false
 	}
-	iterator, ok := cell.vr.Obj.(*bashPPForeignIterator)
+	iterator, ok := vr.Obj.(*bashPPForeignIterator)
 	if !ok {
 		return false
 	}

@@ -258,7 +258,7 @@ func (r *Runner) goSourceChannelValueCell(expr syntax.BashPPExpr) (*bashPPCell, 
 		}
 		return cell, true, err
 	case *syntax.BashPPIdent:
-		if cell := r.bashPPScope.lookup(x.Name.Value); cell != nil {
+		if cell := r.bashPPScope.lookup(x.Name.Value).view(); cell != nil {
 			_, channelType := r.bashPPUnderlyingType(cell.declType).(*syntax.BashPPChanType)
 			if cell.channel != nil || channelType {
 				return bashPPCopyAssignmentCell(cell), true, nil

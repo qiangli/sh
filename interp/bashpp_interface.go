@@ -998,7 +998,10 @@ func (r *Runner) bashPPInterfaceConversion(x syntax.BashPPExpr) (*bashPPCell, bo
 // Structs and arrays are values and therefore need their own payload, while
 // pointers, maps, and slices deliberately retain the identities they carry.
 func bashPPCopyInterfaceCell(cell *bashPPCell) *bashPPCell {
-	stored := *cell.view()
+	// Every test below and the payload it copies answer from the one
+	// snapshot, never from the live cell behind it.
+	cell = cell.view()
+	stored := *cell
 	stored.interfaceValue = nil
 	if cell.vr.Kind == expand.Object && bashPPValueMeta(bashPPCellMeta(cell)) {
 		value, meta := bashPPCopyArrayValue(cell.vr.Obj, bashPPCellMeta(cell))
@@ -1017,7 +1020,9 @@ func (r *Runner) bashPPCellForInterfaceExpr(expr syntax.BashPPExpr) (*bashPPCell
 	// shadows them they are the untyped boolean constants the scalar
 	// evaluator below already knows, and store as a bool.
 	if id, ok := expr.(*syntax.BashPPIdent); ok && !(bashPPBoolIdent(id.Name.Value) && r.bashPPScope.lookup(id.Name.Value) == nil) {
-		cell := r.bashPPScope.lookup(id.Name.Value)
+		// The boxed value is decided from several of the cell's fields at
+		// once, so they come from one snapshot of a possibly shared cell.
+		cell := r.bashPPScope.lookup(id.Name.Value).view()
 		if cell == nil {
 			// A declared function named as a value — `var i any = f` —
 			// is its handle, exactly as `g := f` binds it; its dynamic
@@ -1212,6 +1217,9 @@ func (r *Runner) bashPPScalarInterfaceCell(expr syntax.BashPPExpr) (*bashPPCell,
 // an interface value contributes its dynamic value, anything else is its own
 // value with the type it declares or carries.
 func (r *Runner) bashPPInterfaceSourceCell(cell *bashPPCell, what string) (*bashPPCell, syntax.BashPPTypeExpr, error) {
+	// Every fallback below reads another of the cell's fields to name the
+	// dynamic type, and they must all describe one store.
+	cell = cell.view()
 	if cell.interfaceValue != nil {
 		if cell.interfaceValue.nilIface {
 			return cell, cell.declType, nil
@@ -1427,6 +1435,10 @@ func (r *Runner) bashPPInterfaceOperand(x syntax.BashPPExpr, what string) (*bash
 }
 
 func (r *Runner) bashPPTypeAssertCell(assert *syntax.BashPPTypeAssertExpr, commaOK bool, cell *bashPPCell) ([]string, *bashPPCell, error) {
+	// The operand's interface payload and its static type are read together
+	// and must describe one store; an interpreted goroutine may be rebinding
+	// the variable this cell is. See bashpp_cell_share.go.
+	cell = cell.view()
 	if cell == nil || cell.interfaceValue == nil {
 		return nil, nil, r.bashPPOperandErrf(assert.X, "BASHPP-EASSERT-OPERAND", "type assertion operand is not an interface")
 	}
@@ -1642,6 +1654,9 @@ func (r *Runner) bashPPTypeSwitch(ctx context.Context, sw *syntax.BashPPSwitch) 
 		r.exit = exitStatus{code: 2}
 		return
 	}
+	// One snapshot: every arm is matched against the same dynamic value even
+	// when an interpreted goroutine rebinds the operand mid-switch.
+	cell = cell.view()
 	if cell == nil || cell.interfaceValue == nil {
 		r.errf("%sBASHPP-ETYPESWITCH-OPERAND: %s is not an interface\n", r.bashPPExprErrPrefix(assert.X), bashPPExprText(assert.X))
 		r.exit = exitStatus{code: 2}

@@ -101,7 +101,9 @@ func (r *Runner) goSourceStaticExprType(expr syntax.BashPPExpr) (syntax.BashPPTy
 		if r.bashPPScope == nil {
 			return nil, false
 		}
-		cell := r.bashPPScope.lookup(x.Name.Value)
+		// The declared type, collection meta, type name, scalar kind and
+		// pointee are consulted in turn; one snapshot answers for all.
+		cell := r.bashPPScope.lookup(x.Name.Value).view()
 		if cell == nil {
 			return nil, false
 		}
