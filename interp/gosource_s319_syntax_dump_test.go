@@ -96,3 +96,74 @@ func main() {
 		t.Fatal(err)
 	}
 }
+
+// TestS319ReflectedTraversalDoesNotResnapshotGraph reduces Fdump's hot path:
+// a reflect.Value rooted at an interpreted pointer walks a graph using only
+// read-only reflection. Each tiny Value operation must not structurally
+// snapshot the entire retained graph for pointer writeback.
+func TestS319ReflectedTraversalDoesNotResnapshotGraph(t *testing.T) {
+	source := gosource.Source{Name: "main.go", Data: []byte(`package main
+import (
+	"fmt"
+	"reflect"
+)
+type node struct { next *node; value int }
+func main() {
+	// Arm writeback for an unrelated retained origin first. Traversing root
+	// must not sweep it together with the reflected graph.
+	var prior int
+	if _, err := fmt.Sscan("7", &prior); err != nil || prior != 7 { panic("scan") }
+	root := &node{}
+	tail := root
+	for i := 0; i < 160; i++ {
+		tail.next = &node{value: i}
+		tail = tail.next
+	}
+	v := reflect.ValueOf(root)
+	count := 0
+	for !v.IsNil() {
+		count++
+		v = v.Elem().Field(0)
+	}
+	if count != 161 { panic("short traversal") }
+}
+`)}
+	program, err := gosource.Load([]gosource.Source{source}, gosource.Options{RunMain: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner, err := New(Lang(syntax.LangBashPP), Dir(t.TempDir()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	if err := runner.Run(ctx, program.File); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestS319NativePointerReadOnlyRequests(t *testing.T) {
+	req := bashPPEvalRequest{Imports: map[string]string{"r": "reflect", "f": "fmt"}}
+	value := bashPPBridgeValue{Kind: "handle", NativeType: "reflect.Value"}
+	typ := bashPPBridgeValue{Kind: "handle", Type: "reflect.Type"}
+	for _, tc := range []struct {
+		name string
+		q    bashPPBridgeRequest
+		want bool
+	}{
+		{"value-of", bashPPBridgeRequest{Op: "call", Selector: "r.ValueOf"}, true},
+		{"value-field", bashPPBridgeRequest{Op: "call", Selector: "Field", Receiver: &value}, true},
+		{"type-field", bashPPBridgeRequest{Op: "call", Selector: "Field", Receiver: &typ}, true},
+		{"format", bashPPBridgeRequest{Op: "call", Selector: "f.Fprintf"}, true},
+		{"value-set", bashPPBridgeRequest{Op: "call", Selector: "Set", Receiver: &value}, false},
+		{"value-call", bashPPBridgeRequest{Op: "call", Selector: "Call", Receiver: &value}, false},
+		{"ordinary-call", bashPPBridgeRequest{Op: "call", Selector: "dep.Mutate"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := nativePointerReadOnlyRequest(req, tc.q); got != tc.want {
+				t.Fatalf("nativePointerReadOnlyRequest() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

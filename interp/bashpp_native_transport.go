@@ -615,6 +615,53 @@ func nativePointerWritebackAllowed(req bashPPEvalRequest, q bashPPBridgeRequest)
 	return pointers > 0
 }
 
+// nativePointerReadOnlyRequest identifies dependency operations whose Go
+// contracts cannot mutate an origin pointer. Pointer writeback is otherwise
+// conservative: without this proof the worker structurally snapshots origins
+// the request may mutate or retain. Treating a reflected root as one of those
+// on every tiny read turns reflection traversal into repeated whole-graph
+// walks.
+//
+// Keep this list positive. In particular, reflect.Value setters, Call, Recv
+// and Send stay on the conservative path. fmt's listed emitters may invoke an
+// original Writer, Formatter, Stringer, or error method, but those callbacks
+// run against interpreter storage while the request is parked; fmt itself
+// never writes through the formatted pointer copies.
+func nativePointerReadOnlyRequest(req bashPPEvalRequest, q bashPPBridgeRequest) bool {
+	if q.Op != "call" {
+		return false
+	}
+	callable := nativeSliceCallable(req, q)
+	switch callable {
+	case "reflect.ValueOf", "reflect.TypeOf", "reflect.DeepEqual":
+		return true
+	}
+	if strings.HasPrefix(callable, "fmt.") && nativeSliceReadOnly(callable) {
+		return true
+	}
+	if q.Receiver == nil {
+		return false
+	}
+	receiverType := strings.TrimPrefix(q.Receiver.NativeType, "*")
+	declaredType := strings.TrimPrefix(q.Receiver.Type, "*")
+	if receiverType == "reflect.Type" || declaredType == "reflect.Type" {
+		// reflect.Type is immutable; all of its methods inspect type metadata.
+		return true
+	}
+	if receiverType != "reflect.Value" && declaredType != "reflect.Value" {
+		return false
+	}
+	switch q.Selector {
+	case "CanAddr", "CanComplex", "CanConvert", "CanFloat", "CanInt", "CanInterface", "CanSet", "CanUint",
+		"Cap", "Comparable", "Complex", "Convert", "Elem", "Equal", "Field", "FieldByIndex", "FieldByIndexErr",
+		"FieldByName", "Float", "Index", "Int", "Interface", "InterfaceData", "IsNil", "IsValid", "IsZero",
+		"Kind", "Len", "MapIndex", "MapKeys", "MapRange", "Method", "MethodByName", "NumField", "NumMethod",
+		"OverflowComplex", "OverflowFloat", "OverflowInt", "OverflowUint", "Pointer", "String", "Type", "Uint", "UnsafePointer":
+		return true
+	}
+	return false
+}
+
 func nativeRetainedPointerMutator(name string) bool {
 	switch name {
 	case "flag.Parse", "*flag.FlagSet.Parse":

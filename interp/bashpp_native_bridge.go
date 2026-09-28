@@ -174,7 +174,11 @@ type bashPPBridgeRequest struct {
 	ID                        uint64 `json:"id"`
 	Op                        string `json:"op"`
 	PanicOnFault              bool   `json:"panic_on_fault,omitempty"`
-	Selector                  string `json:"selector"`
+	// PointerReadOnly says this operation cannot mutate any origin pointer in
+	// the dependency. The worker can then omit its global pointer writeback
+	// scan; the bit is derived here from authenticated call metadata.
+	PointerReadOnly bool   `json:"pointer_read_only,omitempty"`
+	Selector        string `json:"selector"`
 	// Instance is the type-argument suffix of an instantiated imported
 	// generic function; the helper resolves Selector+Instance.
 	Instance   string              `json:"instance,omitempty"`

@@ -113,6 +113,7 @@ func (r *Runner) bashPPNativeRequest(ctx context.Context, req bashPPEvalRequest,
 	if values, handled, err := r.goSourceLocalReflectRequest(ctx, req, &q); handled {
 		return values, err
 	}
+	q.PointerReadOnly = nativePointerReadOnlyRequest(req, q)
 	values, err := req.Bridge.request(ctx, req, q)
 	if err == nil {
 		r.goSourceRememberValueOf(ctx, req, q, values)
