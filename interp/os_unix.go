@@ -778,3 +778,37 @@ func hdocServe(body []byte) (*os.File, error) {
 	}
 	return f, nil
 }
+
+// setOwnProcessGroup makes cmd the leader of a new process group unless job
+// control already chose its group (or hands it the terminal). It reports
+// whether cmd will lead a group of its own.
+func setOwnProcessGroup(cmd *exec.Cmd) bool {
+	if cmd.SysProcAttr == nil {
+		cmd.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	attr := cmd.SysProcAttr
+	if attr.Foreground {
+		return false
+	}
+	if attr.Setpgid {
+		return attr.Pgid == 0
+	}
+	attr.Setpgid, attr.Pgid = true, 0
+	return true
+}
+
+// signalExecCmd delivers sig to a started external command: to its whole
+// process group when it leads one, else to the process alone.
+func signalExecCmd(cmd *exec.Cmd, sig os.Signal, group bool) {
+	if cmd.Process == nil {
+		return
+	}
+	if group {
+		if num, ok := sig.(syscall.Signal); ok && cmd.Process.Pid > 0 {
+			if syscall.Kill(-cmd.Process.Pid, num) == nil {
+				return
+			}
+		}
+	}
+	_ = cmd.Process.Signal(sig)
+}

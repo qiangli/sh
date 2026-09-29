@@ -540,8 +540,12 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			}
 		}()
 		startingFallback := false
+		ownGroup := hc.runner != nil && hc.runner.execProcessGroups
 		startCmd := func() error {
 			var startErr error
+			if ownGroup {
+				ownGroup = setOwnProcessGroup(&cmd)
+			}
 			if refusal := execBudgetRefusalCmd(&cmd); refusal != nil && (owned == nil || startingFallback) {
 				startErr = refusal
 			} else if start, ok := ctx.Value(execStartOverrideCtxKey{}).(func(*exec.Cmd) error); ok {
@@ -654,16 +658,20 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			}
 			defer stopReplacementStopWatch()
 			defer func() { stopReplacementSignalForward() }()
+			// With [ExecProcessGroups] the child leads its own group, and
+			// the whole group is signalled: descendants must not outlive the
+			// cancellation or keep the output pipe (and so Wait) open.
+			signal := func(sig os.Signal) { signalExecCmd(&cmd, sig, ownGroup) }
 			stopf := context.AfterFunc(ctx, func() {
 				if killTimeout <= 0 || runtime.GOOS == "windows" {
-					_ = cmd.Process.Signal(os.Kill)
+					signal(os.Kill)
 					return
 				}
-				_ = cmd.Process.Signal(execCancelSignal(ctx))
+				signal(execCancelSignal(ctx))
 				// TODO: don't sleep in this goroutine if the program
 				// stops itself with the signal above.
 				time.Sleep(killTimeout)
-				_ = cmd.Process.Signal(os.Kill)
+				signal(os.Kill)
 			})
 			defer stopf()
 

@@ -934,6 +934,11 @@ type Runner struct {
 	// (and the legacy TestRunnerRun tests) keep the old "<name>: <msg>
 	// <arg>" wording without the line prefix.
 	bashCompatErrors bool
+	// execProcessGroups, when true, starts every external command that job
+	// control does not already place as the leader of its own process group,
+	// and a cancelled context signals that whole group. Set via
+	// [ExecProcessGroups] by embedders without a terminal (an agent harness).
+	execProcessGroups bool
 	// strictPosix, when true, applies strict POSIX semantics where bash
 	// deliberately deviates from the standard even in --posix mode: an
 	// assignment error on any command kills a non-interactive shell,
@@ -2450,6 +2455,24 @@ func WithBashCompatErrors(on bool) RunnerOption {
 	}
 }
 
+// ExecProcessGroups makes each external command the leader of its own
+// process group (unless job control already placed it in one) and, when the
+// command's context is cancelled — a deadline, a cancel — delivers the
+// cancel signal and the follow-up kill to that whole group rather than to the
+// direct child alone. Without it a grandchild the command left behind (a
+// server a test script started) survives the cancellation and keeps the
+// command's output pipe open, so waiting for the command never returns.
+//
+// It is meant for embedders with no controlling terminal, such as an agent
+// harness enforcing a per-command wall time: a separate group does not
+// receive terminal-generated signals. No effect on Windows.
+func ExecProcessGroups(on bool) RunnerOption {
+	return func(r *Runner) error {
+		r.execProcessGroups = on
+		return nil
+	}
+}
+
 // WithStrictPosix enables strict POSIX semantics in the areas where bash
 // deviates from the standard even under --posix (see the strictPosix
 // field). Hosts that present themselves as a POSIX `sh` (e.g. bashy when
@@ -3271,6 +3294,7 @@ func (r *Runner) Reset() {
 		inheritedExitTrap:      r.inheritedExitTrap,
 		loginShell:             r.loginShell,
 		bashCompatErrors:       r.bashCompatErrors,
+		execProcessGroups:      r.execProcessGroups,
 		strictPosix:            r.strictPosix,
 		bashSource:             slices.Clone(r.bashSource),
 		stdinScript:            r.stdinScript,
@@ -3978,6 +4002,7 @@ func (r *Runner) subshellWithBashPPCapture(background bool, capture map[*bashPPC
 		parentPID:              r.parentPID,
 		loginShell:             r.loginShell,
 		bashCompatErrors:       r.bashCompatErrors,
+		execProcessGroups:      r.execProcessGroups,
 		strictPosix:            r.strictPosix,
 		auditHandler:           r.auditHandler,
 		commandResolver:        r.commandResolver,

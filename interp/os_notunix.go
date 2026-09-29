@@ -177,3 +177,12 @@ func hdocServe(body []byte) (*os.File, error) {
 	}()
 	return pr, nil
 }
+
+// setOwnProcessGroup has no process-group equivalent here.
+func setOwnProcessGroup(cmd *exec.Cmd) bool { return false }
+
+func signalExecCmd(cmd *exec.Cmd, sig os.Signal, group bool) {
+	if cmd.Process != nil {
+		_ = cmd.Process.Signal(sig)
+	}
+}
