@@ -426,6 +426,12 @@ func (r *Runner) bashPPDeclare(ctx context.Context, d *syntax.BashPPDecl) {
 			}
 		}
 	}
+	// Go variables own their mutability. In particular, boxing a named
+	// constant into an interface can retain the source's ReadOnly flag;
+	// that flag must not make the newly declared variable a constant.
+	if r.bashPPGoSource && d.Site == syntax.StartVar {
+		vr.ReadOnly = false
+	}
 	// A declaration which shadows an exported shell variable inherits the
 	// export, so the child process and the script agree on the value. It does
 	// not export a name the shell was not already exporting: a Go declaration
