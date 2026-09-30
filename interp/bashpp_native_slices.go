@@ -190,7 +190,7 @@ func nativeSliceMutatingIndex(name string) int {
 	return -1
 }
 
-func prepareNativeSliceBuffers(req bashPPEvalRequest, q *bashPPBridgeRequest) error {
+func prepareNativeSliceBuffers(ctx context.Context, req bashPPEvalRequest, q *bashPPBridgeRequest) error {
 	if q.Op != "call" {
 		return nil
 	}
@@ -219,6 +219,13 @@ func prepareNativeSliceBuffers(req bashPPEvalRequest, q *bashPPBridgeRequest) er
 				return fmt.Errorf("gosource: original slice has no request owner")
 			}
 			current, err := req.CallbackOwner.bashPPBridgeCollection(capture.view, capture.meta, capture.typ)
+			if err != nil {
+				return err
+			}
+			// The refreshed cells can carry adopted original handles or lazy
+			// reflect values even though the initial argument was materialized.
+			// Normalize the new snapshot before it becomes transport data.
+			current, _, err = req.CallbackOwner.goSourceMaterializeLocalReflectValue(ctx, req, current)
 			if err != nil {
 				return err
 			}

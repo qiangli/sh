@@ -80,6 +80,13 @@ func TestS319SyntaxParseThenFdump(t *testing.T) {
 	s319RunSyntaxFdump(t, []byte("package p\nfunc f() { h(a(), b.c, d) }\n"))
 }
 
+// SliceExpr.Index is an array of interfaces. Fdump formats the array through
+// its variadic args slice, whose refresh must materialize adopted AST handles
+// again instead of restoring their interpreter-only cells into the request.
+func TestS319SyntaxSliceExprFdump(t *testing.T) {
+	s319RunSyntaxFdump(t, []byte("package p\nfunc f() { h(text[1:]) }\n"))
+}
+
 // TestS319SyntaxParserFdumpThroughput reduces cmd/compile/internal/syntax's
 // TestDump end to end: the interpreted parser builds a package-sized AST and
 // the interpreted dumper writes it through fmt.Fprintf(p, format, args...).
