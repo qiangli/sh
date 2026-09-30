@@ -3,11 +3,11 @@ id: 0b0644558b8d
 kind: task
 title: Map hash:9 first divergence before correction
 seq: 4
-status: todo
+status: wontfix
 priority: p0
 created: 2026-08-31T23:33:22.020951Z
 assignee: s88-getconf-hash
-sprint: 100
+closed: 2026-09-30T15:33:48.879395Z
 ---
 
 Investigate hash:9 using only public-safe metadata, Issue 7 authority,
