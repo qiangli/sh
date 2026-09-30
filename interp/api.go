@@ -1266,6 +1266,10 @@ type bgProc struct {
 	// A completed shell file releases an external async job to outlive Reset.
 	detachOnExit bool
 	detached     atomic.Bool
+	// launchYield is non-nil for an external command whose start the parent
+	// awaits at `&`; see Runner.yieldAsyncLaunch.
+	launchYield     chan struct{}
+	launchYieldOnce sync.Once
 
 	killedSignal atomic.Int32
 
