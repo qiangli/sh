@@ -12,7 +12,7 @@ package interp_test
 import (
 	"bytes"
 	"context"
-	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -57,26 +57,30 @@ func benchGoSource(b *testing.B, path, source string) {
 	b.Helper()
 	dir := b.TempDir()
 	for b.Loop() {
-		program, err := gosource.Parse(strings.NewReader(source), path, gosource.Options{RunMain: true})
-		if err != nil {
-			b.Fatalf("gosource.Parse: %v", err)
-		}
-		var stdout, stderr bytes.Buffer
-		runner, err := interp.New(interp.Lang(syntax.LangBashPP), interp.Dir(dir),
-			interp.StdIO(strings.NewReader(""), &stdout, &stderr), interp.Params("--"))
-		if err != nil {
+		if err := runBenchmarkGoSource(dir, path, source); err != nil {
 			b.Fatal(err)
-		}
-		err = runner.Run(context.Background(), program.File)
-		var status interp.ExitStatus
-		if err != nil && !errorsAsExit(err, &status) {
-			b.Fatalf("Runner: %v; stdout=%q stderr=%q", err, stdout.String(), stderr.String())
 		}
 	}
 }
 
-func errorsAsExit(err error, status *interp.ExitStatus) bool {
-	return errors.As(err, status)
+// A failed program is not a timing sample. In particular, ExitStatus is an
+// execution failure too; accepting it can make a semantic regression appear
+// faster by measuring only the prefix before the program exits.
+func runBenchmarkGoSource(dir, path, source string) error {
+	program, err := gosource.Parse(strings.NewReader(source), path, gosource.Options{RunMain: true})
+	if err != nil {
+		return fmt.Errorf("gosource.Parse: %w", err)
+	}
+	var stdout, stderr bytes.Buffer
+	runner, err := interp.New(interp.Lang(syntax.LangBashPP), interp.Dir(dir),
+		interp.StdIO(strings.NewReader(""), &stdout, &stderr), interp.Params("--"))
+	if err != nil {
+		return err
+	}
+	if err := runner.Run(context.Background(), program.File); err != nil {
+		return fmt.Errorf("Runner: %w; stdout=%q stderr=%q", err, stdout.String(), stderr.String())
+	}
+	return nil
 }
 
 // BenchmarkSprint153File runs one Go program named by SPRINT153_BENCH_FILE
