@@ -334,6 +334,16 @@ type bashPPNativeSession struct {
 	id                  string
 }
 
+// bashPPBridgeEncoder writes the private worker protocol, which is JSON over a
+// socket and never embedded in HTML. Disabling HTML escaping avoids expanding
+// '<', '>' and '&' in the bridge's many string fields while preserving JSON
+// string semantics for the worker decoder.
+func bashPPBridgeEncoder(w io.Writer) *json.Encoder {
+	encoder := json.NewEncoder(w)
+	encoder.SetEscapeHTML(false)
+	return encoder
+}
+
 func (r *Runner) closeGoSourceBridge() {
 	r.bashPPTools.nativeTypes = nil
 	r.bashPPTools.requestEnv = nil
@@ -358,7 +368,7 @@ func (s *bashPPNativeSession) closeCanceled(cause error) {
 			}
 			encoder := s.encoder
 			if encoder == nil {
-				encoder = json.NewEncoder(s.conn)
+				encoder = bashPPBridgeEncoder(s.conn)
 			}
 			_ = encoder.Encode(bashPPBridgeRequest{Op: "close"})
 			if err := s.conn.Close(); err == nil && cause != nil && !processExited {
@@ -759,7 +769,7 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 	_ = conn.SetDeadline(time.Time{})
 	s.mu.Lock()
 	s.conn = conn
-	s.encoder = json.NewEncoder(conn)
+	s.encoder = bashPPBridgeEncoder(conn)
 	s.mu.Unlock()
 	identity := req.sessionIdentity()
 	s.imports, s.locals, s.embeds = identity.imports, identity.locals, identity.embeds

@@ -8,12 +8,31 @@ package interp
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
 	"mvdan.cc/sh/v3/gosource"
 	"mvdan.cc/sh/v3/syntax"
 )
+
+func TestBashPPS279SessionEncoderPreservesJSONStringValues(t *testing.T) {
+	const text = "<bridge>& \"quote\" \\ slash\nline"
+	var wire bytes.Buffer
+	if err := bashPPBridgeEncoder(&wire).Encode(bashPPBridgeRequest{Selector: text}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(wire.String(), `\u003c`) || strings.Contains(wire.String(), `\u003e`) || strings.Contains(wire.String(), `\u0026`) {
+		t.Fatalf("private protocol unexpectedly HTML-escaped: %s", wire.String())
+	}
+	var got bashPPBridgeRequest
+	if err := json.Unmarshal(wire.Bytes(), &got); err != nil {
+		t.Fatalf("decode bridge request: %v", err)
+	}
+	if got.Selector != text {
+		t.Fatalf("decoded selector = %q, want %q", got.Selector, text)
+	}
+}
 
 // TestBashPPS279SessionEncoder covers the hot imported-call representation:
 // one live connection owns one encoder while many direct calls use it.  The
