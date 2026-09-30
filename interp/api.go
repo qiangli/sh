@@ -383,6 +383,8 @@ type Runner struct {
 
 	// execHandler is responsible for executing programs. It must not be nil.
 	execHandler ExecHandlerFunc
+	// A bare default handler always launches an OS process for a literal call.
+	bareExecHandler bool
 
 	// execReplacement is shared with in-process subshells so an asynchronous
 	// `kill $$` can address a foreground command standing in for `exec`.
@@ -1261,6 +1263,9 @@ type bgProc struct {
 	cmd string
 
 	cancel context.CancelFunc
+	// A completed shell file releases an external async job to outlive Reset.
+	detachOnExit bool
+	detached     atomic.Bool
 
 	killedSignal atomic.Int32
 
@@ -3089,19 +3094,16 @@ func (r *Runner) Reset() {
 	if !r.usedNew {
 		panic("use interp.New to construct a Runner")
 	}
-	// Reset is the terminal ownership boundary for asynchronous lists too.
-	// Run deliberately returns without waiting for ordinary background jobs,
-	// but replacing the Runner while one of their subshell goroutines still
-	// reads its state is both a data race and a lost cleanup path. Cancel and
-	// join every job created by this Runner before replacing either its signal
-	// subscriptions or the value itself.
+	// Reset cancels and joins jobs still owned by this runner. A completed
+	// shell file has released its external jobs, which finish independently
+	// (or stop when the original caller context is canceled).
 	for _, bg := range r.bgProcs {
-		if bg != nil && bg.cancel != nil {
+		if bg != nil && bg.cancel != nil && !bg.detached.Load() {
 			bg.cancel()
 		}
 	}
 	for _, bg := range r.bgProcs {
-		if bg == nil || bg.cancel == nil {
+		if bg == nil || bg.cancel == nil || bg.detached.Load() {
 			continue
 		}
 		<-bg.done
@@ -3144,6 +3146,7 @@ func (r *Runner) Reset() {
 			panic("interp.ExecHandler should be replaced with interp.ExecHandlers, not mixed")
 		}
 		if r.execHandler == nil {
+			r.bareExecHandler = len(r.execMiddlewares) == 0
 			r.execHandler = DefaultExecHandler(2 * time.Second)
 		}
 		// Middlewares are chained from first to last, and each can call the
@@ -3195,6 +3198,7 @@ func (r *Runner) Reset() {
 		tempDir:            r.tempDir,
 		callHandler:        r.callHandler,
 		execHandler:        r.execHandler,
+		bareExecHandler:    r.bareExecHandler,
 		openHandler:        r.openHandler,
 		dryRunOpenHandler:  r.dryRunOpenHandler,
 		bashPPCustomOpen:   r.bashPPCustomOpen,
@@ -3778,6 +3782,16 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 		r.callStack = oldCallStack
 		r.exitTrapCallStack = nil
 		r.finishBackgroundOutputBuiltins(ctx)
+	}
+	if runExitTrap && ownerSignal == nil && ctx.Err() == nil {
+		// A file is a shell exit. Its external async children have their
+		// own lifetime; a later Reset must not cancel them as it replaces
+		// this runner. The caller context still owns cancellation.
+		for _, bg := range r.bgProcs {
+			if bg != nil && bg.detachOnExit {
+				bg.detached.Store(true)
+			}
+		}
 	}
 	maps.Insert(r.Vars, r.writeEnv.Each)
 	if ownerStatus != nil {

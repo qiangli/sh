@@ -4815,6 +4815,7 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 			done:                       make(chan struct{}),
 			exit:                       new(exitStatus),
 			pidReady:                   make(chan struct{}),
+			detachOnExit:               (r.bareExecHandler || r.jobCarrier != nil) && r.isLiteralExternalCallStmt(&st2),
 			finishBeforeFileReturn:     r.isFastOutputBuiltinStmt(&st2),
 			publishPidToBang:           isSimpleCallStmt(&st2) || isPipelineStmt(&st2),
 			pidCallback:                r.bgPidCallback, // see WithBgPidCallback
@@ -4932,7 +4933,9 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 				// One reaped child -> one SIGCHLD trap run (bash waitchld).
 				// Queue before signalling done so a `wait` that unblocks here
 				// sees the pending CHLD at its next statement boundary.
-				r.notifyChildReaped()
+				if !bg.detached.Load() {
+					r.notifyChildReaped()
+				}
 				cleanup()
 				close(bg.done)
 			}()
