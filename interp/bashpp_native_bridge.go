@@ -183,6 +183,10 @@ type bashPPBridgeRequest struct {
 	// scan; the bit is derived here from authenticated call metadata.
 	PointerReadOnly bool   `json:"pointer_read_only,omitempty"`
 	Selector        string `json:"selector"`
+	// AccessPackage is the interpreter-authenticated package identity of the
+	// source performing a member read. The worker still compares it with the
+	// field's declaring package before exposing unexported storage.
+	AccessPackage string `json:"access_package,omitempty"`
 	// Instance is the type-argument suffix of an instantiated imported
 	// generic function; the helper resolves Selector+Instance.
 	Instance string              `json:"instance,omitempty"`

@@ -79,7 +79,7 @@ type value struct {
 }
 type bppProtocolEntry struct {Key value `json:"key"`; Value value `json:"value"`}
 type sliceBuffer struct {Index int `json:"index"`;Length int `json:"length"`;Value value `json:"value"`}
-type request struct { SliceBuffers []sliceBuffer `json:"slice_buffers,omitempty"`; Transfers []int `json:"transfers,omitempty"`; ID uint64 `json:"id"`; Op string `json:"op"`; PanicOnFault bool `json:"panic_on_fault,omitempty"`; PointerReadOnly bool `json:"pointer_read_only,omitempty"`; Selector string `json:"selector"`; Instance string `json:"instance,omitempty"`; Receiver *value `json:"receiver,omitempty"`; Args []value `json:"args,omitempty"`; Spread bool `json:"spread,omitempty"`; FormatOnly string `json:"format_only,omitempty"`; SourceFile string `json:"source_file,omitempty"`; SourceLine int `json:"source_line,omitempty"`; LogPrint string `json:"log_print,omitempty"`; Values []value `json:"values,omitempty"`; Error string `json:"error,omitempty"`; Route bool `json:"route,omitempty"` }
+type request struct { SliceBuffers []sliceBuffer `json:"slice_buffers,omitempty"`; Transfers []int `json:"transfers,omitempty"`; ID uint64 `json:"id"`; Op string `json:"op"`; PanicOnFault bool `json:"panic_on_fault,omitempty"`; PointerReadOnly bool `json:"pointer_read_only,omitempty"`; Selector string `json:"selector"`; AccessPackage string `json:"access_package,omitempty"`; Instance string `json:"instance,omitempty"`; Receiver *value `json:"receiver,omitempty"`; Args []value `json:"args,omitempty"`; Spread bool `json:"spread,omitempty"`; FormatOnly string `json:"format_only,omitempty"`; SourceFile string `json:"source_file,omitempty"`; SourceLine int `json:"source_line,omitempty"`; LogPrint string `json:"log_print,omitempty"`; Values []value `json:"values,omitempty"`; Error string `json:"error,omitempty"`; Route bool `json:"route,omitempty"` }
 // Op, Selector and Receiver are set only on a callback: the reverse direction
 // in which this helper asks the interpreter to run an original method body.
 type response struct { SliceUpdates []sliceBuffer `json:"slice_updates,omitempty"`; Transferred []sliceBuffer `json:"transferred,omitempty"`; PtrUpdates []value `json:"ptr_updates,omitempty"`; Panic *value `json:"panic,omitempty"`; PanicAddr *uint64 `json:"panic_addr,omitempty"`; ID uint64 `json:"id"`; Op string `json:"op,omitempty"`; Selector string `json:"selector,omitempty"`; Receiver *value `json:"receiver,omitempty"`; Values []value `json:"values,omitempty"`; Error string `json:"error,omitempty"`; Parent uint64 `json:"parent,omitempty"`; OutputBarrierStdout uint64 `json:"output_barrier_stdout,omitempty"`; OutputBarrierStderr uint64 `json:"output_barrier_stderr,omitempty"` }
@@ -651,6 +651,14 @@ func nativeMethodSignatureIdentity(t reflect.Type,start int,outer bool)string{
  sep:="->";if !outer{sep=")("}
  return strings.Join(params,",")+sep+strings.Join(results,",")
 }
+func samePackagePrivateField(rv reflect.Value,name,pkg string)(reflect.Value,bool){
+ if pkg==""||rv.Kind()!=reflect.Struct{return reflect.Value{},false}
+ field,ok:=rv.Type().FieldByName(name);if !ok||field.PkgPath==""||field.PkgPath!=pkg{return reflect.Value{},false}
+ value:=rv.FieldByIndex(field.Index)
+ if !value.CanAddr(){copy:=reflect.New(rv.Type()).Elem();copy.Set(rv);value=copy.FieldByIndex(field.Index)}
+ if !value.CanAddr(){return reflect.Value{},false}
+ return reflect.NewAt(value.Type(),unsafe.Pointer(value.UnsafeAddr())).Elem(),true
+}
 func access(rv reflect.Value,q request)([]value,string){
  // Interface admission asks for the type's method set, not an addressable
  // value's auto-addressed bound methods. No receiver or function is retained.
@@ -694,7 +702,7 @@ func access(rv reflect.Value,q request)([]value,string){
   for rv.Kind()==reflect.Pointer {if rv.IsNil(){if q.Op=="member" {if method:=memberMethod(original,q.Selector);method.IsValid(){return []value{encode(method)},""}};return nil,"runtime error: invalid memory address or nil pointer dereference"};rv=rv.Elem()}
   if rv.Kind()==reflect.Struct {
    f:=rv.FieldByName(q.Selector)
-   if f.IsValid(){if !f.CanInterface(){return nil,"unexported field "+q.Selector};encoded:=encode(f)
+   if f.IsValid(){if !f.CanInterface(){var ok bool;f,ok=samePackagePrivateField(rv,q.Selector,q.AccessPackage);if !ok{return nil,"unexported field "+q.Selector}};encoded:=encode(f)
     if q.Op=="receiver_field"&&encoded.Kind=="handle"&&f.CanAddr(){handles.Lock();handles.values[encoded.Handle]=f;handles.Unlock();encoded.NativeTypeID=nativeTypeToken(f.Type())}
     return []value{encoded},""}
   }

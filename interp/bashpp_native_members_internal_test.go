@@ -49,6 +49,13 @@ func TestNativeMemberSessionAndAccessBoundary(t *testing.T) {
 	if _, err := session.request(ctx, req, bashPPBridgeRequest{Op: "member", Selector: "username", Receiver: &user}); err == nil || !strings.Contains(err.Error(), "unexported field") {
 		t.Fatalf("private storage exposed: %v", err)
 	}
+	if _, err := session.request(ctx, req, bashPPBridgeRequest{Op: "member", Selector: "username", AccessPackage: "example.com/foreign", Receiver: &user}); err == nil || !strings.Contains(err.Error(), "unexported field") {
+		t.Fatalf("foreign package identity exposed private storage: %v", err)
+	}
+	private, err := session.request(ctx, req, bashPPBridgeRequest{Op: "member", Selector: "username", AccessPackage: "net/url", Receiver: &user})
+	if err != nil || len(private) != 1 || private[0].stringText() != "ada" {
+		t.Fatalf("declaring package could not read its private storage: %v %v", private, err)
+	}
 	var wg sync.WaitGroup
 	failures := make(chan error, 8)
 	for range 8 {

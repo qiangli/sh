@@ -137,7 +137,19 @@ func (r *Runner) bashPPNativeAccess(ctx context.Context, op string, base bashPPB
 	if err != nil {
 		return bashPPBridgeValue{}, err
 	}
-	values, err := r.bashPPNativeRequest(ctx, req, bashPPBridgeRequest{Op: op, Selector: selector, Receiver: &base, Args: args})
+	accessPackage := ""
+	if r.bashPPGoSource {
+		// Linked package sources carry their own front-end-authenticated path.
+		// The program package has no marker, so use the identity supplied by
+		// the backend that invoked this Runner. Never infer identity from the
+		// receiver: doing so would grant every foreign caller same-package
+		// access merely because it held a value of the declaring type.
+		accessPackage = r.goSourcePackageAt(r.curStmtPos)
+		if accessPackage == "" {
+			accessPackage = req.ImportPath
+		}
+	}
+	values, err := r.bashPPNativeRequest(ctx, req, bashPPBridgeRequest{Op: op, Selector: selector, AccessPackage: accessPackage, Receiver: &base, Args: args})
 	if err != nil {
 		// A checked access performed by the dependency can fault after a
 		// multi-result call has supplied its native aggregate. Materialize only
