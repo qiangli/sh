@@ -38,7 +38,7 @@ func TestS319ShadowedBuiltinLocalAssignment(t *testing.T) {
  import "example/p"
  func main() { p.Run() }
 `, "example/p", "p.go", source)
-			if out != "ok\n" || stderr != "" {
+			if out != "" || stderr != "ok\n" {
 				t.Fatalf("stdout=%q stderr=%q", out, stderr)
 			}
 		})
