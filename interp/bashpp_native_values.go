@@ -535,6 +535,20 @@ func (r *Runner) bashPPBridgeExpr(expr syntax.BashPPExpr) (bashPPBridgeValue, er
 		}
 	case *syntax.BashPPParenExpr:
 		return r.bashPPBridgeExpr(x.X)
+	case *syntax.BashPPConvertExpr:
+		// `unsafe.Pointer(&b[0])` names interpreter storage; it crosses as the
+		// pointer it is, not as a scalar. Integer and forged operands keep the
+		// scalar path below.
+		if r.bashPPGoSource && r.goSourceUnsafePointerType(r.bashPPConvertTarget(x)) &&
+			!goSourceNilLiteral(x.X) && !r.goSourceUnsafeIntegerOperand(x.X) && !r.goSourceUnsafeReflectAddressOperand(x.X) {
+			ptr, _, claimed, err := r.goSourceUnsafePointerExpr(x)
+			if claimed {
+				if err != nil {
+					return bashPPBridgeValue{}, err
+				}
+				return r.bashPPBridgePointerValue(ptr)
+			}
+		}
 	case *syntax.BashPPTypeAssertExpr:
 		if r.goSourceNativeTypeAssert(x) {
 			_, cell, err := r.bashPPTypeAssert(x, false)

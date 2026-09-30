@@ -505,6 +505,8 @@ func decodeIn(st *decodeState, v value, target reflect.Type)(reflect.Value,error
  }
  if target==nil{return result,nil}
  if result.Type().AssignableTo(target){return result,nil}
+ // unsafe.Pointer(&x) crosses as the pointer it converts; the dependency's slot is the unsafe.Pointer.
+ if target.Kind()==reflect.UnsafePointer&&result.Kind()==reflect.Pointer{p:=reflect.ValueOf(result.UnsafePointer());if p.Type().ConvertibleTo(target){return p.Convert(target),nil}}
  return result,fmt.Errorf("%s not assignable to %s",result.Type(),target)
 }
 // Structured access over a native value. Handles keep Go identity, so an
