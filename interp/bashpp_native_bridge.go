@@ -293,15 +293,19 @@ type bashPPNativeSession struct {
 	// madeFuncs are the handles of functions reflect.MakeFunc built over an
 	// original implementation, and of their Interface() views; see
 	// bashPPMadeFuncUse.
-	madeFuncs           map[uint64]*Runner
-	origins             map[uint64]*bashPPPointer
-	originIndex         map[bashPPOriginKey]uint64 // protected by mu; see bashPPTransportOrigin
-	originIndexed       int                        // len(origins) the index covers
-	originNext          uint64
-	sliceOriginKeep     map[uint64]*bashPPNativeSlice // widest registered view, kept live
-	sliceOriginNext     uint64
-	start               sync.Mutex
-	write               sync.Mutex
+	madeFuncs       map[uint64]*Runner
+	origins         map[uint64]*bashPPPointer
+	originIndex     map[bashPPOriginKey]uint64 // protected by mu; see bashPPTransportOrigin
+	originIndexed   int                        // len(origins) the index covers
+	originNext      uint64
+	sliceOriginKeep map[uint64]*bashPPNativeSlice // widest registered view, kept live
+	sliceOriginNext uint64
+	start           sync.Mutex
+	write           sync.Mutex
+	// encoder is created with conn and used only with write held. Keeping it
+	// session-owned avoids rebuilding JSON's encoder state for every imported
+	// call, without extending any request or response object's lifetime.
+	encoder             *json.Encoder
 	mu                  sync.Mutex
 	next                atomic.Uint64
 	conn                net.Conn
@@ -352,7 +356,11 @@ func (s *bashPPNativeSession) closeCanceled(cause error) {
 				processExited = true
 			default:
 			}
-			_ = json.NewEncoder(s.conn).Encode(bashPPBridgeRequest{Op: "close"})
+			encoder := s.encoder
+			if encoder == nil {
+				encoder = json.NewEncoder(s.conn)
+			}
+			_ = encoder.Encode(bashPPBridgeRequest{Op: "close"})
 			if err := s.conn.Close(); err == nil && cause != nil && !processExited {
 				s.mu.Lock()
 				s.closeCancellation = cause
@@ -751,6 +759,7 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 	_ = conn.SetDeadline(time.Time{})
 	s.mu.Lock()
 	s.conn = conn
+	s.encoder = json.NewEncoder(conn)
 	s.mu.Unlock()
 	identity := req.sessionIdentity()
 	s.imports, s.locals, s.embeds = identity.imports, identity.locals, identity.embeds
@@ -929,7 +938,15 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 	s.mu.Unlock()
 	defer func() { s.mu.Lock(); delete(s.pending, q.ID); delete(s.routes, q.ID); s.mu.Unlock() }()
 	s.write.Lock()
-	err = json.NewEncoder(s.conn).Encode(q)
+	encoder := s.encoder
+	if encoder == nil {
+		// A live connection always installs its encoder before begin returns.
+		// Keep this refusal explicit rather than silently constructing a second
+		// encoder whose ownership would not match the connection lifetime.
+		s.write.Unlock()
+		return nil, s.closedWriteError(ctx, errors.New("gosource: native bridge encoder is unavailable"))
+	}
+	err = encoder.Encode(q)
 	s.write.Unlock()
 	if err != nil {
 		return nil, s.closedWriteError(ctx, err)
