@@ -77,6 +77,7 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 			}
 		},
 		CmdSubst: func(w io.Writer, cs *syntax.CmdSubst) error {
+			r.yieldAsyncLaunch()
 			r.lastExpandCmdSubst = true
 			switch len(cs.Stmts) {
 			case 0: // nothing to do
@@ -250,6 +251,7 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 			if len(ps.Stmts) == 0 { // nothing to do
 				return os.DevNull, nil
 			}
+			r.yieldAsyncLaunch()
 
 			// The rendezvous is platform-specific: a temp-dir FIFO on Unix,
 			// a \\.\pipe\ named pipe on Windows. See procSubstPipe.
@@ -4811,10 +4813,12 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 		st2.Background = false
 		st2.Disown = false
 		waitForExternalLaunch := r.jobCarrier != nil && r.isLiteralExternalCallStmt(&st2)
+		externalJob := (r.bareExecHandler || r.jobCarrier != nil) && r.isExternalProcessCallStmt(&st2)
 		bg := &bgProc{
 			done:                       make(chan struct{}),
 			exit:                       new(exitStatus),
 			pidReady:                   make(chan struct{}),
+			detachOnExit:               externalJob,
 			finishBeforeFileReturn:     r.isFastOutputBuiltinStmt(&st2),
 			publishPidToBang:           isSimpleCallStmt(&st2) || isPipelineStmt(&st2),
 			pidCallback:                r.bgPidCallback, // see WithBgPidCallback
@@ -4847,6 +4851,9 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 		} else {
 			r.bgProcs = append(r.bgProcs, bg)
 			r.lastBang = bg
+			if externalJob {
+				bg.launchYield = make(chan struct{})
+			}
 			// Stash a pointer to the freshly-appended bgProc on the
 			// goroutine's ctx so the exec handlers (DefaultExecHandler,
 			// runDetachedExec) can publish the real OS PID into it via
@@ -4932,7 +4939,9 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 				// One reaped child -> one SIGCHLD trap run (bash waitchld).
 				// Queue before signalling done so a `wait` that unblocks here
 				// sees the pending CHLD at its next statement boundary.
-				r.notifyChildReaped()
+				if !bg.detached.Load() {
+					r.notifyChildReaped()
+				}
 				cleanup()
 				close(bg.done)
 			}()
@@ -4954,6 +4963,36 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 				select {
 				case <-launched:
 				case <-ctx.Done():
+				}
+			}
+			// An external command is more than scheduled when bash resumes
+			// the parent: fork has returned, so the child exists and outlives
+			// a shell that exits at once (`bash -c 'cmd &'`). A goroutine that
+			// has merely begun dies with the process, before it ever starts
+			// the command. Wait for the start itself — bg.pidReady, closed by
+			// the exec handler's publishBgPid or by the job ending without an
+			// exec. This is a rendezvous on the start, never on the command's
+			// work. The FIFO deadlock described at `launched` cannot arise:
+			// the job closes launchYield before any pre-exec step that has no
+			// time bound (see yieldAsyncLaunch), handing the parent back.
+			if bg.launchYield != nil {
+				// Exec middleware may serve a command itself and never
+				// publish a PID; the default handler always ends the wait
+				// with an event, so only a middleware chain needs the bound.
+				var bound <-chan time.Time
+				var timer *time.Timer
+				if !r.bareExecHandler {
+					timer = time.NewTimer(asyncLaunchBound)
+					bound = timer.C
+				}
+				select {
+				case <-bg.pidReady:
+				case <-bg.launchYield:
+				case <-bound:
+				case <-ctx.Done():
+				}
+				if timer != nil {
+					timer.Stop()
 				}
 			}
 		}
@@ -5043,6 +5082,62 @@ func (r *Runner) isLiteralExternalCallStmt(st *syntax.Stmt) bool {
 		return false
 	}
 	return !IsBuiltin(lit.Value) || r.disabledBuiltins[lit.Value]
+}
+
+// isExternalProcessCallStmt narrows isLiteralExternalCallStmt to commands the
+// exec handlers start as an operating-system process. A name the embedder
+// serves in process, or resolves through its own command rung, runs inside
+// this shell: it has no launch to wait for and cannot outlive the shell.
+func (r *Runner) isExternalProcessCallStmt(st *syntax.Stmt) bool {
+	if !r.isLiteralExternalCallStmt(st) {
+		return false
+	}
+	name := st.Cmd.(*syntax.CallExpr).Args[0].Lit()
+	if strings.ContainsRune(name, '/') {
+		return true
+	}
+	if r.servedInProcess != nil && r.servedInProcess(name) {
+		return false
+	}
+	if r.commandResolver != nil {
+		if _, ok := r.commandResolver(name); ok {
+			return false
+		}
+	}
+	return true
+}
+
+// asyncLaunchBound caps the `&` launch rendezvous under exec middleware that
+// runs a command without publishing its PID. It is not a head start: a started
+// process ends the wait at once, however long the command then runs.
+const asyncLaunchBound = time.Second
+
+// yieldAsyncLaunch hands control back to a parent waiting at `&` for this
+// asynchronous command to start. The job calls it before pre-exec work that
+// has no time bound — a command or process substitution, an open that can
+// wait for a peer — which a forked child would do on its own time, and which
+// the parent's next statement may be what completes (`cat <fifo & echo >fifo`).
+func (r *Runner) yieldAsyncLaunch() {
+	if bg := r.asyncProc; bg != nil && bg.launchYield != nil {
+		bg.launchYieldOnce.Do(func() { close(bg.launchYield) })
+	}
+}
+
+// openMayBlock reports whether opening path can wait indefinitely: a FIFO or
+// device waiting for its peer, or a /dev/tcp connection. A regular file, a
+// directory and a path that does not exist yet all open or fail promptly.
+func (r *Runner) openMayBlock(ctx context.Context, path string) bool {
+	if path == os.DevNull {
+		return false
+	}
+	if _, _, network := devNetworkRedirect(path); network {
+		return true
+	}
+	info, err := r.stat(ctx, path)
+	if err != nil {
+		return false
+	}
+	return !info.Mode().IsRegular() && !info.IsDir()
 }
 
 func isSimpleCallStmt(st *syntax.Stmt) bool {
@@ -11674,6 +11769,9 @@ func (r *Runner) customOpenActive() bool {
 }
 
 func (r *Runner) open(ctx context.Context, path string, flags int, mode os.FileMode, print bool) (io.ReadWriteCloser, error) {
+	if bg := r.asyncProc; bg != nil && bg.launchYield != nil && r.openMayBlock(ctx, path) {
+		r.yieldAsyncLaunch()
+	}
 	// Apply this Runner's virtual umask when creating a file. The
 	// process-wide syscall umask is never touched (see Runner.umask),
 	// so we have to mask the mode here before passing it down.
