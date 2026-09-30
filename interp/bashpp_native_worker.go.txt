@@ -32,6 +32,7 @@ import (
  "sync"
  "time"
  "unsafe"
+ "unicode/utf8"
  bppTextTemplate "text/template"
  bppTemplateParse "text/template/parse"
 //CALLBACKMAILBOXIMPORTS
@@ -563,11 +564,80 @@ func originalFmtProjection(v reflect.Value)(reflect.Value,bool){
  typ,ok:=elem.Interface().(reflect.Type);if !ok||!hasOriginalTypeIdentity(typ){return v,false}
  return reflect.ValueOf(originalTypeFormat{typ}),true
 }
+// Project only type directives, leaving their operands intact for other verbs
+// (including indexed reuse and Errorf's %w). Explicit indices preserve fmt's
+// argument cursor after a projected directive selects an added type string. Invalid
+// formats stay with fmt so its diagnostics are not reinterpreted here.
+func originalFmtTypeVerbs(format string, operands []reflect.Value) (string, []reflect.Value) {
+ var projected []reflect.Value
+ var out strings.Builder
+ next,changed,reordered:=0,false,false
+ index:=func(n int)string{return "["+strconv.Itoa(n+1)+"]"}
+ for i:=0;i<len(format); {
+  if format[i]!='%' {out.WriteByte(format[i]);i++;continue}
+  i++
+  var directive strings.Builder
+  directive.WriteByte('%')
+  for i<len(format)&&strings.ContainsRune("#0+- ",rune(format[i])){directive.WriteByte(format[i]);i++}
+  afterIndex:=false
+  readIndex:=func()bool{
+   afterIndex=false
+   if i>=len(format)||format[i]!='[' {return true}
+   end:=strings.IndexByte(format[i:],']');if end<0{return false}
+   n,err:=strconv.Atoi(format[i+1:i+end]);if err!=nil||n<1||n>len(operands){return false}
+   next=n-1;i+=end+1;afterIndex=true;reordered=true;return true
+  }
+  if !readIndex(){return format,nil}
+  if i<len(format)&&format[i]=='*' {
+   if next>=len(operands){return format,nil};directive.WriteString(index(next));directive.WriteByte('*');next++;i++;afterIndex=false
+  }else{
+   start:=i;for i<len(format)&&format[i]>='0'&&format[i]<='9'{i++}
+   if afterIndex&&i>start{return format,nil};directive.WriteString(format[start:i])
+  }
+  if i+1<len(format)&&format[i]=='.' {
+   if afterIndex{return format,nil};directive.WriteByte('.');i++
+   if !readIndex(){return format,nil}
+   if i<len(format)&&format[i]=='*' {
+    if next>=len(operands){return format,nil};directive.WriteString(index(next));directive.WriteByte('*');next++;i++;afterIndex=false
+   }else{start:=i;for i<len(format)&&format[i]>='0'&&format[i]<='9'{i++};directive.WriteString(format[start:i])}
+  }
+  if !afterIndex&&!readIndex(){return format,nil}
+  if i>=len(format){return format,nil}
+  verb,size:=utf8.DecodeRuneInString(format[i:]);i+=size
+  if verb=='%' {directive.WriteByte('%');out.WriteString(directive.String());continue}
+  if next>=len(operands){return format,nil}
+  operand:=next;next++
+  v:=operands[operand]
+  for v.IsValid()&&v.Kind()==reflect.Interface&&!v.IsNil(){v=v.Elem()}
+  if verb=='T'&&v.IsValid()&&hasOriginalTypeIdentity(v.Type()) {
+   directive.WriteString(index(len(operands)+len(projected)));directive.WriteByte('s')
+   projected=append(projected,reflect.ValueOf(originalTypeString(v.Type())))
+   out.WriteString(directive.String());changed=true
+  }else{directive.WriteString(index(operand));directive.WriteRune(verb);out.WriteString(directive.String())}
+ }
+ if !changed{return format,nil}
+ // Explicit indexing suppresses fmt's extra-argument diagnostic. Preserve it
+ // for originally sequential formats, including the values' normal methods.
+ if !reordered&&next<len(operands){return format,nil}
+ return out.String(),projected
+}
 func originalFmtArgs(fn reflect.Value,args []reflect.Value,spread bool)[]reflect.Value{
  same:=func(target any)bool{return fn.IsValid()&&fn.Pointer()==reflect.ValueOf(target).Pointer()}
  formatIndex,first:=-1,-1
  switch {case same(fmt.Printf),same(fmt.Sprintf),same(fmt.Errorf):formatIndex,first=0,1;case same(fmt.Fprintf),same(fmt.Appendf):formatIndex,first=1,2;default:return args}
- if formatIndex>=len(args)||args[formatIndex].Kind()!=reflect.String||formatUsesTypeVerb(args[formatIndex].String()){return args}
+ if formatIndex>=len(args)||args[formatIndex].Kind()!=reflect.String{return args}
+ if formatUsesTypeVerb(args[formatIndex].String()) {
+  operands:=args[first:]
+  if spread&&len(operands)==1&&operands[0].Kind()==reflect.Slice {src:=operands[0];operands=make([]reflect.Value,src.Len());for i:=range operands{operands[i]=src.Index(i)}}
+  format,projected:=originalFmtTypeVerbs(args[formatIndex].String(),operands)
+  if len(projected)==0{return args}
+  out:=append([]reflect.Value(nil),args...);out[formatIndex]=reflect.ValueOf(format)
+  if spread {
+   src:=args[first];dst:=reflect.MakeSlice(src.Type(),src.Len()+len(projected),src.Len()+len(projected));reflect.Copy(dst,src)
+   for i,v:=range projected{dst.Index(src.Len()+i).Set(v)};out[first]=dst
+  }else{out=append(out,projected...)}
+  return out
+ }
  // The projection is materialised lazily. A spread variadic slice is still the
  // interpreter's own backing array, shared with the callback slice frame, so
  // replacing it with a copy would hide a mutation made by a synchronous
