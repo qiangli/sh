@@ -356,6 +356,25 @@ func structuralPath(v reflect.Value,path map[uintptr]bool) value {
 // is this protocol exchange.
 var callbacks = struct { sync.Mutex; next uint64; waiting map[uint64]chan request }{waiting: map[uint64]chan request{}}
 var outbound = struct { sync.Mutex; encoder *json.Encoder }{}
+// Scratch belongs to one active dispatch, including its callbacks and deferred
+// writeback. Pool pointers, not slice headers (boxing a header allocates).
+// Fixed storage bounds retention; unusually wide calls use an unpooled slice.
+const callArgsScratchLimit = 16
+type callArgsScratch struct { values [callArgsScratchLimit]reflect.Value }
+var callArgsPool sync.Pool
+func borrowCallArgs(n int)([]reflect.Value,*callArgsScratch){
+ if n==0{return nil,nil}
+ if n>callArgsScratchLimit{return make([]reflect.Value,n),nil}
+ cached:=callArgsPool.Get()
+ var scratch *callArgsScratch
+ if cached==nil{scratch=new(callArgsScratch)}else{scratch=cached.(*callArgsScratch)}
+ return scratch.values[:n],scratch
+}
+func releaseCallArgs(scratch *callArgsScratch){
+ if scratch==nil{return}
+ clear(scratch.values[:])
+ callArgsPool.Put(scratch)
+}
 // A routed request asks for its callbacks to name it: the host serves them on
 // the parked request whose goroutine raised them, not on whichever request
 // holds the shared callback gate. The dispatching goroutine is the only link
@@ -962,7 +981,10 @@ func dispatch(q request)(reply response){
  if q.FormatOnly!="" {switch q.FormatOnly {case "Sprint":fn=reflect.ValueOf(fmt.Sprint);case "Sprintln":fn=reflect.ValueOf(fmt.Sprintln);case "Sprintf":fn=reflect.ValueOf(fmt.Sprintf);default:reply.Error="invalid writer format redirection";return}}
  signature:=fn.Type();n:=signature.NumIn();minimum:=n;if signature.IsVariadic(){minimum--}
  if len(q.Args)<minimum||!signature.IsVariadic()&&len(q.Args)!=n{reply.Error="native argument count mismatch";return}
- args:=make([]reflect.Value,len(q.Args))
+ args,scratch:=borrowCallArgs(len(q.Args))
+ // Capture the original owner: originalFmtArgs below may replace args. This
+ // defer runs after callback-frame removal and slice/pointer writeback.
+ defer releaseCallArgs(scratch)
  for i,arg:=range q.Args {var target reflect.Type;if signature.IsVariadic()&&i>=n-1 {target=signature.In(n-1);if !q.Spread{target=target.Elem()}}else{target=signature.In(i)};v,err:=decode(arg,target);if err!=nil{reply.Error=err.Error();return};args[i]=v}
  for _,buffer:=range q.SliceBuffers {if buffer.Index<0||buffer.Index>=len(args)||args[buffer.Index].Kind()!=reflect.Slice{reply.Error="invalid native buffer index";return};backing,err:=decode(buffer.Value,args[buffer.Index].Type());if err!=nil{reply.Error=err.Error();return};if backing.Kind()!=reflect.Slice||buffer.Length<0||buffer.Length>backing.Len(){reply.Error="invalid native buffer bounds";return};args[buffer.Index]=backing.Slice3(0,buffer.Length,backing.Len())}
  // A transferred slice (Transfers) is the interpreter handing this helper the
