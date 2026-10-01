@@ -709,6 +709,16 @@ func (r *Runner) nativeSliceGenericHelper(ctx context.Context, req bashPPEvalReq
 	if q.Op != "call" {
 		return nil, false, nil
 	}
+	if q.Receiver == nil {
+		alias, _, ok := strings.Cut(q.Selector, ".")
+		if !ok {
+			return nil, false, nil
+		}
+		pkg := req.Imports[alias]
+		if pkg != "slices" && pkg != "maps" && pkg != "cmp" {
+			return nil, false, nil
+		}
+	}
 	switch nativeSliceCallable(req, *q) {
 	case "slices.Collect":
 		values, err := r.goSourceSlicesCollect(ctx, req, q.Args)

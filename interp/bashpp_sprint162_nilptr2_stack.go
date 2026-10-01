@@ -379,13 +379,17 @@ func goSourceFrameFuncEqual(lv, rv bashPPBridgeValue) (bool, bool) {
 // call's receiver expression denotes, without evaluating anything that is
 // not one: a runtime.FuncForPC call, or a variable holding such a value.
 func (r *Runner) goSourceFrameFuncReceiver(call *syntax.BashPPCall) (uint64, string, bool) {
-	receiver, method, ok := goSourceMethodCallReceiver(call)
+	method, ok := goSourceCallMethodName(call)
 	if !ok {
 		return 0, "", false
 	}
 	switch method {
 	case "Name", "Entry", "FileLine":
 	default:
+		return 0, "", false
+	}
+	receiver, _, ok := goSourceMethodCallReceiver(call)
+	if !ok {
 		return 0, "", false
 	}
 	for {

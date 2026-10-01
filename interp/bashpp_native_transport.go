@@ -116,6 +116,9 @@ func validateLocalTransport(req bashPPEvalRequest, q bashPPBridgeRequest) error 
 		}
 		unsafe = unsafe || (local && ref) || arg.Kind == "pointer"
 	}
+	if !unsafe && !functionCallbacks && !requestHasCallbacks(req, q) {
+		return nil
+	}
 	// Plain-data pointer writeback reconciles field mutations the dependency
 	// performs through an origin-bearing pointer; it never accounts for the
 	// dependency invoking the pointee's ORIGINAL methods. A pointer to a local
@@ -631,16 +634,25 @@ func nativePointerReadOnlyRequest(req bashPPEvalRequest, q bashPPBridgeRequest) 
 	if q.Op != "call" {
 		return false
 	}
-	callable := nativeSliceCallable(req, q)
-	switch callable {
-	case "reflect.ValueOf", "reflect.TypeOf", "reflect.DeepEqual":
-		return true
-	}
-	if strings.HasPrefix(callable, "fmt.") && nativeSliceReadOnly(callable) {
-		return true
-	}
 	if q.Receiver == nil {
-		return false
+		alias, name, ok := strings.Cut(q.Selector, ".")
+		if !ok {
+			return false
+		}
+		pkg := req.Imports[alias]
+		switch pkg {
+		case "reflect":
+			switch name {
+			case "ValueOf", "TypeOf", "DeepEqual":
+				return true
+			}
+			return false
+		case "fmt":
+			callable := pkg + "." + name
+			return nativeSliceReadOnly(callable)
+		default:
+			return false
+		}
 	}
 	receiverType := strings.TrimPrefix(q.Receiver.NativeType, "*")
 	declaredType := strings.TrimPrefix(q.Receiver.Type, "*")

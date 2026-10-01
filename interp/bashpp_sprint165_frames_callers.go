@@ -152,6 +152,28 @@ func (r *Runner) goSourceFramesValue(call *syntax.BashPPCall) ([]bashPPBridgeVal
 	return []bashPPBridgeValue{{Kind: "frames", Type: "*runtime.Frames", Text: "0", Elements: elements}}, true, nil
 }
 
+// goSourceCallMethodName extracts the method name from a method call without
+// allocating intermediate syntax nodes.
+func goSourceCallMethodName(call *syntax.BashPPCall) (string, bool) {
+	if call == nil {
+		return "", false
+	}
+	if selector, ok := call.CalleeExpr.(*syntax.BashPPSelectorExpr); ok {
+		if selector.Sel != nil {
+			return selector.Sel.Value, true
+		}
+		return "", false
+	}
+	if call.CalleeExpr != nil || len(call.Fun) < 2 {
+		return "", false
+	}
+	last := call.Fun[len(call.Fun)-1]
+	if last == nil {
+		return "", false
+	}
+	return last.Value, true
+}
+
 // goSourceMethodCallReceiver splits a method call into its receiver
 // expression and method name, whether the call carries a callee expression
 // or a dotted name path (`f.Func.Name` is the path f, Func, Name).
@@ -172,7 +194,11 @@ func goSourceMethodCallReceiver(call *syntax.BashPPCall) (syntax.BashPPExpr, str
 // goSourceFramesReceiver reports the *runtime.Frames iterator a method call's
 // receiver names, when it names one held in a variable.
 func (r *Runner) goSourceFramesReceiver(call *syntax.BashPPCall) (*bashPPBridgeValue, string, bool) {
-	receiver, method, ok := goSourceMethodCallReceiver(call)
+	method, ok := goSourceCallMethodName(call)
+	if !ok || method != "Next" {
+		return nil, "", false
+	}
+	receiver, _, ok := goSourceMethodCallReceiver(call)
 	if !ok {
 		return nil, "", false
 	}

@@ -37,6 +37,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 )
 
 // goSourceSharedHeapIface adapts an interpreter-side heap.Interface. A failing
@@ -98,12 +99,21 @@ func (r *Runner) goSourceSharedHeap(ctx context.Context, req bashPPEvalRequest, 
 	if q.Op != "call" || q.Spread || q.Receiver != nil {
 		return nil, false, nil
 	}
-	name := nativeSliceCallable(req, *q)
-	want := map[string]int{
-		"container/heap.Init": 1, "container/heap.Push": 2, "container/heap.Pop": 1,
-		"container/heap.Remove": 2, "container/heap.Fix": 2,
-	}[name]
-	if want == 0 || len(q.Args) != want {
+	alias, name, ok := strings.Cut(q.Selector, ".")
+	if !ok || req.Imports[alias] != "container/heap" {
+		return nil, false, nil
+	}
+	want := 0
+	switch name {
+	case "Init", "Pop":
+		want = 1
+	case "Push", "Remove", "Fix":
+		want = 2
+	default:
+		return nil, false, nil
+	}
+	name = "container/heap." + name
+	if len(q.Args) != want {
 		return nil, false, nil
 	}
 	v := q.Args[0]

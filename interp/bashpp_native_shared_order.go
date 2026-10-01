@@ -51,6 +51,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 
 	"mvdan.cc/sh/v3/syntax"
 )
@@ -165,6 +166,12 @@ func (r *Runner) goSourceSharedOrdering(ctx context.Context, req bashPPEvalReque
 	}
 	if q.Receiver != nil && (q.Selector != "" || q.Receiver.Kind != "handle") {
 		return nil, false, nil
+	}
+	if q.Receiver == nil {
+		alias, _, ok := strings.Cut(q.Selector, ".")
+		if !ok || req.Imports[alias] != "sort" {
+			return nil, false, nil
+		}
 	}
 	name := nativeSliceCallable(req, *q)
 	switch name {
