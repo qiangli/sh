@@ -306,6 +306,7 @@ type bashPPNativeSession struct {
 	// session-owned avoids rebuilding JSON's encoder state for every imported
 	// call, without extending any request or response object's lifetime.
 	encoder             *json.Encoder
+	verifiedPlan        *bashPPNativeRequestPlan // protected by mu
 	mu                  sync.Mutex
 	next                atomic.Uint64
 	conn                net.Conn
@@ -371,11 +372,12 @@ func (s *bashPPNativeSession) closeCanceled(cause error) {
 				encoder = bashPPBridgeEncoder(s.conn)
 			}
 			_ = encoder.Encode(bashPPBridgeRequest{Op: "close"})
+			s.mu.Lock()
+			s.verifiedPlan = nil
 			if err := s.conn.Close(); err == nil && cause != nil && !processExited {
-				s.mu.Lock()
 				s.closeCancellation = cause
-				s.mu.Unlock()
 			}
+			s.mu.Unlock()
 			s.write.Unlock()
 		}
 		if s.cmd != nil && s.cmd.Process != nil {
@@ -415,6 +417,12 @@ func bridgeImportIdentity(imports map[string]string) string {
 	return string(data)
 }
 func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) error {
+	s.mu.Lock()
+	verified := s.conn != nil && s.verifiedPlan != nil && req.identityPlan == s.verifiedPlan && req.identityPlan.matchesRequest(req)
+	s.mu.Unlock()
+	if verified {
+		return nil
+	}
 	s.start.Lock()
 	defer s.start.Unlock()
 	if s.conn != nil {
@@ -446,6 +454,9 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 		if s.selectors != identity.selectors {
 			return errors.New("gosource: bridge selectors changed after native dependency initialization")
 		}
+		s.mu.Lock()
+		s.verifiedPlan = req.identityPlan
+		s.mu.Unlock()
 		return nil
 	}
 	source, err := bashPPNativeSource(ctx, bashPPModuleRequest(req))
@@ -770,6 +781,7 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 	s.mu.Lock()
 	s.conn = conn
 	s.encoder = bashPPBridgeEncoder(conn)
+	s.verifiedPlan = req.identityPlan
 	s.mu.Unlock()
 	identity := req.sessionIdentity()
 	s.imports, s.locals, s.embeds = identity.imports, identity.locals, identity.embeds
@@ -812,6 +824,35 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 	mailboxStarted = true
 	return nil
 }
+
+func (s *bashPPNativeSession) checkBridgeValue(v bashPPBridgeValue) error {
+	if v.localReflect != nil || v.localCell != nil {
+		return errors.New("gosource: interpreter-owned reflected value reached the dependency unmaterialized")
+	}
+	if (v.Kind == "handle" || v.Kind == "callback" || v.Origin != 0) && v.Session != s.id {
+		return errors.New("gosource: native handle belongs to another dependency session")
+	}
+	for _, e := range v.Elements {
+		if err := s.checkBridgeValue(e); err != nil {
+			return err
+		}
+	}
+	for _, e := range v.Fields {
+		if err := s.checkBridgeValue(e); err != nil {
+			return err
+		}
+	}
+	for _, e := range v.Entries {
+		if err := s.checkBridgeValue(e.Key); err != nil {
+			return err
+		}
+		if err := s.checkBridgeValue(e.Value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest, q bashPPBridgeRequest) ([]bashPPBridgeValue, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -897,41 +938,13 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 	} else {
 		requestMailbox = nil
 	}
-	var check func(bashPPBridgeValue) error
-	check = func(v bashPPBridgeValue) error {
-		if v.localReflect != nil || v.localCell != nil {
-			return errors.New("gosource: interpreter-owned reflected value reached the dependency unmaterialized")
-		}
-		if (v.Kind == "handle" || v.Kind == "callback" || v.Origin != 0) && v.Session != s.id {
-			return errors.New("gosource: native handle belongs to another dependency session")
-		}
-		for _, e := range v.Elements {
-			if err := check(e); err != nil {
-				return err
-			}
-		}
-		for _, e := range v.Fields {
-			if err := check(e); err != nil {
-				return err
-			}
-		}
-		for _, e := range v.Entries {
-			if err := check(e.Key); err != nil {
-				return err
-			}
-			if err := check(e.Value); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
 	for _, arg := range q.Args {
-		if err := check(arg); err != nil {
+		if err := s.checkBridgeValue(arg); err != nil {
 			return nil, err
 		}
 	}
 	if q.Receiver != nil {
-		if err := check(*q.Receiver); err != nil {
+		if err := s.checkBridgeValue(*q.Receiver); err != nil {
 			return nil, err
 		}
 	}

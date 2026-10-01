@@ -283,7 +283,7 @@ func (r *Runner) bashPPPrepareNativeCall(ctx context.Context, call *syntax.BashP
 	if !r.bashPPBridgeHandles(call) {
 		return bashPPBridgeRequest{}, fmt.Errorf("gosource: call is not an imported dependency operation")
 	}
-	q := bashPPBridgeRequest{Op: "call", Spread: call.Ellipsis.IsValid()}
+	q := bashPPBridgeRequest{Op: "call", Spread: call.Ellipsis.IsValid(), Args: make([]bashPPBridgeValue, 0, len(call.ArgExprs))}
 	if r.bashPPGoSourceFile != nil && call.Pos().IsValid() {
 		if source, ok := r.bashPPGoSourceFile.SourceAt(call.Pos()); ok {
 			q.SourceFile = source.Name
@@ -526,6 +526,32 @@ func (r *Runner) bashPPBridgeExpr(expr syntax.BashPPExpr) (bashPPBridgeValue, er
 		return value, err
 	}
 	switch x := expr.(type) {
+	case *syntax.BashPPBasicLit:
+		if x.Value != nil {
+			switch x.Kind {
+			case "STRING":
+				v := constant.MakeFromLiteral(x.Value.Value, token.STRING, 0)
+				if v.Kind() == constant.String {
+					return bashPPBridgeString(constant.StringVal(v)), nil
+				}
+			case "INT":
+				v := constant.MakeFromLiteral(x.Value.Value, token.INT, 0)
+				if v.Kind() == constant.Int {
+					return bashPPBridgeValue{Kind: "int", Text: v.ExactString()}, nil
+				}
+			case "FLOAT":
+				v := constant.MakeFromLiteral(x.Value.Value, token.FLOAT, 0)
+				if v.Kind() == constant.Float {
+					num, _ := constant.Float64Val(v)
+					return bashPPBridgeValue{Kind: "float", Text: strconv.FormatFloat(num, 'g', -1, 64)}, nil
+				}
+			case "CHAR":
+				v := constant.MakeFromLiteral(x.Value.Value, token.CHAR, 0)
+				if v.Kind() == constant.Int {
+					return bashPPBridgeValue{Kind: "int", Text: v.ExactString()}, nil
+				}
+			}
+		}
 	case *syntax.BashPPUnaryExpr:
 		if cell, handled, err := r.goSourceChannelValueCell(x); handled {
 			if err != nil {
@@ -572,6 +598,20 @@ func (r *Runner) bashPPBridgeExpr(expr syntax.BashPPExpr) (bashPPBridgeValue, er
 					}
 					return r.bashPPBridgeCollection(cell.vr.Obj, cell.valueMeta, cell.declType)
 				}
+			} else {
+				if x.Name.Value == "true" {
+					return bashPPBridgeValue{Kind: "bool", Text: "true"}, nil
+				}
+				if x.Name.Value == "false" {
+					return bashPPBridgeValue{Kind: "bool", Text: "false"}, nil
+				}
+			}
+		} else {
+			if x.Name.Value == "true" {
+				return bashPPBridgeValue{Kind: "bool", Text: "true"}, nil
+			}
+			if x.Name.Value == "false" {
+				return bashPPBridgeValue{Kind: "bool", Text: "false"}, nil
 			}
 		}
 	case *syntax.BashPPCall:
