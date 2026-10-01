@@ -488,6 +488,18 @@ func (r *Runner) bashPPNativeShortDecl(d *syntax.BashPPShortDecl) bool {
 		r.exit = exitStatus{code: 2}
 		return true
 	}
+	// `r := c.R` with R an interface field: the read reports the dynamic
+	// value alone, but the new variable's static type is the interface, just
+	// as `var r I = c.R` declares it. Without that identity a later
+	// `r.(J)` refused the operand as not an interface (go/types
+	// resolver.go `importer.(ImporterFrom)`).
+	if value.Interface == "" && value.Kind != "nil" {
+		if typ, ok := r.goSourceStaticExprType(d.Expr); ok {
+			if _, iface := r.bashPPInterfaceType(typ); iface {
+				value.Interface = r.bashPPBridgeTypeIdentity(typ)
+			}
+		}
+	}
 	if d.Lhs[0].Value != "_" {
 		r.bashPPBindNativeValue(d.Lhs[0].Value, value)
 	}
