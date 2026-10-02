@@ -273,7 +273,7 @@ func Run(ctx context.Context, opts Options) error {
 	}
 	r.EnableInteractiveHistory()
 	if opts.PlainTerminal {
-		return runFallback(ctx, r, stdin, stdout, stderr, lang, opts.PosixMode, ps1, ps2, onRunError, opts.PreCommand, opts.LangFunc)
+		return runFallback(ctx, r, stdin, stdout, stderr, lang, opts.PosixMode, ps1, ps2, onRunError, opts.PreCommand, opts.LangFunc, newFileHistory(histFile, histLimit))
 	}
 
 	cfg := &readline.Config{
@@ -310,7 +310,7 @@ func Run(ctx context.Context, opts Options) error {
 
 	rl, err := readline.NewFromConfig(cfg)
 	if err != nil {
-		return runFallback(ctx, opts.Runner, stdin, stdout, stderr, lang, opts.PosixMode, ps1, ps2, onRunError, opts.PreCommand, opts.LangFunc)
+		return runFallback(ctx, opts.Runner, stdin, stdout, stderr, lang, opts.PosixMode, ps1, ps2, onRunError, opts.PreCommand, opts.LangFunc, newFileHistory(histFile, histLimit))
 	}
 	defer rl.Close()
 
@@ -724,7 +724,7 @@ func (h *fileHistory) At(idx int) string {
 // that pre-existed in cmd/bashy/runInteractiveBasic and outpost's
 // shell.Session.Run prior to this package — kept here so Run() has a
 // single entry point regardless of TTY status.
-func runFallback(ctx context.Context, r *interp.Runner, stdin io.Reader, stdout, stderr io.Writer, lang syntax.LangVariant, posixMode bool, ps1, ps2 func() string, onRunError func(error), preCommand func(context.Context, *interp.Runner), langFunc func(*interp.Runner) syntax.LangVariant) error {
+func runFallback(ctx context.Context, r *interp.Runner, stdin io.Reader, stdout, stderr io.Writer, lang syntax.LangVariant, posixMode bool, ps1, ps2 func() string, onRunError func(error), preCommand func(context.Context, *interp.Runner), langFunc func(*interp.Runner) syntax.LangVariant, history *fileHistory) error {
 	r.EnableInteractiveHistory()
 	if preCommand != nil {
 		preCommand(ctx, r)
@@ -766,7 +766,11 @@ func runFallback(ctx context.Context, r *interp.Runner, stdin io.Reader, stdout,
 			return nil
 		default:
 		}
-		r.RecordInteractiveHistory(strings.TrimSuffix(input, "\n"))
+		entry := strings.TrimSuffix(input, "\n")
+		r.RecordInteractiveHistory(entry)
+		if history != nil {
+			history.Add(entry)
+		}
 		lineCount := strings.Count(input, "\n")
 		if !strings.HasSuffix(input, "\n") {
 			lineCount++
