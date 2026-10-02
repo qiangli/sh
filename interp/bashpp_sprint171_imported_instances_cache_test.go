@@ -67,7 +67,12 @@ type GenericAlias[T any] = Defined[T]
 type Reused int
 f() { type Reused string; }
 `)
-	runner := &Runner{bashPPGoSourceFile: file}
+	runner, err := New(Lang(syntax.LangBashPP))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runner.Reset()
+	runner.bashPPGoSourceFile = file
 	renderer := runner.bashPPLocalTypeRenderer()
 
 	if _, ok := renderer.declared["Plain"]; !ok {
@@ -83,24 +88,24 @@ f() { type Reused string; }
 		t.Fatal("ambiguous local type name remained renderable")
 	}
 
-	// A copied Runner may share the immutable scan. Each copy still owns its
+	// A child Runner may share the immutable scan. Each child still owns its
 	// renderer and import map, so concurrent callback/subshell requests do not
 	// share refs or other per-render state.
 	const copies = 8
 	var wg sync.WaitGroup
 	for i := 0; i < copies; i++ {
-		child := *runner
+		child := runner.Subshell()
 		child.bashPPImports = map[string]string{"dep": "path"}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			local := child.bashPPLocalTypeRenderer()
 			if child.bashPPTools.localTypeDecls != runner.bashPPTools.localTypeDecls {
-				t.Error("copied Runner rebuilt immutable declaration scan")
+				t.Error("child Runner rebuilt immutable declaration scan")
 			}
 			local.refs = map[string]bool{"owned": true}
 			if _, ok := local.source(&syntax.BashPPNamedType{Name: &syntax.Lit{Value: "Plain"}}, 0); !ok {
-				t.Error("copied Runner could not render cached alias")
+				t.Error("child Runner could not render cached alias")
 			}
 		}()
 	}

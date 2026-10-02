@@ -134,10 +134,13 @@ func TestS281BridgeMetadataCacheInvalidation(t *testing.T) {
 import "strings"
 func main() { _ = strings.TrimSpace(" x ") }
 `)
-	runner := &Runner{
-		bashPPGoSourceFile: firstFile,
-		bashPPImports:      map[string]string{"strings": "strings"},
+	runner, err := New(Lang(syntax.LangBashPP))
+	if err != nil {
+		t.Fatal(err)
 	}
+	runner.Reset()
+	runner.bashPPGoSourceFile = firstFile
+	runner.bashPPImports = map[string]string{"strings": "strings"}
 	first := runner.bashPPBridgeMetadata()
 	if again := runner.bashPPBridgeMetadata(); again != first {
 		t.Fatal("unchanged source metadata was rebuilt")
@@ -167,7 +170,7 @@ func main() { fmt.Println("ok") }
 
 	// A subshell/callback Runner copies bashPPTools by value. It may share the
 	// immutable hit, but an import mutation replaces only the child's pointer.
-	child := *runner
+	child := runner.Subshell()
 	child.bashPPImports = map[string]string{"fmt": "log"}
 	childCache := child.bashPPBridgeMetadata()
 	if childCache == second {

@@ -1,6 +1,8 @@
 // Copyright (c) 2026, the sh authors.
 // See LICENSE for licensing information.
 
+//go:build unix
+
 package interp_test
 
 // Sprint: #290 — declare -f must reparse: bash prints a command whose words
