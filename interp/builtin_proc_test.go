@@ -205,6 +205,57 @@ exit 99
 	}
 }
 
+func TestKillZeroRunsShellTrapBeforeNextStatement(t *testing.T) {
+	if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		t.Skip("process-group signalling behavior is unix-specific")
+	}
+	for _, tc := range []struct {
+		name string
+		kill string
+	}{
+		{name: "zero", kill: "kill 0"},
+		{name: "negative-current-group", kill: `kill -s TERM "-$$"`},
+		{name: "foreground-subshell", kill: "(kill 0)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			orderMarker := filepath.Join(dir, "order")
+			readyMarker := filepath.Join(dir, "ready")
+			script := `
+trap 'printf T >> "$KILL_ORDER_MARKER"' TERM
+"$GOSH_PROG" 'trap '\''exit 0'\'' TERM
+printf x > "$KILL_READY_MARKER"
+while :; do /bin/sleep 0.05; done' &
+worker=$!
+while [ ! -f "$KILL_READY_MARKER" ]; do /bin/sleep 0.05; done
+` + tc.kill + `
+printf K >> "$KILL_ORDER_MARKER"
+wait "$worker"
+printf 'W%s' "$?" >> "$KILL_ORDER_MARKER"
+`
+			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, os.Args[0], script)
+			cmd.Env = append(os.Environ(),
+				"GOSH_PROG="+os.Args[0],
+				"KILL_ORDER_MARKER="+orderMarker,
+				"KILL_READY_MARKER="+readyMarker,
+			)
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("group-trap helper: %v; output=%q", err, out)
+			}
+			got, err := os.ReadFile(orderMarker)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != "TKW0" {
+				t.Fatalf("trap/post-kill/wait order = %q, want TKW0", got)
+			}
+		})
+	}
+}
+
 func TestKillCustomSignal(t *testing.T) {
 	sleepBin, err := exec.LookPath("sleep")
 	if err != nil {

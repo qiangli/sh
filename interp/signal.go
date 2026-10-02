@@ -918,6 +918,10 @@ func (r *Runner) queuePendingSignal(name, callback string) {
 	}
 	r.pendingSig[name]++
 	r.pendingSigCallback[name] = append(r.pendingSigCallback[name], callback)
+	if receipt := r.groupSignalReceipt[name]; receipt != nil {
+		close(receipt)
+		delete(r.groupSignalReceipt, name)
+	}
 	r.sigMu.Unlock()
 	r.hasPendingSig.Store(true)
 	r.wakeSignalWaiters()
@@ -1016,6 +1020,27 @@ func (r *Runner) peekPendingSignal() (string, int) {
 		return "", 0
 	}
 	return best, bestNum
+}
+
+// groupSignalReceiptChan subscribes to this runner's next OS signal receipt
+// before kill(2) sends to a group containing this shell. Closing the channel
+// broadcasts receipt to every waiter; the separate sigWake channel belongs
+// to wait(1) and must not be consumed here. An already-pending trap is enough
+// to run before the next statement, and a second standard signal may coalesce
+// with it, so there is no new receipt to wait for in that case.
+func (r *Runner) groupSignalReceiptChan(name string) <-chan struct{} {
+	r.sigMu.Lock()
+	defer r.sigMu.Unlock()
+	if r.pendingSig[name] > 0 {
+		return nil
+	}
+	if r.groupSignalReceipt == nil {
+		r.groupSignalReceipt = make(map[string]chan struct{})
+	}
+	if r.groupSignalReceipt[name] == nil {
+		r.groupSignalReceipt[name] = make(chan struct{})
+	}
+	return r.groupSignalReceipt[name]
 }
 
 // waitOrSignal blocks until bg finishes or a trapped signal arrives, returning

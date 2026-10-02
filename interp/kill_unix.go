@@ -122,6 +122,13 @@ func sendSignal(pid int, sig killSig) error {
 	return syscall.Kill(pid, sig)
 }
 
+// A zero operand names the caller's process group; a negative operand names
+// the group whose ID is its absolute value. Only these targets can send the
+// shell its own signal as a side effect of signalling a group.
+func targetsOwnProcessGroup(pid int) bool {
+	return pid == 0 || pid < 0 && -pid == syscall.Getpgrp()
+}
+
 // continueIfStopped sends SIGCONT to pid, best-effort. Used by `fg` to
 // resume a stopped real-PID bg process before waiting on it. Errors are
 // swallowed because the process may already be running or gone.

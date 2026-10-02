@@ -2049,9 +2049,24 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				r.recordJobSignal(bg, sig)
 				continue
 			}
+			var groupTrapOwner *Runner
+			var groupReceipt <-chan struct{}
+			if !sigIsZero(sig) && targetsOwnProcessGroup(pid) {
+				if name, ok := signalName(sig); ok {
+					groupTrapOwner = r.owningSignalRunner(name)
+					if groupTrapOwner != nil {
+						groupReceipt = groupTrapOwner.groupSignalReceiptChan(name)
+					}
+				}
+			}
 			if err := sendSignal(pid, sig); err != nil {
 				exit.code = 1
 				r.errf(r.bashErrPrefix(pos)+"kill: (%d) - %v\n", pid, err)
+			} else if groupReceipt != nil {
+				select {
+				case <-groupReceipt:
+				case <-ctx.Done():
+				}
 			}
 		}
 	case "nohup":

@@ -24,6 +24,8 @@ type killSig struct {
 func sigIsZero(s killSig) bool { return s.Num == 0 }
 func sigNum(s killSig) int     { return s.Num }
 
+func targetsOwnProcessGroup(int) bool { return false }
+
 const defaultTermSignalNum = 15
 
 var defaultTermSignal = killSig{Name: "TERM", Num: defaultTermSignalNum, Signal: os.Kill}

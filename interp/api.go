@@ -1070,6 +1070,7 @@ type Runner struct {
 	sigMu              sync.Mutex
 	pendingSig         map[string]int                // signal name -> pending count, guarded by sigMu
 	pendingSigCallback map[string][]string           // callback fixed at signal receipt, guarded by sigMu
+	groupSignalReceipt map[string]chan struct{}      // broadcast receipt for a group kill which also signals this shell
 	sigNotify          map[string]os.Signal          // signal name -> os.Signal under signal.Notify
 	sigNotifyCh        map[string]signalSubscription // per-signal notification channel and lifetime
 	standaloneDefaults map[string]bool               // runtime faults relayed to their native default action
