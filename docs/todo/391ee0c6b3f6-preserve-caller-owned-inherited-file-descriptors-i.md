@@ -3,15 +3,18 @@ id: 391ee0c6b3f6
 kind: bug
 title: Preserve caller-owned inherited file descriptors in sh runner
 seq: 158
-status: todo
+status: done
 priority: p0
 labels:
     - macos
     - ci
 created: 2026-10-02T06:05:38.739199Z
+assignee: codex-gpt6.1-sol
 sprint: 355
 sprint_id: 3a83ff48-7f8b-5be4-b0e6-e146762b2573
 sprint_title: Profile D residual blocker triage and targeted closure
+closed: 2026-10-02T09:46:29.611953Z
+closed_by: codex-gpt6.1-sol
 ---
 
 Baseline af489df Darwin P–T group intermittently fails before kill-zero fix; candidate dddd3fe also fails. Runner inheritedFd wraps caller-owned raw descriptor with os.NewFile and may close it via runner cleanup or finalization, yielding unrelated EBADF. Acceptance: focused ownership regression fails before repair and passes after; inherited descriptors are atomically duplicated with CLOEXEC; caller descriptor remains usable after runner close/reset; relevant Unix tests and macOS CI pass. Do not attribute all P–T flakes without evidence.
