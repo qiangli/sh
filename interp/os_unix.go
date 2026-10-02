@@ -131,20 +131,30 @@ func (r *Runner) inheritedFd(fd int) (*os.File, bool) {
 	if !r.inheritedFds[fd] {
 		return nil, false
 	}
-	f := os.NewFile(uintptr(fd), "/dev/fd/"+strconv.Itoa(fd))
+	// The ambient descriptor belongs to the caller. A second os.File for its
+	// raw number would close the caller's descriptor when this runner closes
+	// its table or the os.File finalizer runs. Duplicate it with CLOEXEC so
+	// concurrent child launches cannot inherit the temporary physical fd.
+	syscall.ForkLock.RLock()
+	flags, err := unix.FcntlInt(uintptr(fd), unix.F_GETFL, 0)
+	if err != nil {
+		syscall.ForkLock.RUnlock()
+		return nil, false
+	}
+	ownedFD, err := unix.FcntlInt(uintptr(fd), unix.F_DUPFD_CLOEXEC, 0)
+	syscall.ForkLock.RUnlock()
+	if err != nil {
+		return nil, false
+	}
+	f := os.NewFile(uintptr(ownedFD), "/dev/fd/"+strconv.Itoa(fd))
 	if f == nil {
+		_ = unix.Close(ownedFD)
 		return nil, false
 	}
 	if r.fdTable == nil {
 		r.fdTable = make(map[int]*os.File)
 	}
 	r.fdTable[fd] = f
-	flags, err := unix.FcntlInt(uintptr(fd), unix.F_GETFL, 0)
-	if err != nil {
-		delete(r.fdTable, fd)
-		f.Close()
-		return nil, false
-	}
 	switch flags & unix.O_ACCMODE {
 	case unix.O_RDONLY:
 		if r.fdReadTable == nil {
