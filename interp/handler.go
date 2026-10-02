@@ -416,6 +416,15 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			env = setExecEnvValue(env, bashyParentPIDEnv, parent)
 		}
 		env = append(env, fds.env...)
+		// Go's runtime replaces a closed standard descriptor with /dev/null
+		// before a Go utility's main function can inspect it. Carry fd 1's
+		// shell-visible state only to the installed Coreutils image, which can
+		// consume this private hint before dispatch. An explicitly opened
+		// /dev/null is not a closed descriptor and must not acquire the hint.
+		env = removeExecEnvValue(env, execFD1ClosedEnv)
+		if isClosedFdWriter(hc.Stdout) && isInstalledCoreutilsExecutable(execPath) {
+			env = setExecEnvValue(env, execFD1ClosedEnv, "1")
+		}
 		// `exec CMD` is execve everywhere it can be, and execve inherits
 		// SIG_IGN. On Windows nothing is replaced: the shell starts CMD and
 		// exits in its place, and a bashy ignore lives in this process's own
@@ -883,6 +892,17 @@ func setExecEnvValue(env []string, name, value string) []string {
 	}
 	if !found {
 		out = append(out, prefix+value)
+	}
+	return out
+}
+
+func removeExecEnvValue(env []string, name string) []string {
+	prefix := name + "="
+	out := env[:0]
+	for _, kv := range env {
+		if !strings.HasPrefix(kv, prefix) {
+			out = append(out, kv)
+		}
 	}
 	return out
 }
