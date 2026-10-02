@@ -748,6 +748,16 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			// decodes the bashy signal marker (waitstatus_windows.go) and on
 			// Plan9 it never reports a signal.
 			if status, ok := execWaitStatus(&cmd, err); ok && status.Signaled() {
+				// With job control or an owned exec group, the foreground
+				// command does not share the shell's signal-delivery group.
+				// Background jobs have their own runner/notification boundary.
+				if hc.runner != nil && !ownGroup && !hc.runner.monitorActive() {
+					if bg, _ := ctx.Value(bgProcCtxKey{}).(*bgProc); bg == nil {
+						if _, name, ok := signalByNumber(int(status.Signal())); ok {
+							hc.runner.waitForForegroundGroupSignalReceipt(ctx, name)
+						}
+					}
+				}
 				if proxyReplace {
 					if _, standalone := hc.runner.sigReset.(OSSignalResetter); standalone {
 						return relayExecReplacementSignal(status.Signal())

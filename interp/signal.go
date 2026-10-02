@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"mvdan.cc/sh/v3/syntax"
 )
@@ -918,12 +919,15 @@ func (r *Runner) queuePendingSignal(name, callback string) {
 	}
 	r.pendingSig[name]++
 	r.pendingSigCallback[name] = append(r.pendingSigCallback[name], callback)
+	// Publish the fast-path bit before a receipt wakes a foreground waiter.
+	// Otherwise that waiter can return and miss the trap at its next statement
+	// boundary while this goroutine has not yet stored the bit.
+	r.hasPendingSig.Store(true)
 	if receipt := r.groupSignalReceipt[name]; receipt != nil {
 		close(receipt)
 		delete(r.groupSignalReceipt, name)
 	}
 	r.sigMu.Unlock()
-	r.hasPendingSig.Store(true)
 	r.wakeSignalWaiters()
 }
 
@@ -1041,6 +1045,42 @@ func (r *Runner) groupSignalReceiptChan(name string) <-chan struct{} {
 		r.groupSignalReceipt[name] = make(chan struct{})
 	}
 	return r.groupSignalReceipt[name]
+}
+
+// waitForForegroundGroupSignalReceipt closes the race between reaping a
+// signaled foreground command and receiving the same process-group signal in
+// this shell. If the command was the file's last statement, returning from
+// its wait before our os/signal forwarder runs would discard the shell's trap.
+// A signal sent only to the command has no shell receipt, so bound the join.
+// Ordinary foreground completions never enter this path; a signal-only child
+// death with an active matching trap can add at most this one bound.
+func (r *Runner) waitForForegroundGroupSignalReceipt(ctx context.Context, name string) {
+	r.sigMu.Lock()
+	_, trapped := r.trapCallbacks[name]
+	_, subscribed := r.sigNotifyCh[name]
+	r.sigMu.Unlock()
+	if !trapped || !subscribed {
+		return
+	}
+	receipt := r.groupSignalReceiptChan(name)
+	if receipt == nil { // already pending
+		return
+	}
+	const receiptBound = 200 * time.Millisecond
+	timer := time.NewTimer(receiptBound)
+	defer timer.Stop()
+	select {
+	case <-receipt:
+	case <-timer.C:
+	case <-ctx.Done():
+	}
+	// A command-only signal does not leave an unused receipt subscription
+	// that could be mistaken for a later process-group delivery.
+	r.sigMu.Lock()
+	if r.groupSignalReceipt[name] == receipt {
+		delete(r.groupSignalReceipt, name)
+	}
+	r.sigMu.Unlock()
 }
 
 // waitOrSignal blocks until bg finishes or a trapped signal arrives, returning
