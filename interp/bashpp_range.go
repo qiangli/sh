@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"go/constant"
+	"math"
+	"math/big"
 	"sort"
 	"strconv"
 
@@ -441,8 +443,16 @@ func (r *Runner) bashPPRangeScalarValue(ctx context.Context, rng *syntax.BashPPR
 		}
 		limit, ok := constant.Int64Val(value.value)
 		if !ok {
-			r.bashPPRangeError(rng, "BASHPP-ERANGE-INTEGER: integer range bound is not representable as int64")
-			return true
+			// A uint64 or uintptr bound above the int64 range is a legal
+			// Go bound. The counter below is an int64, so the loop walks
+			// the indexes it can represent; no program reaches the 2^63
+			// iterations it would take to observe the remainder, and a
+			// break or return leaves the loop as it does any other.
+			if constant.Sign(value.value) <= 0 {
+				r.bashPPRangeError(rng, "BASHPP-ERANGE-INTEGER: integer range bound is not representable as int64")
+				return true
+			}
+			limit = math.MaxInt64
 		}
 		iterationType := bashPPRangeNamedType("int")
 		if value.typ != "" {
@@ -596,6 +606,15 @@ func (r *Runner) bashPPRangeCollection(ctx context.Context, rng *syntax.BashPPRa
 	if meta == nil {
 		return false
 	}
+	// A scalar read out of dependency-owned storage — `*trials` where trials is
+	// the *int64 flag.Int64 returned — is still a scalar, but arrives with
+	// metadata: the wire spells every integer alike, so the declared Go type
+	// travels beside the value. That metadata describes no collection. Range
+	// the value just read as the scalar it is, under its declared type, rather
+	// than refusing it as a non-collection or evaluating the operand again.
+	if bashPPScalarMetaKind(meta) {
+		return r.bashPPRangeScalarValue(ctx, rng, r.bashPPRangeTypedScalar(value, meta))
+	}
 	// A "native" kind means the value is still a lazy dependency-owned handle
 	// (see bashPPBridgeContents) rather than interpreter-owned storage this
 	// path knows how to walk — for example a reassigned `lines = strings.
@@ -606,6 +625,28 @@ func (r *Runner) bashPPRangeCollection(ctx context.Context, rng *syntax.BashPPRa
 		return false
 	}
 	return r.bashPPRangeCollectionValue(ctx, rng, value, meta)
+}
+
+// bashPPRangeTypedScalar rebuilds the scalar a structured read projected into
+// a Go value together with scalar metadata. An integer too wide for the
+// projection's int (a uint64 above the int range) is carried as its decimal
+// spelling; it is still an integer unless the declared type is a string.
+func (r *Runner) bashPPRangeTypedScalar(value any, meta *bashPPCollectionMeta) bashPPScalar {
+	scalar := bashPPScalar{value: bashPPScalarConstant(value)}
+	if meta.typ != nil {
+		scalar.typ = bashPPTypeText(meta.typ)
+	}
+	text, isText := value.(string)
+	if !isText {
+		return scalar
+	}
+	if named, ok := r.bashPPUnderlyingType(meta.typ).(*syntax.BashPPNamedType); ok && named.Name != nil && named.Name.Value == "string" {
+		return scalar
+	}
+	if n, ok := new(big.Int).SetString(text, 10); ok && meta.typ != nil {
+		scalar.value = constant.Make(n)
+	}
+	return scalar
 }
 
 // bashPPRangeCollectionValue iterates an already read collection operand.
