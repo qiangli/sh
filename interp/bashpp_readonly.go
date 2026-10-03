@@ -246,6 +246,16 @@ func (r *Runner) bashPPTupleAssignCall(ctx context.Context, assign *syntax.BashP
 	}
 	fn, ok := r.bashPPLookupFunc(assign.Call)
 	if !ok {
+		// Resolving the callee can itself run code: `v = f().M()` calls f to
+		// obtain the receiver. When that evaluation panicked, exited or
+		// stopped on a fatal error, the lookup reports no callee because the
+		// expression was interrupted, not because the callee is undeclared.
+		// The recorded outcome is the result; the fallbacks below must neither
+		// evaluate the receiver a second time nor replace that outcome with a
+		// diagnostic about the call's shape.
+		if r.bashPPPanicHalts() || r.exit.exiting || r.exit.fatalExit || r.exit.err != nil {
+			return
+		}
 		if cells, handled := r.goSourceResultFuncValueCallCells(ctx, assign.Call); handled {
 			if len(assign.Names) != len(cells) {
 				r.errf("%sBASHPP-EASSIGN-ARITY: %d variable(s) but %d value(s)\n",
