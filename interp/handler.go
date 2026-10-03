@@ -599,7 +599,10 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 		if err != nil && isExecFormatError(err) {
 			selfBin, lookupErr := os.Executable()
 			if lookupErr == nil {
-				newArgs := append([]string{selfBin, scriptPath}, execArgsForOS(args[1:])...)
+				// Keep the shell's invocation name while executing the same
+				// physical binary. A multicall executable selects its shell
+				// route from argv[0], not from the executable path.
+				newArgs := append([]string{os.Args[0], scriptPath}, execArgsForOS(args[1:])...)
 				// Re-exec'ing our own shell on a no-shebang script: carry the
 				// parent's hard-ignored signals across so the child shell
 				// treats them as ignored-on-entry, matching how bash inherits
