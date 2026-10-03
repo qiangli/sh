@@ -1050,9 +1050,13 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				args = args[1:]
 			}
 		}
+		// Keep a complete echo line in one write. Other processes can share
+		// this descriptor (including the VSC SigWait helper); separate writes
+		// for operands and the newline allow their output to split this line.
+		var line strings.Builder
 		for i, arg := range args {
 			if i > 0 {
-				r.out(" ")
+				line.WriteByte(' ')
 			}
 			if doExpand {
 				// `echo -e` uses bash's `%b`-style escape table:
@@ -1060,16 +1064,22 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				// literal (no `\` strip), the rest follow the
 				// standard ANSI-C escapes.
 				out, err := expand.FormatBPercent(r.ecfg, arg)
-				r.out(out)
+				line.WriteString(out)
 				if err == expand.ErrPrintfStop {
+					if line.Len() > 0 {
+						r.out(line.String())
+					}
 					return exit
 				}
 				continue
 			}
-			r.out(arg)
+			line.WriteString(arg)
 		}
 		if newline {
-			r.out("\n")
+			line.WriteByte('\n')
+		}
+		if line.Len() > 0 {
+			r.out(line.String())
 		}
 	case "printf":
 		// printf -v VAR FORMAT [args...] writes output to VAR instead of
