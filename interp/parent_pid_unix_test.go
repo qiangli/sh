@@ -20,7 +20,7 @@ func TestNativeChildShellParentIdentity(t *testing.T) {
 		source := `printf '%s' "$PPID"`
 		if mode == "owner" {
 			source = `(
-parent=$(GOSH_PROG= PARENT_PID_TEST_MODE=child "$GOSH_PROG" -test.run='^TestNativeChildShellParentIdentity$')
+parent=$(GOSH_PROG= PARENT_PID_TEST_MODE=child "$PARENT_PID_TEST_PROG" -test.run='^TestNativeChildShellParentIdentity$')
 kill -s INT "$parent"
 kill -s QUIT "$parent"
 printf 'sender-survived\n'
@@ -29,7 +29,7 @@ wait "$!"
 printf 'background-status=%s\n' "$?"
 `
 		} else if mode == "direct" || mode == "nested" || mode == "primary" || mode == "exec" || mode == "relative" {
-			command := `GOSH_PROG= PARENT_PID_TEST_MODE=child "$GOSH_PROG" -test.run='^TestNativeChildShellParentIdentity$' > child-parent`
+			command := `GOSH_PROG= PARENT_PID_TEST_MODE=child "$PARENT_PID_TEST_PROG" -test.run='^TestNativeChildShellParentIdentity$' > child-parent`
 			job := "( " + command + "; : ) &"
 			want := `"$!"`
 			switch mode {
@@ -37,16 +37,16 @@ printf 'background-status=%s\n' "$?"
 				job = command + " &"
 				want = `"$$"`
 			case "exec":
-				job = `( GOSH_PROG= PARENT_PID_TEST_MODE=child exec "$GOSH_PROG" -test.run='^TestNativeChildShellParentIdentity$' > child-parent ) &`
+				job = `( GOSH_PROG= PARENT_PID_TEST_MODE=child exec "$PARENT_PID_TEST_PROG" -test.run='^TestNativeChildShellParentIdentity$' > child-parent ) &`
 				want = `"$$"`
 			case "relative":
 				if err := os.Mkdir("subdir", 0o700); err != nil {
 					panic(err)
 				}
-				if err := os.Symlink(os.Getenv("GOSH_PROG"), "subdir/shell"); err != nil {
+				if err := os.Symlink(os.Getenv("PARENT_PID_TEST_PROG"), "subdir/sh"); err != nil {
 					panic(err)
 				}
-				job = `( cd subdir; GOSH_PROG= PARENT_PID_TEST_MODE=child ./shell -test.run='^TestNativeChildShellParentIdentity$' > ../child-parent; : ) &`
+				job = `( cd subdir; GOSH_PROG= PARENT_PID_TEST_MODE=child ./sh -test.run='^TestNativeChildShellParentIdentity$' > ../child-parent; : ) &`
 			}
 			source = job + "\nwant=" + want + `
 wait "$!" || exit
@@ -90,9 +90,14 @@ printf 'parent-matches\n'
 		t.Run(mode, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
+			dir := t.TempDir()
+			shell := dir + "/sh"
+			if err := os.Symlink(exe, shell); err != nil {
+				t.Fatal(err)
+			}
 			cmd := exec.CommandContext(ctx, exe, "-test.run=^TestNativeChildShellParentIdentity$")
-			cmd.Dir = t.TempDir()
-			cmd.Env = []string{"PATH=/usr/bin:/bin", "HOME=" + cmd.Dir, "GOSH_PROG=", "PARENT_PID_TEST_MODE=" + mode}
+			cmd.Dir = dir
+			cmd.Env = []string{"PATH=/usr/bin:/bin", "HOME=" + cmd.Dir, "GOSH_PROG=", "PARENT_PID_TEST_PROG=" + shell, "PARENT_PID_TEST_MODE=" + mode}
 			out, err := cmd.CombinedOutput()
 			want := "parent-matches\n"
 			if mode == "owner" {

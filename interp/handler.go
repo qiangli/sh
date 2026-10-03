@@ -412,7 +412,7 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 		env = setExecEnvValue(env, "_", envCommandPath)
 		// Identity checks run in this process, before exec: execPath may now
 		// name an ExtraFiles descriptor that exists only in the child.
-		if parent := hc.runner.childParentPIDBridge(ctx, diagnosticScriptPath); parent != "" {
+		if parent := hc.runner.childParentPIDBridge(ctx, diagnosticScriptPath, cmdArgs[0]); parent != "" {
 			env = setExecEnvValue(env, bashyParentPIDEnv, parent)
 		}
 		env = append(env, fds.env...)

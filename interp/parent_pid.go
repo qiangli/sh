@@ -3,6 +3,7 @@ package interp
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -32,7 +33,7 @@ func (r *Runner) startupParentPID() int {
 	return pid
 }
 
-func (r *Runner) childParentPIDBridge(ctx context.Context, path string) string {
+func (r *Runner) childParentPIDBridge(ctx context.Context, path, argv0 string) string {
 	if _, standalone := r.sigReset.(OSSignalResetter); !standalone {
 		return ""
 	}
@@ -42,10 +43,26 @@ func (r *Runner) childParentPIDBridge(ctx context.Context, path string) string {
 	}
 	// An exec replaces this job instead of creating its child. A primary
 	// external background job similarly has the host as its actual parent.
-	if replacing, _ := ctx.Value(execReplacingCtxKey{}).(bool); replacing || !sameShellExecutable(path) {
+	// The one-file Bashy payload also serves utility links such as env. An
+	// inode match alone would leak this private shell handoff into an applet's
+	// environment, where it is visible to env(1) and scheduled jobs.
+	if replacing, _ := ctx.Value(execReplacingCtxKey{}).(bool); replacing || !shellEntryName(argv0) || !sameShellExecutable(path) {
 		return ""
 	}
 	return strconv.Itoa(os.Getpid()) + ":" + strconv.Itoa(bg.carrier.Pid())
+}
+
+func shellEntryName(argv0 string) bool {
+	name := filepath.Base(argv0)
+	name = strings.TrimPrefix(name, "-")
+	if len(name) > 4 && strings.EqualFold(name[len(name)-4:], ".exe") {
+		name = name[:len(name)-4]
+	}
+	switch name {
+	case "sh", "bash", "bashy":
+		return true
+	}
+	return false
 }
 
 // Only our own payload, or a launcher paired with that exact payload, can

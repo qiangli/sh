@@ -86,7 +86,7 @@ func TestParentPIDBridgeRequiresOwnExecutable(t *testing.T) {
 	}
 	r := &Runner{sigReset: OSSignalResetter{}}
 	ctx := context.WithValue(context.Background(), bgProcCtxKey{}, &bgProc{carrier: parentPIDCarrier(12345)})
-	if got := r.childParentPIDBridge(ctx, launcher); got != "" {
+	if got := r.childParentPIDBridge(ctx, launcher, "sh"); got != "" {
 		t.Fatalf("unpaired executable received bridge %q", got)
 	}
 	if err := os.Symlink(self, launcher+".real"); err != nil {
@@ -96,7 +96,7 @@ func TestParentPIDBridgeRequiresOwnExecutable(t *testing.T) {
 	if err := os.Symlink(launcher, link); err != nil {
 		t.Fatal(err)
 	}
-	if got := r.childParentPIDBridge(ctx, launcher); got != "" {
+	if got := r.childParentPIDBridge(ctx, launcher, "sh"); got != "" {
 		t.Fatalf("unrelated executable with adjacent payload received bridge %q", got)
 	}
 	for _, path := range []string{launcher, link} {
@@ -104,22 +104,34 @@ func TestParentPIDBridgeRequiresOwnExecutable(t *testing.T) {
 			t.Fatalf("installed launcher identity rejected for %s", path)
 		}
 	}
-	if got, want := r.childParentPIDBridge(ctx, self), strconv.Itoa(os.Getpid())+":12345"; got != want {
+	if got, want := r.childParentPIDBridge(ctx, self, "sh"), strconv.Itoa(os.Getpid())+":12345"; got != want {
 		t.Fatalf("own payload bridge %q, want %q", got, want)
 	}
-	if got := r.childParentPIDBridge(context.Background(), self); got != "" {
+	// The same inode is also the installed env/coreutils applet. It must
+	// never expose the shell's private PPID handoff to an env snapshot.
+	for _, name := range []string{"env", "/usr/bin/env", "batch", "at", "coreutils"} {
+		if got := r.childParentPIDBridge(ctx, self, name); got != "" {
+			t.Fatalf("utility route %q received bridge %q", name, got)
+		}
+	}
+	for _, name := range []string{"bash", "bashy", "/usr/bin/sh", "-bash"} {
+		if got, want := r.childParentPIDBridge(ctx, self, name), strconv.Itoa(os.Getpid())+":12345"; got != want {
+			t.Fatalf("shell route %q bridge %q, want %q", name, got, want)
+		}
+	}
+	if got := r.childParentPIDBridge(context.Background(), self, "sh"); got != "" {
 		t.Fatalf("foreground child received bridge %q", got)
 	}
 	primary := context.WithValue(context.Background(), bgProcCtxKey{}, &bgProc{carrier: parentPIDCarrier(12345), publishPidToBang: true})
-	if got := r.childParentPIDBridge(primary, self); got != "" {
+	if got := r.childParentPIDBridge(primary, self, "sh"); got != "" {
 		t.Fatalf("primary external job received bridge %q", got)
 	}
 	replacing := context.WithValue(ctx, execReplacingCtxKey{}, true)
-	if got := r.childParentPIDBridge(replacing, self); got != "" {
+	if got := r.childParentPIDBridge(replacing, self, "sh"); got != "" {
 		t.Fatalf("exec replacement received bridge %q", got)
 	}
 	r.sigReset = nil
-	if got := r.childParentPIDBridge(ctx, self); got != "" {
+	if got := r.childParentPIDBridge(ctx, self, "sh"); got != "" {
 		t.Fatalf("embedded runner exported bridge %q", got)
 	}
 }
