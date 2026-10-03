@@ -40,6 +40,9 @@ type bashPPPointer struct {
 	// of an unsafe.Pointer whose target is no supported view: the pointer
 	// exists, but no access through it can be represented.
 	unsafeRefusal error
+	// unsafeSlice is set instead when the conversion reads a slice-header
+	// struct as a slice; see gosource_unsafe_slice_view.go.
+	unsafeSlice *goSourceUnsafeSliceView
 	// unsafeOffset is a residual byte offset left by unsafe.Add outside the
 	// element grid of the span; forged/unsafeAddress name an opaque address
 	// converted from an integer. Neither may be dereferenced; see
@@ -206,8 +209,12 @@ func (r *Runner) bashPPPointerConversion(expr syntax.BashPPExpr) (*bashPPPointer
 	}
 	retyped := *ptr
 	retyped.unsafeRefusal = nil
+	retyped.unsafeSlice = nil
 	if ptr.unsafeSource != nil && bashPPTypeText(ptr.unsafeSource) != bashPPTypeText(target.Element) {
-		if err := r.goSourceUnsafeBlankView(ptr.unsafeSource, target.Element); err == nil {
+		if view := r.goSourceUnsafeSliceHeaderView(ptr.unsafeSource, target.Element); view != nil {
+			retyped.unsafeView = nil
+			retyped.unsafeSlice = view
+		} else if err := r.goSourceUnsafeBlankView(ptr.unsafeSource, target.Element); err == nil {
 			retyped.unsafeView = target.Element
 		} else if r.bashPPGoSource {
 			// Go permits the conversion itself; only an access through the
@@ -757,7 +764,12 @@ func (p *bashPPPointer) read() (any, *bashPPCollectionMeta, syntax.BashPPTypeExp
 		}
 	}
 	if p.unsafeSource != nil && bashPPTypeText(p.unsafeSource) != bashPPTypeText(p.elem) {
-		if p.unsafeView != nil {
+		if p.unsafeSlice != nil && p.unsafeSlice.target == p.elem {
+			var err error
+			if value, meta, err = p.unsafeSlice.read(value); err != nil {
+				return nil, nil, nil, err
+			}
+		} else if p.unsafeView != nil {
 			value, meta = bashPPUnsafeBlankZero(p.unsafeView)
 		} else {
 			return nil, nil, nil, fmt.Errorf("BASHPP-EUNSAFE-VIEW: target %s is not a supported blank-field struct", bashPPTypeText(p.elem))
@@ -1194,6 +1206,11 @@ func (r *Runner) bashPPDerefAssign(target *syntax.BashPPDerefExpr, rhs syntax.Ba
 	}
 	if err := goSourceUnsafeDerefCheck(ptr); err != nil {
 		r.errf("%v\n", err)
+		r.exit.code = 2
+		return
+	}
+	if ptr.unsafeSlice != nil && ptr.unsafeSlice.target == ptr.elem {
+		r.errf("BASHPP-EUNSAFE-WRITE: writes through a reinterpreted slice header are unsupported\n")
 		r.exit.code = 2
 		return
 	}

@@ -55,6 +55,11 @@ func (r *Runner) bashPPSelectReceiveAssign(assign *syntax.BashPPAssign, received
 		r.exit.code = 2
 		return
 	}
+	if ptr.unsafeSlice != nil {
+		r.errf("BASHPP-EUNSAFE-WRITE: writes through a reinterpreted slice header are unsupported\n")
+		r.exit.code = 2
+		return
+	}
 	candidate := bashPPCopyAssignmentCell(received)
 	target := &bashPPCell{declType: ptr.elem}
 	r.bashPPPrepareInterfaceAssignment(target, candidate)
