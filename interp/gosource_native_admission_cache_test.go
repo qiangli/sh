@@ -76,6 +76,18 @@ func TestS243NativeAdmissionCache(t *testing.T) {
 		if s.next.Load() != after {
 			checks = append(checks, fmt.Errorf("same concrete type repeated native RPC"))
 		}
+		// Evict the original handles with transient authenticated responses.
+		// A still-live value remains usable through a real type-check request.
+		for i := 0; i < goSourceNativeHandleTypeCacheLimit; i++ {
+			s.rememberNativeHandleType(bashPPBridgeValue{Kind: "handle", Session: s.id, Handle: uint64(1<<60) + uint64(i), NativeTypeID: 7})
+		}
+		beforeEvicted := s.next.Load()
+		if err := admit("first", iface); err != nil {
+			checks = append(checks, fmt.Errorf("evicted live handle: %w", err))
+		}
+		if s.next.Load() == beforeEvicted {
+			checks = append(checks, fmt.Errorf("evicted handle skipped the live type check"))
+		}
 		// Re-reading a value remains a real operation: cached type admission never
 		// substitutes the first color's payload for another color's channel values.
 		wrong := syntax.BashPPTypeExprFromText("interface{ RGBA()(uint16,uint16,uint16,uint16) }").(*syntax.BashPPInterfaceType)

@@ -16,6 +16,12 @@ type goSourceNativeAdmissionKey struct {
 	destination string
 }
 
+// This is an optional authentication cache, not the owner of native handles.
+// A miss in nativeAdmissionKey takes the normal dependency type-check path.
+// Bound transient (including lazy reflect.ValueOf) handle identities so calls
+// with a constant live working set do not accumulate metadata indefinitely.
+const goSourceNativeHandleTypeCacheLimit = 4096
+
 func (s *bashPPNativeSession) rememberNativeHandleType(v bashPPBridgeValue) {
 	if v.Kind != "handle" || v.Handle == 0 || v.Session != s.id {
 		return
@@ -36,6 +42,9 @@ func (s *bashPPNativeSession) rememberNativeHandleType(v bashPPBridgeValue) {
 	}
 	if s.handleTypes == nil {
 		s.handleTypes = make(map[uint64]uint64)
+	}
+	if _, known := s.handleTypes[v.Handle]; !known && len(s.handleTypes) >= goSourceNativeHandleTypeCacheLimit {
+		clear(s.handleTypes)
 	}
 	s.handleTypes[v.Handle] = v.NativeTypeID
 }
