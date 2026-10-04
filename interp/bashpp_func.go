@@ -2521,12 +2521,13 @@ func (r *Runner) bashPPSettleResultCells(fn *bashPPFunc, results, resultNames []
 		} else if i < len(r.bashPPReturn.cells) {
 			source = r.bashPPReturn.cells[i]
 		}
-		// A blank result parameter has a result slot but no lexical binding.
-		// On a naked return, instantiate that slot directly from its declared
-		// type; looking up "_" can only find unrelated shell state, while
+		// A blank or unassigned result parameter has a result slot but no
+		// lexical binding. On a naked return or when recovering from a panic,
+		// instantiate that slot directly from its declared type; looking up
+		// "_" or "" can only find unrelated shell state (or nothing), while
 		// rebuilding the slot from results[i] loses non-string zero values.
 		// An explicit return reaches the branch above and keeps its value cell.
-		if source == nil && blankResult && i < len(resultTypes) {
+		if source == nil && (!r.bashPPReturn.active || blankResult) && i < len(resultTypes) && resultTypes[i] != nil {
 			resultType := r.bashPPBindTypeExpr(resultTypes[i])
 			zero, meta := r.bashPPZeroValue(resultType)
 			source = &bashPPCell{declType: resultType, typeName: bashPPNamedTypeBase(resultType)}
