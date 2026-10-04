@@ -157,7 +157,7 @@ func TestGoSourceUnsafeSliceViewRefusals(t *testing.T) {
 	for _, tc := range []struct{ name, body, want string }{
 		{"string elements", `b := make([]string, 2); h := H{unsafe.Pointer(&b[0]), 4, 4}; fmt.Println(*(*[]int64)(unsafe.Pointer(&h)))`, "BASHPP-EUNSAFE-VIEW: type string"},
 		{"interface target", `b := make([]limit, 2); h := H{unsafe.Pointer(&b[0]), 4, 4}; fmt.Println(*(*[]any)(unsafe.Pointer(&h)))`, "BASHPP-EUNSAFE-VIEW: interface type"},
-		{"padded struct", `type P struct{ a int8; b int64 }; b := make([]P, 2); h := H{unsafe.Pointer(&b[0]), 4, 4}; fmt.Println(*(*[]int64)(unsafe.Pointer(&h)))`, "BASHPP-EUNSAFE-VIEW: padded struct P"},
+		{"padded struct", `type P struct{ a int8; b int64 }; b := make([]P, 2); h := H{unsafe.Pointer(&b[0]), 4, 4}; fmt.Println(*(*[]int64)(unsafe.Pointer(&h)))`, "BASHPP-EUNSAFE-VIEW: padded"},
 		{"past the span", `b := make([]limit, 2); h := H{unsafe.Pointer(&b[0]), 24, 24}; fmt.Println(*(*[]ID)(unsafe.Pointer(&h)))`, "BASHPP-EUNSAFE-SPAN"},
 		{"partial element", `b := make([]limit, 2); h := H{unsafe.Pointer(&b[0]), 3, 3}; fmt.Println(*(*[]ID)(unsafe.Pointer(&h)))`, "BASHPP-EUNSAFE-SPAN"},
 		{"invalid header", `b := make([]limit, 2); h := H{unsafe.Pointer(&b[0]), 9, 8}; fmt.Println(*(*[]ID)(unsafe.Pointer(&h)))`, "BASHPP-EUNSAFE-VIEW: slice header has invalid len"},

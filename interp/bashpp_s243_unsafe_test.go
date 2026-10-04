@@ -17,7 +17,9 @@ type Source struct { x, y, z int }
 type Blank struct { _, _, _ int }
 type Nested struct { _ struct { a, b, c int } }
 `
-	if runtime.GOARCH != "amd64" {
+	// arm64 shares the 64-bit little-endian gc layout; since the struct
+	// overlay support (Sprint 374) the same cases hold there.
+	if runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64" {
 		_, stderr, err := runGoSource(t, "s243-unsafe-architecture", prefix+`func main() { _ = *(*Blank)(unsafe.Pointer(&Source{})) }`)
 		qt.Assert(t, qt.IsNotNil(err))
 		qt.Assert(t, qt.IsTrue(strings.Contains(stderr, "BASHPP-EUNSAFE-LAYOUT")), qt.Commentf("stderr: %s", stderr))

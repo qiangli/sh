@@ -141,7 +141,7 @@ func main() {
 		}
 	})
 
-	t.Run("issue15329 reflect uintptr dereference remains raw memory", func(t *testing.T) {
+	t.Run("issue15329 reflect uintptr keeps its pointer origin", func(t *testing.T) {
 		src := `package main
 import (
 	"reflect"
@@ -152,9 +152,12 @@ func main() {
 	p := unsafe.Pointer(reflect.ValueOf(&x).Pointer())
 	_ = *(*int)(p)
 }`
+		// Sprint 374: a pointer round-tripped through reflect.Value.Pointer
+		// keeps its origin, so this is the original storage, not a forged
+		// address; the program runs as it does natively.
 		_, stderr, err := runGoSource(t, "s270-g4-issue15329-raw", src)
-		if err == nil || !strings.Contains(err.Error()+stderr, "BASHPP-EUNSAFE-FORGED") {
-			t.Fatalf("err=%v stderr=%q; want forged raw-address refusal", err, stderr)
+		if err != nil {
+			t.Fatalf("err=%v stderr=%q; want the reflected pointer to keep its origin", err, stderr)
 		}
 	})
 
