@@ -30,6 +30,12 @@ import (
 func (r *Runner) bashPPNativeExpr(expr syntax.BashPPExpr) bool {
 	switch x := expr.(type) {
 	case *syntax.BashPPCompositeLit:
+		// A slice-header literal is the one imported struct the program
+		// owns: bashPPEvalComposite builds it locally so that the unsafe
+		// conversion that follows can view its three words.
+		if _, header := r.goSourceUnsafeSliceHeaderFields(x.LitType); header {
+			return false
+		}
 		return r.bashPPNativeType(x.LitType)
 	case *syntax.BashPPAddressExpr:
 		if lit, ok := x.X.(*syntax.BashPPCompositeLit); ok {

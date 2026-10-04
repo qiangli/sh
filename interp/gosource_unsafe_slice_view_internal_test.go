@@ -88,3 +88,36 @@ func TestGoSourceUnsafeSliceHeaderViewPicksQualifiedPackage(t *testing.T) {
 		t.Fatal("an unqualified name matching two imported packages must stay ambiguous")
 	}
 }
+
+// A slice-header literal is built by the program and immediately viewed
+// through unsafe, so it is interpreter-owned storage even though its type is
+// imported. `s := unsafeheader.Slice{…}` reaches the declaration path, which
+// asks bashPPNativeExpr before any composite is evaluated.
+func TestGoSourceUnsafeSliceHeaderLiteralIsNotDependencyOwned(t *testing.T) {
+	pkg := types.NewPackage("internal/unsafeheader", "unsafeheader")
+	header := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "Slice", nil), types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Data", types.Typ[types.UnsafePointer], false),
+		types.NewField(token.NoPos, pkg, "Len", types.Typ[types.Int], false),
+		types.NewField(token.NoPos, pkg, "Cap", types.Typ[types.Int], false),
+	}, nil), nil)
+	other := types.NewNamed(types.NewTypeName(token.NoPos, pkg, "String", nil), types.NewStruct([]*types.Var{
+		types.NewField(token.NoPos, pkg, "Data", types.Typ[types.UnsafePointer], false),
+		types.NewField(token.NoPos, pkg, "Len", types.Typ[types.Int], false),
+	}, nil), nil)
+	r := &Runner{
+		bashPPGoSource: true,
+		bashPPImports:  map[string]string{"unsafeheader": "internal/unsafeheader", "unsafe": "unsafe"},
+		bashPPTools: bashPPToolchain{nativeTypes: map[string]types.Type{
+			"internal/unsafeheader.Slice":  header,
+			"internal/unsafeheader.String": other,
+		}},
+	}
+	notHeader := &syntax.BashPPCompositeLit{LitType: &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "unsafeheader.String"}}}
+	if !r.bashPPNativeExpr(notHeader) {
+		t.Fatal("an ordinary imported struct literal must stay dependency-owned")
+	}
+	lit := &syntax.BashPPCompositeLit{LitType: &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "unsafeheader.Slice"}}}
+	if r.bashPPNativeExpr(lit) {
+		t.Fatal("a slice-header literal was classified as dependency-owned")
+	}
+}
