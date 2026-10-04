@@ -892,6 +892,11 @@ func bashPPBridgeScalarValue(v bashPPBridgeValue) (any, *bashPPCollectionMeta, e
 		}
 		return n, nil, nil
 	case "float":
+		// A NaN crosses the bridge as its IEEE bits so the payload survives;
+		// collections store that carrier as the float's text.
+		if _, nan := bashPPNaNBitsScalar(v.Text, ""); nan {
+			return v.Text, nil, nil
+		}
 		n, err := strconv.ParseFloat(v.Text, 64)
 		if err != nil {
 			return nil, nil, fmt.Errorf("float %q from the dependency: %w", v.Text, err)
