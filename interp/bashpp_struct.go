@@ -368,10 +368,17 @@ func bashPPSetStructSelector(root map[string]any, meta *bashPPCollectionMeta, ed
 
 // bashPPSetInitialStructField builds private struct storage. Scalar fields have
 // no runtime shape beyond their declared type, so omitting their nil layout
-// entries avoids a second hash map on the common all-scalar struct.
+// entries avoids a second hash map on the common all-scalar struct. A nil
+// child still clears a layout entry the zero-value pre-fill left behind —
+// a positional initializer carrying no metadata of its own (a closure handle
+// for a func-typed field) must not keep reading under the zero's layout or
+// the value and its metadata disagree about what the field holds.
 func bashPPSetInitialStructField(out map[string]any, meta *bashPPCollectionMeta, name string, value any, child *bashPPCollectionMeta) {
 	out[name] = value
 	if child == nil {
+		if meta.mapping != nil {
+			meta.mapping[name] = nil
+		}
 		return
 	}
 	if meta.mapping == nil {

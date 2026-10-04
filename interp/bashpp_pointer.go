@@ -788,6 +788,21 @@ func (p *bashPPPointer) read() (any, *bashPPCollectionMeta, syntax.BashPPTypeExp
 			return nil, nil, nil, fmt.Errorf("BASHPP-EUNSAFE-VIEW: target %s is not a supported blank-field struct", bashPPTypeText(p.elem))
 		}
 	}
+	// Dereferencing a pointer to an interface yields the interface value
+	// itself: the target cell's interface edge travels with a direct read.
+	// Without it a nil interface reads back as a bare value that can neither
+	// compare with nil nor match `case nil`, and a live one re-boxes under
+	// its static interface type instead of its dynamic type. A path that
+	// walked into nested storage already carries that step's own metadata.
+	if len(p.path) == 0 && (meta == nil || meta.interfaceValue == nil) {
+		if iv := target.interfaceValue; iv != nil {
+			typ := target.declType
+			if typ == nil {
+				typ = p.elem
+			}
+			meta = &bashPPCollectionMeta{kind: "interface", typ: typ, interfaceValue: iv}
+		}
+	}
 	return value, meta, p.elem, nil
 }
 
