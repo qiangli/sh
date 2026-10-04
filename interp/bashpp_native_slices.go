@@ -354,7 +354,7 @@ func prepareNativeSliceBuffers(ctx context.Context, req bashPPEvalRequest, q *ba
 		if nativeSliceReadOnly(callable) && prepareNativeCopyCoherence(req, q) {
 			return nil
 		}
-		return fmt.Errorf("gosource: original callback with copied slice references is unsupported")
+		return fmt.Errorf("gosource: original callback with copied slice references is unsupported (calling %s)", callable)
 	}
 	if nativeSliceCallable(req, *q) == "*text/template.Template.Execute" {
 		// A configured template may call arbitrary registered functions. Permit
