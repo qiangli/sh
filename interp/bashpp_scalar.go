@@ -1606,6 +1606,23 @@ func (r *Runner) bashPPComparableExpr(expr syntax.BashPPExpr) (bashPPComparableV
 		if err != nil {
 			return bashPPComparableValue{}, err
 		}
+		if r.bashPPGoSource && !bashPPNilComparable(meta) && !bashPPPointerComparable(meta) {
+			// A dereference of a pointer to a func type reads back the
+			// function value without func metadata, while a variable of
+			// that type compares through its func underlying. See through
+			// the named type the same way, so `*s != nil` answers for the
+			// function value: a live handle is non-nil, an empty one is.
+			if _, ok := r.bashPPUnderlyingType(ptr.elem).(*syntax.BashPPFuncType); ok {
+				if text, ok := value.(string); ok {
+					var fvalue any
+					if text != "" && text != "nil" {
+						fvalue = text
+					}
+					value = fvalue
+					meta = &bashPPCollectionMeta{kind: "func", typ: ptr.elem}
+				}
+			}
+		}
 		return bashPPComparableValue{value: value, meta: meta}, nil
 	case *syntax.BashPPIndexExpr, *syntax.BashPPSliceExpr, *syntax.BashPPSelectorExpr:
 		value, meta, err := r.bashPPReadExpr(expr)

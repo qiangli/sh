@@ -307,6 +307,17 @@ func (r *Runner) goSourceValueSwitchTag(expr syntax.BashPPExpr) bool {
 		return true
 	case *syntax.BashPPCompositeLit:
 		return x.LitType != nil && !r.bashPPNativeType(x.LitType)
+	case *syntax.BashPPDerefExpr:
+		// A dereference of a pointer to a func type is a function value,
+		// which the scalar tag path cannot carry; the value switch
+		// compares it through the same func metadata a variable uses.
+		// Other dereferences keep their existing tag routing.
+		if pointer, ok := r.bashPPUnderlyingType(r.bashPPExprScalarType(x.X)).(*syntax.BashPPPointerType); ok {
+			if _, ok := r.bashPPUnderlyingType(pointer.Element).(*syntax.BashPPFuncType); ok {
+				return true
+			}
+		}
+		return false
 	}
 	return false
 }

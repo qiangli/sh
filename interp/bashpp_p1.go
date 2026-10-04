@@ -1271,6 +1271,17 @@ func (r *Runner) bashPPShortDecl(ctx context.Context, d *syntax.BashPPShortDecl)
 					}
 				}
 				bound.valueMeta = meta
+				// An interface-typed read keeps the dynamic edge the
+				// collection reported, under the read's own static type:
+				// without the edge the new binding is a bare value that can
+				// neither switch nor box, so `t := m[k]` from an
+				// interface-element map loses the interface itself, and
+				// without the static type a later interface admission checks
+				// the wrong dynamic type.
+				if meta.interfaceValue != nil {
+					bound.interfaceValue = meta.interfaceValue
+					bound.declType = meta.typ
+				}
 			} else {
 				cell := r.goSourceCollectionReadCell(d.Expr, value, meta)
 				r.bashPPDeclareName(name, cell.vr)
