@@ -162,6 +162,27 @@ func (r *Runner) bashPPNestMirror(types []bashPPLocalType, scoped map[string]str
 			generic[fn.Name.Value] = info
 		}
 	}
+	// A generic function may reach a mirrored declaration through another
+	// generic function. Mirror each explicit forwarder so the concrete caller
+	// can register the descendant's types under its substituted arguments.
+	for changed := true; changed; {
+		changed = false
+		for _, stmt := range file.Stmts {
+			fn, ok := stmt.Cmd.(*syntax.BashPPFuncDecl)
+			if !ok || fn.Receiver != nil || fn.Name == nil || fn.Body == nil || len(fn.TypeParams) == 0 || generic[fn.Name.Value] != nil {
+				continue
+			}
+			info := r.bashPPNestFuncInfo(fn)
+			if info == nil {
+				continue
+			}
+			info.sites = bashPPNestSites(fn, generic)
+			if len(info.sites) > 0 && r.bashPPNestRenders(info, helperNames) {
+				generic[fn.Name.Value] = info
+				changed = true
+			}
+		}
+	}
 	if len(generic) == 0 {
 		return nil, ""
 	}
@@ -170,16 +191,7 @@ func (r *Runner) bashPPNestMirror(types []bashPPLocalType, scoped map[string]str
 	callers := map[*syntax.BashPPFuncDecl]*bashPPNestFunc{}
 	used := map[string]bool{}
 	for _, fn := range plain {
-		var sites []*syntax.BashPPCall
-		syntax.Walk(fn.Body, func(node syntax.Node) bool {
-			call, ok := node.(*syntax.BashPPCall)
-			if ok && len(call.Fun) == 1 && call.CalleeExpr == nil && call.FuncLit == nil {
-				if target := generic[call.Fun[0].Value]; target != nil && len(call.TypeArgs) == len(target.params) {
-					sites = append(sites, call)
-				}
-			}
-			return true
-		})
+		sites := bashPPNestSites(fn, generic)
 		if len(sites) == 0 {
 			continue
 		}
@@ -201,6 +213,17 @@ func (r *Runner) bashPPNestMirror(types []bashPPLocalType, scoped map[string]str
 	for name, info := range generic {
 		if used[name] {
 			mirrored[info.fn] = info
+		}
+	}
+	for changed := true; changed; {
+		changed = false
+		for _, info := range mirrored {
+			for _, site := range info.sites {
+				if target := generic[site.Fun[0].Value]; target != nil && mirrored[target.fn] == nil {
+					mirrored[target.fn] = target
+					changed = true
+				}
+			}
 		}
 	}
 	for fn, info := range callers {
@@ -248,6 +271,20 @@ func (r *Runner) bashPPNestMirror(types []bashPPLocalType, scoped map[string]str
 	}
 	fmt.Fprintf(&b, "func init() { %s }\n", strings.Join(inits, "; "))
 	return nest, b.String()
+}
+
+func bashPPNestSites(fn *syntax.BashPPFuncDecl, generic map[string]*bashPPNestFunc) []*syntax.BashPPCall {
+	var sites []*syntax.BashPPCall
+	syntax.Walk(fn.Body, func(node syntax.Node) bool {
+		call, ok := node.(*syntax.BashPPCall)
+		if ok && len(call.Fun) == 1 && call.CalleeExpr == nil && call.FuncLit == nil {
+			if target := generic[call.Fun[0].Value]; target != nil && len(call.TypeArgs) == len(target.params) {
+				sites = append(sites, call)
+			}
+		}
+		return true
+	})
+	return sites
 }
 
 // bashPPNestHasLocalTypes reports whether fn declares any local type.
@@ -476,7 +513,11 @@ func (r *Runner) bashPPNestMirrorGo(b *strings.Builder, info *bashPPNestFunc, ge
 			bindings[target.params[i]] = arg.ArgType
 			args[i] = bashPPBridgeTypeText(arg.ArgType)
 		}
-		keys := r.bashPPNestSiteKeys(target, bindings, nest, scoped)
+		if len(info.params) > 0 {
+			points = append(points, point{pos: site.Pos(), text: fmt.Sprintf(" bppNestTs = append(bppNestTs, bppNestFn_%s[%s]()...)\n", target.fn.Name.Value, strings.Join(args, ", "))})
+			continue
+		}
+		keys := r.bashPPNestSiteKeys(target, bindings, generic, nest, scoped)
 		quoted := make([]string, len(keys))
 		for i, key := range keys {
 			quoted[i] = strconv.Quote(key)
@@ -528,15 +569,15 @@ func (r *Runner) bashPPNestMirrorGo(b *strings.Builder, info *bashPPNestFunc, ge
 // bashPPNestSiteKeys are the registration keys of a generic mirror's
 // results under one instantiation: the runtime spelling of each reference
 // once the frame binds the site's type arguments, in the mirror's order.
-func (r *Runner) bashPPNestSiteKeys(target *bashPPNestFunc, bindings map[string]syntax.BashPPTypeExpr, nest map[string]bashPPNestDecl, scoped map[string]string) []string {
+func (r *Runner) bashPPNestSiteKeys(target *bashPPNestFunc, bindings map[string]syntax.BashPPTypeExpr, generic map[string]*bashPPNestFunc, nest map[string]bashPPNestDecl, scoped map[string]string) []string {
 	scope := r.bashPPNestScope(nest, scoped, bindings)
 	type keyed struct {
-		pos syntax.Pos
-		key string
+		pos  syntax.Pos
+		keys []string
 	}
 	var keys []keyed
 	for _, named := range target.exprs {
-		keys = append(keys, keyed{named.Pos(), bashPPBridgeTypeTextIn(bashPPSubstituteType(named, bindings), scope)})
+		keys = append(keys, keyed{named.Pos(), []string{bashPPBridgeTypeTextIn(bashPPSubstituteType(named, bindings), scope)}})
 	}
 	for _, d := range target.decls {
 		if len(d.TypeParams) > 0 {
@@ -547,12 +588,23 @@ func (r *Runner) bashPPNestSiteKeys(target *bashPPNestFunc, bindings map[string]
 		for i, param := range target.params {
 			args[i] = bashPPBridgeTypeTextIn(bindings[param], r.bashPPNestScope(nest, scoped, nil))
 		}
-		keys = append(keys, keyed{d.End(), bashPPNestName(key, args)})
+		keys = append(keys, keyed{d.End(), []string{bashPPNestName(key, args)}})
+	}
+	for _, site := range target.sites {
+		child := generic[site.Fun[0].Value]
+		if child == nil {
+			continue
+		}
+		childBindings := make(map[string]syntax.BashPPTypeExpr, len(child.params))
+		for i, param := range child.params {
+			childBindings[param] = bashPPSubstituteType(site.TypeArgs[i].ArgType, bindings)
+		}
+		keys = append(keys, keyed{site.Pos(), r.bashPPNestSiteKeys(child, childBindings, generic, nest, scoped)})
 	}
 	sort.SliceStable(keys, func(i, j int) bool { return keys[i].pos.Offset() < keys[j].pos.Offset() })
-	out := make([]string, len(keys))
-	for i, k := range keys {
-		out[i] = k.key
+	var out []string
+	for _, k := range keys {
+		out = append(out, k.keys...)
 	}
 	return out
 }
