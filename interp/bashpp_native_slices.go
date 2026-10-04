@@ -4,6 +4,7 @@ package interp
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -30,6 +31,21 @@ type bashPPNativeSliceRefreshKey struct {
 	storage          uint64
 	offset           int
 	length, capacity int
+}
+
+// errNativeCopiedSliceCallback is the refusal of a dependency call that would
+// keep or change a decoded copy of interpreter storage while original
+// callbacks can still run.
+var errNativeCopiedSliceCallback = errors.New("gosource: original callback with copied slice references is unsupported")
+
+// nativePoolPutDroppable reports whether q is sync.Pool.Put. A pool may drop
+// any item at any time without notification, and the race-enabled runtime
+// does so at random, so a Put whose argument the dependency may not retain is
+// answered by dropping the item: the program then observes exactly what it
+// would after a collection emptied the pool.
+func nativePoolPutDroppable(q bashPPBridgeRequest) bool {
+	return q.Op == "call" && q.Selector == "Put" && len(q.Args) == 1 &&
+		q.Receiver != nil && q.Receiver.Kind == "pointer" && q.Receiver.Type == "*sync.Pool"
 }
 
 func nativeSliceCallable(req bashPPEvalRequest, q bashPPBridgeRequest) string {
@@ -354,7 +370,7 @@ func prepareNativeSliceBuffers(ctx context.Context, req bashPPEvalRequest, q *ba
 		if nativeSliceReadOnly(callable) && prepareNativeCopyCoherence(req, q) {
 			return nil
 		}
-		return fmt.Errorf("gosource: original callback with copied slice references is unsupported (calling %s)", callable)
+		return fmt.Errorf("%w (calling %s)", errNativeCopiedSliceCallback, callable)
 	}
 	if nativeSliceCallable(req, *q) == "*text/template.Template.Execute" {
 		// A configured template may call arbitrary registered functions. Permit

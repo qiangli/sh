@@ -954,6 +954,9 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 		q.sourceSynchronousCallback = dependencyFunctionCallbackLifetimeProof(ctx, req, q)
 	}
 	if err := prepareNativeSliceBuffers(ctx, req, &q); err != nil {
+		if errors.Is(err, errNativeCopiedSliceCallback) && nativePoolPutDroppable(q) {
+			return nil, nil
+		}
 		return nil, err
 	}
 	// A generic slices helper (slices.Equal/slices.Sort) is not a reflectable
