@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -62,5 +63,17 @@ func main() { done := make(chan struct{}); go func() { defer close(done); defer 
 				t.Fatalf("interpreter differs: err=%v stdout=%q stderr=%q; go run=%q", runErr, stdout.String(), stderr.String(), want)
 			}
 		})
+	}
+}
+
+func TestGoSourceS374FixedbugsIssue5963(t *testing.T) {
+	root := filepath.Join(runtime.GOROOT(), "test", "fixedbugs")
+	source, err := os.ReadFile(filepath.Join(root, "issue5963.go"))
+	if err != nil {
+		t.Skipf("skipping: %v", err)
+	}
+	stdout, stderr, err := runGoSource(t, "issue5963", string(source))
+	if err != nil || stderr != "" || stdout != "" {
+		t.Fatalf("run: %v\nstdout: %q\nstderr: %q", err, stdout, stderr)
 	}
 }

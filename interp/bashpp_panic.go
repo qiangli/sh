@@ -355,8 +355,14 @@ func (r *Runner) bashPPPanicTerminate() {
 			r.exit = exitStatus{}
 			return
 		}
-		r.errf("fatal error: no goroutines (main called runtime.Goexit) - deadlock!\n")
-		r.exit = exitStatus{code: bashPPPanicStatus, exiting: true}
+		r.bashPPMainGoexit = true
+		if c := r.bashPPConcurrent; c != nil {
+			c.mu.Lock()
+			c.mainGoexit = true
+			c.changed.Broadcast()
+			c.mu.Unlock()
+		}
+		r.exit = exitStatus{exiting: true}
 		return
 	}
 	var b strings.Builder

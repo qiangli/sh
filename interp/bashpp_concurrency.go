@@ -283,6 +283,9 @@ type bashPPConcurrent struct {
 	// finalizers holds the program's armed finalizers; see
 	// gosource_finalizer.go.
 	finalizers *goSourceFinalizers
+	mainGoexit bool
+	exitCalled bool
+	exitStatus int
 }
 
 // bashPPLockedWriter serializes one Write call at a time across every task in
@@ -1297,6 +1300,54 @@ func (r *Runner) bashPPWait(ctx context.Context) {
 	}
 	if c == nil {
 		r.bashPPPruneIssuedHandles(nil)
+		if r.bashPPMainGoexit {
+			r.errf("fatal error: no goroutines (main called runtime.Goexit) - deadlock!\n")
+			r.exit = exitStatus{code: bashPPPanicStatus, exiting: true}
+		}
+		return
+	}
+	if r.bashPPMainGoexit {
+		c.mu.Lock()
+		c.mainGoexit = true
+		c.changed.Broadcast()
+		for c.active != 0 && !c.exitCalled {
+			c.changed.Wait()
+		}
+		if c.exitCalled {
+			code := c.exitStatus
+			c.cancel()
+			for c.active != 0 {
+				c.changed.Wait()
+			}
+			c.quiesced = true
+			c.mu.Unlock()
+			r.bashPPPruneIssuedHandles(c)
+			c.closeFIFOs(nil)
+			r.bashPPClearChannelRefs(c)
+			r.bashPPConcurrent = nil
+			r.exit = exitStatus{code: uint8(code), exiting: true}
+			if code != 0 {
+				r.exit.fatalExit = true
+				r.exit.err = ExitStatus(uint8(code))
+			}
+			return
+		}
+		c.quiesced = true
+		failure := c.primaryFailureLocked()
+		c.mu.Unlock()
+		r.bashPPPruneIssuedHandles(c)
+		c.closeFIFOs(nil)
+		r.bashPPClearChannelRefs(c)
+		r.bashPPConcurrent = nil
+		if failure != nil {
+			r.errf("bash++: task failed: %s\n", failure.text)
+			if r.exit.code == 0 {
+				r.exit.code = failure.code
+			}
+			return
+		}
+		r.errf("fatal error: no goroutines (main called runtime.Goexit) - deadlock!\n")
+		r.exit = exitStatus{code: bashPPPanicStatus, exiting: true}
 		return
 	}
 	// EOF is the structured lifetime boundary. Successful blocked tasks must
