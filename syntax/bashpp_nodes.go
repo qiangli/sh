@@ -653,8 +653,10 @@ func (t *BashPPFuncType) End() Pos {
 }
 
 type BashPPNamedType struct {
-	Name     *Lit
-	TypeArgs []*BashPPTypeArg
+	// LocalSync is a front-end ownership certificate, never inferred at runtime.
+	LocalSync string
+	Name      *Lit
+	TypeArgs  []*BashPPTypeArg
 }
 
 func (t *BashPPNamedType) Pos() Pos { return t.Name.Pos() }

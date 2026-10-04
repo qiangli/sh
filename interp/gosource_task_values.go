@@ -56,6 +56,9 @@ func (r *Runner) goSourceCapturedHandleCell(cell *bashPPCell) (bool, bool) {
 	if !ok || v == nil {
 		return false, false
 	}
+	if v.residentSync != nil {
+		return true, true
+	}
 	if v.Kind == "nil" {
 		// A typed nil carries no object authority; future non-nil values are
 		// still checked by every dependency operation.

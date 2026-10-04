@@ -87,8 +87,9 @@ type converter struct {
 	statementLabel          string
 	// gotoTargets holds the labels a goto names, built on first use by
 	// gotoTarget; nil until then.
-	gotoTargets       map[types.Object]bool
-	localChannelTypes map[string]bool
+	gotoTargets            map[types.Object]bool
+	localChannelTypes      map[string]bool
+	syncPlanned, syncLocal bool
 	// innerNames caches, per file, the set of identifiers declared in any scope
 	// strictly inside the file scope — function, block, case, and other body
 	// scopes. A spelling head absent from this set cannot be shadowed by a local
@@ -610,12 +611,12 @@ func (c *converter) typ(e ast.Expr) s.BashPPTypeExpr {
 				return &s.BashPPTypeParamType{Name: c.ident(x)}
 			}
 		}
-		return &s.BashPPNamedType{Name: c.ident(x)}
+		return &s.BashPPNamedType{Name: c.ident(x), LocalSync: c.localSyncType(c.info.TypeOf(x))}
 	case *ast.SelectorExpr:
 		if c.mappedPkgName(x.X) {
 			return &s.BashPPNamedType{Name: c.ident(x.Sel)}
 		}
-		return &s.BashPPNamedType{Name: c.lit(x.Pos(), c.ident(x.X.(*ast.Ident)).Value+"."+x.Sel.Name)}
+		return &s.BashPPNamedType{Name: c.lit(x.Pos(), c.ident(x.X.(*ast.Ident)).Value+"."+x.Sel.Name), LocalSync: c.localSyncType(c.info.TypeOf(x))}
 	case *ast.StarExpr:
 		return &s.BashPPPointerType{Star: c.pos(x.Star), Element: c.typ(x.X)}
 	case *ast.ArrayType:

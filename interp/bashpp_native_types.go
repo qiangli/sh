@@ -24,6 +24,9 @@ func (r *Runner) bashPPNativeType(typ syntax.BashPPTypeExpr) bool {
 	return false
 }
 func (r *Runner) bashPPNativeTypeRequest(op string, typ syntax.BashPPTypeExpr, args ...bashPPBridgeValue) (bashPPBridgeValue, error) {
+	if value, handled, err := r.goSourceResidentSyncType(op, typ, args); handled {
+		return value, err
+	}
 	req, err := r.bashPPEvalRequest()
 	if err != nil {
 		return bashPPBridgeValue{}, err

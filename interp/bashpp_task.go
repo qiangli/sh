@@ -68,6 +68,9 @@ func bashPPNativeScopeOf(r *Runner) bashPPNativeHandleScope {
 // deliberately conservative: it only rejects what is provably unusable, so a
 // snapshot taken before the session has started is still allowed through.
 func (scope bashPPNativeHandleScope) checkHandle(value bashPPBridgeValue) error {
+	if value.residentSync != nil {
+		return nil
+	}
 	if value.Kind == "handle" {
 		if value.Session == "" {
 			return errBashPPUnboundNativeHandle

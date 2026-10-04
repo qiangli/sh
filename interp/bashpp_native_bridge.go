@@ -39,6 +39,7 @@ import (
 var bashPPNativeWorker string
 
 type bashPPBridgeValue struct {
+	residentSync *goSourceResidentSync // host-only; never serialized
 	// deferredNativeComposite is return-boundary provenance minted only while
 	// evaluating the mirrored method frame's own return expression. The worker
 	// reconstructs the value at the declared reflect result type; the marker is
@@ -316,8 +317,8 @@ type bashPPNativeSession struct {
 	// mismatch rebuilds it, as for originIndex. Both protected by mu.
 	sliceRegionRoot  *bashPPSliceRegion
 	sliceRegionCount int
-	start           sync.Mutex
-	write           sync.Mutex
+	start            sync.Mutex
+	write            sync.Mutex
 	// encoder is created with conn and used only with write held. Keeping it
 	// session-owned avoids rebuilding JSON's encoder state for every imported
 	// call, without extending any request or response object's lifetime.
@@ -874,6 +875,15 @@ func (s *bashPPNativeSession) checkBridgeValue(v bashPPBridgeValue) error {
 }
 
 func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest, q bashPPBridgeRequest) ([]bashPPBridgeValue, error) {
+	if q.Receiver != nil && residentSyncValue(*q.Receiver) != nil {
+		return nil, fmt.Errorf("resident sync cannot enter native transport")
+	}
+	for _, arg := range q.Args {
+		if residentSyncValue(arg) != nil {
+			return nil, fmt.Errorf("resident sync cannot enter native transport")
+		}
+	}
+
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}

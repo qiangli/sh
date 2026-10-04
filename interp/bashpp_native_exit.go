@@ -98,6 +98,9 @@ func (r *Runner) bashPPNativeExitStatus(err error) bool {
 // bashPPNativeRequest issues one bridge request and converts a self-terminated
 // dependency process into the program's exit status.
 func (r *Runner) bashPPNativeRequest(ctx context.Context, req bashPPEvalRequest, q bashPPBridgeRequest) ([]bashPPBridgeValue, error) {
+	if values, handled, err := r.goSourceResidentSyncRequest(ctx, q); handled {
+		return values, err
+	}
 	if values, handled, err := goSourceFastStdlibCall(ctx, req, q); handled {
 		return values, err
 	}
