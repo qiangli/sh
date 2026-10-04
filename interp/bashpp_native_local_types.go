@@ -196,6 +196,7 @@ func (r *Runner) bashPPBuildLocalTypeDescriptorsWithout(withdrawn map[string]boo
 			if _, exists := generics[d.Name.Value]; exists {
 				ambiguous[d.Name.Value] = true
 			}
+			identities[d.Name.Value] = d.GoTypeIdentity
 			generics[d.Name.Value] = d
 		}
 	}
@@ -284,7 +285,7 @@ func (r *Runner) bashPPBuildLocalTypeDescriptorsWithout(withdrawn map[string]boo
 		}
 	}
 	sort.Strings(names)
-	local := &bashPPLocalTypeSet{declared: declared, imports: r.bashPPImports, generics: generics, resolve: resolveScoped}
+	local := &bashPPLocalTypeSet{declared: declared, imports: r.bashPPImports, generics: generics, identities: identities, resolve: resolveScoped}
 	// A package-level defined generic whose declaration, constraints and
 	// mirrored method stubs are all expressible is materialised as itself:
 	// its instantiations are aliases of the real generic instance, so fmt
@@ -515,7 +516,7 @@ func (r *Runner) bashPPBuildLocalTypeDescriptorsWithout(withdrawn map[string]boo
 			// gc separates type arguments with a bare comma.
 			args := make([]string, len(named.TypeArgs))
 			for i, arg := range named.TypeArgs {
-				args[i] = bashPPTypeText(arg.ArgType)
+				args[i] = local.identityTypeText(arg.ArgType)
 			}
 			public.Name = named.Name.Value + "[" + strings.Join(args, ",") + "]"
 			identity = &public
@@ -724,6 +725,10 @@ func (l *bashPPLocalTypeSet) genericDeclaration(base *syntax.BashPPDecl, instanc
 type bashPPLocalTypeSet struct {
 	declared map[string]syntax.BashPPTypeExpr
 	imports  map[string]string
+	// identities are the source package identities of package-level
+	// declarations. They are used only for public reflection strings, not for
+	// helper source or transport registry names.
+	identities map[string]*syntax.BashPPTypeIdentity
 	// generics are the local generic type declarations, so an instantiated
 	// spelling inside a rendered body resolves to its materialised name.
 	generics map[string]*syntax.BashPPDecl
@@ -749,6 +754,53 @@ type bashPPLocalTypeSet struct {
 	// reused name by its own helper identity; nil or false keeps the plain
 	// name (bashpp_s243_scoped_local_types.go).
 	resolve func(*syntax.BashPPNamedType) (string, bool)
+}
+
+// identityTypeText renders a type argument the way gc includes it in the
+// reflection name of an instantiated defined type. Unlike helper source text,
+// named package types are package-qualified in this public identity string.
+func (l *bashPPLocalTypeSet) identityTypeText(typ syntax.BashPPTypeExpr) string {
+	switch t := typ.(type) {
+	case *syntax.BashPPNamedType:
+		base := t.Name.Value
+		if id := l.identities[base]; id != nil {
+			base = id.PackageName + "." + id.Name
+		}
+		if len(t.TypeArgs) == 0 {
+			return base
+		}
+		args := make([]string, len(t.TypeArgs))
+		for i, arg := range t.TypeArgs {
+			args[i] = l.identityTypeText(arg.ArgType)
+		}
+		return base + "[" + strings.Join(args, ",") + "]"
+	case *syntax.BashPPPointerType:
+		return "*" + l.identityTypeText(t.Element)
+	case *syntax.BashPPCollectionType:
+		if t.Kind == "map" {
+			return "map[" + l.identityTypeText(t.Key) + "]" + l.identityTypeText(t.Element)
+		}
+		length := ""
+		if t.Length != nil {
+			length = t.Length.Value
+		}
+		return "[" + length + "]" + l.identityTypeText(t.Element)
+	case *syntax.BashPPChanType:
+		prefix := "chan "
+		if t.Direction == "send" {
+			prefix = "chan<- "
+		} else if t.Direction == "recv" {
+			prefix = "<-chan "
+		}
+		if t.Element == nil {
+			if t.Elem != nil {
+				return prefix + t.Elem.Value
+			}
+			return prefix
+		}
+		return prefix + l.identityTypeText(t.Element)
+	}
+	return bashPPTypeText(typ)
 }
 
 // embeddedInstantiation reports an embedded field spelled as a local generic
