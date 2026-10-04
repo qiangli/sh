@@ -65,6 +65,99 @@ func (r *Runner) bashPPApplyUpdate(target syntax.BashPPExpr, op string, rhs synt
 			}
 		}
 	}
+	if r.bashPPGoSource && r.goSourceImportedVariablePath(target) {
+		ptr, err := r.goSourceNativeAddress(target)
+		if err != nil {
+			r.bashPPUpdateError(target.Pos(), "TARGET", err.Error())
+			return
+		}
+		curVal, err := r.bashPPNativeAccess(r.ectx, "deref", ptr, "")
+		if err != nil {
+			if !errors.Is(err, errBashPPScalarInterrupted) {
+				r.bashPPUpdateError(target.Pos(), "TARGET", err.Error())
+			}
+			return
+		}
+		left, err := curVal.scalar()
+		if err != nil {
+			r.bashPPUpdateError(target.Pos(), "TYPE", err.Error())
+			return
+		}
+		right, err := r.bashPPEvalScalarExpr(rhs)
+		if err != nil {
+			if !errors.Is(err, errBashPPScalarInterrupted) {
+				r.bashPPUpdateError(rhs.Pos(), "RHS", err.Error())
+			}
+			return
+		}
+		value, kind, err := r.bashPPUpdateResult(op, left, right)
+		if err != nil {
+			if !errors.Is(err, errBashPPScalarInterrupted) {
+				r.bashPPUpdateError(pos, "OP", err.Error())
+			}
+			return
+		}
+		resultScalar := bashPPScalar{typ: left.typ, runtime: true}
+		switch kind {
+		case constant.String:
+			if s, ok := value.(string); ok {
+				resultScalar.value = constant.MakeString(s)
+			} else {
+				resultScalar.value = constant.MakeString(fmt.Sprint(value))
+			}
+		case constant.Bool:
+			if b, ok := value.(bool); ok {
+				resultScalar.value = constant.MakeBool(b)
+			} else {
+				resultScalar.value = constant.MakeFromLiteral(fmt.Sprint(value), token.INT, 0)
+			}
+		case constant.Int:
+			switch v := value.(type) {
+			case int:
+				resultScalar.value = constant.MakeInt64(int64(v))
+			case string:
+				resultScalar.value = constant.MakeFromLiteral(v, token.INT, 0)
+			default:
+				resultScalar.value = constant.MakeFromLiteral(fmt.Sprint(v), token.INT, 0)
+			}
+		case constant.Float:
+			switch v := value.(type) {
+			case float64:
+				resultScalar.value = constant.MakeFloat64(v)
+			case string:
+				resultScalar.value = constant.MakeFromLiteral(v, token.FLOAT, 0)
+			default:
+				resultScalar.value = constant.MakeFromLiteral(fmt.Sprint(v), token.FLOAT, 0)
+			}
+		case constant.Complex:
+			text := fmt.Sprint(value)
+			if parsed := bashPPParseComplex(text); parsed != nil && parsed.Kind() == constant.Complex {
+				resultScalar.value = parsed
+			} else {
+				resultScalar.value = constant.MakeFromLiteral(text, token.FLOAT, 0)
+			}
+		default:
+			r.bashPPUpdateError(target.Pos(), "TYPE", fmt.Sprintf("unsupported result kind %v", kind))
+			return
+		}
+		if resultScalar.value == nil || resultScalar.value.Kind() == constant.Unknown {
+			r.bashPPUpdateError(target.Pos(), "TYPE", "result is not scalar")
+			return
+		}
+		bridge, err := bridgeScalar(resultScalar)
+		if err != nil {
+			r.bashPPUpdateError(target.Pos(), "WRITE", err.Error())
+			return
+		}
+		if _, err := r.bashPPNativeAccess(r.ectx, "deref-set", ptr, "", bridge); err != nil {
+			if !errors.Is(err, errBashPPScalarInterrupted) {
+				r.bashPPUpdateError(target.Pos(), "WRITE", err.Error())
+			}
+			return
+		}
+		r.exit.clear()
+		return
+	}
 	ptr, err := r.bashPPAddress(target)
 	if err != nil {
 		r.bashPPUpdateError(target.Pos(), "TARGET", err.Error())

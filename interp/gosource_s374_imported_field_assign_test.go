@@ -80,3 +80,37 @@ func main() {
 }`
 	differGoSourceDependencyModule(t, "example.com/fieldassign", dep, main)
 }
+
+// Compound assignment and increment on a field of an imported package variable
+// must use the same by-address base as plain assignment. Before the fix the
+// update path reported BASHPP-EUPDATE-TARGET: BASHPP-EPOINTER-TARGET.
+func TestS374ImportedVariableFieldCompound(t *testing.T) {
+	source := `package main
+
+import (
+	"fmt"
+	"go/build"
+	"image"
+)
+
+func main() {
+	orig := build.Default.GOARCH
+	fmt.Println("before", build.Default.GOARCH)
+	build.Default.GOARCH += "q"
+	fmt.Println("after", build.Default.GOARCH)
+	build.Default.GOARCH = orig
+	fmt.Println("restore", build.Default.GOARCH)
+
+	fmt.Println("zp before", image.ZP.X, image.ZP.Y)
+	image.ZP.X += 3
+	fmt.Println("zp add", image.ZP.X, image.ZP.Y)
+	image.ZP.X++
+	fmt.Println("zp inc", image.ZP.X, image.ZP.Y)
+	image.ZP.X--
+	fmt.Println("zp dec", image.ZP.X, image.ZP.Y)
+	// reset
+	image.ZP.X = 0
+	fmt.Println("zp reset", image.ZP.X, image.ZP.Y)
+}`
+	differGoSource(t, source, nil, "")
+}
