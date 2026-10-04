@@ -275,6 +275,7 @@ func Load(sources []Source, options Options) (*Program, error) {
 	}
 	imp := newMapImporter(options.ImportBase, fallback)
 	imp.fset, imp.checker = c.fset, checker
+	imp.link = !options.PreserveNativeInit
 	// Explicit packages are checked first, in order, so a later package sees
 	// every earlier one; a failing package stops here with its diagnostics
 	// and the program is never checked against a partial map.

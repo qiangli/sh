@@ -18,14 +18,14 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
-// A linked package reads an unexported field of a value of its own type that
-// a compiled dependency produced: go/types validates `imp.name` on the
-// *Package its Config.Importer returned (resolver.go). The worker grants the
-// read only to the field's declaring import path, so the interpreter must
-// send the path the linked source was authenticated under. It sent the
-// linker's hygiene tag ("0") instead, which matches no package, and every such
-// read was refused as "unexported field name".
-func TestS374LinkedPackageReadsOwnPrivateFieldOfDependencyValue(t *testing.T) {
+// The types2 test hands its importer cache, a map[string]*types2.Package, to
+// cmd/compile/internal/importer. With types2 interpreted and the importer
+// compiled against the on-disk types2, the map was refused at the bridge
+// ("map[string]*main.__gosource_pkg_0_Package not assignable to
+// map[string]*types2.Package"): two copies of one package. The dependent is
+// now linked from source into the same program, so the map, the packages the
+// dependent stores in it and the methods called on them are all one package's.
+func TestS374DependentOfLinkedPackageRunsAgainstTheSameCopy(t *testing.T) {
 	dir, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -34,36 +34,28 @@ func TestS374LinkedPackageReadsOwnPrivateFieldOfDependencyValue(t *testing.T) {
 		"go.mod": "module example.com/dual\n\ngo 1.27\n",
 		"p/p.go": `package p
 
-type Package struct {
-	name string
-}
+type Package struct{ name string }
 
 func NewPackage(name string) *Package { return &Package{name: name} }
 
-type Importer interface {
-	Import(path string) (*Package, error)
-}
+func (p *Package) Name() string { return p.name }
 
-func Resolve(importer Importer, path string) (string, error) {
-	imp, err := importer.Import(path)
-	if err == nil && imp != nil && (imp.name == "_" || imp.name == "") {
-		return "", nil
-	}
-	return imp.name, err
-}
+func Count(packages map[string]*Package) int { return len(packages) }
+
+func First(packages map[string]*Package, path string) string { return packages[path].name }
 `,
-		// An assembly input keeps dep on its compiled form, so the value it
-		// returns is the on-disk package's and the read crosses the bridge.
-		"dep/stub.s": "// assembly input\n",
 		"dep/dep.go": `package dep
 
 import "example.com/dual/p"
 
-type cache struct{}
-
-func (cache) Import(path string) (*p.Package, error) { return p.NewPackage(path), nil }
-
-func Default() p.Importer { return cache{} }
+func Import(packages map[string]*p.Package, path string) *p.Package {
+	if pkg := packages[path]; pkg != nil {
+		return pkg
+	}
+	pkg := p.NewPackage(path)
+	packages[path] = pkg
+	return pkg
+}
 `,
 		"main.go": `package main
 
@@ -75,7 +67,10 @@ import (
 )
 
 func main() {
-	fmt.Println(p.Resolve(dep.Default(), "fmt"))
+	packages := make(map[string]*p.Package)
+	pkg := dep.Import(packages, "fmt")
+	again := dep.Import(packages, "fmt")
+	fmt.Println(pkg.Name(), p.Count(packages), p.First(packages, "fmt"), pkg == again)
 }
 `,
 	}
@@ -110,7 +105,7 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	err = r.Run(ctx, program.File)
-	if err != nil || out.String() != "fmt <nil>\n" || errs.String() != "" {
+	if err != nil || out.String() != "fmt 1 fmt true\n" || errs.String() != "" {
 		t.Fatalf("err=%v stdout=%q stderr=%q", err, out.String(), errs.String())
 	}
 }

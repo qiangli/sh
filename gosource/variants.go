@@ -22,9 +22,20 @@ type defaultSourceImporter struct {
 }
 
 func (defaultSourceImporter) SourcePackageFiles(path, srcDir string) (string, []string, error) {
-	pkg, err := build.Default.Import(path, srcDir, 0)
+	ctx := build.Default
+	// go/build resolves a module package by running `go list` in ctx.Dir, or
+	// in the process working directory when that is empty. The importing
+	// directory is the context that decides the answer, never wherever the
+	// embedding process happens to be running.
+	if filepath.IsAbs(srcDir) {
+		ctx.Dir = srcDir
+	}
+	pkg, err := ctx.Import(path, srcDir, 0)
 	if err != nil {
 		return "", nil, err
+	}
+	if len(pkg.CgoFiles) > 0 {
+		return "", nil, fmt.Errorf("package %q has cgo files", path)
 	}
 	files := append([]string(nil), pkg.GoFiles...)
 	return pkg.Dir, files, nil
@@ -56,44 +67,64 @@ type SourcePackageLister interface {
 // its own source with this map importer, so every reference binds to the
 // mapped object. A dependency that reaches no mapped path keeps its export
 // data, and one without listable source (cgo, no lister) is left as read.
-func (m *mapImporter) variantImport(path string, pkg *types.Package, srcDir string) (*types.Package, error) {
+//
+// Re-checking unifies the TYPES. When the program is linked for execution
+// the mapped package is also the only copy that runs interpreted, while a
+// dependent left on its compiled form still links the on-disk copy: two
+// packages at run time. That is harmless until a value of a type the mapped
+// package declares crosses between them, so a dependent whose exported API
+// mentions such a type is promoted (promoteVariant): checked with its
+// bodies and linked exactly as an explicit package is, leaving one copy. The
+// returned note is non-empty when a dependent needed promotion and could not
+// have it.
+func (m *mapImporter) variantImport(path string, pkg *types.Package, srcDir string) (*types.Package, string, error) {
 	if len(m.packages) == 0 || m.variants == nil {
-		return pkg, nil
+		return pkg, "", nil
 	}
 	if v, ok := m.variants[path]; ok && v != nil {
-		return v, nil
+		return v, m.variantNotes[path], nil
 	}
 	reaches, err := m.reachesMapped(pkg, srcDir, map[*types.Package]bool{})
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if !reaches {
-		return pkg, nil
+		return pkg, "", nil
 	}
 	lister, ok := m.fallback.(SourcePackageLister)
 	if !ok {
-		return pkg, nil
+		return pkg, m.unpromotedNote(path, pkg, "the importer cannot list its source"), nil
 	}
 	dir, names, err := lister.SourcePackageFiles(path, srcDir)
 	if err != nil || len(names) == 0 {
-		return pkg, nil
+		reason := "it has no listable Go source"
+		if err != nil {
+			reason = err.Error()
+		}
+		return pkg, m.unpromotedNote(path, pkg, reason), nil
 	}
 	if m.variants[path] == nil && m.variantBusy[path] {
-		return nil, fmt.Errorf("import cycle through the explicit package map at %q", path)
+		return nil, "", fmt.Errorf("import cycle through the explicit package map at %q", path)
 	}
 	m.variantBusy[path] = true
 	defer delete(m.variantBusy, path)
 	sort.Strings(names)
+	sources := make([]Source, 0, len(names))
 	var files []*ast.File
+	embeds := false
 	for _, name := range names {
 		data, err := os.ReadFile(filepath.Join(dir, name))
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		f, err := parser.ParseFile(m.fset, filepath.Join(dir, name), data, parser.ParseComments|parser.SkipObjectResolution)
 		if err != nil {
-			return nil, err
+			return nil, "", err
 		}
+		for _, spec := range f.Imports {
+			embeds = embeds || spec.Path.Value == `"embed"`
+		}
+		sources = append(sources, Source{Name: filepath.Join(dir, name), Data: data})
 		files = append(files, f)
 	}
 	// The variant's own imports are decided with the variant as the importer
@@ -109,10 +140,206 @@ func (m *mapImporter) variantImport(path string, pkg *types.Package, srcDir stri
 		if err == nil {
 			err = errs[0]
 		}
-		return nil, fmt.Errorf("gosource: re-checking %q against the explicit package map: %v", path, err)
+		return nil, "", fmt.Errorf("gosource: re-checking %q against the explicit package map: %v", path, err)
+	}
+	note := ""
+	if exposed := m.exposesMapped(checked); exposed != "" {
+		reason := ""
+		switch {
+		case !m.link:
+		case embeds:
+			reason = "it embeds files"
+		case hasNonGoInputs(dir):
+			reason = "it has non-Go inputs"
+		default:
+			promoted, err := m.promoteVariant(PackageSpec{Path: path, SourceDir: dir, Sources: sources})
+			if err != nil {
+				return nil, "", err
+			}
+			return promoted, "", nil
+		}
+		if reason != "" {
+			note = unpromotedText(path, exposed, reason)
+		}
 	}
 	m.variants[path] = checked
-	return checked, nil
+	if note != "" {
+		m.variantNotes[path] = note
+	}
+	return checked, note, nil
+}
+
+// promoteVariant checks a dependent with its bodies and registers it in the
+// explicit map, in dependency order: every dependent it imports was promoted
+// (or kept) while it was being checked, and it is added before the package
+// whose import asked for it finishes.
+func (m *mapImporter) promoteVariant(spec PackageSpec) (*types.Package, error) {
+	savedFrom, savedIdentity := m.from, m.identity
+	defer func() { m.from, m.identity = savedFrom, savedIdentity }()
+	if diagnostics := m.checkDependency(m.fset, spec, m.checker); len(diagnostics) > 0 {
+		return nil, fmt.Errorf("gosource: linking %q against the explicit package map: %v", spec.Path, diagnostics[0])
+	}
+	m.promoted = append(m.promoted, spec.Path)
+	return m.packages[spec.Path], nil
+}
+
+// unpromotedNote is the note for a dependent that reaches the map but whose
+// source could not even be re-checked: its export data is all there is, so
+// exposure is judged on that.
+func (m *mapImporter) unpromotedNote(path string, pkg *types.Package, reason string) string {
+	if !m.link {
+		return ""
+	}
+	exposed := m.exposesMappedByPath(pkg)
+	if exposed == "" {
+		return ""
+	}
+	return unpromotedText(path, exposed, reason)
+}
+
+func unpromotedText(path, exposed, reason string) string {
+	return fmt.Sprintf("package %q stays compiled against the on-disk copy of an interpreted package (%s); its API exposes %s, and values of that type cannot cross between the two copies", path, reason, exposed)
+}
+
+// hasNonGoInputs reports whether a package directory holds assembly, C or
+// object inputs: such a package cannot be linked from its Go source alone.
+func hasNonGoInputs(dir string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return true
+	}
+	for _, entry := range entries {
+		switch filepath.Ext(entry.Name()) {
+		case ".s", ".S", ".c", ".cc", ".cpp", ".cxx", ".m", ".h", ".hh", ".hpp", ".syso", ".f", ".F", ".f90", ".swig", ".swigcxx":
+			return true
+		}
+	}
+	return false
+}
+
+// exposesMapped names the first type declared by a mapped package that pkg's
+// exported API mentions, or "" when there is none. pkg was checked against
+// the map, so a mapped type is the map's own object.
+func (m *mapImporter) exposesMapped(pkg *types.Package) string {
+	return exposedType(pkg, func(owner *types.Package) bool {
+		return owner != nil && m.packages[owner.Path()] == owner
+	})
+}
+
+// exposesMappedByPath is exposesMapped for export data, whose packages are
+// distinct objects from the map's: a mapped package is recognized by path.
+func (m *mapImporter) exposesMappedByPath(pkg *types.Package) string {
+	return exposedType(pkg, func(owner *types.Package) bool {
+		if owner == nil {
+			return false
+		}
+		_, ok := m.packages[owner.Path()]
+		return ok
+	})
+}
+
+// exposedType walks the exported API of pkg — the types of its exported
+// package-level objects, through exported fields and exported methods — and
+// names the first defined type owned by a package mapped accepts. A mapped
+// interface made only of exported methods is behaviour, not representation:
+// any value satisfying it may cross, so only its method signatures are
+// walked. Unexported fields and methods are not API.
+func exposedType(pkg *types.Package, mapped func(*types.Package) bool) string {
+	seen := map[types.Type]bool{}
+	var walk func(t types.Type) string
+	walkTuple := func(tuple *types.Tuple) string {
+		for i := range tuple.Len() {
+			if hit := walk(tuple.At(i).Type()); hit != "" {
+				return hit
+			}
+		}
+		return ""
+	}
+	walk = func(t types.Type) string {
+		if t == nil || seen[t] {
+			return ""
+		}
+		seen[t] = true
+		switch t := t.(type) {
+		case *types.Alias:
+			return walk(types.Unalias(t))
+		case *types.Named:
+			obj := t.Obj()
+			iface, isInterface := t.Underlying().(*types.Interface)
+			if mapped(obj.Pkg()) {
+				behaviour := isInterface
+				if isInterface {
+					for i := range iface.NumMethods() {
+						behaviour = behaviour && iface.Method(i).Exported()
+					}
+				}
+				if !behaviour {
+					return obj.Pkg().Path() + "." + obj.Name()
+				}
+			}
+			if args := t.TypeArgs(); args != nil {
+				for i := range args.Len() {
+					if hit := walk(args.At(i)); hit != "" {
+						return hit
+					}
+				}
+			}
+			for i := range t.NumMethods() {
+				if method := t.Method(i); method.Exported() {
+					if hit := walk(method.Type()); hit != "" {
+						return hit
+					}
+				}
+			}
+			return walk(t.Underlying())
+		case *types.Pointer:
+			return walk(t.Elem())
+		case *types.Slice:
+			return walk(t.Elem())
+		case *types.Array:
+			return walk(t.Elem())
+		case *types.Chan:
+			return walk(t.Elem())
+		case *types.Map:
+			if hit := walk(t.Key()); hit != "" {
+				return hit
+			}
+			return walk(t.Elem())
+		case *types.Signature:
+			if hit := walkTuple(t.Params()); hit != "" {
+				return hit
+			}
+			return walkTuple(t.Results())
+		case *types.Struct:
+			for i := range t.NumFields() {
+				if field := t.Field(i); field.Exported() {
+					if hit := walk(field.Type()); hit != "" {
+						return hit
+					}
+				}
+			}
+		case *types.Interface:
+			for i := range t.NumMethods() {
+				if method := t.Method(i); method.Exported() {
+					if hit := walk(method.Type()); hit != "" {
+						return hit
+					}
+				}
+			}
+		}
+		return ""
+	}
+	scope := pkg.Scope()
+	for _, name := range scope.Names() {
+		obj := scope.Lookup(name)
+		if obj == nil || !obj.Exported() {
+			continue
+		}
+		if hit := walk(obj.Type()); hit != "" {
+			return hit
+		}
+	}
+	return ""
 }
 
 // reachesMapped reports whether pkg or any package it imports, transitively,

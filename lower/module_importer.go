@@ -260,6 +260,12 @@ func (m *moduleImporter) SourcePackageFiles(path, srcDir string) (string, []stri
 	if srcDir == "" {
 		srcDir = dir
 	}
+	// go/build runs `go list` in ctx.Dir, or in the process working directory
+	// when that is empty; the module that answers must be the importing
+	// directory's, wherever the embedding process is running.
+	if filepath.IsAbs(srcDir) {
+		ctx.Dir = srcDir
+	}
 	pkg, err := ctx.Import(path, srcDir, 0)
 	if err != nil {
 		return "", nil, err

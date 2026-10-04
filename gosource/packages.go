@@ -37,15 +37,22 @@ type Resolution struct {
 	// Path is the path after relative-import joining; equal to Import for a
 	// non-relative import.
 	Path string
-	// Origin is "package-map" when the explicit map satisfied the import and
-	// "importer" when the caller's importer (module, GOPATH or export data)
-	// did. A rejected import is not recorded; it is reported as a diagnostic.
+	// Origin is "package-map" when the explicit map satisfied the import,
+	// "linked-dependent" when the import is a dependent of a mapped package
+	// that was linked from its own source so that one copy of the mapped
+	// package exists (variants.go), and "importer" when the caller's importer
+	// (module, GOPATH or export data) did. A rejected import is not
+	// recorded; it is reported as a diagnostic.
 	Origin string
 	// Name is the resolved package's declared name.
 	Name string
 	// Files lists the explicit map package's source names, sorted; nil for
 	// an importer resolution.
 	Files []string
+	// Note is set on an importer resolution whose package exposes types of
+	// an interpreted (mapped) package yet could not be linked from source:
+	// it stays compiled against the on-disk copy, and the note says why.
+	Note string `json:",omitempty"`
 }
 
 // mapImporter implements the policy-free half of Go's import model: an
@@ -74,8 +81,16 @@ type mapImporter struct {
 	// (variantImport); fset and checker are what Load checks with.
 	variants    map[string]*types.Package
 	variantBusy map[string]bool
-	fset        *token.FileSet
-	checker     checkerOptions
+	// link is set when the program is linked for execution: a dependent
+	// whose API exposes a mapped package's types is then promoted into the
+	// map (promoteVariant) and promoted lists those paths. variantNotes
+	// keeps the note of a dependent that needed promotion and stayed
+	// compiled.
+	link         bool
+	promoted     []string
+	variantNotes map[string]string
+	fset         *token.FileSet
+	checker      checkerOptions
 }
 
 // checkedPackage is one explicit package after checkDependency: its sorted
@@ -91,7 +106,7 @@ type checkedPackage struct {
 }
 
 func newMapImporter(base string, fallback types.Importer) *mapImporter {
-	return &mapImporter{base: base, packages: map[string]*types.Package{}, files: map[string][]string{}, fallback: fallback, checked: map[string]*checkedPackage{}, variants: map[string]*types.Package{}, variantBusy: map[string]bool{}}
+	return &mapImporter{base: base, packages: map[string]*types.Package{}, files: map[string][]string{}, fallback: fallback, checked: map[string]*checkedPackage{}, variants: map[string]*types.Package{}, variantBusy: map[string]bool{}, variantNotes: map[string]string{}}
 }
 
 // newTypeInfo allocates the Info map set the converter reads. The program
@@ -154,10 +169,15 @@ func (m *mapImporter) ImportFrom(p, srcDir string, mode types.ImportMode) (*type
 	if err != nil {
 		return nil, err
 	}
-	if pkg, err = m.variantImport(resolved, pkg, srcDir); err != nil {
+	pkg, note, err := m.variantImport(resolved, pkg, srcDir)
+	if err != nil {
 		return nil, err
 	}
-	m.resolutions = append(m.resolutions, Resolution{From: m.from, Import: p, Path: resolved, Origin: "importer", Name: pkg.Name()})
+	if linked, ok := m.packages[resolved]; ok && linked == pkg {
+		m.resolutions = append(m.resolutions, Resolution{From: m.from, Import: p, Path: resolved, Origin: "linked-dependent", Name: pkg.Name(), Files: m.files[resolved]})
+		return pkg, nil
+	}
+	m.resolutions = append(m.resolutions, Resolution{From: m.from, Import: p, Path: resolved, Origin: "importer", Name: pkg.Name(), Note: note})
 	return pkg, nil
 }
 
