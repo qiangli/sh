@@ -1492,17 +1492,12 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 			imports.WriteString(strings.Replace(text, alias+" ", "_ ", 1))
 		}
 	}
-	localTypeEntries := bashPPNativeLocalTypeEntries(req.LocalTypes)
-	for _, typ := range req.GenericTypes {
-		if localTypeEntries[typ] {
-			continue
-		}
-		mapped, err := bashPPNativeTypeImports(typ, importAliases)
-		if err != nil {
-			return "", err
-		}
-		fmt.Fprintf(&typeEntries, "%q: reflect.TypeFor[%s](),\n", typ, mapped)
-	}
+	// GenericTypes is a registry universe, not a declaration list.  A local
+	// generic is emitted only when LocalTypes has materialised its concrete
+	// instance under a helper name.  Registering every otherwise-unmaterialised
+	// source spelling here would put (for example) Cons[int] in a package that
+	// declares only bppInstance_..., which is invalid Go.  Each materialised
+	// descriptor below registers its WireType after emitting that declaration.
 	var embeds strings.Builder
 	for i, embed := range req.EmbedDecls {
 		typ, err := bashPPNativeTypeImports(embed.Type, importAliases)
@@ -1658,12 +1653,9 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 	return source, nil
 }
 
-// bashPPNativeLocalTypeEntries returns every spelling already represented by
-// a generated local helper declaration. WireType is source-oriented text and
-// can contain presentation whitespace (for example Pair[int, string]), while
-// GenericTypes uses the compact bridge spelling (Pair[int,string]). Record the
-// canonical spelling as well so worker generation does not emit a second
-// reflect.TypeFor entry naming an undeclared flattened source generic.
+// bashPPNativeLocalTypeEntries returns every spelling represented by a local
+// helper declaration. It remains useful to callers that compare the registry
+// universe with materialised declarations.
 func bashPPNativeLocalTypeEntries(locals []bashPPLocalType) map[string]bool {
 	entries := make(map[string]bool, len(locals)*2)
 	for _, local := range locals {
