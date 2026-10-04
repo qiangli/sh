@@ -231,6 +231,8 @@ func (r *Runner) bashPPNewClosure(lit *syntax.BashPPFuncLit) *bashPPFunc {
 	if r.bashPPScope != nil {
 		if r.bashPPGoSource && r.bashPPFuncActive == 0 {
 			fn.scope = r.bashPPScope
+		} else if r.bashPPGoSource {
+			fn.scope = r.goSourceClosureScope(lit)
 		} else {
 			fn.scope = r.bashPPScope.snapshot()
 		}

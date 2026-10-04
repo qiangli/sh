@@ -244,3 +244,18 @@ func (r *Runner) goSourceFrameNamedResult(scope *bashPPScope, name string) bool 
 	}
 	return false
 }
+
+// goSourceClosureScope keeps the bindings a source closure can name. A full
+// snapshot would make the closure retain unrelated dead locals of every
+// enclosing frame. The name walk is conservative (including nested literals
+// and type/field names); unsupported control flow keeps the full snapshot.
+// narrowed preserves cell identity, so assignments and escaping aliases still
+// observe the original storage. Package initialization uses its live scope in
+// bashPPNewClosure because later package bindings must remain visible.
+func (r *Runner) goSourceClosureScope(lit *syntax.BashPPFuncLit) *bashPPScope {
+	w := goSourceNameWalker{names: map[string]bool{}, seen: map[uintptr]bool{}}
+	if !w.walk(reflect.ValueOf(lit)) {
+		return r.bashPPScope.snapshot()
+	}
+	return r.bashPPScope.narrowed(w.names)
+}
