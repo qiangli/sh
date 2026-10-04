@@ -360,6 +360,7 @@ type Runner struct {
 	bashPPDeclRefused  bool
 	bashPPChanBoundary bool
 	bashPPFileRun      bool
+	bashPPRunCancel    context.CancelFunc
 	bashPPTaskFiles    []*os.File
 	bashPPTaskState    *bashPPTaskState
 	bashPPTaskCanceled bool
@@ -3558,6 +3559,13 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 	if !r.didReset {
 		r.Reset()
 	}
+	ctx, cancelRun := context.WithCancel(ctx)
+	previousRunCancel := r.bashPPRunCancel
+	r.bashPPRunCancel = cancelRun
+	defer func() {
+		r.bashPPRunCancel = previousRunCancel
+		cancelRun()
+	}()
 	ctx, finishSignalRun := r.beginAsyncSignalRun(ctx)
 	defer finishSignalRun()
 	previousTaskPolicy := r.bashPPHostedTask

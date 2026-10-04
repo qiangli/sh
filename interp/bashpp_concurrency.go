@@ -254,6 +254,9 @@ type bashPPConcurrent struct {
 	changed *sync.Cond
 	ctx     context.Context
 	cancel  context.CancelFunc
+	// failureCancel interrupts the owning File Run when a child interpreter
+	// fails, including when the owner is blocked in a dependency call.
+	failureCancel context.CancelFunc
 	// fileRunOwner is stamped only by bashPPConcurrency while its Runner is
 	// inside Run(*syntax.File). Callback templates retain this group pointer,
 	// so the stamp is the capability which lets a verified testing callback
@@ -383,6 +386,11 @@ func (r *Runner) bashPPConcurrency(ctx context.Context) *bashPPConcurrent {
 	if r.bashPPConcurrent == nil {
 		r.bashPPConcurrent = newBashPPConcurrent(ctx)
 	}
+	if r.bashPPRunCancel != nil {
+		r.bashPPConcurrent.mu.Lock()
+		r.bashPPConcurrent.failureCancel = r.bashPPRunCancel
+		r.bashPPConcurrent.mu.Unlock()
+	}
 	if r.bashPPFileRun {
 		r.bashPPConcurrent.mu.Lock()
 		if !r.bashPPConcurrent.quiesced && r.bashPPConcurrent.ctx.Err() == nil {
@@ -441,6 +449,7 @@ func (c *bashPPConcurrent) armed(task *bashPPTaskState) bool {
 func (c *bashPPConcurrent) done(ordinal uint64, f *bashPPTaskFailure) {
 	c.mu.Lock()
 	state := c.tasks[ordinal]
+	var cancelRun context.CancelFunc
 	if f != nil {
 		c.failures = append(c.failures, *f)
 		// Failure is a structured-concurrency cancellation point, not something
@@ -449,6 +458,7 @@ func (c *bashPPConcurrent) done(ordinal uint64, f *bashPPTaskFailure) {
 		// its first command has either completed or committed to a cancellable
 		// block.
 		c.cancel()
+		cancelRun = c.failureCancel
 	}
 	delete(c.tasks, ordinal)
 	c.active--
@@ -456,6 +466,9 @@ func (c *bashPPConcurrent) done(ordinal uint64, f *bashPPTaskFailure) {
 		c.changed.Broadcast()
 	}
 	c.mu.Unlock()
+	if cancelRun != nil {
+		cancelRun()
+	}
 	// Always release a launcher, including snapshot failures, empty functions,
 	// and panics before the first semantic command.
 	c.arm(state)
