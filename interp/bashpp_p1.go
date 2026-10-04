@@ -1672,9 +1672,9 @@ func bashPPWordScalarKind(word *syntax.Word, value expand.Variable) constant.Kin
 type bashPPShortDeclTxn struct {
 	parent *bashPPShortDeclTxn
 	scope  *bashPPScope
-	// saved is every cell the block held when the declaration began, with
-	// its contents, so that a failed declaration puts the block back exactly
-	// as it was: the producer may have written through any of them.
+	// saved is every pre-existing left-hand cell, with its contents, so that a
+	// failed declaration puts its assignment targets back exactly as they were.
+	// Cells unrelated to the declaration are not part of its atomic update.
 	saved []bashPPSavedCell
 	// names are the left-hand names in order with their positions.
 	names    []bashPPShortName
@@ -1728,11 +1728,8 @@ func (r *Runner) bashPPBeginShortDecl(d *syntax.BashPPShortDecl) (*bashPPShortDe
 	txn := &bashPPShortDeclTxn{
 		parent: r.bashPPShortTxn,
 		scope:  r.bashPPScope,
-		saved:  make([]bashPPSavedCell, 0, len(r.bashPPScope.entries)),
+		saved:  make([]bashPPSavedCell, 0, len(d.Lhs)),
 		names:  make([]bashPPShortName, 0, len(d.Lhs)),
-	}
-	for name, cell := range r.bashPPScope.entries {
-		txn.saved = append(txn.saved, bashPPSavedCell{name: name, cell: cell, before: *cell.view()})
 	}
 	for _, lhs := range d.Lhs {
 		name := lhs.Value
@@ -1752,7 +1749,9 @@ func (r *Runner) bashPPBeginShortDecl(d *syntax.BashPPShortDecl) (*bashPPShortDe
 			return nil, false
 		}
 		txn.names = append(txn.names, bashPPShortName{name: name, pos: lhs.Pos()})
-		if _, exists := r.bashPPScope.entries[name]; !exists {
+		if cell, exists := r.bashPPScope.entries[name]; exists {
+			txn.saved = append(txn.saved, bashPPSavedCell{name: name, cell: cell, before: *cell.view()})
+		} else {
 			txn.newName = true
 		}
 	}

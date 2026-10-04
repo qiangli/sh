@@ -245,9 +245,10 @@ func (r *Runner) bashPPEvalComposite(lit *syntax.BashPPCompositeLit, expected sy
 	}
 	flat := bashPPFlatFields(fields)
 	out := make(map[string]any, len(flat))
-	meta := &bashPPCollectionMeta{kind: "struct", typ: typ, mapping: make(map[string]*bashPPCollectionMeta, len(flat))}
+	meta := &bashPPCollectionMeta{kind: "struct", typ: typ}
 	for _, field := range flat {
-		out[field.name], meta.mapping[field.name] = r.bashPPZeroValue(field.typ)
+		value, child := r.bashPPZeroValue(field.typ)
+		bashPPSetInitialStructField(out, meta, field.name, value, child)
 	}
 	keyed, positional := false, false
 	for _, elem := range lit.Elems {
@@ -271,7 +272,7 @@ func (r *Runner) bashPPEvalComposite(lit *syntax.BashPPCompositeLit, expected sy
 			if r.bashPPGoSource && flat[i].name == "_" {
 				continue
 			}
-			out[flat[i].name], meta.mapping[flat[i].name] = value, child
+			bashPPSetInitialStructField(out, meta, flat[i].name, value, child)
 		}
 		return out, meta, nil
 	}
@@ -365,6 +366,20 @@ func bashPPSetStructSelector(root map[string]any, meta *bashPPCollectionMeta, ed
 	return fmt.Errorf("empty field selector")
 }
 
+// bashPPSetInitialStructField builds private struct storage. Scalar fields have
+// no runtime shape beyond their declared type, so omitting their nil layout
+// entries avoids a second hash map on the common all-scalar struct.
+func bashPPSetInitialStructField(out map[string]any, meta *bashPPCollectionMeta, name string, value any, child *bashPPCollectionMeta) {
+	out[name] = value
+	if child == nil {
+		return
+	}
+	if meta.mapping == nil {
+		meta.mapping = make(map[string]*bashPPCollectionMeta)
+	}
+	meta.mapping[name] = child
+}
+
 func (r *Runner) bashPPZeroValue(typ syntax.BashPPTypeExpr) (any, *bashPPCollectionMeta) {
 	if value, meta, ok := r.goSourceNilCallableOrChannel(typ); ok {
 		return value, meta
@@ -389,9 +404,10 @@ func (r *Runner) bashPPZeroValue(typ syntax.BashPPTypeExpr) (any, *bashPPCollect
 	}
 	if fields, _, ok := r.bashPPStructFields(typ); ok {
 		out := make(map[string]any)
-		meta := &bashPPCollectionMeta{kind: "struct", typ: typ, mapping: make(map[string]*bashPPCollectionMeta)}
+		meta := &bashPPCollectionMeta{kind: "struct", typ: typ}
 		for _, field := range bashPPFlatFields(fields) {
-			out[field.name], meta.mapping[field.name] = r.bashPPZeroValue(field.typ)
+			value, child := r.bashPPZeroValue(field.typ)
+			bashPPSetInitialStructField(out, meta, field.name, value, child)
 		}
 		return out, meta
 	}
