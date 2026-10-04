@@ -168,6 +168,14 @@ func (r *Runner) bashPPSprint165MapKey(value any, meta *bashPPCollectionMeta, ty
 			}
 			return bashPPMapKey{typ: typeName, value: "b" + strconv.FormatBool(boolean)}, false, nil
 		case "float32", "float64":
+			// A NaN key retains its IEEE spelling in the map entry so ranging
+			// over the map can recover its payload. Hashing only needs the
+			// nonreflexive float value, regardless of its payload.
+			if text, isText := value.(string); isText {
+				if nan, isBits := bashPPNaNBitsScalar(text, kind); isBits {
+					value = nan.nonFinite
+				}
+			}
 			floating, ok := value.(float64)
 			if !ok {
 				if integer, integerOK := value.(int); integerOK {
