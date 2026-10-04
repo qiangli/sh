@@ -601,7 +601,14 @@ func (r *Runner) bashPPLookupFunc(c *syntax.BashPPCall) (*bashPPFunc, bool) {
 			r.exit.fatal(err)
 			return nil, false
 		}
-		if fn, ok := r.bashPPClosure(cell.vr.Str); ok {
+		closureName := cell.vr.Str
+		if closureName == "" && cell.vr.Kind == expand.Object {
+			closureName, _ = cell.vr.Obj.(string)
+		}
+		if closureName == "" {
+			closureName = cell.vr.String()
+		}
+		if fn, ok := r.bashPPClosure(closureName); ok {
 			return fn, true
 		}
 		return r.goSourceComputedNativeFuncCell(c, cell)

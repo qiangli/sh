@@ -30,8 +30,20 @@ func (r *Runner) bashPPResolveNativeEmbedded(root syntax.BashPPTypeExpr, name st
 // which must not fall through to the interpreter-only method set after the
 // combined selector walk has found multiple candidates at the winning depth.
 func (r *Runner) bashPPResolveNativeEmbeddedSelection(root syntax.BashPPTypeExpr, name string, addressable bool) ([]bashPPEmbedEdge, bool, bool) {
+	edges, _, ok, ambiguous := r.bashPPResolveNativeMethodCandidate(root, name, addressable)
+	return edges, ok, ambiguous
+}
+
+// bashPPResolveNativeMethodSpec resolves a method specification from a native type
+// or an embedded native field on root.
+func (r *Runner) bashPPResolveNativeMethodSpec(root syntax.BashPPTypeExpr, name string, addressable bool) (*syntax.BashPPMethodSpec, bool, bool) {
+	_, spec, ok, ambiguous := r.bashPPResolveNativeMethodCandidate(root, name, addressable)
+	return spec, ok, ambiguous
+}
+
+func (r *Runner) bashPPResolveNativeMethodCandidate(root syntax.BashPPTypeExpr, name string, addressable bool) ([]bashPPEmbedEdge, *syntax.BashPPMethodSpec, bool, bool) {
 	if !r.bashPPGoSource || root == nil || name == "" {
-		return nil, false, false
+		return nil, nil, false, false
 	}
 	rootPointer := false
 	if pointer, ok := root.(*syntax.BashPPPointerType); ok {
@@ -42,6 +54,7 @@ func (r *Runner) bashPPResolveNativeEmbeddedSelection(root syntax.BashPPTypeExpr
 	type candidate struct {
 		edges  []bashPPEmbedEdge
 		native bool
+		spec   *syntax.BashPPMethodSpec
 	}
 	pending := map[int][]candidate{}
 	for depth := 0; len(level) > 0 || len(pending) > 0; depth++ {
@@ -54,8 +67,21 @@ func (r *Runner) bashPPResolveNativeEmbeddedSelection(root syntax.BashPPTypeExpr
 					if offset < 0 {
 						offset = 0
 					}
-					_, method := object.(*types.Func)
-					pending[depth+offset] = append(pending[depth+offset], candidate{node.edges, method})
+					fn, method := object.(*types.Func)
+					var spec *syntax.BashPPMethodSpec
+					if method && fn != nil {
+						if sig, ok := fn.Type().(*types.Signature); ok {
+							spec = bashPPImportedMethodSpec(name, sig)
+							if named, ok := node.typ.(*syntax.BashPPNamedType); ok {
+								bindings := bashPPImportedInterfaceTypeBindings(typ, named)
+								if len(bindings) > 0 {
+									spec.Params = bashPPSubstituteFields(spec.Params, bindings)
+									spec.Results = bashPPSubstituteFields(spec.Results, bindings)
+								}
+							}
+						}
+					}
+					pending[depth+offset] = append(pending[depth+offset], candidate{node.edges, method, spec})
 				}
 				continue
 			}
@@ -118,22 +144,22 @@ func (r *Runner) bashPPResolveNativeEmbeddedSelection(root syntax.BashPPTypeExpr
 			if len(matches) != 1 {
 				for _, match := range matches {
 					if match.native {
-						return nil, false, true
+						return nil, nil, false, true
 					}
 				}
 				// An interpreter-only level is resolved by the package-aware
 				// selector walk, particularly for unexported promoted methods.
-				return nil, false, false
+				return nil, nil, false, false
 			}
 			if !matches[0].native {
-				return nil, false, false
+				return nil, nil, false, false
 			}
-			return matches[0].edges, true, false
+			return matches[0].edges, matches[0].spec, true, false
 		}
 		delete(pending, depth)
 		level = next
 	}
-	return nil, false, false
+	return nil, nil, false, false
 }
 
 // bashPPPromotedNativeReceiver reads the embedded dependency-owned receiver

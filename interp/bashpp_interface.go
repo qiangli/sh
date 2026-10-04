@@ -422,6 +422,13 @@ func (r *Runner) bashPPImplements(actual syntax.BashPPTypeExpr, iface *syntax.Ba
 		// An unexported method is looked up as the interface's package
 		// spells it: main's `m` is not lib's.
 		sel := r.bashPPResolveSelectionIn(actual, name, true, false, expected.pkg)
+		if !sel.ambiguous && sel.method == nil && sel.interfaceSpec == nil && !goSourceUnexportedName(name) {
+			if spec, ok, amb := r.bashPPResolveNativeMethodSpec(actual, name, false); amb {
+				return fmt.Errorf("BASHPP-EINTERFACE-MISSING: %s does not implement interface (ambiguous method %s)", bashPPTypeText(actual), name)
+			} else if ok && spec != nil {
+				sel.interfaceSpec = spec
+			}
+		}
 		if sel.ambiguous || sel.method == nil && sel.interfaceSpec == nil {
 			return fmt.Errorf("BASHPP-EINTERFACE-MISSING: %s does not implement interface (missing method %s)", bashPPTypeText(actual), name)
 		}

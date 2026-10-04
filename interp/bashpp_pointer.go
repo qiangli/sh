@@ -1053,6 +1053,15 @@ func bashPPFillCellValue(cell *bashPPCell, value any, meta *bashPPCollectionMeta
 		}
 		return
 	}
+	if meta != nil && meta.kind == "func" {
+		cell.valueMeta = meta
+		if native, ok := value.(*bashPPBridgeValue); ok && native != nil {
+			cell.vr = expand.NewObject(native)
+			return
+		}
+		cell.vr = expand.Variable{Set: true, Kind: expand.String, Str: fmt.Sprint(value)}
+		return
+	}
 	if meta != nil {
 		// Collection payloads are interpreter-owned typed storage. They may
 		// legitimately contain values which cannot cross the shell's JSON object
