@@ -232,6 +232,15 @@ func (r *Runner) bashPPEvalComposite(lit *syntax.BashPPCompositeLit, expected sy
 		return r.bashPPEvalCollection(lit, expected)
 	}
 	fields, typeName, ok := r.bashPPStructFields(typ)
+	if !ok && r.bashPPGoSource {
+		// Imported structs normally remain dependency-owned. A slice-header
+		// literal is different: the program has just built its three words,
+		// and an unsafe conversion immediately needs that local storage.
+		// Restrict the exception to the authenticated header shape.
+		if header, headerOK := r.goSourceUnsafeSliceHeaderFields(typ); headerOK {
+			fields, typeName, ok = header, bashPPTypeText(typ), true
+		}
+	}
 	if !ok {
 		return nil, nil, fmt.Errorf("BASHPP-ESTRUCT-TYPE: %s is not a supported struct type", bashPPTypeText(typ))
 	}
@@ -423,6 +432,9 @@ func (r *Runner) bashPPZeroValue(typ syntax.BashPPTypeExpr) (any, *bashPPCollect
 func (r *Runner) bashPPEvalTypedValue(expr syntax.BashPPExpr, expected syntax.BashPPTypeExpr) (value any, meta *bashPPCollectionMeta, err error) {
 	defer func() { err = r.goSourceRuntimeFaultAt(err, expr) }()
 	if lit, ok := expr.(*syntax.BashPPCompositeLit); ok && r.bashPPNativeType(expected) {
+		if _, header := r.goSourceUnsafeSliceHeaderFields(expected); header {
+			return r.bashPPEvalComposite(lit, expected)
+		}
 		nativeLit := *lit
 		nativeLit.LitType = expected
 		value, err := r.bashPPNativeComposite(&nativeLit, false)

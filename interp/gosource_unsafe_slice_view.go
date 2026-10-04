@@ -89,28 +89,50 @@ func (r *Runner) goSourceUnsafeSliceHeaderView(source, target syntax.BashPPTypeE
 	if !ok || slice.Kind != "slice" || slice.Element == nil {
 		return nil
 	}
-	fields, ok := r.goSourceUnsafeStructFields(source)
+	fields, ok := r.goSourceUnsafeSliceHeaderFields(source)
 	if !ok {
 		return nil
 	}
-	flat := bashPPFlatFields(fields)
-	if len(flat) != 3 || !r.goSourceUnsafePointerType(flat[0].typ) {
-		return nil
-	}
 	view := &goSourceUnsafeSliceView{r: r, source: source, target: target, elem: slice.Element}
+	for i, field := range bashPPFlatFields(fields) {
+		view.fields[i] = field.name
+	}
+	return view
+}
+
+// goSourceUnsafeSliceHeaderFields authenticates the only imported struct shape
+// an interpreted composite literal may materialise locally: the three words of
+// a slice header. The declared imported type remains its type identity; only
+// this particular value's storage is interpreter-owned.
+func (r *Runner) goSourceUnsafeSliceHeaderFields(typ syntax.BashPPTypeExpr) ([]*syntax.BashPPField, bool) {
+	fields, ok := r.goSourceUnsafeStructFields(typ)
+	if !ok {
+		return nil, false
+	}
+	flat := bashPPFlatFields(fields)
+	if len(flat) != 3 || flat[0].name != "Data" || flat[1].name != "Len" || flat[2].name != "Cap" {
+		return nil, false
+	}
+	// Metadata for unsafe.Pointer is represented under the importing source
+	// file's alias. The authenticated unsafeheader export can instead arrive
+	// here with its package-path spelling, so accept that one well-known
+	// pointer-word name after the struct itself and its field order have been
+	// authenticated by go/types.
+	if !r.goSourceUnsafePointerType(flat[0].typ) && bashPPTypeText(flat[0].typ) != "unsafe.Pointer" {
+		return nil, false
+	}
 	for i, field := range flat {
 		if field.name == "_" {
-			return nil
+			return nil, false
 		}
 		if i > 0 {
 			named, ok := r.bashPPUnderlyingType(field.typ).(*syntax.BashPPNamedType)
 			if !ok || named.Name == nil || named.Name.Value != "int" {
-				return nil
+				return nil, false
 			}
 		}
-		view.fields[i] = field.name
 	}
-	return view
+	return fields, true
 }
 
 // goSourceUnsafeStructFields includes imported structs whose authenticated
