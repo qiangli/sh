@@ -53,7 +53,11 @@ var bashPPCellDirectReaders = []string{
 	// looks up was declared by this goroutine a few statements earlier, and no
 	// `go` statement of the callee has run yet, so nothing can have aliased it.
 	// Reading back the fields it just stored is a private read.
-	"bashPPInvoke",
+	// The parameter binding and result settling that bashPPInvoke did inline
+	// moved into these helpers when its frame was shrunk for deep recursion
+	// (Sprint 374); the direct reads moved with the code, unchanged.
+	"bashPPBindParams",
+	"bashPPSettleResultCells",
 }
 
 // markStore marks an assignment target and every selector it is reached

@@ -114,9 +114,6 @@ func bashPPLayoutSet(layout map[string]*bashPPCollectionMeta, key string, child 
 }
 
 func bashPPLayoutSnapshot(layout map[string]*bashPPCollectionMeta) map[string]*bashPPCollectionMeta {
-	if layout == nil {
-		return nil
-	}
 	bashPPStorageMu.RLock()
 	out := make(map[string]*bashPPCollectionMeta, len(layout))
 	for key, child := range layout {

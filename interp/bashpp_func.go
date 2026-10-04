@@ -2529,7 +2529,7 @@ func (r *Runner) bashPPSettleResultCells(fn *bashPPFunc, results, resultNames []
 		// "_" or "" can only find unrelated shell state (or nothing), while
 		// rebuilding the slot from results[i] loses non-string zero values.
 		// An explicit return reaches the branch above and keeps its value cell.
-		if source == nil && (!r.bashPPReturn.active || blankResult) && i < len(resultTypes) && resultTypes[i] != nil {
+		if source == nil && ((r.bashPPGoSource && !r.bashPPReturn.active) || blankResult) && i < len(resultTypes) && resultTypes[i] != nil {
 			resultType := r.bashPPBindTypeExpr(resultTypes[i])
 			zero, meta := r.bashPPZeroValue(resultType)
 			source = &bashPPCell{declType: resultType, typeName: bashPPNamedTypeBase(resultType)}

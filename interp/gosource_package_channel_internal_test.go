@@ -39,7 +39,10 @@ func TestGoSourceChannelBindingRejectsInvalidTypes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	source := `package main;var c=make(chan int,1);var send chan<- int=c;func main(){c<-7;println("probe");if <-c!=7{panic("binding consumed value")}}`
+	// keep stores the channel in an interface, which keeps it in the native
+	// channel domain: since Sprint 374 a channel that never leaves interpreted
+	// code is interpreter-resident and has no native binding to probe.
+	source := `package main;var c=make(chan int,1);var keep any=c;var send chan<- int=c;func main(){_=keep;c<-7;println("probe");if <-c!=7{panic("binding consumed value")}}`
 	p, err := gosource.Parse(strings.NewReader(source), "original.go", gosource.Options{RunMain: true})
 	if err != nil {
 		t.Fatal(err)

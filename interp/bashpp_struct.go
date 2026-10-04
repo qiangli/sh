@@ -375,12 +375,8 @@ func bashPPSetStructSelector(root map[string]any, meta *bashPPCollectionMeta, ed
 // the value and its metadata disagree about what the field holds.
 func bashPPSetInitialStructField(out map[string]any, meta *bashPPCollectionMeta, name string, value any, child *bashPPCollectionMeta) {
 	out[name] = value
-	if child == nil {
-		if meta.mapping != nil {
-			meta.mapping[name] = nil
-		}
-		return
-	}
+	// Every field keeps a layout entry, nil for a scalar: struct comparison
+	// and slicing tell a field with no runtime shape from an absent one.
 	if meta.mapping == nil {
 		meta.mapping = make(map[string]*bashPPCollectionMeta)
 	}
