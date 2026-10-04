@@ -1180,6 +1180,15 @@ func (r *Runner) bashPPCellForInterfaceExpr(expr syntax.BashPPExpr) (*bashPPCell
 			}
 			return r.bashPPInterfaceSourceCell(cell, "interface conversion")
 		}
+		// `unsafe.Pointer(new(T))`, `unsafe.Pointer(p)`: the interface owns
+		// the pointer the conversion retypes, with unsafe.Pointer as its
+		// dynamic type.
+		if cell, handled, err := r.goSourceUnsafePointerCell(x); handled {
+			if err != nil {
+				return nil, nil, err
+			}
+			return cell, cell.declType, nil
+		}
 	}
 	return r.bashPPScalarInterfaceCell(expr)
 }

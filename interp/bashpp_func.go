@@ -1139,6 +1139,10 @@ func (r *Runner) bashPPComparableType(typ syntax.BashPPTypeExpr, seen map[string
 	switch x := typ.(type) {
 	case *syntax.BashPPNamedType:
 		name := x.Name.Value
+		// unsafe.Pointer is a pointer type: always comparable.
+		if r.goSourceUnsafePointerType(x) {
+			return true
+		}
 		decl, found := r.bashPPTypes[name]
 		if !found {
 			if bashPPBuiltinType(name) {
@@ -1455,6 +1459,10 @@ func (r *Runner) bashPPStructuredArgCell(w *syntax.Word, expr syntax.BashPPExpr)
 			cell := bashPPPointerCell(ptr)
 			cell.declType = target
 			return cell, nil
+		}
+		// `f(unsafe.Pointer(new(T)))`: likewise the pointer it retypes.
+		if cell, handled, err := r.goSourceUnsafePointerCell(x); handled {
+			return cell, err
 		}
 		// `Stringer(m).String()`, `f(any(x))`, `return I(v)`: a conversion
 		// to an interface is the interface value that boxes its operand.

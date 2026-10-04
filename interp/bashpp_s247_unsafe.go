@@ -642,3 +642,18 @@ func (r *Runner) goSourceUnsafeDiscardAssign(assign *syntax.BashPPAssign) bool {
 	}
 	return true
 }
+
+// goSourceUnsafePointerCell materializes a conversion to unsafe.Pointer read
+// as a value — an interface's dynamic value, a call argument, a collection
+// element — as the pointer it retypes, typed unsafe.Pointer. Such a
+// conversion has no scalar reading: `unsafe.Pointer(new(T))` and
+// `unsafe.Pointer(p)` name storage, not a number.
+func (r *Runner) goSourceUnsafePointerCell(conv *syntax.BashPPConvertExpr) (*bashPPCell, bool, error) {
+	ptr, target, handled, err := r.goSourceUnsafePointerExpr(conv)
+	if !handled || err != nil {
+		return nil, handled, err
+	}
+	cell := bashPPPointerCell(ptr)
+	cell.declType, cell.typeName = target, bashPPTypeText(target)
+	return cell, true, nil
+}
