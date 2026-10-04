@@ -1076,7 +1076,7 @@ func (r *Runner) bashPPStructuredAssign(target, rhs syntax.BashPPExpr) {
 				return
 			}
 		}
-		base, err := r.bashPPNativeReceiver(selector.X)
+		base, err := r.goSourceNativeAssignBase(selector.X)
 		if err == nil {
 			value, valueErr := r.bashPPBridgeExpr(rhs)
 			if valueErr == nil {

@@ -132,3 +132,34 @@ func (r *Runner) goSourceNativePointerError(err error) (*bashPPBridgeValue, bool
 	}
 	return native.value, true
 }
+
+// goSourceNativeAssignBase evaluates the operand of a field assignment whose
+// storage the dependency owns. `pkg.Var.Field = v` writes the package
+// variable itself, so an operand that is an imported variable, or a field
+// path rooted at one, is taken by address: read as a value it is a copy, and
+// the write would land in that copy and be lost. The native field write
+// follows the pointer, including the implicit dereference of a pointer-typed
+// variable. Every other operand keeps the receiver evaluation.
+func (r *Runner) goSourceNativeAssignBase(expr syntax.BashPPExpr) (bashPPBridgeValue, error) {
+	if r.bashPPGoSource && r.goSourceImportedVariablePath(expr) {
+		return r.goSourceNativeAddress(expr)
+	}
+	return r.bashPPNativeReceiver(expr)
+}
+
+// goSourceImportedVariablePath reports a selector path whose root is an
+// imported package variable not shadowed by a local binding of the alias.
+func (r *Runner) goSourceImportedVariablePath(expr syntax.BashPPExpr) bool {
+	switch x := expr.(type) {
+	case *syntax.BashPPParenExpr:
+		return r.goSourceImportedVariablePath(x.X)
+	case *syntax.BashPPSelectorExpr:
+		if id, ok := x.X.(*syntax.BashPPIdent); ok {
+			alias := id.Name.Value
+			_, imported := r.bashPPImports[alias]
+			return imported && (r.bashPPScope == nil || r.bashPPScope.lookup(alias) == nil)
+		}
+		return r.goSourceImportedVariablePath(x.X)
+	}
+	return false
+}
