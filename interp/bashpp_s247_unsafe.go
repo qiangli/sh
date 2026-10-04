@@ -207,6 +207,13 @@ func (r *Runner) goSourceUnsafePointerWord(conv *syntax.BashPPConvertExpr) (bash
 	if !goSourceUnsafeIntegerType(r.bashPPUnderlyingType(target)) {
 		return bashPPScalar{}, false, nil
 	}
+	// Integer conversions are ordinary scalar expressions unless their
+	// operand is a pointer value. Probing every operand through the pointer
+	// evaluator would execute calls such as T(side()) a second time before
+	// the scalar evaluator handles the conversion.
+	if r.goSourceUnsafeIntegerOperand(conv.X) {
+		return bashPPScalar{}, false, nil
+	}
 	ptr, err := r.bashPPPointerExprValue(conv.X)
 	if err != nil {
 		return bashPPScalar{}, false, nil
