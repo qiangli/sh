@@ -48,7 +48,7 @@ func goSourceInterpretedCallable(name string) bool {
 	switch name {
 	case "slices.Sort", "slices.Equal", "slices.Collect",
 		"slices.SortFunc", "slices.SortStableFunc", "slices.EqualFunc", "slices.IndexFunc", "slices.ContainsFunc",
-		"slices.Index", "slices.Contains",
+		"slices.Index", "slices.Contains", "slices.Reverse",
 		"cmp.Compare", "cmp.Less":
 		return true
 	}
@@ -81,6 +81,33 @@ func (r *Runner) callbackValueType(typ syntax.BashPPTypeExpr, depth int) bool {
 		if shape.Kind == "array" {
 			return r.callbackValueType(shape.Element, depth+1)
 		}
+	}
+	return false
+}
+
+// callbackLocalSliceType admits reference-bearing slice elements only for a
+// callback which an interpreter-side collection helper invokes over live
+// storage. Go copies structs and slice headers at that boundary while the
+// referenced backing arrays remain shared.
+func (r *Runner) callbackLocalSliceType(typ syntax.BashPPTypeExpr, depth int) bool {
+	if typ == nil || depth > 8 {
+		return false
+	}
+	if r.bashPPCallbackValueType(typ) {
+		return true
+	}
+	switch shape := r.bashPPUnderlyingType(typ).(type) {
+	case *syntax.BashPPCollectionType:
+		if shape.Kind == "slice" || shape.Kind == "array" {
+			return r.callbackLocalSliceType(shape.Element, depth+1)
+		}
+	case *syntax.BashPPStructType:
+		for _, field := range bashPPFlatFields(shape.Fields) {
+			if !r.callbackLocalSliceType(field.typ, depth+1) {
+				return false
+			}
+		}
+		return len(shape.Fields) > 0
 	}
 	return false
 }

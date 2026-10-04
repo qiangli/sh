@@ -79,6 +79,52 @@ func main(){
 	}
 }
 
+// A struct is copied at a Go call boundary, but slices in that copy keep
+// their backing arrays. The same applies recursively to a slice of slices.
+func TestS374CallbackSliceAliases(t *testing.T) {
+	for name, source := range map[string]string{
+		"slice nested in struct": `package main
+import ("fmt"; "slices")
+type bucket struct { items []int }
+func main() {
+	left := []bucket{{items: []int{1}}}
+	right := []bucket{{items: []int{1}}}
+	ok := slices.EqualFunc(left, right, func(a, b bucket) bool { a.items[0] = 9; return true })
+	fmt.Println(ok, left[0].items[0])
+}`,
+		"slice of slices": `package main
+import ("fmt"; "slices")
+func main() {
+	left := [][]int{{1}}
+	right := [][]int{{1}}
+	ok := slices.EqualFunc(left, right, func(a, b []int) bool { a[0] = 9; return true })
+	fmt.Println(ok, left[0][0])
+}`,
+	} {
+		t.Run(name, func(t *testing.T) { differGoSource(t, source, nil, "") })
+	}
+}
+
+func TestS374SlicesReverseCallbackSliceAliases(t *testing.T) {
+	const source = `package main
+import ("fmt"; "slices")
+type interval struct { start, end int; annotations []int }
+func (interval) String() string { return "interval" }
+func main() {
+	values := []interval{{start: 1, annotations: []int{10}}, {start: 2, annotations: []int{20}}}
+	held := values[0].annotations
+	slices.Reverse(values)
+	held[0] = 99
+	fmt.Println(values[0].start, values[1].annotations, held)
+	rows := [][]int{{1}, {2}}
+	row := rows[0]
+	slices.Reverse(rows)
+	row[0] = 9
+	fmt.Println(rows[0], rows[1], row)
+}`
+	differGoSource(t, source, nil, "")
+}
+
 // TestGoSourceInterpretedGenericHelpers pins the generic callable set the
 // dependency cannot reflect and this Runner therefore answers itself.
 func TestGoSourceInterpretedGenericHelpers(t *testing.T) {

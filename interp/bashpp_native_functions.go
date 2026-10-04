@@ -109,6 +109,9 @@ func (r *Runner) bashPPBridgeFunction(fn *bashPPFunc) (bashPPBridgeValue, error)
 			// admitted above and use the same live-cell path. Keep the refusal in
 			// case this pointer callback is ever routed outside that path.
 			if localCallback && group == 0 {
+				if r.callbackLocalSliceType(field.FieldTypeExpr, 0) {
+					continue
+				}
 				if _, pointer := field.FieldTypeExpr.(*syntax.BashPPPointerType); pointer {
 					localRefusal = refusal
 					continue

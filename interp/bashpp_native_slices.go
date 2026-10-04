@@ -181,6 +181,7 @@ func fmtProtocolMethod(name string) bool {
 func nativeSliceMutatingIndex(name string) int {
 	switch name {
 	case "sort.Ints", "sort.Strings", "sort.Float64s", "slices.Sort",
+		"slices.Reverse",
 		// slices.SortFunc/SortStableFunc reorder in place through the original
 		// comparison callback; goSourceSlicesSortFunc computes the ordering
 		// interpreter-side and rides this same writeback.
@@ -377,6 +378,10 @@ func prepareNativeSliceBuffers(ctx context.Context, req bashPPEvalRequest, q *ba
 	}
 	name := nativeSliceCallable(req, *q)
 	if mut := nativeSliceMutatingIndex(name); mut >= 0 {
+		if name == "slices.Reverse" && (mut >= len(q.Args) || q.Args[mut].sliceView == nil) {
+			// Dependency-owned and nil slices stay on the normal native path.
+			return nil
+		}
 		return prepareNativeSliceMutation(req, q, mut)
 	}
 	if nativePointerWritebackAllowed(req, *q) || nativeRetainedPointerMutator(name) {
@@ -756,6 +761,27 @@ func (r *Runner) nativeSliceGenericHelper(ctx context.Context, req bashPPEvalReq
 		}}}
 		if err := applyNativeSliceBuffers(r, *q, reply); err != nil {
 			return nil, false, err
+		}
+		return nil, true, nil
+	case "slices.Reverse":
+		if len(q.Args) != 1 {
+			return nil, true, fmt.Errorf("gosource: slices.Reverse requires one slice")
+		}
+		if q.Args[0].Kind == "nil" {
+			return nil, true, nil
+		}
+		if q.Args[0].sliceView == nil {
+			return nil, false, nil
+		}
+		shared, ok := r.goSourceSharedSliceOf(q.Args[0])
+		if !ok {
+			return nil, true, fmt.Errorf("gosource: slices.Reverse requires an original slice")
+		}
+		for i, j := 0, len(shared.view)-1; i < j; i, j = i+1, j-1 {
+			shared.view[i], shared.view[j] = shared.view[j], shared.view[i]
+			if shared.meta != nil {
+				shared.meta.sequence[i], shared.meta.sequence[j] = shared.meta.sequence[j], shared.meta.sequence[i]
+			}
 		}
 		return nil, true, nil
 	case "slices.IsSorted":
