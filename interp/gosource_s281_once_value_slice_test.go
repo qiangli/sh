@@ -173,6 +173,123 @@ func main() {
 	}
 }
 
+func TestS374TestingMainSynchronizesDescriptorSlices(t *testing.T) {
+	driver := s249Source("_testmain.go", `package main
+
+import (
+	"fmt"
+	"os"
+	"testing"
+)
+
+var rows = []string{"before"}
+
+func matchString(pat, str string) (bool, error) { return true, nil }
+
+func TestDescriptorSliceCallback(t *testing.T) {
+	rows[0] = "inside"
+	fmt.Println(rows[0])
+}
+
+var tests = []testing.InternalTest{{"TestDescriptorSliceCallback", TestDescriptorSliceCallback}}
+
+func main() {
+	testing.Main(matchString, tests, nil, nil)
+	fmt.Println("after", rows[0])
+	os.Exit(0)
+}
+`)
+	got, err := runS249PackageTestMain(t, []gosource.Source{driver}, nil)
+	const want = "inside\nPASS\n"
+	if err != nil || got.stdout != want || got.stderr != "" || got.status != 0 {
+		t.Fatalf("run=%v outcome=%+v", err, got)
+	}
+}
+
+func TestS374SortSliceSynchronizesCopiedSliceCallback(t *testing.T) {
+	const source = `package main
+
+import (
+	"fmt"
+	"sort"
+)
+
+func main() {
+	xs := []int{3, 1, 2}
+	sort.Slice(xs, func(i, j int) bool {
+		if xs[i] == 3 {
+			xs[i] = 4
+		}
+		return xs[i] < xs[j]
+	})
+	fmt.Println(xs)
+}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "original.go")
+	if err := os.WriteFile(path, []byte(source), 0600); err != nil {
+		t.Fatal(err)
+	}
+	oracle := runNativeOracle(t, dir, path, nil, "")
+	got := runGoSourceRunner(t, dir, path, source, nil, "")
+	if got.stdout != oracle.stdout || got.stderr != oracle.stderr || got.status != oracle.status {
+		t.Fatalf("interp=%+v oracle=%+v", got, oracle)
+	}
+}
+
+func TestS374OriginalCallbackResultArity(t *testing.T) {
+	for name, source := range map[string]string{
+		"once_func_zero_results": `package main
+
+import (
+	"fmt"
+	"sync"
+)
+
+var n int
+var once = sync.OnceFunc(func() { n++; fmt.Println("called", n) })
+
+func main() {
+	once()
+	once()
+	fmt.Println("after", n)
+}
+`,
+		"once_values_multiple_results": `package main
+
+import (
+	"fmt"
+	"sync"
+)
+
+var calls int
+var once = sync.OnceValues(func() (int, []string) {
+	calls++
+	return calls, []string{"linux", "amd64"}
+})
+
+func main() {
+	a, b := once()
+	c, d := once()
+	fmt.Println(a, b, c, d, calls)
+}
+`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "original.go")
+			if err := os.WriteFile(path, []byte(source), 0600); err != nil {
+				t.Fatal(err)
+			}
+			oracle := runNativeOracle(t, dir, path, nil, "")
+			got := runGoSourceRunner(t, dir, path, source, nil, "")
+			if got.stdout != oracle.stdout || got.stderr != oracle.stderr || got.status != oracle.status {
+				t.Fatalf("interp=%+v oracle=%+v", got, oracle)
+			}
+		})
+	}
+}
+
 func TestS281TestingMainStartSequentialCopiedSliceCallbackBarrier(t *testing.T) {
 	driver := s249Source("_testmain.go", `package main
 
