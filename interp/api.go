@@ -3564,7 +3564,13 @@ func (r *Runner) Run(ctx context.Context, node syntax.Node) error {
 	// shell runs keep the caller's context untouched: background jobs and
 	// asynchronous signal senders legitimately outlive a Run, and cancelling
 	// a derived context when Run returns would kill them.
-	if r.bashPPGoSource {
+	// The runner's own flag is set further down, once the file is entered, so
+	// decide from the node being run (or from an enclosing Go-source run).
+	goSourceRun := r.bashPPGoSource
+	if file, ok := node.(*syntax.File); ok && file.GoSource {
+		goSourceRun = true
+	}
+	if goSourceRun {
 		var cancelRun context.CancelFunc
 		ctx, cancelRun = context.WithCancel(ctx)
 		previousRunCancel := r.bashPPRunCancel
