@@ -144,8 +144,13 @@ func (r *Runner) bashPPNativeAccess(ctx context.Context, op string, base bashPPB
 		// the backend that invoked this Runner. Never infer identity from the
 		// receiver: doing so would grant every foreign caller same-package
 		// access merely because it held a value of the declaring type.
-		accessPackage = r.goSourcePackageAt(r.curStmtPos)
-		if accessPackage == "" {
+		if tag := r.goSourcePackageAt(r.curStmtPos); tag != "" {
+			// The tag is only the linker's hygiene key for the flattened
+			// package. The worker compares against a field's declaring import
+			// path, so send the path the tagged source was authenticated
+			// under; an unresolved tag grants nothing.
+			accessPackage = r.goSourceLinkedPackagePath(tag)
+		} else {
 			accessPackage = req.ImportPath
 		}
 	}
