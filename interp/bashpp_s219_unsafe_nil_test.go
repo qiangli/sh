@@ -37,7 +37,9 @@ func main() {
 		qt.Assert(t, qt.Equals(stderr, "0x0\ntrue true\nunsafe Pointer\ntime Duration\ntrue true\n"))
 	})
 
-	t.Run("non-nil reinterpretation remains unsupported", func(t *testing.T) {
+	// Sprint 374: a conversion to unsafe.Pointer is read as the pointer it
+	// retypes, so discarding one is valid, as it is in Go.
+	t.Run("non-nil conversion can be discarded", func(t *testing.T) {
 		src := `package main
 import "unsafe"
 func main() {
@@ -45,7 +47,6 @@ func main() {
 	_ = unsafe.Pointer(&x)
 }`
 		_, stderr, err := runGoSource(t, "s219-unsafe-nonnil", src)
-		qt.Assert(t, qt.IsNotNil(err))
-		qt.Assert(t, qt.IsTrue(strings.Contains(stderr, "BASHPP-")), qt.Commentf("stderr: %s", stderr))
+		qt.Assert(t, qt.IsNil(err), qt.Commentf("stderr: %s", stderr))
 	})
 }
