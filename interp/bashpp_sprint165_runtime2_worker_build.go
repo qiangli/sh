@@ -24,6 +24,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"go/parser"
@@ -102,7 +103,12 @@ func bashPPWorkerImportcfg(ctx context.Context, goBinary, dir string, env []stri
 // overlay is threaded to the dependency listing so a mapped companion's
 // package is exported from its overlaid form; the compile and link steps read
 // the worker source directly and never re-apply cmd/go's directory rule.
-func bashPPBuildWorkerImportcfg(ctx context.Context, goBinary, dir string, env []string, overlay, work, source, binary string, linkValues map[string]string) error {
+//
+// godebug is the original program's default GODEBUG setting as cmd/go would
+// bake it into a native build of that program; when non-empty it is replayed
+// into the linked binary exactly as the go command does
+// (-X=runtime.godebugDefault=...). See bashPPDefaultGODEBUG.
+func bashPPBuildWorkerImportcfg(ctx context.Context, goBinary, dir string, env []string, overlay, work, source, binary string, linkValues map[string]string, godebug string) error {
 	data, err := os.ReadFile(source)
 	if err != nil {
 		return err
@@ -159,8 +165,60 @@ func bashPPBuildWorkerImportcfg(ctx context.Context, goBinary, dir string, env [
 	for _, value := range bashPPWorkerLinkValues(linkValues) {
 		linkArgs = append(linkArgs, "-X", value)
 	}
+	if godebug != "" {
+		linkArgs = append(linkArgs, "-X=runtime.godebugDefault="+godebug)
+	}
 	linkArgs = append(linkArgs, "-o", binary, archive)
 	return run(linkArgs...)
+}
+
+// bashPPDefaultGODEBUG reports the default GODEBUG setting a native `go
+// build` of the original interpreted program would bake into its binary.
+// cmd/go derives it for the main package from the main module's go
+// directive, the go.mod godebug lines, //go:debug directives in the main
+// package's own files and GOFIPS140, then passes it to the linker as
+// -X=runtime.godebugDefault=... (cmd/go/internal/work/gc.go). Builds routed
+// through cmd/go inherit that automatically; the importcfg worker link does
+// not, and a worker without it runs on the toolchain's own defaults instead
+// of the original module's -- a go1.23-or-older module whose native build
+// still honors math/rand.Seed would get a worker where Seed is the Go 1.24+
+// no-op, so the interpreted seeded sequence changes every run and never
+// matches the native one.
+//
+// The exact value is not reimplemented here: `go list -json` exposes the
+// computed DefaultGODEBUG of the main package, so the same reviewed
+// toolchain that compiles and links the worker also computes the defaults
+// the original build would have used. Listing happens in the original
+// program's own source directory so its files' //go:debug lines count. Empty
+// means no default could be established (module-less or non-main contexts,
+// or a listing failure): the binary then keeps the toolchain's linked-in
+// defaults, which is also what cmd/go would use in a context without a main
+// module go directive.
+func bashPPDefaultGODEBUG(ctx context.Context, req bashPPEvalRequest) string {
+	dir := req.SourceDir
+	if dir == "" {
+		dir = bashPPModuleRequest(req).Dir
+	}
+	if dir == "" {
+		return ""
+	}
+	cmd := exec.CommandContext(ctx, req.internalBuildGo(), "list", "-json", "-p", "2", ".")
+	cmd.Dir, cmd.Env = dir, req.internalBuildEnv()
+	var diagnostics bytes.Buffer
+	cmd.Stderr = &diagnostics
+	out, err := cmd.Output()
+	if err != nil {
+		// No module context for the original program: the linked binary
+		// keeps its own defaults, which is what cmd/go would use too.
+		return ""
+	}
+	var listed struct {
+		DefaultGODEBUG string
+	}
+	if err := json.Unmarshal(out, &listed); err != nil {
+		return ""
+	}
+	return listed.DefaultGODEBUG
 }
 
 const bashPPWorkerCacheFormat = "bashpp-worker-archive-v1"

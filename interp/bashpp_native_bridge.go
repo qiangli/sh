@@ -569,6 +569,10 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 	if len(req.CgoPackages) > 0 {
 		buildEnv = setEnvString(req.internalBuildEnv(), "CGO_ENABLED", "1")
 	}
+	// The importcfg link routes below bypass cmd/go, so the original build's
+	// default GODEBUG must be replayed into the worker by hand; the go build
+	// routes compute it themselves. See bashPPDefaultGODEBUG.
+	defaultGODEBUG := bashPPDefaultGODEBUG(ctx, req)
 	if len(req.MappedCompanions) > 0 {
 		if err = bashPPOverlayMappedCompanions(ctx, req, file, buildEnv); err != nil {
 			cleanup()
@@ -663,7 +667,7 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 		// closure by path, so the companion is exported from the overlay while
 		// the admitted internal imports are never re-decided. See D8 and
 		// bashPPBuildWorkerImportcfg.
-		if err = bashPPBuildWorkerImportcfg(ctx, req.internalBuildGo(), file.sourceDir, setEnvString(buildEnv, "PWD", file.sourceDir), file.overlay, file.work, file.Name(), binary, linkValues); err != nil {
+		if err = bashPPBuildWorkerImportcfg(ctx, req.internalBuildGo(), file.sourceDir, setEnvString(buildEnv, "PWD", file.sourceDir), file.overlay, file.work, file.Name(), binary, linkValues, defaultGODEBUG); err != nil {
 			cleanup()
 			return err
 		}
@@ -678,7 +682,7 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 			cleanup()
 			return fmt.Errorf("gosource: build dependency bridge: %w: %s", err, diagnostics.String())
 		}
-	} else if err = bashPPBuildWorkerImportcfg(ctx, req.internalBuildGo(), bashPPModuleRequest(req).Dir, buildEnv, "", filepath.Dir(file.Name()), file.Name(), binary, linkValues); err != nil {
+	} else if err = bashPPBuildWorkerImportcfg(ctx, req.internalBuildGo(), bashPPModuleRequest(req).Dir, buildEnv, "", filepath.Dir(file.Name()), file.Name(), binary, linkValues, defaultGODEBUG); err != nil {
 		// The importcfg route: the worker's imports were decided at the
 		// check (identity-keyed, D8); cmd/go's directory rule does not
 		// re-decide them. See bashpp_sprint165_runtime2_worker_build.go.

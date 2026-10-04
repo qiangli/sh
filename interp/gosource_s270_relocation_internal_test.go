@@ -104,7 +104,7 @@ const callbackMailboxPath = ""`, 1)
 	if err := os.WriteFile(path, []byte(source), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := bashPPBuildWorkerImportcfg(context.Background(), filepath.Join(runtime.GOROOT(), "bin", "go"), buildDir, os.Environ(), "", dir, path, filepath.Join(dir, "worker"), nil); err != nil {
+	if err := bashPPBuildWorkerImportcfg(context.Background(), filepath.Join(runtime.GOROOT(), "bin", "go"), buildDir, os.Environ(), "", dir, path, filepath.Join(dir, "worker"), nil, ""); err != nil {
 		t.Fatalf("build generated dependency worker: %v", err)
 	}
 }

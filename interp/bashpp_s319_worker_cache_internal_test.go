@@ -53,7 +53,7 @@ func TestBashPPS319WorkerArchiveCacheAcrossChildren(t *testing.T) {
 		if flags := bashPPWorkerBuildLDFlags(map[string]string{"bridgeAuthPath": authPath}); strings.Contains(flags, auth) {
 			t.Fatalf("link flags exposed bridge auth: %s", flags)
 		}
-		if err := bashPPBuildWorkerImportcfg(context.Background(), goBinary, work, os.Environ(), "", work, sourcePath, binary, map[string]string{"bridgeAuthPath": authPath}); err != nil {
+		if err := bashPPBuildWorkerImportcfg(context.Background(), goBinary, work, os.Environ(), "", work, sourcePath, binary, map[string]string{"bridgeAuthPath": authPath}, ""); err != nil {
 			t.Fatal(err)
 		}
 		output, err := exec.Command(binary).CombinedOutput()
