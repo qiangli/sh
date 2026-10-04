@@ -377,7 +377,7 @@ func goSourceUnsafeDerefCheck(p *bashPPPointer) error {
 	if p.forged {
 		return errGoSourceUnsafeForged
 	}
-	if p.unsafeRefusal != nil && p.unsafeSource != nil && bashPPTypeText(p.unsafeSource) != bashPPTypeText(p.elem) {
+	if p.unsafeRefusal != nil && p.unsafeOverlay == nil && p.unsafeSource != nil && bashPPTypeText(p.unsafeSource) != bashPPTypeText(p.elem) {
 		return p.unsafeRefusal
 	}
 	if p.unsafeOffset != 0 {

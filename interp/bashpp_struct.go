@@ -1190,6 +1190,13 @@ func (r *Runner) bashPPStructuredAssign(target, rhs syntax.BashPPExpr) {
 			r.exit = exitStatus{code: 2}
 			return
 		}
+		if ptr.unsafeOverlay != nil {
+			if err := ptr.unsafeOverlay.write(ptr, value, meta); err != nil {
+				r.errf("%v\n", err)
+				r.exit = exitStatus{code: 2}
+			}
+			return
+		}
 		parent, parentMeta, _, err := ptr.readParent()
 		if err != nil {
 			// `lst.head.next = v` with a nil head is the nil dereference.
@@ -1604,6 +1611,10 @@ func (r *Runner) goSourceComputedPointerField(target syntax.BashPPExpr) bool {
 		// f().field and s.StructType().ParamTuple: a call result of pointer
 		// type is dereferenced implicitly, so its field is addressable.
 		return r.goSourcePointerCallResult(call)
+	}
+	if conv, ok := x.(*syntax.BashPPConvertExpr); ok {
+		_, pointer := r.bashPPPointerType(r.bashPPConvertTarget(conv))
+		return pointer
 	}
 	assert, ok := x.(*syntax.BashPPTypeAssertExpr)
 	if !ok {

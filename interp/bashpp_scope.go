@@ -81,6 +81,11 @@ type bashPPCell struct {
 	declType       syntax.BashPPTypeExpr
 	pointerValue   *bashPPPointer
 	interfaceValue *bashPPInterfaceValue
+	// unsafeAllocation is the byte image of this addressable allocation. It is
+	// created lazily by an unsafe struct overlay. Ordinary typed storage stays
+	// authoritative for declared fields; the image retains bytes (notably
+	// padding) for which that storage has no carrier.
+	unsafeAllocation *goSourceUnsafeAllocation
 	// constant marks a `const` binding. It is kept beside vr.ReadOnly rather
 	// than derived from it because the shell's readonly machinery is what
 	// vr.ReadOnly drives, and the two answer to different owners: `declare -r`
@@ -365,6 +370,7 @@ func (c *bashPPCloner) cloneCell(cell *bashPPCell) *bashPPCell {
 		iface.cell = c.cloneCell(cell.interfaceValue.cell)
 		dup.interfaceValue = &iface
 	}
+	dup.unsafeAllocation = cell.unsafeAllocation.clone(c.clonePointer)
 	return copied
 }
 

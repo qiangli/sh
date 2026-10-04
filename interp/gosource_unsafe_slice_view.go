@@ -6,9 +6,11 @@ package interp
 import (
 	"encoding/binary"
 	"fmt"
+	"go/types"
 	"math"
 	"runtime"
 	"strconv"
+	"sync"
 
 	"mvdan.cc/sh/v3/syntax"
 )
@@ -184,6 +186,9 @@ func (v *goSourceUnsafeSliceView) read(header any) (any, *bashPPCollectionMeta, 
 	if err != nil {
 		return nil, nil, err
 	}
+	if from.padding || to.padding {
+		return nil, nil, goSourceUnsafeViewErr("padded layouts %s and %s cannot be moved through a slice view", bashPPTypeText(source), bashPPTypeText(v.elem))
+	}
 	if from.size == 0 || to.size == 0 {
 		return nil, nil, goSourceUnsafeViewErr("zero-size element type cannot be reinterpreted (%s as %s)", bashPPTypeText(source), bashPPTypeText(v.elem))
 	}
@@ -240,14 +245,15 @@ func (v *goSourceUnsafeSliceView) read(header any) (any, *bashPPCollectionMeta, 
 // goSourceUnsafeLayout is the byte layout of a type every byte of which is an
 // observable value.
 type goSourceUnsafeLayout struct {
-	kind   byte // 'i' integer, 'b' bool, 'f' float, 'p' pointer, 's' struct, 'a' array
-	size   int
-	align  int
-	signed bool
-	typ    syntax.BashPPTypeExpr
-	fields []goSourceUnsafeLayoutField
-	elem   *goSourceUnsafeLayout
-	count  int
+	kind    byte // 'i' integer, 'b' bool, 'f' float, 'p' pointer, 's' struct, 'a' array
+	size    int
+	align   int
+	signed  bool
+	typ     syntax.BashPPTypeExpr
+	fields  []goSourceUnsafeLayoutField
+	elem    *goSourceUnsafeLayout
+	count   int
+	padding bool
 }
 
 type goSourceUnsafeLayoutField struct {
@@ -319,36 +325,215 @@ func (r *Runner) goSourceUnsafeByteLayout(typ syntax.BashPPTypeExpr, depth int) 
 		if n != 0 && elem.size > math.MaxInt32/n {
 			return refuse("array type")
 		}
-		return &goSourceUnsafeLayout{kind: 'a', size: n * elem.size, align: elem.align, typ: typ, elem: elem, count: n}, nil
+		return &goSourceUnsafeLayout{kind: 'a', size: n * elem.size, align: elem.align, typ: typ, elem: elem, count: n, padding: elem.padding}, nil
 	case *syntax.BashPPStructType:
 		fields, _, ok := r.bashPPStructFields(typ)
 		if !ok {
 			fields = x.Fields
 		}
-		out := &goSourceUnsafeLayout{kind: 's', align: 1, typ: typ}
-		for _, field := range bashPPFlatFields(fields) {
-			if field.name == "_" {
-				return refuse("blank field of")
-			}
+		flat := bashPPFlatFields(fields)
+		goType, layoutOK := r.goSourceLayoutType(typ, map[string]bool{})
+		var goStruct *types.Struct
+		if layoutOK {
+			goStruct, _ = goType.Underlying().(*types.Struct)
+		}
+		structOK := goStruct != nil
+		sizes := types.SizesFor("gc", runtime.GOARCH)
+		if !layoutOK || !structOK || sizes == nil || goStruct.NumFields() != len(flat) {
+			return refuse("layout of")
+		}
+		offsets := sizes.Offsetsof(structFields(goStruct))
+		total := sizes.Sizeof(goType)
+		align := sizes.Alignof(goType)
+		if total < 0 || total > math.MaxInt32 || align <= 0 || align > math.MaxInt32 {
+			return refuse("layout of")
+		}
+		out := &goSourceUnsafeLayout{kind: 's', size: int(total), align: int(align), typ: typ}
+		end := 0
+		for i, field := range flat {
 			layout, err := r.goSourceUnsafeByteLayout(field.typ, depth+1)
 			if err != nil {
 				return nil, err
 			}
-			if layout.size == 0 || out.size%layout.align != 0 {
-				// A zero-size field or padding before this field: bytes
-				// the interpreter's field storage has nowhere to keep.
-				return refuse("padded struct")
+			offset := int(offsets[i])
+			if offset > end || field.name == "_" || layout.padding {
+				out.padding = true
 			}
-			out.fields = append(out.fields, goSourceUnsafeLayoutField{name: field.name, offset: out.size, layout: layout})
-			out.size += layout.size
-			out.align = max(out.align, layout.align)
+			if field.name != "_" {
+				out.fields = append(out.fields, goSourceUnsafeLayoutField{name: field.name, offset: offset, layout: layout})
+			}
+			end = max(end, offset+layout.size)
 		}
-		if out.size%out.align != 0 {
-			return refuse("padded struct")
+		if out.size > end {
+			out.padding = true
 		}
 		return out, nil
 	}
 	return refuse("type")
+}
+
+// goSourceUnsafeAllocation is the canonical byte companion of one addressable
+// interpreter cell. The declared value remains in the cell; this image keeps
+// the otherwise unrepresented padding and exact pointer words. All refreshes,
+// view writes, and typed publication use this one lock.
+type goSourceUnsafeAllocation struct {
+	mu     sync.Mutex
+	image  *goSourceUnsafeImage
+	source *goSourceUnsafeLayout
+}
+
+func (a *goSourceUnsafeAllocation) clone(pointer func(*bashPPPointer) *bashPPPointer) *goSourceUnsafeAllocation {
+	if a == nil {
+		return nil
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	out := &goSourceUnsafeAllocation{source: a.source}
+	if a.image != nil {
+		out.image = cloneGoSourceUnsafeImage(a.image, pointer)
+	}
+	return out
+}
+
+func cloneGoSourceUnsafeImage(in *goSourceUnsafeImage, pointer func(*bashPPPointer) *bashPPPointer) *goSourceUnsafeImage {
+	if in == nil {
+		return nil
+	}
+	out := &goSourceUnsafeImage{bytes: append([]byte(nil), in.bytes...)}
+	if len(in.pointers) != 0 {
+		out.pointers = make(map[int]*bashPPPointer, len(in.pointers))
+		for offset, ptr := range in.pointers {
+			if pointer != nil {
+				ptr = pointer(ptr)
+			}
+			out.pointers[offset] = ptr
+		}
+	}
+	return out
+}
+
+// goSourceUnsafeOverlayView identifies a byte range within an allocation.
+// Field selection derives another view with a stable byte offset instead of
+// appending a target-struct field name to the source struct's map path.
+type goSourceUnsafeOverlayView struct {
+	r      *Runner
+	source *goSourceUnsafeLayout
+	target *goSourceUnsafeLayout
+	offset int
+}
+
+func (r *Runner) goSourceUnsafeStructOverlay(source, target syntax.BashPPTypeExpr) (*goSourceUnsafeOverlayView, error) {
+	if runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64" {
+		return nil, fmt.Errorf("BASHPP-EUNSAFE-LAYOUT: struct overlays require a 64-bit little-endian gc layout, got %s", runtime.GOARCH)
+	}
+	if _, ok := r.bashPPUnderlyingType(source).(*syntax.BashPPStructType); !ok {
+		return nil, goSourceUnsafeViewErr("source %s is not an interpreter-owned struct", bashPPTypeText(source))
+	}
+	if _, ok := r.bashPPUnderlyingType(target).(*syntax.BashPPStructType); !ok {
+		return nil, goSourceUnsafeViewErr("target %s is not a struct overlay", bashPPTypeText(target))
+	}
+	from, err := r.goSourceUnsafeByteLayout(source, 0)
+	if err != nil {
+		return nil, err
+	}
+	to, err := r.goSourceUnsafeByteLayout(target, 0)
+	if err != nil {
+		return nil, err
+	}
+	if from.size != to.size || from.align != to.align {
+		return nil, fmt.Errorf("BASHPP-EUNSAFE-LAYOUT: %s (%d bytes, align %d) and %s (%d bytes, align %d) cannot share a struct overlay", bashPPTypeText(source), from.size, from.align, bashPPTypeText(target), to.size, to.align)
+	}
+	return &goSourceUnsafeOverlayView{r: r, source: from, target: to}, nil
+}
+
+func (v *goSourceUnsafeOverlayView) allocation(ptr *bashPPPointer) (*goSourceUnsafeAllocation, error) {
+	if ptr == nil || ptr.target == nil {
+		return nil, errBashPPNilDereference
+	}
+	if len(ptr.path) != 0 {
+		return nil, goSourceUnsafeViewErr("nested struct overlay storage is not yet representable")
+	}
+	ptr.target.lock()
+	allocation := ptr.target.unsafeAllocation
+	if allocation == nil {
+		allocation = &goSourceUnsafeAllocation{source: v.source, image: &goSourceUnsafeImage{bytes: make([]byte, v.source.size)}}
+		ptr.target.unsafeAllocation = allocation
+	}
+	ptr.target.unlock()
+	if allocation.source.size != v.source.size || bashPPTypeText(allocation.source.typ) != bashPPTypeText(v.source.typ) {
+		return nil, goSourceUnsafeViewErr("allocation byte image belongs to %s, not %s", bashPPTypeText(allocation.source.typ), bashPPTypeText(v.source.typ))
+	}
+	return allocation, nil
+}
+
+func (v *goSourceUnsafeOverlayView) refresh(ptr *bashPPPointer, allocation *goSourceUnsafeAllocation) (*goSourceUnsafeImage, error) {
+	stored := ptr.target.view()
+	value := stored.vr.Obj
+	image := cloneGoSourceUnsafeImage(allocation.image, nil)
+	if image == nil {
+		image = &goSourceUnsafeImage{bytes: make([]byte, v.source.size)}
+	}
+	if err := v.r.goSourceUnsafeEncode(v.source, value, image, 0); err != nil {
+		return nil, err
+	}
+	return image, nil
+}
+
+func (v *goSourceUnsafeOverlayView) read(ptr *bashPPPointer) (any, *bashPPCollectionMeta, error) {
+	allocation, err := v.allocation(ptr)
+	if err != nil {
+		return nil, nil, err
+	}
+	allocation.mu.Lock()
+	defer allocation.mu.Unlock()
+	image, err := v.refresh(ptr, allocation)
+	if err != nil {
+		return nil, nil, err
+	}
+	value, meta, err := v.r.goSourceUnsafeDecode(v.target, image, v.offset)
+	if err == nil {
+		allocation.image = image
+	}
+	return value, meta, err
+}
+
+func (v *goSourceUnsafeOverlayView) write(ptr *bashPPPointer, value any, _ *bashPPCollectionMeta) error {
+	allocation, err := v.allocation(ptr)
+	if err != nil {
+		return err
+	}
+	allocation.mu.Lock()
+	defer allocation.mu.Unlock()
+	image, err := v.refresh(ptr, allocation)
+	if err != nil {
+		return err
+	}
+	if err := v.r.goSourceUnsafeEncode(v.target, value, image, v.offset); err != nil {
+		return err
+	}
+	decoded, meta, err := v.r.goSourceUnsafeDecode(v.source, image, 0)
+	if err != nil {
+		return err
+	}
+	allocation.image = image
+	bashPPStoreCellValue(ptr.target, decoded, meta)
+	return nil
+}
+
+func (v *goSourceUnsafeOverlayView) field(ptr *bashPPPointer, name string) (*bashPPPointer, error) {
+	for _, field := range v.target.fields {
+		if field.name != name {
+			continue
+		}
+		out := ptr.clone()
+		child := *v
+		child.target = field.layout
+		child.offset += field.offset
+		out.unsafeOverlay = &child
+		out.elem = field.layout.typ
+		return out, nil
+	}
+	return nil, goSourceUnsafeViewErr("field %s is not addressable in overlay %s", name, bashPPTypeText(v.target.typ))
 }
 
 // goSourceUnsafeImage is a run of bytes. A live pointer has no numeric
@@ -474,6 +659,9 @@ func (r *Runner) goSourceUnsafeEncode(layout *goSourceUnsafeLayout, value any, i
 		ptr, ok := value.(*bashPPPointer)
 		if value != nil && !ok {
 			return mismatch()
+		}
+		if image.pointers != nil {
+			delete(image.pointers, offset)
 		}
 		switch {
 		case ptr == nil:
@@ -611,14 +799,14 @@ func (r *Runner) goSourceUnsafeRetypePointer(ptr *bashPPPointer, typ syntax.Bash
 		// unsafe.Pointer: the storage type travels in unsafeSource.
 		return &retyped
 	}
-	retyped.unsafeView, retyped.unsafeRefusal, retyped.unsafeSlice = nil, nil, nil
+	retyped.unsafeView, retyped.unsafeRefusal, retyped.unsafeSlice, retyped.unsafeOverlay = nil, nil, nil, nil
 	if bashPPTypeText(retyped.unsafeSource) != bashPPTypeText(pointer.Element) {
 		if view := r.goSourceUnsafeSliceHeaderView(retyped.unsafeSource, pointer.Element); view != nil {
 			retyped.unsafeSlice = view
-		} else if err := r.goSourceUnsafeBlankView(retyped.unsafeSource, pointer.Element); err == nil {
-			retyped.unsafeView = pointer.Element
+		} else if overlay, overlayErr := r.goSourceUnsafeStructOverlay(retyped.unsafeSource, pointer.Element); overlayErr == nil {
+			retyped.unsafeOverlay = overlay
 		} else {
-			retyped.unsafeRefusal = err
+			retyped.unsafeRefusal = overlayErr
 		}
 	}
 	retyped.elem = pointer.Element

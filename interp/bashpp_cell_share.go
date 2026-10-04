@@ -175,6 +175,7 @@ func (c *bashPPCell) storeFields(value *bashPPCell) {
 	c.declType = value.declType
 	c.pointerValue = value.pointerValue
 	c.interfaceValue = value.interfaceValue
+	c.unsafeAllocation = value.unsafeAllocation
 	c.constant = value.constant
 }
 

@@ -36,6 +36,10 @@ type bashPPPointer struct {
 	// struct view presented by a following typed-pointer conversion.
 	unsafeSource syntax.BashPPTypeExpr
 	unsafeView   syntax.BashPPTypeExpr
+	// unsafeOverlay is a byte-addressed view of the allocation. Unlike
+	// unsafeView's historical blank-only zero value, it persists padding and
+	// decodes observable fields on every access.
+	unsafeOverlay *goSourceUnsafeOverlayView
 	// unsafeRefusal is the validation failure of a typed-pointer conversion
 	// of an unsafe.Pointer whose target is no supported view: the pointer
 	// exists, but no access through it can be represented.
@@ -213,12 +217,14 @@ func (r *Runner) bashPPPointerConversion(expr syntax.BashPPExpr) (*bashPPPointer
 	retyped := *ptr
 	retyped.unsafeRefusal = nil
 	retyped.unsafeSlice = nil
+	retyped.unsafeOverlay = nil
 	if ptr.unsafeSource != nil && bashPPTypeText(ptr.unsafeSource) != bashPPTypeText(target.Element) {
 		if view := r.goSourceUnsafeSliceHeaderView(ptr.unsafeSource, target.Element); view != nil {
 			retyped.unsafeView = nil
 			retyped.unsafeSlice = view
-		} else if err := r.goSourceUnsafeBlankView(ptr.unsafeSource, target.Element); err == nil {
-			retyped.unsafeView = target.Element
+		} else if overlay, overlayErr := r.goSourceUnsafeStructOverlay(ptr.unsafeSource, target.Element); overlayErr == nil {
+			retyped.unsafeView = nil
+			retyped.unsafeOverlay = overlay
 		} else if r.bashPPGoSource {
 			// Go permits the conversion itself; only an access through the
 			// result reinterprets bytes. The retyped pointer still names the
@@ -226,9 +232,9 @@ func (r *Runner) bashPPPointerConversion(expr syntax.BashPPExpr) (*bashPPPointer
 			// exactly as Go does), and every read or write through it is
 			// refused with this validation's diagnostic.
 			retyped.unsafeView = nil
-			retyped.unsafeRefusal = err
+			retyped.unsafeRefusal = overlayErr
 		} else {
-			return nil, target, true, err
+			return nil, target, true, overlayErr
 		}
 	}
 	retyped.elem = target.Element
@@ -492,6 +498,21 @@ func (r *Runner) bashPPAddress(expr syntax.BashPPExpr) (result *bashPPPointer, e
 	// x.(*T).f is addressable through the asserted pointer: the assertion
 	// runs once and the field address continues from its pointee.
 	if selector, ok := expr.(*syntax.BashPPSelectorExpr); ok && r.bashPPGoSource {
+		if base, _, converted, err := r.bashPPPointerConversion(selector.X); converted {
+			if err != nil {
+				return nil, err
+			}
+			return r.goSourcePointeeFieldAddress(base, selector.Sel.Value)
+		}
+		if parentType, known := r.goSourceStaticExprType(selector.X); known {
+			if _, pointer := r.bashPPPointerType(parentType); pointer {
+				base, err := r.bashPPPointerExprValue(selector.X)
+				if err != nil {
+					return nil, err
+				}
+				return r.goSourcePointeeFieldAddress(base, selector.Sel.Value)
+			}
+		}
 		x := selector.X
 		for {
 			paren, parenthesised := x.(*syntax.BashPPParenExpr)
@@ -564,7 +585,7 @@ ordinaryAddress:
 				return nil, errBashPPNilDereference
 			}
 			base := stored.pointerValue
-			ptr = &bashPPPointer{target: base.target, path: append([]bashPPPointerStep(nil), base.path...), elem: base.elem}
+			ptr = base.clone()
 			typ = base.elem
 			_, meta, _, _ = base.read()
 		}
@@ -776,7 +797,13 @@ func (p *bashPPPointer) read() (any, *bashPPCollectionMeta, syntax.BashPPTypeExp
 			}
 		}
 	}
-	if p.unsafeSource != nil && bashPPTypeText(p.unsafeSource) != bashPPTypeText(p.elem) {
+	if p.unsafeOverlay != nil {
+		var err error
+		value, meta, err = p.unsafeOverlay.read(p)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+	} else if p.unsafeSource != nil && bashPPTypeText(p.unsafeSource) != bashPPTypeText(p.elem) {
 		if p.unsafeSlice != nil && p.unsafeSlice.target == p.elem {
 			var err error
 			if value, meta, err = p.unsafeSlice.read(value); err != nil {
@@ -1251,7 +1278,7 @@ func (r *Runner) bashPPDerefAssign(target *syntax.BashPPDerefExpr, rhs syntax.Ba
 		r.exit.code = 2
 		return
 	}
-	if ptr.unsafeSource != nil && bashPPTypeText(ptr.unsafeSource) != bashPPTypeText(ptr.elem) && ptr.unsafeView == nil {
+	if ptr.unsafeSource != nil && bashPPTypeText(ptr.unsafeSource) != bashPPTypeText(ptr.elem) && ptr.unsafeView == nil && ptr.unsafeOverlay == nil {
 		r.errf("BASHPP-EUNSAFE-VIEW: target %s is not a supported blank-field struct\n", bashPPTypeText(ptr.elem))
 		r.exit.code = 2
 		return
@@ -1282,6 +1309,13 @@ func (r *Runner) bashPPDerefAssign(target *syntax.BashPPDerefExpr, rhs syntax.Ba
 		return
 	}
 	if len(ptr.path) == 0 {
+		if ptr.unsafeOverlay != nil {
+			if err := ptr.unsafeOverlay.write(ptr, value, meta); err != nil {
+				r.errf("%v\n", err)
+				r.exit.code = 2
+			}
+			return
+		}
 		if handled, err := r.bashPPWriteSliceArrayPointer(ptr, value, meta); handled {
 			if err != nil {
 				r.errf("%v\n", err)
@@ -1336,6 +1370,9 @@ func (p *bashPPPointer) readParent() (any, *bashPPCollectionMeta, syntax.BashPPT
 func (r *Runner) goSourcePointeeFieldAddress(base *bashPPPointer, name string) (*bashPPPointer, error) {
 	if base == nil {
 		return nil, errBashPPNilDereference
+	}
+	if base.unsafeOverlay != nil {
+		return base.unsafeOverlay.field(base, name)
 	}
 	sel := r.bashPPResolveField(base.elem, name)
 	if sel.ambiguous || len(sel.edges) == 0 {
