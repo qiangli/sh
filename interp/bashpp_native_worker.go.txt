@@ -1220,6 +1220,9 @@ func main(){
 		fmt.Fprintln(bppOS.Stderr,"gosource: dependency worker cannot be re-executed as an interpreted program")
 		bppOS.Exit(126)
 	}
+	// The bootstrap token is the launcher's, not the program's: the program
+	// must not see it in os.Environ, and a child it starts must not inherit it.
+	bppOS.Unsetenv("BASHPP_WORKER_BOOTSTRAP")
 	loadBridgeAuth()
  openCallbackMailbox()
  conn,err:=net.Dial(bridgeNetwork,bridgeAddress);if err!=nil{panic(err)};defer conn.Close()
