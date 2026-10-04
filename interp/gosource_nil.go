@@ -315,7 +315,15 @@ func (r *Runner) goSourceUnsafePointerType(typ syntax.BashPPTypeExpr) bool {
 		return false
 	}
 	alias, name, ok := strings.Cut(named.Name.Value, ".")
-	return ok && name == "Pointer" && r.bashPPImports[alias] == "unsafe"
+	if !ok || name != "Pointer" {
+		return false
+	}
+	if path, imported := r.bashPPImports[alias]; imported {
+		return path == "unsafe"
+	}
+	// A field type taken from an imported struct's go/types metadata is
+	// spelled by package path, whatever the importing file calls unsafe.
+	return alias == "unsafe"
 }
 
 // goSourceNilElement materialises an untyped nil literal, or a typed nil
