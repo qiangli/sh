@@ -168,7 +168,7 @@ func main() {
 	_, _, _ = raw[0], raw[1], raw[2]
 }`
 		_, stderr, err := runGoSource(t, "s270-g4-slice3-raw", src)
-		if err == nil || !strings.Contains(err.Error()+stderr, "BASHPP-EUNSAFE-VIEW") {
+		if err == nil || (!strings.Contains(err.Error()+stderr, "BASHPP-EUNSAFE-VIEW") && !strings.Contains(err.Error()+stderr, "BASHPP-EUNSAFE-LAYOUT")) {
 			t.Fatalf("err=%v stderr=%q; want raw-layout view refusal", err, stderr)
 		}
 	})

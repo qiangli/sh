@@ -601,7 +601,7 @@ func (r *Runner) goSourceStackBytes(text string) (bashPPBridgeValue, error) {
 	for i := range text {
 		elements[i] = bashPPBridgeValue{Kind: "uint", Type: "uint8", Text: strconv.Itoa(int(text[i]))}
 	}
-	literal := bashPPBridgeValue{Kind: "slice", Type: "[]uint8", Elements: elements}
+	literal := bashPPBridgeValue{Kind: "slice", Type: "[]uint8", Elements: elements, Length: len(text), Capacity: len(text)}
 	return r.bashPPNativeTypeRequest("construct", &syntax.BashPPCollectionType{Kind: "slice", Element: &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "uint8"}}}, literal)
 }
 

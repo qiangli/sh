@@ -105,6 +105,9 @@ func bashPPCanonicalPointerAddress(ptr *bashPPPointer, elem syntax.BashPPTypeExp
 	if err != nil {
 		return nil, nil, err
 	}
+	if value == nil {
+		return nil, nil, errBashPPNilDereference
+	}
 	base, ok := value.(*bashPPPointer)
 	if !ok {
 		return nil, nil, fmt.Errorf("BASHPP-EPOINTER-TARGET: dereference result is not a pointer")

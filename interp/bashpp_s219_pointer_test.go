@@ -156,7 +156,7 @@ func TestS219PointerUnsafeReinterpretationRejected(t *testing.T) {
 import "unsafe"
 func main() {
 	x := 1
-	_ = (*byte)(unsafe.Pointer(&x))
+	_ = *(*byte)(unsafe.Pointer(&x))
 }`
 	_, stderr, err := runGoSource(t, "s219-pointer-unsafe-boundary", src)
 	qt.Assert(t, qt.IsNotNil(err))

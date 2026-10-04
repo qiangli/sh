@@ -44,6 +44,9 @@ func (r *Runner) goSourceDependencyHandle(cell *bashPPCell) *bashPPBridgeValue {
 	if handle.Kind == "pointer" && len(handle.Elements) == 1 && handle.Elements[0].Kind == "handle" {
 		return handle
 	}
+	if handle.Kind == "nil" && handle.Type != "" {
+		return handle
+	}
 	if handle.Kind != "handle" {
 		return nil
 	}
