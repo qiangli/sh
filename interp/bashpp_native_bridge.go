@@ -303,8 +303,11 @@ type bashPPNativeSession struct {
 	// madeFuncs are the handles of functions reflect.MakeFunc built over an
 	// original implementation, and of their Interface() views; see
 	// bashPPMadeFuncUse.
-	madeFuncs       map[uint64]*Runner
-	origins         map[uint64]*bashPPPointer
+	madeFuncs map[uint64]*Runner
+	origins   map[uint64]*bashPPPointer
+	// Native uintptr results whose address is a transported original pointer.
+	// Protected by mu; retaining the pointer also keeps its interpreter cell live.
+	addressOrigins  map[uint64]*bashPPPointer
 	originIndex     map[bashPPOriginKey]uint64 // protected by mu; see bashPPTransportOrigin
 	originIndexed   int                        // len(origins) the index covers
 	originNext      uint64
@@ -1222,6 +1225,18 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 			}
 			derivedCopy := reflectedCopyDerived(req, q)
 			for i := range reply.Values {
+				if v := &reply.Values[i]; v.Kind == "uint" && v.Type == "uintptr" && v.Origin != 0 && v.Session == s.id {
+					if address, err := strconv.ParseUint(v.Text, 10, 64); err == nil {
+						s.mu.Lock()
+						if ptr := s.origins[v.Origin]; ptr != nil {
+							if s.addressOrigins == nil {
+								s.addressOrigins = make(map[uint64]*bashPPPointer)
+							}
+							s.addressOrigins[address] = ptr
+						}
+						s.mu.Unlock()
+					}
+				}
 				bashPPMarkReflectCopy(&reply.Values[i], derivedCopy)
 				if reply.Values[i].Kind == "handle" {
 					if reflectedOriginalFunctionValueOf(req, q) {

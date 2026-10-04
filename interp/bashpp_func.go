@@ -2493,7 +2493,7 @@ func (r *Runner) bashPPBindParams(params []bashPPParam, args []string, callCells
 			if _, ok := r.bashPPTypes[base]; ok {
 				cell := r.bashPPScope.lookup(param.name)
 				cell.typeName = base
-				cell.pointer = r.bashPPDeclaredPointer(param.declared)
+				cell.pointer = r.bashPPDeclaredPointer(param.declared) || cell.pointer && r.goSourceUnsafePointerType(param.typ)
 				cell.nilPointer = cell.pointer && args[i] == ""
 				if r.bashPPGoSource && cell.pointer {
 					cell.nilPointer = cell.view().pointerValue == nil

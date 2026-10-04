@@ -94,6 +94,9 @@ func (r *Runner) goSourceUnsafePointerExpr(expr syntax.BashPPExpr) (*bashPPPoint
 		if address == 0 {
 			return nil, target, true, nil
 		}
+		if ptr := r.goSourceUnsafeRegisteredAddress(uint64(address)); ptr != nil {
+			return ptr, target, true, nil
+		}
 		return &bashPPPointer{forged: true, unsafeAddress: uint64(address)}, target, true, nil
 	}
 	if r.goSourceUnsafeReflectAddressOperand(conv.X) {
@@ -103,6 +106,9 @@ func (r *Runner) goSourceUnsafePointerExpr(expr syntax.BashPPExpr) (*bashPPPoint
 		}
 		if address == 0 {
 			return nil, target, true, nil
+		}
+		if ptr := r.goSourceUnsafeRegisteredAddress(uint64(address)); ptr != nil {
+			return ptr, target, true, nil
 		}
 		return &bashPPPointer{forged: true, unsafeAddress: uint64(address)}, target, true, nil
 	}
@@ -120,6 +126,24 @@ func (r *Runner) goSourceUnsafePointerExpr(expr syntax.BashPPExpr) (*bashPPPoint
 		view.unsafeSource = ptr.elem
 	}
 	return &view, target, true, nil
+}
+
+func (r *Runner) goSourceUnsafeRegisteredAddress(address uint64) *bashPPPointer {
+	if r.bashPPTools.bridge == nil {
+		return nil
+	}
+	session := r.bashPPTools.bridge
+	session.mu.Lock()
+	ptr := session.addressOrigins[address]
+	session.mu.Unlock()
+	if ptr == nil {
+		return nil
+	}
+	view := *ptr
+	if view.unsafeSource == nil {
+		view.unsafeSource = ptr.elem
+	}
+	return &view
 }
 
 func (r *Runner) goSourceUnsafeReflectAddressOperand(expr syntax.BashPPExpr) bool {

@@ -1075,7 +1075,7 @@ func (r *Runner) bashPPInvokeDecorated(ctx context.Context, fn *bashPPFunc, args
 			if base := strings.TrimPrefix(param.declared, "*"); base != "" {
 				if _, ok := r.bashPPTypes[base]; ok {
 					cell.typeName = base
-					cell.pointer = r.bashPPDeclaredPointer(param.declared)
+					cell.pointer = r.bashPPDeclaredPointer(param.declared) || cell.pointer && r.goSourceUnsafePointerType(param.typ)
 					cell.nilPointer = cell.pointer && args[i] == ""
 					if r.bashPPGoSource && cell.pointer {
 						cell.nilPointer = cell.pointerValue == nil

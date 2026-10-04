@@ -50,9 +50,8 @@ func main() {
 }
 
 // TestS247PtrForgedIntegerRefused is the negative control: no integer other
-// than the constant 0 is trusted as an address. A forged constant, a runtime
-// uintptr and a uintptr read back from a native reflect.Value all refuse with
-// a clear BASHPP error instead of dereferencing anything.
+// than the constant 0 is trusted without a registered live pointer origin.
+// A forged constant and a runtime uintptr refuse with a clear BASHPP error.
 func TestS247PtrForgedIntegerRefused(t *testing.T) {
 	cases := map[string]string{
 		"constant": `package main
@@ -63,16 +62,6 @@ import "unsafe"
 func main() {
 	u := uintptr(4660)
 	p := unsafe.Pointer(u)
-	println(*(*int)(p))
-}`,
-		"reflect pointer": `package main
-import (
-	"reflect"
-	"unsafe"
-)
-func main() {
-	x := 1
-	p := unsafe.Pointer(reflect.ValueOf(&x).Pointer())
 	println(*(*int)(p))
 }`,
 	}

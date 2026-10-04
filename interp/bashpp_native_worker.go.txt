@@ -383,6 +383,14 @@ func encode(v reflect.Value) value {
  }
  return result
 }
+// A uintptr returned by reflection can still name a pointer to storage the
+// interpreter transported. Only an address registered by that transport gets
+// an origin; ordinary integer results carry no pointer authority.
+func markOriginalUintptr(v reflect.Value, encoded *value) {
+ if !v.IsValid() || v.Kind()!=reflect.Uintptr || encoded.Kind!="uint" {return}
+ originalPointers.Lock();origin:=originalPointers.ids[uintptr(v.Uint())];originalPointers.Unlock()
+ if origin!=0 {encoded.Origin=origin;encoded.Session=bridgeAuth[:16]}
+}
 // structural encodes a value by shape rather than by handle. A callback
 // receiver crosses back into the interpreter, which owns the original method
 // body and needs the field names, element values and defined type name. A
@@ -1074,7 +1082,7 @@ func dispatch(q request)(reply response){
  leaveCallbackSlices:=enterCallbackSliceFrame(q.SliceBuffers,args);defer leaveCallbackSlices()
  args=originalFmtArgs(fn,args,q.Spread)
  returned=callDependency(fn,args,q.Spread)
- for _,v:=range returned{encoded:=encode(v);if encoded.Kind=="handle" {
+ for _,v:=range returned{encoded:=encode(v);markOriginalUintptr(v,&encoded);if encoded.Kind=="handle" {
    var ctx reflectedMethodContext;valid:=false
    if q.Receiver==nil&&len(q.Args)==1&&q.Args[0].Origin!=0&&v.Type()==reflect.TypeFor[reflect.Value](){snapshot:=reflect.New(args[0].Type()).Elem();snapshot.Set(args[0]);ctx=reflectedMethodContext{receiver:snapshot};if args[0].Kind()==reflect.Pointer{ctx.origin=q.Args[0].Origin};valid=true
    }else if q.Receiver!=nil {if parent,ok:=reflectedContext(q.Receiver.Handle);ok {switch q.Selector {case "MethodByName":if len(args)==1&&args[0].Kind()==reflect.String{typ:=parent.receiver.Type();if typ.Kind()==reflect.Pointer{typ=typ.Elem()};parent.selector=typ.Name()+"."+args[0].String();ctx,valid=parent,true};case "Method":if len(args)==1 {i:=int(args[0].Int());typ:=parent.receiver.Type();if i>=0&&i<typ.NumMethod(){name:=typ.Method(i).Name;if typ.Kind()==reflect.Pointer{typ=typ.Elem()};parent.selector=typ.Name()+"."+name;ctx,valid=parent,true}};case "Interface":if parent.selector!=""{ctx,valid=parent,true}}}}
