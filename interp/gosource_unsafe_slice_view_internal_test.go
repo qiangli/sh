@@ -74,6 +74,15 @@ func TestGoSourceUnsafeSliceHeaderViewPicksQualifiedPackage(t *testing.T) {
 	if view := r.goSourceUnsafeSliceHeaderView(notHeader, target); view != nil {
 		t.Fatal("types.Slice is not a slice header and must not be recognized as one")
 	}
+	// The same package under an import alias, as a linked multi-file package
+	// spells it, and under its full import path.
+	r.bashPPImports["__gosource_import_0_7"] = "internal/unsafeheader"
+	for _, spelling := range []string{"__gosource_import_0_7.Slice", "internal/unsafeheader.Slice"} {
+		aliased := &syntax.BashPPNamedType{Name: &syntax.Lit{Value: spelling}}
+		if view := r.goSourceUnsafeSliceHeaderView(aliased, target); view == nil {
+			t.Fatalf("slice header spelled %q was not recognized", spelling)
+		}
+	}
 	bare := &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "Slice"}}
 	if _, ok := r.goSourceUnsafeStructFields(bare); ok {
 		t.Fatal("an unqualified name matching two imported packages must stay ambiguous")

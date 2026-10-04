@@ -155,27 +155,48 @@ func (r *Runner) goSourceUnsafeStructFields(typ syntax.BashPPTypeExpr) ([]*synta
 	// Several imported packages may export a type of the same name: a file
 	// importing both internal/unsafeheader and cmd/compile/internal/types sees
 	// two types called Slice. The qualifier the source wrote selects the
-	// package; only an unqualified or synthetically qualified name falls back
-	// to requiring the name to be unique among the imports.
-	var native, qualified types.Type
-	matches, qualifiedMatches := 0, 0
-	for key, candidate := range r.bashPPTools.nativeTypes {
-		path := strings.TrimSuffix(key, "."+name)
-		if path == key || !r.goSourceImportsPath(path) {
-			continue
+	// package. It may be an import alias of this session (resolved through
+	// the import table, which also covers the synthetic aliases of linked
+	// multi-file packages), the import path itself, or the package's base
+	// name. Only an unqualified name, or a qualifier that resolves to
+	// nothing, falls back to requiring the name to be unique among imports.
+	var native types.Type
+	if qualifier != "" {
+		paths := []string{}
+		if path, ok := r.bashPPImports[qualifier]; ok {
+			paths = append(paths, path)
 		}
-		native = candidate
-		matches++
-		if qualifier != "" && (path == qualifier || strings.HasSuffix(path, "/"+qualifier)) {
-			qualified = candidate
-			qualifiedMatches++
+		if r.goSourceImportsPath(qualifier) {
+			paths = append(paths, qualifier)
+		}
+		for _, path := range paths {
+			if candidate, ok := r.bashPPTools.nativeTypes[path+"."+name]; ok {
+				native = candidate
+				break
+			}
 		}
 	}
-	switch {
-	case qualifiedMatches == 1:
-		native = qualified
-	case matches != 1:
-		return nil, false
+	if native == nil {
+		var qualified types.Type
+		matches, qualifiedMatches := 0, 0
+		for key, candidate := range r.bashPPTools.nativeTypes {
+			path := strings.TrimSuffix(key, "."+name)
+			if path == key || !r.goSourceImportsPath(path) {
+				continue
+			}
+			native = candidate
+			matches++
+			if qualifier != "" && strings.HasSuffix(path, "/"+qualifier) {
+				qualified = candidate
+				qualifiedMatches++
+			}
+		}
+		switch {
+		case qualifiedMatches == 1:
+			native = qualified
+		case matches != 1:
+			return nil, false
+		}
 	}
 	structure, ok := types.Unalias(native).Underlying().(*types.Struct)
 	if !ok {
@@ -201,7 +222,7 @@ func (v *goSourceUnsafeSliceView) read(header any) (any, *bashPPCollectionMeta, 
 	r := v.r
 	mapping, ok := header.(map[string]any)
 	if !ok {
-		return nil, nil, goSourceUnsafeViewErr("slice header %s no longer names struct storage", bashPPTypeText(v.source))
+		return nil, nil, goSourceUnsafeViewErr("slice header %s no longer names struct storage (it holds %T)", bashPPTypeText(v.source), header)
 	}
 	data, _ := bashPPStorageGet(mapping, v.fields[0])
 	var words [2]int
