@@ -309,6 +309,13 @@ type bashPPNativeSession struct {
 	originNext      uint64
 	sliceOriginKeep map[uint64]*bashPPNativeSlice // widest registered view, kept live
 	sliceOriginNext uint64
+	// sliceRegionRoot indexes sliceOriginKeep by backing interval so a
+	// transported view finds its tightest containing region without
+	// scanning every registered view; see bashPPTransportSliceOrigin.
+	// sliceRegionCount is len(sliceOriginKeep) the index covers; a
+	// mismatch rebuilds it, as for originIndex. Both protected by mu.
+	sliceRegionRoot  *bashPPSliceRegion
+	sliceRegionCount int
 	start           sync.Mutex
 	write           sync.Mutex
 	// encoder is created with conn and used only with write held. Keeping it
@@ -988,10 +995,18 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 		return nil, s.closedWriteError(ctx, err)
 	}
 	var mailboxSpin uint32
+	// This parked request owns its callback channel for the loop's whole
+	// lifetime: an unrelated top-level request waits on the callback gate
+	// before it can install its own channel, and a nested request runs on
+	// this same goroutine and restores the previous owner before this loop
+	// resumes. Re-reading the owner under the session mutex on every
+	// iteration — including every mailbox spin — only contends that lock
+	// across parallel requests, so read it once. Mailbox liveness itself
+	// is still checked per served callback below.
+	s.mu.Lock()
+	mailboxActive := requestMailbox != nil && callbacks != nil && s.activeCallbacks == callbacks
+	s.mu.Unlock()
 	for {
-		s.mu.Lock()
-		mailboxActive := requestMailbox != nil && callbacks != nil && s.activeCallbacks == callbacks
-		s.mu.Unlock()
 		if mailboxActive {
 			if slot, callback, ok := requestMailbox.take(); ok {
 				mailboxSpin = 0

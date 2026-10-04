@@ -78,24 +78,13 @@ func bashPPTransportSliceOrigin(session *bashPPNativeSession, view []any, meta *
 	end := data + uintptr(cap(view))*size
 	session.mu.Lock()
 	defer session.mu.Unlock()
-	var bestID uint64
-	var bestStart uintptr
-	bestCapacity := 0
-	for id, kept := range session.sliceOriginKeep {
-		if kept == nil || cap(kept.view) == 0 {
-			continue
-		}
-		keptStart := reflect.ValueOf(kept.view).Pointer()
-		keptCapacity := cap(kept.view)
-		keptEnd := keptStart + uintptr(keptCapacity)*size
-		if data >= keptStart && end <= keptEnd &&
-			(bestID == 0 || keptCapacity < bestCapacity || keptCapacity == bestCapacity && id < bestID) {
-			bestID = id
-			bestStart = keptStart
-			bestCapacity = keptCapacity
-		}
+	// The index answers the tightest containing region in O(log n). A
+	// table populated outside this function is reindexed before use, so
+	// a lookup never misses a registered region.
+	if session.sliceRegionRoot == nil || session.sliceRegionCount != len(session.sliceOriginKeep) {
+		session.reindexSliceRegionsLocked()
 	}
-	if bestID != 0 {
+	if bestID, bestStart, ok := sliceRegionLookup(session.sliceRegionRoot, data, end); ok {
 		return bestID, int((data - bestStart) / size)
 	}
 	if session.sliceOriginKeep == nil {
@@ -104,7 +93,142 @@ func bashPPTransportSliceOrigin(session *bashPPNativeSession, view []any, meta *
 	session.sliceOriginNext++
 	id := session.sliceOriginNext
 	session.sliceOriginKeep[id] = &bashPPNativeSlice{view: view[:cap(view)], meta: meta, typ: typ}
+	session.sliceRegionRoot = sliceRegionInsert(session.sliceRegionRoot, &bashPPSliceRegion{
+		start: data,
+		end:   end,
+		capN:  cap(view),
+		id:    id,
+		prio:  sliceRegionPriority(id),
+	})
+	session.sliceRegionCount = len(session.sliceOriginKeep)
 	return id, 0
+}
+
+// bashPPSliceRegion is one node of the backing-interval index over
+// sliceOriginKeep. The tree orders regions by (start, id) and each subtree
+// remembers its maximum end, so a containment query visits only regions
+// that can still contain the transported view. The tree is append-only,
+// matching the keep-live table it mirrors.
+type bashPPSliceRegion struct {
+	start, end uintptr
+	capN       int
+	id         uint64
+	prio       uint64
+	maxEnd     uintptr
+	left       *bashPPSliceRegion
+	right      *bashPPSliceRegion
+}
+
+// sliceRegionPriority decorrelates heap order from allocation order, which
+// follows backing addresses closely enough to degenerate an unbalanced
+// tree. It is a pure function of the id so a rebuild yields the same shape
+// for the same table.
+func sliceRegionPriority(id uint64) uint64 {
+	id ^= id >> 30
+	id *= 0xbf58476d1ce4e5b9
+	id ^= id >> 27
+	id *= 0x94d049bb133111eb
+	id ^= id >> 31
+	return id
+}
+
+func sliceRegionUpdate(n *bashPPSliceRegion) {
+	n.maxEnd = n.end
+	if n.left != nil && n.left.maxEnd > n.maxEnd {
+		n.maxEnd = n.left.maxEnd
+	}
+	if n.right != nil && n.right.maxEnd > n.maxEnd {
+		n.maxEnd = n.right.maxEnd
+	}
+}
+
+func sliceRegionRotateRight(n *bashPPSliceRegion) *bashPPSliceRegion {
+	left := n.left
+	n.left = left.right
+	left.right = n
+	sliceRegionUpdate(n)
+	sliceRegionUpdate(left)
+	return left
+}
+
+func sliceRegionRotateLeft(n *bashPPSliceRegion) *bashPPSliceRegion {
+	right := n.right
+	n.right = right.left
+	right.left = n
+	sliceRegionUpdate(n)
+	sliceRegionUpdate(right)
+	return right
+}
+
+// sliceRegionInsert adds a region to the index. Regions never leave the
+// table, so no deletion counterpart exists.
+func sliceRegionInsert(root, node *bashPPSliceRegion) *bashPPSliceRegion {
+	if root == nil {
+		node.maxEnd = node.end
+		return node
+	}
+	if node.start < root.start || node.start == root.start && node.id < root.id {
+		root.left = sliceRegionInsert(root.left, node)
+		if root.left.prio < root.prio {
+			root = sliceRegionRotateRight(root)
+		}
+	} else {
+		root.right = sliceRegionInsert(root.right, node)
+		if root.right.prio < root.prio {
+			root = sliceRegionRotateLeft(root)
+		}
+	}
+	sliceRegionUpdate(root)
+	return root
+}
+
+// sliceRegionLookup reports the tightest region containing [data, end):
+// the smallest capacity, then the lowest id — exactly the minimum the
+// former table scan computed, independent of map iteration order.
+func sliceRegionLookup(root *bashPPSliceRegion, data, end uintptr) (uint64, uintptr, bool) {
+	var bestID uint64
+	var bestStart uintptr
+	bestCapacity := 0
+	found := false
+	stack := []*bashPPSliceRegion{root}
+	for len(stack) > 0 {
+		n := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		if n == nil || n.maxEnd < end {
+			continue
+		}
+		if n.start > data {
+			stack = append(stack, n.left)
+			continue
+		}
+		if n.end >= end && (!found || n.capN < bestCapacity || n.capN == bestCapacity && n.id < bestID) {
+			bestID, bestStart, bestCapacity, found = n.id, n.start, n.capN, true
+		}
+		stack = append(stack, n.left, n.right)
+	}
+	return bestID, bestStart, found
+}
+
+// reindexSliceRegionsLocked rebuilds the interval index from the keep-live
+// table. Degenerate entries carry no identity and stay out, exactly as the
+// former scan skipped them.
+func (s *bashPPNativeSession) reindexSliceRegionsLocked() {
+	s.sliceRegionRoot = nil
+	size := reflect.TypeFor[any]().Size()
+	for id, kept := range s.sliceOriginKeep {
+		if kept == nil || cap(kept.view) == 0 {
+			continue
+		}
+		start := reflect.ValueOf(kept.view).Pointer()
+		s.sliceRegionRoot = sliceRegionInsert(s.sliceRegionRoot, &bashPPSliceRegion{
+			start: start,
+			end:   start + uintptr(cap(kept.view))*size,
+			capN:  cap(kept.view),
+			id:    id,
+			prio:  sliceRegionPriority(id),
+		})
+	}
+	s.sliceRegionCount = len(s.sliceOriginKeep)
 }
 
 // bashPPOriginKey is the storage identity a transport origin names: the root
