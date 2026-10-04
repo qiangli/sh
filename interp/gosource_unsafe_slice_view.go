@@ -10,6 +10,7 @@ import (
 	"math"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 
 	"mvdan.cc/sh/v3/syntax"
@@ -88,7 +89,7 @@ func (r *Runner) goSourceUnsafeSliceHeaderView(source, target syntax.BashPPTypeE
 	if !ok || slice.Kind != "slice" || slice.Element == nil {
 		return nil
 	}
-	fields, _, ok := r.bashPPStructFields(source)
+	fields, ok := r.goSourceUnsafeStructFields(source)
 	if !ok {
 		return nil
 	}
@@ -110,6 +111,51 @@ func (r *Runner) goSourceUnsafeSliceHeaderView(source, target syntax.BashPPTypeE
 		view.fields[i] = field.name
 	}
 	return view
+}
+
+// goSourceUnsafeStructFields includes imported structs whose authenticated
+// shape lives in go/types metadata rather than the interpreted type registry.
+// Imported runtime headers (for example internal/unsafeheader.Slice) are
+// dependency-owned, but their exported field layout is still safe to inspect
+// for the generic three-word slice-header recognition above.
+func (r *Runner) goSourceUnsafeStructFields(typ syntax.BashPPTypeExpr) ([]*syntax.BashPPField, bool) {
+	if fields, _, ok := r.bashPPStructFields(typ); ok {
+		return fields, true
+	}
+	named, ok := typ.(*syntax.BashPPNamedType)
+	if !ok || named.Name == nil || r.bashPPTools.nativeTypes == nil {
+		return nil, false
+	}
+	name := named.Name.Value
+	if dot := strings.LastIndexByte(name, '.'); dot >= 0 {
+		name = name[dot+1:]
+	}
+	var native types.Type
+	for key, candidate := range r.bashPPTools.nativeTypes {
+		if !strings.HasSuffix(key, "."+name) || !r.goSourceImportsPath(strings.TrimSuffix(key, "."+name)) {
+			continue
+		}
+		if native != nil {
+			return nil, false
+		}
+		native = candidate
+	}
+	if native == nil {
+		return nil, false
+	}
+	structure, ok := types.Unalias(native).Underlying().(*types.Struct)
+	if !ok {
+		return nil, false
+	}
+	fields := make([]*syntax.BashPPField, 0, structure.NumFields())
+	for i := 0; i < structure.NumFields(); i++ {
+		field := structure.Field(i)
+		fields = append(fields, &syntax.BashPPField{
+			Names:         []*syntax.Lit{{Value: field.Name()}},
+			FieldTypeExpr: syntax.BashPPTypeExprFromText(types.TypeString(field.Type(), func(pkg *types.Package) string { return pkg.Name() })),
+		})
+	}
+	return fields, true
 }
 
 func goSourceUnsafeViewErr(format string, args ...any) error {
