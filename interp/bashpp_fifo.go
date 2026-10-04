@@ -107,6 +107,7 @@ func (r *Runner) bashPPFIFOPublish(c *bashPPConcurrent, file *os.File, path stri
 		c.fifos = make(map[*os.File]*bashPPFIFOEntry)
 	}
 	c.fifos[file] = e
+	c.fifoCount.Add(1)
 	c.fifoMatch(e, true)
 	c.fifoMu.Unlock()
 	return e
@@ -190,6 +191,7 @@ func (r *Runner) bashPPFIFOOpen(ctx context.Context, path string, flags int) (*o
 		c.fifos = make(map[*os.File]*bashPPFIFOEntry)
 	}
 	c.fifos[file] = e
+	c.fifoCount.Add(1)
 	if e.matched {
 		// Released while announced, by a published peer.
 		if e.probe != nil {
@@ -223,7 +225,10 @@ func (e *bashPPFIFOEntry) Close() error {
 	e.once.Do(func() {
 		e.group.fifoMu.Lock()
 		e.closed = true
-		delete(e.group.fifos, e.file)
+		if _, ok := e.group.fifos[e.file]; ok {
+			delete(e.group.fifos, e.file)
+			e.group.fifoCount.Add(-1)
+		}
 		if e.probe != nil {
 			_ = e.probe.Close()
 			e.probe = nil
@@ -360,4 +365,5 @@ func (c *bashPPConcurrent) cloneFIFO(original, duplicate *os.File, owner *Runner
 		read: source.read, write: source.write, ready: make(chan struct{}), matched: true}
 	close(e.ready)
 	c.fifos[duplicate] = e
+	c.fifoCount.Add(1)
 }

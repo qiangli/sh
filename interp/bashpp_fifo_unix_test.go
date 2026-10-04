@@ -44,6 +44,28 @@ func TestBashPPFIFORetryInterruptedAcquisition(t *testing.T) {
 	}
 }
 
+// The statement hot path asks this predicate while FIFO registration and
+// retirement hold fifoMu. It must therefore use the registration count's
+// atomic snapshot rather than contend on the registry lock.
+func TestBashPPHasFIFOsDoesNotLockRegistry(t *testing.T) {
+	c := newBashPPConcurrent(context.Background())
+	defer c.cancel()
+	r := &Runner{bashPPConcurrent: c}
+
+	c.fifoMu.Lock()
+	defer c.fifoMu.Unlock()
+	done := make(chan bool, 1)
+	go func() { done <- r.bashPPHasFIFOs() }()
+	select {
+	case got := <-done:
+		if got {
+			t.Fatal("empty FIFO registry reported registrations")
+		}
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("bashPPHasFIFOs waited for the FIFO registry lock")
+	}
+}
+
 func TestBashPPFIFOWrappedWriterSnapshot(t *testing.T) {
 	c := newBashPPConcurrent(context.Background())
 	defer c.cancel()
@@ -181,7 +203,11 @@ func fifoTestRegistration(t *testing.T, c *bashPPConcurrent, f *os.File, live bo
 	t.Helper()
 	c.fifoMu.Lock()
 	registered := c.fifos[f] != nil
+	count, length := c.fifoCount.Load(), len(c.fifos)
 	c.fifoMu.Unlock()
+	if count != int32(length) {
+		t.Fatalf("FIFO count=%d, want registry length %d", count, length)
+	}
 	_, err := f.Stat()
 	if registered != live || (live && err != nil) || (!live && !errors.Is(err, os.ErrClosed)) {
 		t.Fatalf("live=%v: registered=%v, stat=%v", live, registered, err)

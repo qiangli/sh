@@ -296,8 +296,5 @@ func (r *Runner) bashPPHasFIFOs() bool {
 	if c == nil {
 		return false
 	}
-	c.fifoMu.Lock()
-	n := len(c.fifos)
-	c.fifoMu.Unlock()
-	return n > 0
+	return c.fifoCount.Load() > 0
 }

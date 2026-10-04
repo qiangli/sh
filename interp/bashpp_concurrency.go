@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
@@ -269,6 +270,10 @@ type bashPPConcurrent struct {
 	observerMu   sync.Mutex
 	fifoMu       sync.Mutex
 	fifos        map[*os.File]*bashPPFIFOEntry
+	// fifoCount mirrors len(fifos). It lets the statement hot path avoid
+	// contending on fifoMu merely to discover that no reconciliation is due.
+	// Every change is made while fifoMu is held.
+	fifoCount atomic.Int32
 	// fifoPending holds rendezvous openers that have announced themselves
 	// but not yet acquired a descriptor; see bashPPFIFOOpen.
 	fifoPending map[*bashPPFIFOEntry]struct{}
