@@ -1160,6 +1160,13 @@ func (r *Runner) bashPPCellForInterfaceExpr(expr syntax.BashPPExpr) (*bashPPCell
 	case *syntax.BashPPAddressExpr, *syntax.BashPPNewExpr:
 		ptr, err := r.bashPPPointerExprValue(expr)
 		if err != nil {
+			// A dependency-owned address boxes as its native handle, the
+			// same way declaring the same expression stores it; refusing
+			// it here made `x = &dep.T{...}` into an interface variable
+			// fail while `y := &dep.T{...}` worked.
+			if native, ok := r.goSourceNativePointerError(err); ok {
+				return r.bashPPInterfaceSourceCell(r.goSourceNativeValueCell(*native), "pointer")
+			}
 			return nil, nil, err
 		}
 		cell := bashPPPointerCell(ptr)
