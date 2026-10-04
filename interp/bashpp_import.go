@@ -109,6 +109,10 @@ type bashPPEvalRequest struct {
 	// See [GoSourceIdentity].
 	ImportPath string
 	TestMain   bool
+	// FreshReexec reports that this worker starts the original program under a
+	// reexec plan, rather than a launcher replay. The worker uses its own binary
+	// as argv[0] in this case; a replay keeps the launcher's invoked identity.
+	FreshReexec bool
 	// identity is the session drift fingerprint of the program-derived
 	// descriptor sets above, and localPlan the derivation of LocalTypes the
 	// request path performs lookups against. Both are derived once per program
@@ -721,7 +725,7 @@ func (r *Runner) bashPPEvalRequest() (bashPPEvalRequest, error) {
 	if !connected {
 		argv = append([]string{r.goSourceReexecArgv0()}, r.Params...)
 	}
-	return bashPPEvalRequest{CallbackOwner: r, CallbackDepth: r.bashPPTools.callbackDepth, PanicOnFault: r.bashPPTools.panicOnFault, LocalTypes: plan.localTypes, Instances: plan.instances, GenericTypes: plan.genericTypes, Selectors: plan.selectors, RuntimeEnv: runtimeEnv, ModuleDir: moduleDir, ImportPath: importPath, TestMain: testMain, Argv: argv, Bridge: r.bashPPTools.bridge, Go: r.bashPPTools.goBinary, BuildGo: r.bashPPTools.buildGoBinary, BuildEnv: buildEnv, Dir: r.Dir, Env: env, Stdin: r.stdin,
+	return bashPPEvalRequest{CallbackOwner: r, CallbackDepth: r.bashPPTools.callbackDepth, PanicOnFault: r.bashPPTools.panicOnFault, LocalTypes: plan.localTypes, Instances: plan.instances, GenericTypes: plan.genericTypes, Selectors: plan.selectors, RuntimeEnv: runtimeEnv, ModuleDir: moduleDir, ImportPath: importPath, TestMain: testMain, FreshReexec: r.goSourceFreshReexec(), Argv: argv, Bridge: r.bashPPTools.bridge, Go: r.bashPPTools.goBinary, BuildGo: r.bashPPTools.buildGoBinary, BuildEnv: buildEnv, Dir: r.Dir, Env: env, Stdin: r.stdin,
 		Stdout: r.bashPPWriter(r.stdout), Stderr: r.bashPPWriter(r.stderr), Imports: r.bashPPImports, SourceDir: plan.sourceDir, SourceFile: plan.sourceFile, EmbedDecls: plan.embedDecls, CompanionFiles: plan.companionFiles, NativeFuncs: plan.nativeFuncs, MappedCompanions: plan.mapped, CompanionTrampolines: plan.trampolines, CompanionUnmappedFrames: plan.unmappedFrames, RootFiles: plan.rootFiles, CgoPackages: plan.cgo,
 		identity: &plan.identity, identityPlan: plan, localPlan: plan.localPlan}, nil
 }

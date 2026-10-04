@@ -67,6 +67,14 @@ func GoSourceReexecPlan(plan ...string) RunnerOption {
 // re-entry instead of falling back to the reconstructed source name.
 const reexecArgv0Env = "BASHPP_REEXEC_ARGV0"
 
+func (r *Runner) goSourceFreshReexec() bool {
+	if len(r.bashPPTools.reexecPlan) == 0 || r.origArgv0 != "" {
+		return false
+	}
+	vr := r.lookupVar(reexecArgv0Env)
+	return !vr.IsSet() || vr.String() == ""
+}
+
 const (
 	reexecPreparedCacheEnv = "BASHPP_REEXEC_PREPARED_CACHE"
 	reexecInterpreterIDEnv = "BASHPP_REEXEC_INTERPRETER_ID"
@@ -106,6 +114,14 @@ func (r *Runner) goSourceReexecArgv0() string {
 	}
 	if r.origArgv0 != "" {
 		return r.origArgv0
+	}
+	if session := r.bashPPTools.bridge; session != nil {
+		session.reexecMu.Lock()
+		launcher := session.reexecLauncher
+		session.reexecMu.Unlock()
+		if launcher != "" {
+			return launcher
+		}
 	}
 	return r.filename
 }

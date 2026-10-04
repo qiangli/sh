@@ -46,6 +46,7 @@ var bridgeNetwork = ""
 var bridgeAddress = ""
 var bridgeAuthPath = ""
 var bridgeAuth = ""
+var workerBootstrap = ""
 var callbackMailboxPath = ""
 var bridgeStdoutBarrier = ""
 var bridgeStderrBarrier = ""
@@ -1095,7 +1096,11 @@ func loadBridgeAuth(){
  bridgeAuth=string(data)
 }
 func main(){
- loadBridgeAuth()
+	if bppOS.Getenv("BASHPP_WORKER_BOOTSTRAP") != workerBootstrap {
+		fmt.Fprintln(bppOS.Stderr,"gosource: dependency worker cannot be re-executed as an interpreted program")
+		bppOS.Exit(126)
+	}
+	loadBridgeAuth()
  openCallbackMailbox()
  conn,err:=net.Dial(bridgeNetwork,bridgeAddress);if err!=nil{panic(err)};defer conn.Close()
  encoder:=json.NewEncoder(conn);if err=encoder.Encode(bridgeAuth);err!=nil{return};decoder:=json.NewDecoder(conn)

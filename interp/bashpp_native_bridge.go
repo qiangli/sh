@@ -541,6 +541,7 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 		"bridgeNetwork":       bridgeNetwork,
 		"bridgeAddress":       listener.Addr().String(),
 		"callbackMailboxPath": mailboxPath,
+		"workerBootstrap":     auth,
 	}
 	if stdoutDrain {
 		linkValues["bridgeStdoutBarrier"] = "1"
@@ -716,7 +717,14 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 	// Bootstrap data is compiled into this ephemeral dependency-only helper.
 	// It must not pollute os.Args or os.Environ, including dependency init.
 	cmd.Args = append([]string(nil), req.Argv...)
-	cmd.Dir, cmd.Env = req.Dir, req.RuntimeEnv
+	if req.FreshReexec && len(cmd.Args) != 0 {
+		// The generated worker is the process actually running the interpreted
+		// package test. Advertising it as argv[0] gives testing a real test
+		// executable without pretending that the replay launcher is the program
+		// under test. Replays retain the launcher's invoked identity instead.
+		cmd.Args[0] = binary
+	}
+	cmd.Dir, cmd.Env = req.Dir, append(append([]string(nil), req.RuntimeEnv...), "BASHPP_WORKER_BOOTSTRAP="+auth)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = req.Stdin, req.Stdout, req.Stderr
 	// A non-file writer receives child output through a pipe this session owns,
 	// so each answered request can drain its output before the interpreter's
@@ -2011,6 +2019,20 @@ func (r *Runner) bashPPStartGoSourceBridge(ctx context.Context) error {
 	req, err := r.bashPPEvalRequest()
 	if err != nil {
 		return err
+	}
+	if len(r.bashPPTools.reexecPlan) != 0 {
+		// The worker snapshots Argv when it starts. Create the launcher before
+		// that snapshot so os.Args[0], testing's test-binary identity, and the
+		// os.Executable interception all name the same executable. The launcher
+		// still only re-enters this interpreted program; it is not a native
+		// fallback for it.
+		if _, err := req.Bridge.goSourceReexecLauncher(ctx, req, r.bashPPTools.reexecPlan, r.tempDir); err != nil {
+			return err
+		}
+		req, err = r.bashPPEvalRequest()
+		if err != nil {
+			return err
+		}
 	}
 	return req.Bridge.begin(ctx, req)
 }
