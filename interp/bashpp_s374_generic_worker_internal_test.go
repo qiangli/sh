@@ -50,3 +50,30 @@ const callbackMailboxPath = ""`, 1)
 		t.Fatalf("build generated dependency worker: %v", err)
 	}
 }
+
+// A generic bridge candidate is not necessarily a local declaration: this
+// imported instantiation has a local type argument, but its generic constructor
+// belongs to hash/maphash and must retain the registration introduced by S281.
+func TestS374GeneratedWorkerRegistersDeclaredImportedGeneric(t *testing.T) {
+	program, err := gosource.Parse(strings.NewReader(`package main
+import "hash/maphash"
+type Thing struct{ Name string }
+func main() { _ = make(chan maphash.Hasher[Thing], 1) }
+`), "generic.go", gosource.Options{RunMain: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &Runner{bashPPGoSourceFile: program.File, bashPPImports: map[string]string{"maphash": "hash/maphash"}}
+	descriptors, _ := r.bashPPBuildLocalTypeDescriptors()
+	dir := t.TempDir()
+	source, err := bashPPNativeSource(context.Background(), bashPPEvalRequest{
+		Go: filepath.Join(runtime.GOROOT(), "bin", "go"), Dir: dir, Env: os.Environ(),
+		Imports: map[string]string{"maphash": "hash/maphash"}, LocalTypes: descriptors, GenericTypes: r.bashPPBuildGenericBridgeTypes(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(source, `"maphash.Hasher[Thing]": reflect.TypeFor[`) {
+		t.Fatalf("worker omitted imported generic registration:\n%s", source)
+	}
+}

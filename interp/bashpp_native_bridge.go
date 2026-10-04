@@ -1492,12 +1492,17 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 			imports.WriteString(strings.Replace(text, alias+" ", "_ ", 1))
 		}
 	}
-	// GenericTypes is a registry universe, not a declaration list.  A local
-	// generic is emitted only when LocalTypes has materialised its concrete
-	// instance under a helper name.  Registering every otherwise-unmaterialised
-	// source spelling here would put (for example) Cons[int] in a package that
-	// declares only bppInstance_..., which is invalid Go.  Each materialised
-	// descriptor below registers its WireType after emitting that declaration.
+	localTypeEntries := bashPPNativeLocalTypeEntries(req.LocalTypes)
+	for _, typ := range req.GenericTypes {
+		if localTypeEntries[typ] || !bashPPNativeGenericTypeDeclaredInWorker(typ) {
+			continue
+		}
+		mapped, err := bashPPNativeTypeImports(typ, importAliases)
+		if err != nil {
+			return "", err
+		}
+		fmt.Fprintf(&typeEntries, "%q: reflect.TypeFor[%s](),\n", typ, mapped)
+	}
 	var embeds strings.Builder
 	for i, embed := range req.EmbedDecls {
 		typ, err := bashPPNativeTypeImports(embed.Type, importAliases)
@@ -1669,6 +1674,17 @@ func bashPPNativeLocalTypeEntries(locals []bashPPLocalType) map[string]bool {
 		}
 	}
 	return entries
+}
+
+// bashPPNativeGenericTypeDeclaredInWorker reports whether a generic registry
+// candidate names a declaration available to the generated worker. A local
+// generic declaration is never copied wholesale: only the concrete instances
+// in LocalTypes are emitted under helper names and registered through WireType.
+// In contrast, a package-qualified constructor is available from the worker's
+// generated import and needs a direct reflect registration.
+func bashPPNativeGenericTypeDeclaredInWorker(text string) bool {
+	named, ok := syntax.BashPPTypeExprFromText(text).(*syntax.BashPPNamedType)
+	return ok && named.Name != nil && strings.Contains(named.Name.Value, ".")
 }
 
 // bashPPNativeSyntheticTypeImports finds package-qualified names that appear
