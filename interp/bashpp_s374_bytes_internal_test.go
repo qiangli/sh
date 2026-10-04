@@ -63,12 +63,12 @@ func TestS374MemStatsMemberScalar(t *testing.T) {
 		recv  bashPPBridgeValue
 		field string
 	}{
-		"unknown field":     {recv, "NoSuchField"},
-		"non-scalar field":  {recv, "BySize"},
-		"wrong kind":        {bashPPBridgeValue{Kind: "struct", Type: "runtime.MemStats"}, "Alloc"},
-		"wrong type":        {bashPPBridgeValue{Kind: "handle", Type: "time.Time"}, "Alloc"},
-		"foreign session":   {bashPPBridgeValue{Kind: "handle", Type: "runtime.MemStats", Session: "other"}, "Alloc"},
-		"empty receiver":    {bashPPBridgeValue{}, "Alloc"},
+		"unknown field":    {recv, "NoSuchField"},
+		"non-scalar field": {recv, "BySize"},
+		"wrong kind":       {bashPPBridgeValue{Kind: "struct", Type: "runtime.MemStats"}, "Alloc"},
+		"wrong type":       {bashPPBridgeValue{Kind: "handle", Type: "time.Time"}, "Alloc"},
+		"foreign session":  {bashPPBridgeValue{Kind: "handle", Type: "runtime.MemStats", Session: "other"}, "Alloc"},
+		"empty receiver":   {bashPPBridgeValue{}, "Alloc"},
 	} {
 		if _, ok := bashPPHostMemStatsMember("s", args.recv, args.field); ok {
 			t.Fatalf("%s did not fall through", name)

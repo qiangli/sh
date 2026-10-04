@@ -121,5 +121,3 @@ func bashPPHostMemStatsMember(sessionID string, recv bashPPBridgeValue, field st
 	}
 	return out, true
 }
-
-
