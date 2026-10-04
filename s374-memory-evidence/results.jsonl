@@ -1,0 +1,95 @@
+{"label": "build", "rc": 1, "reason": "exit", "seconds": 0.067, "peak_KiB": 2064}
+{"label": "logs/15277-16384", "rc": 0, "reason": "exit", "seconds": 1.34, "peak_KiB": 175216}
+{"label": "logs/15277-262144", "rc": 0, "reason": "exit", "seconds": 2.551, "peak_KiB": 1237856}
+{"label": "logs/15277-65536", "rc": 0, "reason": "exit", "seconds": 1.239, "peak_KiB": 344832}
+{"label": "logs/20780b-1000", "rc": 0, "reason": "exit", "seconds": 0.796, "peak_KiB": 136976}
+{"label": "logs/20780b-16000", "rc": 0, "reason": "exit", "seconds": 1.277, "peak_KiB": 159760}
+{"label": "logs/20780b-4000", "rc": 0, "reason": "exit", "seconds": 0.862, "peak_KiB": 155200}
+{"label": "logs/39541-100", "rc": 0, "reason": "exit", "seconds": 0.835, "peak_KiB": 160656}
+{"label": "logs/39541-2000", "rc": 0, "reason": "exit", "seconds": 1.113, "peak_KiB": 157936}
+{"label": "logs/39541-500", "rc": 0, "reason": "exit", "seconds": 0.955, "peak_KiB": 146720}
+{"label": "logs/78081-100", "rc": 0, "reason": "exit", "seconds": 0.782, "peak_KiB": 159696}
+{"label": "logs/78081-20", "rc": 0, "reason": "exit", "seconds": 0.783, "peak_KiB": 162784}
+{"label": "logs/78081-300", "rc": 0, "reason": "exit", "seconds": 0.852, "peak_KiB": 161440}
+{"label": "logs/80188-100", "rc": 0, "reason": "exit", "seconds": 0.834, "peak_KiB": 165552}
+{"label": "logs/80188-1000", "rc": 0, "reason": "exit", "seconds": 1.688, "peak_KiB": 313920}
+{"label": "logs/80188-400", "rc": 0, "reason": "exit", "seconds": 1.159, "peak_KiB": 144304}
+{"label": "logs/peano-4", "rc": 0, "reason": "exit", "seconds": 0.79, "peak_KiB": 130432}
+{"label": "logs/peano-5", "rc": 0, "reason": "exit", "seconds": 0.8, "peak_KiB": 169136}
+{"label": "logs/peano-6", "rc": 0, "reason": "exit", "seconds": 0.848, "peak_KiB": 163904}
+{"label": "logs/rangegen-1", "rc": 0, "reason": "exit", "seconds": 1.759, "peak_KiB": 156656}
+{"label": "logs/rangegen-2", "rc": 0, "reason": "exit", "seconds": 2.599, "peak_KiB": 153584}
+{"label": "logs/rangegen-3", "rc": 0, "reason": "exit", "seconds": 4.874, "peak_KiB": 309744}
+{"label": "logs/15277-churn-False-16", "rc": 0, "reason": "exit", "seconds": 0.916, "peak_KiB": 162608}
+{"label": "logs/15277-churn-False-4", "rc": 0, "reason": "exit", "seconds": 1.043, "peak_KiB": 173936}
+{"label": "logs/15277-churn-True-16", "rc": 0, "reason": "exit", "seconds": 3.987, "peak_KiB": 215536}
+{"label": "logs/15277-churn-True-4", "rc": 0, "reason": "exit", "seconds": 1.435, "peak_KiB": 172976}
+{"label": "logs/20780b-131072", "rc": 0, "reason": "exit", "seconds": 5.736, "peak_KiB": 260096}
+{"label": "logs/20780b-32768", "rc": 0, "reason": "exit", "seconds": 2.109, "peak_KiB": 169616}
+{"label": "logs/39541-20000", "rc": 0, "reason": "exit", "seconds": 5.087, "peak_KiB": 236176}
+{"label": "logs/39541-5000", "rc": 0, "reason": "exit", "seconds": 2.132, "peak_KiB": 136704}
+{"label": "logs/78081-300", "rc": 0, "reason": "exit", "seconds": 0.951, "peak_KiB": 174304}
+{"label": "logs/78081-3000", "rc": 0, "reason": "exit", "seconds": 1.651, "peak_KiB": 136928}
+{"label": "logs/peano-6", "rc": 0, "reason": "exit", "seconds": 1.075, "peak_KiB": 175200}
+{"label": "logs/peano-7", "rc": 0, "reason": "exit", "seconds": 1.093, "peak_KiB": 170384}
+{"label": "logs/20780b-repeat-16", "rc": 0, "reason": "exit", "seconds": 3.673, "peak_KiB": 134624}
+{"label": "logs/20780b-repeat-4", "rc": 0, "reason": "exit", "seconds": 1.528, "peak_KiB": 154384}
+{"label": "logs/peano-repeat-16", "rc": 0, "reason": "exit", "seconds": 1.484, "peak_KiB": 170368}
+{"label": "logs/peano-repeat-4", "rc": 0, "reason": "exit", "seconds": 1.114, "peak_KiB": 175968}
+{"label": "logs/stats-15277-churn-True-16", "rc": 0, "reason": "exit", "seconds": 4.432, "peak_KiB": 174544}
+{"label": "logs/stats-39541-20000", "rc": 0, "reason": "exit", "seconds": 4.227, "peak_KiB": 259088}
+{"label": "logs/stats-rangegen-3", "rc": 0, "reason": "exit", "seconds": 5.566, "peak_KiB": 334512}
+{"label": "logs/native-build-80188-1000", "rc": 0, "reason": "exit", "seconds": 0.114, "peak_KiB": 58704}
+{"label": "logs/native-80188-1000", "rc": 0, "reason": "exit", "seconds": 0.314, "peak_KiB": 4240}
+{"label": "logs/native-build-15277-262144", "rc": 0, "reason": "exit", "seconds": 0.116, "peak_KiB": 68160}
+{"label": "logs/native-15277-262144", "rc": 0, "reason": "exit", "seconds": 0.44, "peak_KiB": 1248}
+{"label": "logs/native-build-20780b-131072", "rc": 0, "reason": "exit", "seconds": 0.121, "peak_KiB": 65008}
+{"label": "logs/native-20780b-131072", "rc": 0, "reason": "exit", "seconds": 0.231, "peak_KiB": 1248}
+{"label": "logs/native-build-39541-20000", "rc": 0, "reason": "exit", "seconds": 0.12, "peak_KiB": 58080}
+{"label": "logs/native-39541-20000", "rc": 0, "reason": "exit", "seconds": 0.239, "peak_KiB": 1248}
+{"label": "logs/native-build-78081-3000", "rc": 0, "reason": "exit", "seconds": 0.114, "peak_KiB": 68240}
+{"label": "logs/native-78081-3000", "rc": 0, "reason": "exit", "seconds": 0.358, "peak_KiB": 1344}
+{"label": "logs/native-build-peano-7", "rc": 0, "reason": "exit", "seconds": 0.12, "peak_KiB": 68128}
+{"label": "logs/native-peano-7", "rc": 0, "reason": "exit", "seconds": 0.306, "peak_KiB": 1248}
+{"label": "logs/native-build-rangegen-3", "rc": 0, "reason": "exit", "seconds": 0.124, "peak_KiB": 27808}
+{"label": "logs/native-rangegen-3", "rc": 0, "reason": "exit", "seconds": 0.297, "peak_KiB": 1248}
+{"label": "logs/integrated-15277-churn-True-16", "rc": 0, "reason": "exit", "seconds": 4.427, "peak_KiB": 175984}
+{"label": "logs/integrated-39541-20000", "rc": 0, "reason": "exit", "seconds": 4.851, "peak_KiB": 183280}
+{"label": "logs/integrated-rangegen-3", "rc": 0, "reason": "exit", "seconds": 6.864, "peak_KiB": 158608}
+{"label": "logs/final-rangegen-3", "rc": 0, "reason": "exit", "seconds": 7.201, "peak_KiB": 170480, "root_peak_KiB": 129680}
+{"label": "logs/final-rss-15277-16384", "rc": 0, "reason": "exit", "seconds": 1.048, "peak_KiB": 164160, "root_peak_KiB": 57648}
+{"label": "logs/final-rss-15277-262144", "rc": 0, "reason": "exit", "seconds": 3.113, "peak_KiB": 1379408, "root_peak_KiB": 551328}
+{"label": "logs/final-rss-15277-65536", "rc": 0, "reason": "exit", "seconds": 1.395, "peak_KiB": 331376, "root_peak_KiB": 149504}
+{"label": "logs/final-rss-20780b-1000", "rc": 0, "reason": "exit", "seconds": 0.867, "peak_KiB": 164240, "root_peak_KiB": 25488}
+{"label": "logs/final-rss-20780b-16000", "rc": 0, "reason": "exit", "seconds": 1.574, "peak_KiB": 159488, "root_peak_KiB": 58128}
+{"label": "logs/final-rss-20780b-4000", "rc": 0, "reason": "exit", "seconds": 0.988, "peak_KiB": 140000, "root_peak_KiB": 36112}
+{"label": "logs/final-rss-39541-100", "rc": 0, "reason": "exit", "seconds": 0.918, "peak_KiB": 161232, "root_peak_KiB": 23776}
+{"label": "logs/final-rss-39541-2000", "rc": 0, "reason": "exit", "seconds": 1.358, "peak_KiB": 158400, "root_peak_KiB": 42640}
+{"label": "logs/final-rss-39541-500", "rc": 0, "reason": "exit", "seconds": 1.045, "peak_KiB": 162672, "root_peak_KiB": 34560}
+{"label": "logs/final-rss-78081-100", "rc": 0, "reason": "exit", "seconds": 0.906, "peak_KiB": 174752, "root_peak_KiB": 22512}
+{"label": "logs/final-rss-78081-20", "rc": 0, "reason": "exit", "seconds": 1.33, "peak_KiB": 143424, "root_peak_KiB": 22864}
+{"label": "logs/final-rss-78081-300", "rc": 0, "reason": "exit", "seconds": 0.964, "peak_KiB": 173600, "root_peak_KiB": 28000}
+{"label": "logs/final-rss-80188-100", "rc": 0, "reason": "exit", "seconds": 1.131, "peak_KiB": 179104, "root_peak_KiB": 45408}
+{"label": "logs/final-rss-80188-1000", "rc": 0, "reason": "exit", "seconds": 2.168, "peak_KiB": 280272, "root_peak_KiB": 273184}
+{"label": "logs/final-rss-80188-400", "rc": 0, "reason": "exit", "seconds": 1.318, "peak_KiB": 164912, "root_peak_KiB": 133856}
+{"label": "logs/final-rss-peano-4", "rc": 0, "reason": "exit", "seconds": 0.904, "peak_KiB": 173952, "root_peak_KiB": 32080}
+{"label": "logs/final-rss-peano-5", "rc": 0, "reason": "exit", "seconds": 0.834, "peak_KiB": 139872, "root_peak_KiB": 23856}
+{"label": "logs/final-rss-peano-6", "rc": 0, "reason": "exit", "seconds": 0.922, "peak_KiB": 141488, "root_peak_KiB": 23728}
+{"label": "logs/final-rss-rangegen-1", "rc": 0, "reason": "exit", "seconds": 2.048, "peak_KiB": 183200, "root_peak_KiB": 50128}
+{"label": "logs/final-rss-rangegen-2", "rc": 0, "reason": "exit", "seconds": 3.383, "peak_KiB": 172016, "root_peak_KiB": 111600}
+{"label": "logs/final-rss-rangegen-3", "rc": 0, "reason": "exit", "seconds": 6.337, "peak_KiB": 169376, "root_peak_KiB": 124320}
+{"label": "logs/final-rss-20780b-32768", "rc": 0, "reason": "exit", "seconds": 2.064, "peak_KiB": 160816, "root_peak_KiB": 83776}
+{"label": "logs/final-rss-20780b-131072", "rc": 0, "reason": "exit", "seconds": 5.707, "peak_KiB": 269280, "root_peak_KiB": 263360}
+{"label": "logs/final-rss-39541-5000", "rc": 0, "reason": "exit", "seconds": 1.913, "peak_KiB": 171552, "root_peak_KiB": 74240}
+{"label": "logs/final-rss-39541-20000", "rc": 0, "reason": "exit", "seconds": 4.982, "peak_KiB": 184208, "root_peak_KiB": 165728}
+{"label": "logs/final-rss-78081-3000", "rc": 0, "reason": "exit", "seconds": 1.467, "peak_KiB": 174320, "root_peak_KiB": 38688}
+{"label": "logs/final-rss-peano-7", "rc": 0, "reason": "exit", "seconds": 1.099, "peak_KiB": 176016, "root_peak_KiB": 74144}
+{"label": "logs/final-39541-100000", "rc": 0, "reason": "exit", "seconds": 20.987, "peak_KiB": 239072, "root_peak_KiB": 199664}
+{"label": "logs/final-finalizer-transport-False", "rc": 0, "reason": "exit", "seconds": 0.9, "peak_KiB": 175312, "root_peak_KiB": 22704}
+{"label": "logs/final-finalizer-transport-True", "rc": 0, "reason": "exit", "seconds": 0.943, "peak_KiB": 168112, "root_peak_KiB": 28176}
+{"label": "logs/final-rangegen-repeat-2", "rc": 0, "reason": "exit", "seconds": 2.233, "peak_KiB": 151216, "root_peak_KiB": 76592}
+{"label": "logs/final-rangegen-repeat-8", "rc": 0, "reason": "exit", "seconds": 4.323, "peak_KiB": 179264, "root_peak_KiB": 113280}
+{"label": "logs/registry-rangegen-repeat-2", "rc": 0, "reason": "exit", "seconds": 2.479, "peak_KiB": 157136, "root_peak_KiB": 76016}
+{"label": "logs/registry-rangegen-repeat-8", "rc": 0, "reason": "exit", "seconds": 3.693, "peak_KiB": 183312, "root_peak_KiB": 107488}
+{"label": "logs/bounded-39541-100000", "rc": 0, "reason": "exit", "seconds": 16.842, "peak_KiB": 216064, "root_peak_KiB": 174368}
+{"label": "logs/bounded-rangegen-3", "rc": 0, "reason": "exit", "seconds": 5.429, "peak_KiB": 176640, "root_peak_KiB": 127888}
