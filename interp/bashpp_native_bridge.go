@@ -39,6 +39,8 @@ import (
 var bashPPNativeWorker string
 
 type bashPPBridgeValue struct {
+	handleOwner  *bashPPHandleOwner    // shared by every interpreter copy; never serialized
+	Lease        uint64                `json:"lease,omitempty"`
 	residentSync *goSourceResidentSync // host-only; never serialized
 	// deferredNativeComposite is return-boundary provenance minted only while
 	// evaluating the mirrored method frame's own return expression. The worker
@@ -146,6 +148,8 @@ type bashPPBridgeEntry struct {
 	Value bashPPBridgeValue `json:"value"`
 }
 type bashPPBridgeRequest struct {
+	AckHandles   bool                      `json:"ack_handles,omitempty"`
+	Releases     []uint64                  `json:"releases,omitempty"`
 	SliceBuffers []bashPPNativeSliceBuffer `json:"slice_buffers,omitempty"`
 	sliceTargets []*bashPPNativeSlice
 	// sliceMutating[i] distinguishes a full in-place mutation writeback (sort)
@@ -268,10 +272,13 @@ func bashPPNativeNoOutputReply(req bashPPEvalRequest, q bashPPBridgeRequest, rep
 }
 
 type bashPPNativeSession struct {
-	fastRandMu        sync.Mutex
-	fastRand          *mrand.Rand
-	fastRandProof     map[string]bool
-	fastRandProofSeen map[string]bool
+	callbackLeaseReplies map[uint64]bashPPBridgeRequest
+	handleReleaseMu      sync.Mutex
+	handleState          *bashPPHandleState
+	fastRandMu           sync.Mutex
+	fastRand             *mrand.Rand
+	fastRandProof        map[string]bool
+	fastRandProofSeen    map[string]bool
 	// Type facts are authenticated on this connection; no native values are cached.
 	handleTypes         map[uint64]uint64
 	localWriters        map[uint64]string
@@ -389,6 +396,7 @@ func (s *bashPPNativeSession) close() { s.closeCanceled(nil) }
 
 func (s *bashPPNativeSession) closeCanceled(cause error) {
 	s.closeOnce.Do(func() {
+		defer func() { s.handleReleaseMu.Lock(); s.callbackLeaseReplies = nil; s.handleReleaseMu.Unlock() }()
 		if s.conn != nil {
 			s.write.Lock()
 			processExited := false
@@ -835,6 +843,11 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 			if err := decoder.Decode(&reply); err != nil {
 				return
 			}
+			if reply.Op == "handle-ack" {
+				s.ackHandleReply(reply.ID)
+				continue
+			}
+			s.adoptHandleResponse(&reply)
 			if reply.Op == "callback" {
 				// The waiting request executes its own callback; this reader
 				// remains available for nested dependency replies.
@@ -896,6 +909,7 @@ func (s *bashPPNativeSession) checkBridgeValue(v bashPPBridgeValue) error {
 }
 
 func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest, q bashPPBridgeRequest) ([]bashPPBridgeValue, error) {
+	defer runtime.KeepAlive(&q)
 	if q.Receiver != nil && residentSyncValue(*q.Receiver) != nil {
 		return nil, fmt.Errorf("resident sync cannot enter native transport")
 	}
@@ -1020,6 +1034,7 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 		s.write.Unlock()
 		return nil, s.closedWriteError(ctx, errors.New("gosource: native bridge encoder is unavailable"))
 	}
+	q.Releases = s.takeHandleReleases()
 	err = encoder.Encode(q)
 	s.write.Unlock()
 	if err != nil {

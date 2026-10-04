@@ -249,8 +249,10 @@ func (s *bashPPNativeSession) enterCallbacks(ctx context.Context, req bashPPEval
 // emitter, is checked after the body and after the receiver reconciliation
 // is computed: a stale copy fails this callback before the dependency reads
 // any further.
-func (s *bashPPNativeSession) callbackAnswer(ctx context.Context, owner *Runner, q bashPPBridgeResponse, outer *bashPPBridgeRequest, frameFn *bashPPFunc) bashPPBridgeRequest {
-	answer := bashPPBridgeRequest{ID: q.ID, Op: "callback-reply"}
+func (s *bashPPNativeSession) callbackAnswer(ctx context.Context, owner *Runner, q bashPPBridgeResponse, outer *bashPPBridgeRequest, frameFn *bashPPFunc) (answer bashPPBridgeRequest) {
+	s.adoptHandleResponse(&q)
+	defer func() { s.retainHandleReply(&answer) }()
+	answer = bashPPBridgeRequest{ID: q.ID, Op: "callback-reply"}
 	var coherence *goSourceCopyCoherence
 	if outer != nil {
 		coherence = outer.coherence
@@ -391,6 +393,7 @@ func (s *bashPPNativeSession) recordCallbackRefusal(err error) {
 }
 
 func (s *bashPPNativeSession) serveCallback(ctx context.Context, owner *Runner, q bashPPBridgeResponse, outer *bashPPBridgeRequest, frameFn *bashPPFunc) {
+	s.adoptHandleResponse(&q)
 	answer := s.callbackAnswer(ctx, owner, q, outer, frameFn)
 	s.mu.Lock()
 	conn := s.conn
@@ -895,6 +898,7 @@ func bashPPBridgeScalarValue(v bashPPBridgeValue) (any, *bashPPCollectionMeta, e
 // its identity. Stored handles keep that identity through nested field reads,
 // and the normal request validator rejects them after Reset or in another runner.
 func (s *bashPPNativeSession) bashPPAuthenticateCallbackValue(v *bashPPBridgeValue) {
+	s.adoptHandleValue(v)
 	if v.Kind == "handle" || v.Kind == "callback" || v.Origin != 0 {
 		v.Session = s.id
 		s.rememberNativeHandleType(*v)

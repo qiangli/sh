@@ -55,6 +55,8 @@ var bridgeStderrBarrier = ""
 //EMBEDS
 
 type value struct {
+ owner *handleOwner
+ Lease uint64 `json:"lease,omitempty"`
  ReaderBuffer []byte `json:"reader_buffer,omitempty"`
  ReaderLength int `json:"reader_length,omitempty"`
  CallArgs []value `json:"call_args,omitempty"`
@@ -95,7 +97,11 @@ type withinStep struct {
 }
 type bppProtocolEntry struct {Key value `json:"key"`; Value value `json:"value"`}
 type sliceBuffer struct {Index int `json:"index"`;Length int `json:"length"`;Value value `json:"value"`}
-type request struct { SliceBuffers []sliceBuffer `json:"slice_buffers,omitempty"`; Transfers []int `json:"transfers,omitempty"`; ID uint64 `json:"id"`; Op string `json:"op"`; PanicOnFault bool `json:"panic_on_fault,omitempty"`; PointerReadOnly bool `json:"pointer_read_only,omitempty"`; Selector string `json:"selector"`; AccessPackage string `json:"access_package,omitempty"`; Instance string `json:"instance,omitempty"`; Receiver *value `json:"receiver,omitempty"`; Args []value `json:"args,omitempty"`; Spread bool `json:"spread,omitempty"`; FormatOnly string `json:"format_only,omitempty"`; SourceFile string `json:"source_file,omitempty"`; SourceLine int `json:"source_line,omitempty"`; LogPrint string `json:"log_print,omitempty"`; Values []value `json:"values,omitempty"`; Error string `json:"error,omitempty"`; Route bool `json:"route,omitempty"` }
+type request struct {
+ AckHandles bool `json:"ack_handles,omitempty"`
+
+ Releases []uint64 `json:"releases,omitempty"`
+ SliceBuffers []sliceBuffer `json:"slice_buffers,omitempty"`; Transfers []int `json:"transfers,omitempty"`; ID uint64 `json:"id"`; Op string `json:"op"`; PanicOnFault bool `json:"panic_on_fault,omitempty"`; PointerReadOnly bool `json:"pointer_read_only,omitempty"`; Selector string `json:"selector"`; AccessPackage string `json:"access_package,omitempty"`; Instance string `json:"instance,omitempty"`; Receiver *value `json:"receiver,omitempty"`; Args []value `json:"args,omitempty"`; Spread bool `json:"spread,omitempty"`; FormatOnly string `json:"format_only,omitempty"`; SourceFile string `json:"source_file,omitempty"`; SourceLine int `json:"source_line,omitempty"`; LogPrint string `json:"log_print,omitempty"`; Values []value `json:"values,omitempty"`; Error string `json:"error,omitempty"`; Route bool `json:"route,omitempty"` }
 // Op, Selector and Receiver are set only on a callback: the reverse direction
 // in which this helper asks the interpreter to run an original method body.
 type response struct { SliceUpdates []sliceBuffer `json:"slice_updates,omitempty"`; Transferred []sliceBuffer `json:"transferred,omitempty"`; PtrUpdates []value `json:"ptr_updates,omitempty"`; Panic *value `json:"panic,omitempty"`; PanicAddr *uint64 `json:"panic_addr,omitempty"`; ID uint64 `json:"id"`; Op string `json:"op,omitempty"`; Selector string `json:"selector,omitempty"`; Receiver *value `json:"receiver,omitempty"`; Values []value `json:"values,omitempty"`; Error string `json:"error,omitempty"`; Parent uint64 `json:"parent,omitempty"`; OutputBarrierStdout uint64 `json:"output_barrier_stdout,omitempty"`; OutputBarrierStderr uint64 `json:"output_barrier_stderr,omitempty"` }
@@ -304,7 +310,65 @@ func pointerWritebackOrigins(q request)map[uint64]bool{current:=map[uint64]bool{
 func writablePointee(kind string)bool{switch kind{case "string","bool","int","uint","float","complex","nil","handle","struct","slice","array","map":return true};return false}
 type reflectedMethodContext struct { origin uint64; receiver reflect.Value; selector string }
 type nativePointerHandleKey struct { typ reflect.Type; address uintptr }
-var handles = struct { sync.Mutex; next uint64; values map[uint64]reflect.Value; pointers map[nativePointerHandleKey]uint64; reflected map[uint64]reflectedMethodContext; stop chan struct{} }{values: map[uint64]reflect.Value{},pointers:map[nativePointerHandleKey]uint64{},reflected:map[uint64]reflectedMethodContext{},stop:make(chan struct{})}
+var handles = struct { sync.Mutex; next uint64; values map[uint64]reflect.Value; refs map[uint64]int; leases map[uint64]uint64; leaseNext uint64; pointers map[nativePointerHandleKey]uint64; pointerKeys map[uint64]nativePointerHandleKey; reflected map[uint64]reflectedMethodContext; stop chan struct{} }{values: map[uint64]reflect.Value{},refs:map[uint64]int{},leases:map[uint64]uint64{},pointers:map[nativePointerHandleKey]uint64{},pointerKeys:map[uint64]nativePointerHandleKey{},reflected:map[uint64]reflectedMethodContext{},stop:make(chan struct{})}
+// An encoding owns a temporary reference even if it never reaches the wire.
+// Each delivery acquires a separate lease; a delayed release cannot revoke a
+// later delivery of the same native pointer. Native references are ordinary Go
+// references and remain valid when the bridge's last reference is released.
+type handleOwner struct { id uint64; padding uint64 }
+func ownHandleLocked(id uint64)*handleOwner {
+ handles.refs[id]++
+ owner:=&handleOwner{id:id}
+ bppRuntime.AddCleanup(owner,dropHandle,id)
+ return owner
+}
+func dropHandle(id uint64){handles.Lock();defer handles.Unlock();dropHandleLocked(id)}
+func dropHandleLocked(id uint64){
+ if handles.refs[id]>1{handles.refs[id]--;return}
+ delete(handles.refs,id)
+ if key,ok:=handles.pointerKeys[id];ok {if handles.pointers[key]==id{delete(handles.pointers,key)};delete(handles.pointerKeys,id)}
+ delete(handles.values,id);delete(handles.reflected,id)
+}
+func releaseHandles(leases []uint64){
+ handles.Lock();defer handles.Unlock()
+ for _,lease:=range leases{if id,ok:=handles.leases[lease];ok{delete(handles.leases,lease);dropHandleLocked(id)}}
+}
+func exportHandleValue(v *value){
+ if v.Kind=="handle"&&v.Handle!=0 {
+  handles.Lock()
+  if _,ok:=handles.values[v.Handle];ok {handles.leaseNext++;v.Lease=handles.leaseNext;handles.leases[v.Lease]=v.Handle;handles.refs[v.Handle]++}
+  handles.Unlock()
+ }
+ for i:=range v.CallArgs{exportHandleValue(&v.CallArgs[i])}
+ for i:=range v.Elements{exportHandleValue(&v.Elements[i])}
+ for k,x:=range v.Fields{exportHandleValue(&x);v.Fields[k]=x}
+ for i:=range v.Entries{exportHandleValue(&v.Entries[i].Key);exportHandleValue(&v.Entries[i].Value)}
+}
+// Pin incoming callback results before acknowledging interpreter ownership.
+// Returned values carry these temporary owners until the native consumer has
+// decoded them into ordinary Go references, including on the mailbox path.
+func pinHandleValue(v *value){
+ if v.Kind=="handle"&&v.Handle!=0&&v.owner==nil{handles.Lock();if _,ok:=handles.values[v.Handle];ok{v.owner=ownHandleLocked(v.Handle)};handles.Unlock()}
+ for i:=range v.CallArgs{pinHandleValue(&v.CallArgs[i])}
+ for i:=range v.Elements{pinHandleValue(&v.Elements[i])}
+ for k,x:=range v.Fields{pinHandleValue(&x);v.Fields[k]=x}
+ for i:=range v.Entries{pinHandleValue(&v.Entries[i].Key);pinHandleValue(&v.Entries[i].Value)}
+}
+func acceptHandleReply(q *request){
+ if !q.AckHandles{return}
+ if q.Receiver!=nil{pinHandleValue(q.Receiver)}
+ for i:=range q.Values{pinHandleValue(&q.Values[i])}
+ for i:=range q.SliceBuffers{pinHandleValue(&q.SliceBuffers[i].Value)}
+ outbound.Lock();_ = outbound.encoder.Encode(response{ID:q.ID,Op:"handle-ack"});outbound.Unlock()
+}
+func exportHandles(r *response){
+ if r.Receiver!=nil{exportHandleValue(r.Receiver)}
+ if r.Panic!=nil{exportHandleValue(r.Panic)}
+ for i:=range r.Values{exportHandleValue(&r.Values[i])}
+ for i:=range r.PtrUpdates{exportHandleValue(&r.PtrUpdates[i])}
+ for i:=range r.Transferred{exportHandleValue(&r.Transferred[i].Value)}
+ for i:=range r.SliceUpdates{exportHandleValue(&r.SliceUpdates[i].Value)}
+}
 func callbackReceiver(v reflect.Value)value{return structural(v)}
 func typeID(t reflect.Type) string { if t.Name()!="" && t.PkgPath()!="" {return t.PkgPath()+"."+t.Name()}; return t.String() }
 // seenTypes registers every type this helper has handed the interpreter, by
@@ -343,13 +407,19 @@ func encodeHandle(v reflect.Value,result value)value {
  var pointerKey nativePointerHandleKey
  if v.Kind()==reflect.Pointer {
   pointerKey=nativePointerHandleKey{v.Type(),v.Pointer()}
-  if id:=handles.pointers[pointerKey];id!=0{result.Kind="handle";result.Handle=id;return result}
+  if id:=handles.pointers[pointerKey];id!=0{
+   // receiver_field can replace a copied value with a mutable native field.
+   // Its current pointer may no longer be the address indexed at encoding.
+   current:=handles.values[id]
+   if current.IsValid()&&current.Kind()==reflect.Pointer&&current.Type()==v.Type()&&current.Pointer()==v.Pointer(){result.Kind="handle";result.Handle=id;result.owner=ownHandleLocked(id);return result}
+   delete(handles.pointers,pointerKey);delete(handles.pointerKeys,id)
+  }
  }
  handles.next++;id:=handles.next;copy:=reflect.New(v.Type()).Elem();copy.Set(v);handles.values[id]=copy
  // Retaining the pointer value prevents its address being reused while the
  // session's typed-address key remains live. Native ownership stays unchanged.
- if v.Kind()==reflect.Pointer{handles.pointers[pointerKey]=id}
- result.Kind="handle";result.Handle=id
+ if v.Kind()==reflect.Pointer{handles.pointers[pointerKey]=id;handles.pointerKeys[id]=pointerKey}
+ result.Kind="handle";result.Handle=id;result.owner=ownHandleLocked(id)
  if v.Type()==reflect.TypeFor[reflect.Value]()&&v.CanInterface(){result.Storage=originalSliceStorage(v.Interface().(reflect.Value))}
  return result
 }
@@ -465,11 +535,14 @@ func callback(selector string, recv value) ([]value,error) {
  callbacks.Lock();callbacks.next++;id:=callbacks.next;wait:=make(chan request,1);callbacks.waiting[id]=wait;callbacks.Unlock()
  defer func(){callbacks.Lock();delete(callbacks.waiting,id);callbacks.Unlock()}()
  message:=response{ID:id,Op:"callback",Selector:selector,Receiver:&recv,Parent:routeParent(),SliceUpdates:callbackSliceSnapshot()}
+ exportHandles(&message)
  var reply request;handled:=false;var err error
  if message.Parent==0 {reply,handled,err=mailboxCallback(message)}
  if err!=nil{return nil,err}
  if !handled {outbound.Lock();err=encoder.Encode(message);outbound.Unlock();if err!=nil{return nil,err};reply=<-wait}
  if handled && reply.Op=="callback-mailbox-overflow" && reply.Error=="" {select{case reply=<-wait:case <-handles.stop:return nil,fmt.Errorf("interpreter connection closed during callback")}}
+ acceptHandleReply(&reply)
+ defer bppRuntime.KeepAlive(&reply)
  if reply.Receiver!=nil && recv.Origin!=0 {if _,err:=decode(*reply.Receiver,nil);err!=nil{return nil,err}}
  if reply.Error=="" {if err:=applyCallbackSliceReply(reply.SliceBuffers);err!=nil{return nil,err}}
  if reply.Error!=""{return nil,fmt.Errorf("%s",reply.Error)}
@@ -1103,6 +1176,7 @@ func nativeFaultAddr(q request)(uint64,bool){if q.Receiver==nil||len(q.Args)<1{r
 var outputBarrierStdoutSequence uint64
 var outputBarrierStderrSequence uint64
 func sendAnswer(answer response){
+ exportHandles(&answer)
  outbound.Lock();defer outbound.Unlock()
  if bridgeStdoutBarrier!="" {if _,err:=bppOS.Stdout.Write([]byte(bridgeAuth+"-stdout"));err==nil{outputBarrierStdoutSequence++;answer.OutputBarrierStdout=outputBarrierStdoutSequence}}
  if bridgeStderrBarrier!="" {if _,err:=bppOS.Stderr.Write([]byte(bridgeAuth+"-stderr"));err==nil{outputBarrierStderrSequence++;answer.OutputBarrierStderr=outputBarrierStderrSequence}}
@@ -1126,6 +1200,8 @@ func main(){
  // Host EOF/close ends the dependency process, including blocked native calls.
  // Waiting for those calls would orphan listeners after host termination.
  for {var q request;if err:=decoder.Decode(&q);err!=nil{close(handles.stop);return};if q.Op=="close"{close(handles.stop);return}
+  releaseHandles(q.Releases)
+  if q.Op=="release"{continue}
   if q.Op=="callback-reply" {callbacks.Lock();wait:=callbacks.waiting[q.ID];callbacks.Unlock();if wait!=nil{wait<-q};continue}
   // A dependency call may end this serving goroutine with runtime.Goexit
   // (testing.T.FailNow, SkipNow). The request is still answered, as ended by
