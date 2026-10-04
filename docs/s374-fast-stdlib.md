@@ -30,3 +30,13 @@ results, including seeded random sequences, and force the worker fallback for
 ineligible values. In-process functions also run in the interpreter's process:
 the table must remain small and exclude file, network, and other externally
 visible effects.
+
+The extended table covers selected value-only calls in `math`, `math/bits`,
+`strings`, `bytes`, `unicode`, `unicode/utf8`, and `strconv`, plus `fmt.Sprint`,
+`fmt.Sprintln`, and `fmt.Sprintf`. Formatting admits a variadic operand only
+when its transported value is a builtin scalar or string with no identity;
+an omitted scalar type uses the worker's builtin default for that kind. Named
+values and values with interface identity stay on the worker so formatting
+methods and `%T` retain their dynamic type. Byte slices are copied only when
+their transport has no origin or storage identity; the copy keeps its length,
+capacity, and capacity-tail bytes.

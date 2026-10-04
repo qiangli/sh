@@ -1,18 +1,24 @@
 package interp
 
 import (
+	"bytes"
 	"context"
 	crand "crypto/rand"
 	"encoding/binary"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"math"
+	"math/bits"
 	"math/rand"
 	"os"
 	"reflect"
 	"strconv"
 	"strings"
 	"sync"
+	"unicode"
+	"unicode/utf8"
 )
 
 // The table is deliberately made of linked, typed symbols. A Go import alias
@@ -31,6 +37,67 @@ var fastStrconvSymbols = map[string]reflect.Value{
 	"QuoteRuneToASCII":   reflect.ValueOf(strconv.QuoteRuneToASCII),
 	"QuoteRuneToGraphic": reflect.ValueOf(strconv.QuoteRuneToGraphic),
 	"CanBackquote":       reflect.ValueOf(strconv.CanBackquote),
+	"IsPrint":            reflect.ValueOf(strconv.IsPrint),
+	"IsGraphic":          reflect.ValueOf(strconv.IsGraphic),
+	"AppendBool":         reflect.ValueOf(strconv.AppendBool),
+	"AppendInt":          reflect.ValueOf(strconv.AppendInt),
+	"AppendUint":         reflect.ValueOf(strconv.AppendUint),
+	"AppendFloat":        reflect.ValueOf(strconv.AppendFloat),
+	"AppendQuote":        reflect.ValueOf(strconv.AppendQuote),
+}
+
+var fastPureSymbols = map[string]map[string]reflect.Value{
+	"math": {
+		"Abs": reflect.ValueOf(math.Abs), "Ceil": reflect.ValueOf(math.Ceil), "Cos": reflect.ValueOf(math.Cos),
+		"Exp": reflect.ValueOf(math.Exp), "Floor": reflect.ValueOf(math.Floor), "IsInf": reflect.ValueOf(math.IsInf),
+		"IsNaN": reflect.ValueOf(math.IsNaN), "Log": reflect.ValueOf(math.Log), "Max": reflect.ValueOf(math.Max),
+		"Min": reflect.ValueOf(math.Min), "Mod": reflect.ValueOf(math.Mod), "Pow": reflect.ValueOf(math.Pow),
+		"Round": reflect.ValueOf(math.Round), "Signbit": reflect.ValueOf(math.Signbit), "Sin": reflect.ValueOf(math.Sin),
+		"Sqrt": reflect.ValueOf(math.Sqrt), "Tan": reflect.ValueOf(math.Tan), "Trunc": reflect.ValueOf(math.Trunc),
+	},
+	"math/bits": {
+		"LeadingZeros": reflect.ValueOf(bits.LeadingZeros), "LeadingZeros32": reflect.ValueOf(bits.LeadingZeros32),
+		"LeadingZeros64": reflect.ValueOf(bits.LeadingZeros64), "Len": reflect.ValueOf(bits.Len),
+		"Len32": reflect.ValueOf(bits.Len32), "Len64": reflect.ValueOf(bits.Len64),
+		"OnesCount": reflect.ValueOf(bits.OnesCount), "OnesCount32": reflect.ValueOf(bits.OnesCount32),
+		"OnesCount64": reflect.ValueOf(bits.OnesCount64), "Reverse": reflect.ValueOf(bits.Reverse),
+		"ReverseBytes": reflect.ValueOf(bits.ReverseBytes), "TrailingZeros": reflect.ValueOf(bits.TrailingZeros),
+		"TrailingZeros32": reflect.ValueOf(bits.TrailingZeros32), "TrailingZeros64": reflect.ValueOf(bits.TrailingZeros64),
+	},
+	"strings": {
+		"Contains": reflect.ValueOf(strings.Contains), "Count": reflect.ValueOf(strings.Count),
+		"EqualFold": reflect.ValueOf(strings.EqualFold), "HasPrefix": reflect.ValueOf(strings.HasPrefix),
+		"HasSuffix": reflect.ValueOf(strings.HasSuffix), "Index": reflect.ValueOf(strings.Index),
+		"LastIndex": reflect.ValueOf(strings.LastIndex), "Repeat": reflect.ValueOf(strings.Repeat),
+		"Replace": reflect.ValueOf(strings.Replace), "ReplaceAll": reflect.ValueOf(strings.ReplaceAll),
+		"ToLower": reflect.ValueOf(strings.ToLower), "ToUpper": reflect.ValueOf(strings.ToUpper),
+		"Trim": reflect.ValueOf(strings.Trim), "TrimPrefix": reflect.ValueOf(strings.TrimPrefix),
+		"TrimSpace": reflect.ValueOf(strings.TrimSpace), "TrimSuffix": reflect.ValueOf(strings.TrimSuffix),
+	},
+	"bytes": {
+		"Contains": reflect.ValueOf(bytes.Contains), "Count": reflect.ValueOf(bytes.Count),
+		"Equal": reflect.ValueOf(bytes.Equal), "HasPrefix": reflect.ValueOf(bytes.HasPrefix),
+		"HasSuffix": reflect.ValueOf(bytes.HasSuffix), "Index": reflect.ValueOf(bytes.Index),
+		"LastIndex": reflect.ValueOf(bytes.LastIndex), "Repeat": reflect.ValueOf(bytes.Repeat),
+		"Replace": reflect.ValueOf(bytes.Replace), "ReplaceAll": reflect.ValueOf(bytes.ReplaceAll),
+		"ToLower": reflect.ValueOf(bytes.ToLower), "ToUpper": reflect.ValueOf(bytes.ToUpper),
+		"TrimSpace": reflect.ValueOf(bytes.TrimSpace),
+	},
+	"unicode": {
+		"IsDigit": reflect.ValueOf(unicode.IsDigit), "IsLetter": reflect.ValueOf(unicode.IsLetter),
+		"IsSpace": reflect.ValueOf(unicode.IsSpace), "ToLower": reflect.ValueOf(unicode.ToLower),
+		"ToUpper": reflect.ValueOf(unicode.ToUpper),
+	},
+	"unicode/utf8": {
+		"DecodeRune": reflect.ValueOf(utf8.DecodeRune), "DecodeRuneInString": reflect.ValueOf(utf8.DecodeRuneInString),
+		"RuneCount": reflect.ValueOf(utf8.RuneCount), "RuneCountInString": reflect.ValueOf(utf8.RuneCountInString),
+		"RuneLen": reflect.ValueOf(utf8.RuneLen), "Valid": reflect.ValueOf(utf8.Valid),
+		"ValidString": reflect.ValueOf(utf8.ValidString),
+	},
+	"fmt": {
+		"Sprint": reflect.ValueOf(fmt.Sprint), "Sprintln": reflect.ValueOf(fmt.Sprintln),
+		"Sprintf": reflect.ValueOf(fmt.Sprintf),
+	},
 }
 
 // Each entry is a method of one session-owned generator, except Seed, which
@@ -67,9 +134,9 @@ func goSourceFastStdlibCall(ctx context.Context, req bashPPEvalRequest, q bashPP
 			return nil, false, nil
 		}
 	default:
-		return nil, false, nil
+		fn = fastPureSymbols[path][name]
 	}
-	if path == "strconv" && !fn.IsValid() {
+	if path != "math/rand" && !fn.IsValid() {
 		return nil, false, nil
 	}
 	for _, arg := range q.Args {
@@ -107,12 +174,25 @@ func goSourceFastStdlibCall(ctx context.Context, req bashPPEvalRequest, q bashPP
 		return nil, false, nil
 	}
 	sig := fn.Type()
-	if sig.IsVariadic() || sig.NumIn() != len(q.Args) {
+	if !sig.IsVariadic() && sig.NumIn() != len(q.Args) || sig.IsVariadic() && len(q.Args) < sig.NumIn()-1 {
 		return nil, false, nil
 	}
 	args := make([]reflect.Value, len(q.Args))
 	for i, arg := range q.Args {
-		v, ok := fastDecodeScalar(arg, sig.In(i))
+		var target reflect.Type
+		if sig.IsVariadic() && i >= sig.NumIn()-1 {
+			if path != "fmt" {
+				return nil, false, nil
+			}
+			var ok bool
+			target, ok = fastDynamicScalarType(arg)
+			if !ok {
+				return nil, false, nil
+			}
+		} else {
+			target = sig.In(i)
+		}
+		v, ok := fastDecodeScalar(arg, target)
 		if !ok {
 			return nil, false, nil
 		}
@@ -144,17 +224,36 @@ func goSourceFastStdlibCall(ctx context.Context, req bashPPEvalRequest, q bashPP
 }
 
 func fastPlainBridgeValue(v bashPPBridgeValue) bool {
-	if v.Origin != 0 || v.Storage != 0 || v.Handle != 0 || v.Session != "" || v.Callbacks || v.sliceView != nil || v.localReflect != nil || v.localCell != nil || v.Interface != "" || len(v.Elements) != 0 || len(v.Fields) != 0 || len(v.Entries) != 0 || v.Within != nil {
+	if v.Origin != 0 || v.Storage != 0 || v.Handle != 0 || v.Session != "" || v.Interface != "" ||
+		v.Callbacks || v.Function || v.NativeTypeID != 0 || v.Signature != "" || v.LocalWriter != "" ||
+		len(v.CallArgs) != 0 || v.ReaderLength != 0 || len(v.ReaderBuffer) != 0 || v.Offset != 0 ||
+		v.sliceView != nil || v.localReflect != nil || v.localCell != nil || v.reflectCopy ||
+		v.reflectFunction || v.reflectFunc != nil || v.deferredNativeComposite || v.copiedResults ||
+		v.newCallback || v.callRefusal != "" || v.localRefusal != "" ||
+		v.Kind != "slice" && len(v.Elements) != 0 || len(v.Fields) != 0 || len(v.Entries) != 0 || v.Within != nil {
 		return false
 	}
 	switch v.Kind {
 	case "bool", "int", "uint", "float", "complex", "string":
+		return true
+	case "slice", "nil":
+		if v.Type != "[]uint8" && v.Type != "[]byte" || v.Capacity != len(v.Elements) || v.Length > v.Capacity {
+			return false
+		}
+		for _, elem := range v.Elements {
+			if !fastPlainBridgeValue(elem) || elem.Kind != "uint" || elem.Type != "uint8" {
+				return false
+			}
+		}
 		return true
 	}
 	return false
 }
 
 func fastPlainType(t reflect.Type) bool {
+	if t == reflect.TypeOf([]byte(nil)) {
+		return true
+	}
 	switch t.Kind() {
 	case reflect.Bool, reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
 		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr,
@@ -165,8 +264,29 @@ func fastPlainType(t reflect.Type) bool {
 }
 
 func fastDecodeScalar(v bashPPBridgeValue, target reflect.Type) (reflect.Value, bool) {
-	if !fastPlainType(target) || v.Type != "" && v.Type != target.String() {
+	if !fastPlainType(target) || v.Type != "" && v.Type != target.String() &&
+		!(target == reflect.TypeOf([]byte(nil)) && v.Type == "[]byte") &&
+		!(target.Kind() == reflect.Uint8 && v.Type == "byte") &&
+		!(target.Kind() == reflect.Int32 && v.Type == "rune") {
 		return reflect.Value{}, false
+	}
+	if target == reflect.TypeOf([]byte(nil)) {
+		if v.Kind == "nil" {
+			return reflect.Zero(target), true
+		}
+		if v.Kind != "slice" {
+			return reflect.Value{}, false
+		}
+		b := make([]byte, v.Length, v.Capacity)
+		full := b[:cap(b)]
+		for i, e := range v.Elements {
+			n, err := strconv.ParseUint(e.Text, 10, 8)
+			if err != nil || e.Kind != "uint" || e.Type != "uint8" {
+				return reflect.Value{}, false
+			}
+			full[i] = byte(n)
+		}
+		return reflect.ValueOf(b), true
 	}
 	r := reflect.New(target).Elem()
 	var err error
@@ -216,6 +336,17 @@ func fastDecodeScalar(v bashPPBridgeValue, target reflect.Type) (reflect.Value, 
 }
 
 func fastEncodeScalar(v reflect.Value) bashPPBridgeValue {
+	if v.Type() == reflect.TypeOf([]byte(nil)) {
+		if v.IsNil() {
+			return bashPPBridgeValue{Kind: "nil", Type: "[]uint8", NativeType: "[]uint8"}
+		}
+		out := bashPPBridgeValue{Kind: "slice", Type: "[]uint8", NativeType: "[]uint8", Length: v.Len(), Capacity: v.Cap(), Elements: make([]bashPPBridgeValue, v.Cap())}
+		full := v.Slice3(0, v.Cap(), v.Cap())
+		for i := 0; i < v.Cap(); i++ {
+			out.Elements[i] = fastEncodeScalar(full.Index(i))
+		}
+		return out
+	}
 	out := bashPPBridgeValue{Type: v.Type().String(), NativeType: v.Type().String()}
 	switch v.Kind() {
 	case reflect.String:
@@ -233,6 +364,40 @@ func fastEncodeScalar(v reflect.Value) bashPPBridgeValue {
 		out.Kind, out.Text = "complex", strconv.FormatComplex(v.Complex(), 'g', -1, v.Type().Bits())
 	}
 	return out
+}
+
+var fastFormatTypes = map[string]reflect.Type{
+	"bool": reflect.TypeOf(false), "string": reflect.TypeOf(""),
+	"int": reflect.TypeOf(int(0)), "int8": reflect.TypeOf(int8(0)),
+	"int16": reflect.TypeOf(int16(0)), "int32": reflect.TypeOf(int32(0)),
+	"int64": reflect.TypeOf(int64(0)), "rune": reflect.TypeOf(rune(0)),
+	"uint": reflect.TypeOf(uint(0)), "uint8": reflect.TypeOf(uint8(0)),
+	"uint16": reflect.TypeOf(uint16(0)), "uint32": reflect.TypeOf(uint32(0)),
+	"uint64": reflect.TypeOf(uint64(0)), "uintptr": reflect.TypeOf(uintptr(0)),
+	"byte": reflect.TypeOf(byte(0)), "float32": reflect.TypeOf(float32(0)),
+	"float64":   reflect.TypeOf(float64(0)),
+	"complex64": reflect.TypeOf(complex64(0)), "complex128": reflect.TypeOf(complex128(0)),
+}
+
+func fastDynamicScalarType(v bashPPBridgeValue) (reflect.Type, bool) {
+	t := fastFormatTypes[v.Type]
+	if t == nil && v.Type == "" {
+		switch v.Kind {
+		case "bool":
+			t = fastFormatTypes["bool"]
+		case "int":
+			t = fastFormatTypes["int"]
+		case "uint":
+			t = fastFormatTypes["uint"]
+		case "float":
+			t = fastFormatTypes["float64"]
+		case "complex":
+			t = fastFormatTypes["complex128"]
+		case "string":
+			t = fastFormatTypes["string"]
+		}
+	}
+	return t, t != nil && fastPlainType(t)
 }
 
 // Only direct calls to covered top-level functions may share the session's
