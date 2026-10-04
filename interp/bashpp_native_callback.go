@@ -325,9 +325,7 @@ func (s *bashPPNativeSession) callbackAnswer(ctx context.Context, owner *Runner,
 			answer.Values = s.bashPPWireLazyValueOf(values)
 		}
 		if q.Receiver.Origin != 0 {
-			s.mu.Lock()
-			ptr := s.origins[q.Receiver.Origin]
-			s.mu.Unlock()
+			ptr, _ := s.originLookup(q.Receiver.Origin)
 			if ptr != nil {
 				v, err := owner.bashPPBridgePointerValue(ptr)
 				if err != nil {
@@ -441,9 +439,7 @@ func (r *Runner) bashPPNativeCallback(ctx context.Context, selector string, recv
 	var promoted bashPPSelection
 	if recv.Origin != 0 {
 		session := r.bashPPTools.bridge
-		session.mu.Lock()
-		ptr := session.origins[recv.Origin]
-		session.mu.Unlock()
+		ptr, _ := session.originLookup(recv.Origin)
 		if ptr == nil {
 			return nil, fmt.Errorf("gosource: callback receiver identity expired")
 		}
@@ -745,6 +741,28 @@ func (r *Runner) bashPPBridgeContents(v bashPPBridgeValue, typ syntax.BashPPType
 				if _, err := r.bashPPSprint165MapStore(out, meta, key, bashPPBridgeNestedMeta(keyMeta), shape.Key, value, bashPPBridgeNestedMeta(child)); err != nil {
 					return nil, nil, err
 				}
+			}
+			return out, meta, nil
+		}
+		if v.Kind == "bytes" {
+			// Compact byte array (see bashPPByteArrayBytes): rebuild the
+			// same per-byte storage the structural spelling decodes to,
+			// element by element through the normal path.
+			if shape.Kind != "array" && shape.Kind != "slice" {
+				return nil, nil, fmt.Errorf("%s is a sequence but the dependency sent %s", bashPPTypeText(typ), v.Kind)
+			}
+			if !bashPPByteElementType(r, shape.Element) {
+				return nil, nil, fmt.Errorf("%s is not a byte sequence but the dependency sent bytes", bashPPTypeText(typ))
+			}
+			out := make([]any, 0, len(v.Bytes))
+			meta := &bashPPCollectionMeta{kind: shape.Kind, typ: typ}
+			for _, b := range v.Bytes {
+				item, child, err := r.bashPPBridgeContents(bashPPBridgeValue{Kind: "uint", Type: "uint8", Text: strconv.Itoa(int(b))}, shape.Element)
+				if err != nil {
+					return nil, nil, err
+				}
+				out = append(out, item)
+				meta.sequence = append(meta.sequence, bashPPBridgeNestedMeta(child))
 			}
 			return out, meta, nil
 		}

@@ -63,8 +63,8 @@ func TestS248TransportOriginIndexedIdentity(t *testing.T) {
 // lookup never misses a registered identity.
 func TestS248TransportOriginReindexesForeignEntries(t *testing.T) {
 	cell := &bashPPCell{}
-	session := &bashPPNativeSession{id: "s", origins: map[uint64]*bashPPPointer{
-		7: {target: cell, path: []bashPPPointerStep{{field: "f"}}},
+	session := &bashPPNativeSession{id: "s", origins: map[uint64]*bashPPOriginRecord{
+		7: newOriginRecord(&bashPPPointer{target: cell, path: []bashPPPointerStep{{field: "f"}}}),
 	}, originNext: 7}
 	if id := bashPPTransportOrigin(session, &bashPPPointer{target: cell, path: []bashPPPointerStep{{field: "f"}}}); id != 7 {
 		t.Fatalf("foreign entry origin %d, want 7", id)

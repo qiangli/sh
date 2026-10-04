@@ -272,9 +272,7 @@ func (r *Runner) goSourceSharedInterface(ctx context.Context, req bashPPEvalRequ
 		if req.Bridge == nil || v.Session != req.Bridge.id {
 			return nil, true, fmt.Errorf("gosource: sort.Interface pointer belongs to another dependency session")
 		}
-		req.Bridge.mu.Lock()
-		ptr := req.Bridge.origins[v.Origin]
-		req.Bridge.mu.Unlock()
+		ptr, _ := req.Bridge.originLookup(v.Origin)
 		if ptr == nil {
 			return nil, true, fmt.Errorf("gosource: sort.Interface receiver identity expired")
 		}

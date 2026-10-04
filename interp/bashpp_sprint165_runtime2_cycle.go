@@ -30,12 +30,13 @@ import (
 
 // bashPPTransportOrigin registers ptr with the session's origin table (or
 // finds its existing origin) BEFORE its pointee is transported, so a nested
-// reference back to ptr can be spelled by origin.
+// reference back to ptr can be spelled by origin. Records do not root
+// their cells (see bashpp_native_origin_release.go); unsafe-derived
+// pointers take the conservative pinned path instead.
 func bashPPTransportOrigin(session *bashPPNativeSession, ptr *bashPPPointer) uint64 {
 	session.mu.Lock()
-	defer session.mu.Unlock()
 	if session.origins == nil {
-		session.origins = map[uint64]*bashPPPointer{}
+		session.origins = map[uint64]*bashPPOriginRecord{}
 	}
 	// The index answers the storage identity (target cell + path) in O(1).
 	// Registered paths are never rewritten in place, so a hit is verified
@@ -46,15 +47,28 @@ func bashPPTransportOrigin(session *bashPPNativeSession, ptr *bashPPPointer) uin
 		session.reindexOriginsLocked()
 	}
 	if id, ok := session.originIndex[key]; ok {
-		if existing := session.origins[id]; existing != nil && existing.target == ptr.target && reflect.DeepEqual(existing.path, ptr.path) {
-			return id
+		if rec := session.origins[id]; rec != nil {
+			if live, ok := rec.upgrade(); ok && live.target == ptr.target && reflect.DeepEqual(live.path, ptr.path) {
+				session.mu.Unlock()
+				return id
+			}
 		}
 	}
 	session.originNext++
-	session.origins[session.originNext] = ptr
-	session.originIndex[key] = session.originNext
+	id := session.originNext
+	rec := newOriginRecord(ptr)
+	if originNeedsPin(ptr) {
+		rec.strong = ptr
+	}
+	session.origins[id] = rec
+	session.originIndex[key] = id
 	session.originIndexed = len(session.origins)
-	return session.originNext
+	over := len(session.origins) > bashPPOriginKeepCap
+	session.mu.Unlock()
+	if over {
+		session.sweepTransportOrigins(false)
+	}
+	return id
 }
 
 // bashPPTransportSliceOrigin gives overlapping interpreter slice views a
@@ -367,14 +381,20 @@ func bashPPOriginKeyOf(ptr *bashPPPointer) bashPPOriginKey {
 
 // reindexOriginsLocked rebuilds the identity index from the origin table.
 // It keeps the lowest origin for a duplicated identity, which is the only
-// one the table registration itself could have produced.
+// one the table registration itself could have produced. Records whose cell
+// has died carry no identity and stay out of the index until the next sweep
+// removes them; the caller holds session.mu.
 func (s *bashPPNativeSession) reindexOriginsLocked() {
 	s.originIndex = make(map[bashPPOriginKey]uint64, len(s.origins))
-	for id, ptr := range s.origins {
-		if ptr == nil {
+	for id, rec := range s.origins {
+		if rec == nil {
 			continue
 		}
-		key := bashPPOriginKeyOf(ptr)
+		live, ok := rec.upgrade()
+		if !ok {
+			continue
+		}
+		key := bashPPOriginKeyOf(live)
 		if prev, ok := s.originIndex[key]; !ok || id < prev {
 			s.originIndex[key] = id
 		}
@@ -426,10 +446,8 @@ func (r *Runner) bashPPBridgeBackReferencePointer(v bashPPBridgeValue) (*bashPPP
 	if session == nil || v.Origin == 0 || v.Session != session.id {
 		return nil, fmt.Errorf("gosource: pointer back-reference names no origin of this dependency session")
 	}
-	session.mu.Lock()
-	ptr := session.origins[v.Origin]
-	session.mu.Unlock()
-	if ptr == nil {
+	ptr, ok := session.originLookup(v.Origin)
+	if !ok || ptr == nil {
 		return nil, fmt.Errorf("gosource: pointer back-reference names an unknown origin")
 	}
 	return ptr, nil
@@ -449,8 +467,12 @@ func (r *Runner) bashPPBridgeOriginPointer(v bashPPBridgeValue) (*bashPPPointer,
 	if session == nil || v.Origin == 0 || v.Session != session.id {
 		return nil, false, nil
 	}
-	session.mu.Lock()
-	ptr := session.origins[v.Origin]
-	session.mu.Unlock()
-	return ptr, ptr != nil, nil
+	ptr, ok := session.originLookup(v.Origin)
+	if !ok || ptr == nil {
+		// A flattened pointee for a released origin is a resurface, not an
+		// alias: the caller rebuilds it as a fresh copy. Back-references
+		// (no pointee) fail closed in their own resolver above.
+		return nil, false, nil
+	}
+	return ptr, true, nil
 }

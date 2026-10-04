@@ -90,6 +90,8 @@ var bashPPHelperReserved = map[string]bool{
 	"pinHandleValue": true, "acceptHandleReply": true,
 	"handleOwner": true, "ownHandleLocked": true, "dropHandle": true, "dropHandleLocked": true,
 	"releaseHandles": true, "exportHandleValue": true, "exportHandles": true,
+	"releaseOrigins": true, "originPointerAddrs": true, "typedPointerOriginKeys": true,
+	"pointeeBytes": true, "bytesValue": true, "bytePointeeUpdate": true,
 	"value": true, "bppProtocolEntry": true, "request": true, "response": true,
 	"originalCallbackPanic": true, "originalPointers": true, "symbols": true, "types": true, "handles": true, "callbacks": true,
 	"bppTextTemplate": true, "bppTemplateParse": true, "primitiveTemplateTree": true,

@@ -162,9 +162,7 @@ func (c *goSourceCopyCoherence) afterCallback(r *Runner, receiver *bashPPBridgeV
 		if source.view != nil {
 			value, err = r.bashPPBridgeCollection(source.view.view, source.view.meta, source.view.typ)
 		} else {
-			session.mu.Lock()
-			ptr := session.origins[source.origin]
-			session.mu.Unlock()
+			ptr, _ := session.originLookup(source.origin)
 			if ptr == nil {
 				return fmt.Errorf("gosource: copied pointer identity expired during a callback")
 			}

@@ -150,6 +150,7 @@ type bashPPBridgeEntry struct {
 type bashPPBridgeRequest struct {
 	AckHandles   bool                      `json:"ack_handles,omitempty"`
 	Releases     []uint64                  `json:"releases,omitempty"`
+	OriginReleases []uint64                `json:"origin_releases,omitempty"`
 	SliceBuffers []bashPPNativeSliceBuffer `json:"slice_buffers,omitempty"`
 	sliceTargets []*bashPPNativeSlice
 	// sliceMutating[i] distinguishes a full in-place mutation writeback (sort)
@@ -311,7 +312,13 @@ type bashPPNativeSession struct {
 	// original implementation, and of their Interface() views; see
 	// bashPPMadeFuncUse.
 	madeFuncs map[uint64]*Runner
-	origins   map[uint64]*bashPPPointer
+	origins   map[uint64]*bashPPOriginRecord
+	// originOpen holds the origins named by requests awaiting their reply,
+	// with the strong pointer that keeps each cell alive while its request
+	// is in flight. originReleaseQueue holds swept dead origins until the
+	// next request carries them to the worker. Both protected by mu.
+	originOpen         map[uint64]*bashPPOriginHold
+	originReleaseQueue []uint64
 	// Native uintptr results whose address is a transported original pointer.
 	// Protected by mu; retaining the pointer also keeps its interpreter cell live.
 	addressOrigins  map[uint64]*bashPPPointer
@@ -1024,7 +1031,14 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 		s.routes[q.ID] = callbacks
 	}
 	s.mu.Unlock()
-	defer func() { s.mu.Lock(); delete(s.pending, q.ID); delete(s.routes, q.ID); s.mu.Unlock() }()
+	var originSet map[uint64]bool
+	defer func() {
+		s.mu.Lock()
+		delete(s.pending, q.ID)
+		delete(s.routes, q.ID)
+		s.mu.Unlock()
+		s.closeOriginRequest(originSet)
+	}()
 	s.write.Lock()
 	encoder := s.encoder
 	if encoder == nil {
@@ -1034,10 +1048,22 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 		s.write.Unlock()
 		return nil, s.closedWriteError(ctx, errors.New("gosource: native bridge encoder is unavailable"))
 	}
+	if os.Getenv("S374_ORIGIN_DEBUG") != "" {
+		fmt.Fprintf(os.Stderr, "s374send: op=%s sel=%s nargs=%d\n", q.Op, q.Selector, len(q.Args))
+	}
 	q.Releases = s.takeHandleReleases()
+	originSet = collectBridgeOrigins(&q)
+	q.OriginReleases = s.openOriginRequest(originSet)
 	err = encoder.Encode(q)
 	s.write.Unlock()
 	if err != nil {
+		// The worker never saw this batch; re-queue it for the next
+		// request rather than dropping the releases with the failed send.
+		if len(q.OriginReleases) > 0 {
+			s.mu.Lock()
+			s.originReleaseQueue = append(q.OriginReleases, s.originReleaseQueue...)
+			s.mu.Unlock()
+		}
 		return nil, s.closedWriteError(ctx, err)
 	}
 	var mailboxSpin uint32
@@ -1209,6 +1235,9 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 			// The worker reports only pointees whose structural snapshot changed,
 			// so applying every reported update preserves retained-pointer writes
 			// without replaying stale native copies over interpreter state.
+			if os.Getenv("S374_ORIGIN_DEBUG") != "" {
+				fmt.Fprintf(os.Stderr, "s374reply: op=%s sel=%s ptrupdates=%d values=%d err=%q\n", q.Op, q.Selector, len(reply.PtrUpdates), len(reply.Values), reply.Error)
+			}
 			if err := s.applyNativePointerUpdates(req, reply); err != nil {
 				return nil, err
 			}
@@ -1242,14 +1271,18 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 			for i := range reply.Values {
 				if v := &reply.Values[i]; v.Kind == "uint" && v.Type == "uintptr" && v.Origin != 0 && v.Session == s.id {
 					if address, err := strconv.ParseUint(v.Text, 10, 64); err == nil {
-						s.mu.Lock()
-						if ptr := s.origins[v.Origin]; ptr != nil {
+						if ptr, ok := s.originLookup(v.Origin); ok && ptr != nil {
+							s.mu.Lock()
 							if s.addressOrigins == nil {
 								s.addressOrigins = make(map[uint64]*bashPPPointer)
 							}
 							s.addressOrigins[address] = ptr
+							s.mu.Unlock()
+							// An integer address escapes to native code, where
+							// it can be retained and reforged invisibly: the
+							// origin takes the conservative path.
+							s.pinTransportOrigin(v.Origin)
 						}
-						s.mu.Unlock()
 					}
 				}
 				bashPPMarkReflectCopy(&reply.Values[i], derivedCopy)

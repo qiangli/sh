@@ -320,9 +320,7 @@ func (r *Runner) goSourceLocalWriterCell(recv bashPPBridgeValue, typeName string
 		if session == nil {
 			return nil, fmt.Errorf("gosource: callback receiver identity expired")
 		}
-		session.mu.Lock()
-		ptr := session.origins[recv.Origin]
-		session.mu.Unlock()
+		ptr, _ := session.originLookup(recv.Origin)
 		if ptr == nil {
 			return nil, fmt.Errorf("gosource: callback receiver identity expired")
 		}

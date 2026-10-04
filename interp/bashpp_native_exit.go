@@ -108,6 +108,13 @@ func (r *Runner) bashPPNativeExitStatus(err error) bool {
 // bashPPNativeRequest issues one bridge request and converts a self-terminated
 // dependency process into the program's exit status.
 func (r *Runner) bashPPNativeRequest(ctx context.Context, req bashPPEvalRequest, q bashPPBridgeRequest) ([]bashPPBridgeValue, error) {
+	if q.Op == "member" && q.Receiver != nil && req.Bridge != nil {
+		// A scalar field of the program's heap oracle reads the heap its
+		// objects live on; see bashpp_s374_bytes.go.
+		if value, ok := bashPPHostMemStatsMember(req.Bridge.id, *q.Receiver, q.Selector); ok {
+			return []bashPPBridgeValue{value}, nil
+		}
+	}
 	if values, handled, err := r.goSourceResidentSyncRequest(ctx, q); handled {
 		return values, err
 	}

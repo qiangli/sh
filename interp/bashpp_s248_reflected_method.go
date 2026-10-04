@@ -276,9 +276,7 @@ func (r *Runner) goSourceLocalReflectValueOf(ctx context.Context, req bashPPEval
 	if !plain || len(r.goSourceLocalReflectMethodNames(typeName)) == 0 {
 		return bashPPBridgeValue{}, false
 	}
-	s.mu.Lock()
-	ptr := s.origins[arg.Origin]
-	s.mu.Unlock()
+	ptr, _ := s.originLookup(arg.Origin)
 	if ptr == nil || ptr.target == nil {
 		return bashPPBridgeValue{}, false
 	}

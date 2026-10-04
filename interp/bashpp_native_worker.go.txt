@@ -100,7 +100,7 @@ type sliceBuffer struct {Index int `json:"index"`;Length int `json:"length"`;Val
 type request struct {
  AckHandles bool `json:"ack_handles,omitempty"`
 
- Releases []uint64 `json:"releases,omitempty"`
+ Releases []uint64 `json:"releases,omitempty"`; OriginReleases []uint64 `json:"origin_releases,omitempty"`
  SliceBuffers []sliceBuffer `json:"slice_buffers,omitempty"`; Transfers []int `json:"transfers,omitempty"`; ID uint64 `json:"id"`; Op string `json:"op"`; PanicOnFault bool `json:"panic_on_fault,omitempty"`; PointerReadOnly bool `json:"pointer_read_only,omitempty"`; Selector string `json:"selector"`; AccessPackage string `json:"access_package,omitempty"`; Instance string `json:"instance,omitempty"`; Receiver *value `json:"receiver,omitempty"`; Args []value `json:"args,omitempty"`; Spread bool `json:"spread,omitempty"`; FormatOnly string `json:"format_only,omitempty"`; SourceFile string `json:"source_file,omitempty"`; SourceLine int `json:"source_line,omitempty"`; LogPrint string `json:"log_print,omitempty"`; Values []value `json:"values,omitempty"`; Error string `json:"error,omitempty"`; Route bool `json:"route,omitempty"` }
 // Op, Selector and Receiver are set only on a callback: the reverse direction
 // in which this helper asks the interpreter to run an original method body.
@@ -271,6 +271,30 @@ func placedPointer(w *within,typ reflect.Type)(result reflect.Value){
 // address alone does not name an origin: the pointer type completes it.
 type pointerKey struct {address uintptr; typ reflect.Type}
 var typedPointerOrigins = map[pointerKey]uint64{} // protected by originalPointers
+// originPointerAddrs and typedPointerOriginKeys are the reverse indexes releaseOrigins
+// uses to prune the address and typed-identity maps exactly; both live only while
+// their origin does, so the worker tables stay bounded by live origins.
+var originPointerAddrs = map[uint64]map[uintptr]bool{} // protected by originalPointers
+var typedPointerOriginKeys = map[uint64]map[pointerKey]bool{} // protected by originalPointers
+// releaseOrigins drops every worker-side index for ids the interpreter released:
+// decoded storage, address and typed identities, sent snapshots, the retained
+// set and array placements. Later writes for a released origin vanish with its
+// retained mark, and a resurfaced native pointer decodes fresh (its old identity
+// is gone, but so is every interpreter alias it could diverge from). It answers
+// how many origins were actually dropped; unknown ids are ignored.
+func releaseOrigins(ids []uint64)int{
+ dropped:=0;originalPointers.Lock()
+ for _,origin:=range ids{
+  if _,ok:=originalPointers.values[origin];!ok{continue}
+  delete(originalPointers.values,origin);delete(originalPointers.sent,origin);delete(retainedPointerOrigins,origin)
+  if addrs,ok:=originPointerAddrs[origin];ok{for addr:=range addrs{if originalPointers.ids[addr]==origin{delete(originalPointers.ids,addr)}};delete(originPointerAddrs,origin)}
+  if keys,ok:=typedPointerOriginKeys[origin];ok{for key:=range keys{if typedPointerOrigins[key]==origin{delete(typedPointerOrigins,key)}};delete(typedPointerOriginKeys,origin)}
+  dropped++
+ }
+ originalPointers.Unlock()
+ if dropped>0{originalArrays.Lock();for _,origin:=range ids{delete(originalArrays.values,origin)};originalArrays.Unlock()}
+ return dropped
+}
 // pointerOrigin answers the origin registered for exactly this pointer, and
 // otherwise the origin registered at its address: a pointer the dependency
 // derived itself — a promoted receiver, &n.base for an original n — is known
@@ -298,7 +322,10 @@ func pointerSnapshotValue(v value)value{
 // recordPointee remembers what a pointee looked like when the interpreter last
 // sent it. structural takes the same lock for its own pointer case, so the
 // rendering must happen outside it.
-func recordPointee(origin uint64,ptr reflect.Value){snapshot:=pointerSnapshot(structural(ptr.Elem()));originalPointers.Lock();originalPointers.sent[origin]=snapshot;originalPointers.Unlock()}
+func recordPointee(origin uint64,ptr reflect.Value){if raw,ok:=pointeeBytes(ptr);ok{originalPointers.Lock();originalPointers.sent[origin]=string(raw);originalPointers.Unlock();return};snapshot:=pointerSnapshot(structural(ptr.Elem()));originalPointers.Lock();originalPointers.sent[origin]=snapshot;originalPointers.Unlock()}
+func pointeeBytes(ptr reflect.Value)([]byte,bool){if !ptr.IsValid()||ptr.Kind()!=reflect.Pointer||ptr.IsNil(){return nil,false};elem:=ptr.Elem();if !elem.IsValid(){return nil,false};switch elem.Kind(){case reflect.Slice:if elem.Type().Elem().Kind()!=reflect.Uint8{return nil,false};if elem.IsNil(){return []byte{},true};return elem.Bytes(),true;case reflect.Array:if elem.Type().Elem().Kind()!=reflect.Uint8||!elem.CanAddr(){return nil,false};return elem.Slice(0,elem.Len()).Bytes(),true};return nil,false}
+func bytesValue(typ string,raw []byte) value{return value{Kind:"bytes",Type:typ,Bytes:raw}}
+func bytePointeeUpdate(origin uint64,ptr reflect.Value,raw []byte)(value,bool){originalPointers.Lock();changed:=string(raw)!=originalPointers.sent[origin];if changed{originalPointers.sent[origin]=string(raw)};originalPointers.Unlock();if !changed{return value{},false};return value{Kind:"pointer",Type:ptr.Type().String(),Origin:origin,Session:bridgeAuth[:16],Elements:[]value{bytesValue(ptr.Type().Elem().String(),raw)}},true}
 // livePointers copies the live origin table so each pointee can be rendered
 // without holding the lock structural itself needs.
 func livePointers(wanted map[uint64]bool)([]uint64,[]reflect.Value){originalPointers.Lock();defer originalPointers.Unlock();var origins []uint64;var ptrs []reflect.Value;for origin:=range wanted{ptr:=originalPointers.values[origin];if ptr.IsValid()&&ptr.Kind()==reflect.Pointer&&!ptr.IsNil(){origins=append(origins,origin);ptrs=append(ptrs,ptr)}};return origins,ptrs}
@@ -307,7 +334,7 @@ func collectOrigins(v value,out map[uint64]bool){if v.Origin!=0{out[v.Origin]=tr
 func pointerWritebackOrigins(q request)map[uint64]bool{current:=map[uint64]bool{};originalPointers.Lock();for origin:=range retainedPointerOrigins{current[origin]=true};originalPointers.Unlock();if q.PointerReadOnly{return current};explicit:=map[uint64]bool{};if q.Receiver!=nil{collectOrigins(*q.Receiver,explicit)};for _,arg:=range q.Args{collectOrigins(arg,explicit)};originalPointers.Lock();for origin:=range explicit{retainedPointerOrigins[origin]=true;current[origin]=true};originalPointers.Unlock();if q.Receiver!=nil&&(q.Receiver.NativeType=="reflect.Value"||q.Receiver.Type=="reflect.Value"){if ctx,ok:=reflectedContext(q.Receiver.Handle);ok&&ctx.origin!=0{current[ctx.origin]=true}else{originalPointers.Lock();for origin:=range originalPointers.values{current[origin]=true};originalPointers.Unlock()}};return current}
 // writablePointee is the set of pointee shapes the interpreter rebuilds at the
 // pointer's declared type. A shape outside it is never written back silently.
-func writablePointee(kind string)bool{switch kind{case "string","bool","int","uint","float","complex","nil","handle","struct","slice","array","map":return true};return false}
+func writablePointee(kind string)bool{switch kind{case "string","bool","int","uint","float","complex","nil","handle","struct","slice","array","map","bytes":return true};return false}
 type reflectedMethodContext struct { origin uint64; receiver reflect.Value; selector string }
 type nativePointerHandleKey struct { typ reflect.Type; address uintptr }
 var handles = struct { sync.Mutex; next uint64; values map[uint64]reflect.Value; refs map[uint64]int; leases map[uint64]uint64; leaseNext uint64; pointers map[nativePointerHandleKey]uint64; pointerKeys map[uint64]nativePointerHandleKey; reflected map[uint64]reflectedMethodContext; stop chan struct{} }{values: map[uint64]reflect.Value{},refs:map[uint64]int{},leases:map[uint64]uint64{},pointers:map[nativePointerHandleKey]uint64{},pointerKeys:map[uint64]nativePointerHandleKey{},reflected:map[uint64]reflectedMethodContext{},stop:make(chan struct{})}
@@ -645,6 +672,7 @@ func decodeIn(st *decodeState, v value, target reflect.Type)(reflect.Value,error
   case "uint":n,e:=strconv.ParseUint(v.Text,10,64);if e!=nil{return result,e};switch typ.Kind(){case reflect.Uint,reflect.Uint8,reflect.Uint16,reflect.Uint32,reflect.Uint64,reflect.Uintptr:if result.OverflowUint(n){return result,fmt.Errorf("unsigned overflow")};result.SetUint(n);case reflect.Int,reflect.Int8,reflect.Int16,reflect.Int32,reflect.Int64:if n>1<<63-1||result.OverflowInt(int64(n)){return result,fmt.Errorf("integer overflow")};result.SetInt(int64(n));case reflect.Float32,reflect.Float64:result.SetFloat(float64(n));default:return result,fmt.Errorf("unsigned for %s",typ)}
   case "complex":n,e:=strconv.ParseComplex(v.Text,128);if e!=nil{return result,e};if typ.Kind()!=reflect.Complex64&&typ.Kind()!=reflect.Complex128{return result,fmt.Errorf("complex for %s",typ)};if result.OverflowComplex(n){return result,fmt.Errorf("complex overflow")};result.SetComplex(n)
   case "float":if strings.HasPrefix(v.Text,"@f32:"){bits,e:=strconv.ParseUint(v.Text[5:],16,32);if e!=nil{return result,e};if typ.Kind()==reflect.Float32{result.Set(reflect.ValueOf(math.Float32frombits(uint32(bits))).Convert(typ));break};v.Text=strconv.FormatFloat(float64(math.Float32frombits(uint32(bits))),'g',-1,64)};if strings.HasPrefix(v.Text,"@f64:"){bits,e:=strconv.ParseUint(v.Text[5:],16,64);if e!=nil{return result,e};if typ.Kind()==reflect.Float64{result.Set(reflect.ValueOf(math.Float64frombits(bits)).Convert(typ));break};v.Text=strconv.FormatFloat(math.Float64frombits(bits),'g',-1,64)};n,e:=strconv.ParseFloat(v.Text,64);if e!=nil{return result,e};switch typ.Kind(){case reflect.Float32,reflect.Float64:result.SetFloat(n);case reflect.Complex64,reflect.Complex128:result.SetComplex(complex(n,0));default:return result,fmt.Errorf("float for %s",typ)}
+  case "bytes":switch typ.Kind(){case reflect.Slice:if typ.Elem().Kind()!=reflect.Uint8{return result,fmt.Errorf("bytes for %s",typ)};result=reflect.MakeSlice(typ,len(v.Bytes),len(v.Bytes));copy(result.Bytes(),v.Bytes);case reflect.Array:if typ.Elem().Kind()!=reflect.Uint8||typ.Len()!=len(v.Bytes){return result,fmt.Errorf("bytes for %s",typ)};result=reflect.New(typ).Elem();copy(result.Slice(0,len(v.Bytes)).Bytes(),v.Bytes);default:return result,fmt.Errorf("bytes for %s",typ)}
   case "slice","array":if typ.Kind()==reflect.Slice {length:=v.Length;capacity:=v.Capacity;if capacity<len(v.Elements){capacity=len(v.Elements)};if length>capacity||v.Offset<0{return result,fmt.Errorf("invalid slice view")};if st.originDepth>0&&v.Storage!=0{needed:=v.Offset+capacity;originalSlices.Lock();backing:=originalSlices.values[v.Storage];if backing.IsValid()&&(backing.Type()!=typ||backing.Cap()<needed){originalSlices.Unlock();return result,fmt.Errorf("retained slice storage cannot expand without invalidating existing selections")};if !backing.IsValid(){backing=reflect.MakeSlice(typ,needed,needed)};originalSlices.values[v.Storage]=backing.Slice3(0,needed,needed);originalSlices.Unlock();result=backing.Slice3(v.Offset,v.Offset+length,v.Offset+capacity)}else{result=reflect.MakeSlice(typ,length,capacity)}} else if typ.Kind()!=reflect.Array||typ.Len()!=len(v.Elements){return result,fmt.Errorf("invalid collection %s",typ)};write:=result;if typ.Kind()==reflect.Slice&&len(v.Elements)>result.Len(){write=result.Slice3(0,len(v.Elements),result.Cap())};for i,elem:=range v.Elements{item,e:=decodeIn(st,elem,typ.Elem());if e!=nil{return result,e};write.Index(i).Set(item)}
   case "pointer":
    // An interface-held interpreted pointer is labelled with the interface's
@@ -675,7 +703,7 @@ func decodeIn(st *decodeState, v value, target reflect.Type)(reflect.Value,error
    // A pointer into an enclosing array is placed inside that array's one
    // allocation, so sibling subobjects keep Go's layout between them.
    placed:=placedPointer(v.Within,typ)
-   originalPointers.Lock();if v.Origin!=0 {result=originalPointers.values[v.Origin]};if !result.IsValid() || result.Type()!=typ || result.IsNil(){result=placed;if !result.IsValid(){result=reflect.New(typ.Elem())}};if v.Origin!=0{originalPointers.values[v.Origin]=result;originalPointers.ids[result.Pointer()]=v.Origin;typedPointerOrigins[pointerKey{result.Pointer(),typ}]=v.Origin};originalPointers.Unlock()
+   originalPointers.Lock();if v.Origin!=0 {result=originalPointers.values[v.Origin]};if !result.IsValid() || result.Type()!=typ || result.IsNil(){result=placed;if !result.IsValid(){result=reflect.New(typ.Elem())}};if v.Origin!=0{if prev,ok:=originalPointers.values[v.Origin];ok&&prev.IsValid()&&prev.Kind()==reflect.Pointer&&!prev.IsNil()&&prev.Pointer()!=result.Pointer(){delete(originalPointers.ids,prev.Pointer());delete(typedPointerOrigins,pointerKey{prev.Pointer(),prev.Type()});if addrs,ok:=originPointerAddrs[v.Origin];ok{delete(addrs,prev.Pointer())};if keys,ok:=typedPointerOriginKeys[v.Origin];ok{delete(keys,pointerKey{prev.Pointer(),prev.Type()})}};originalPointers.values[v.Origin]=result;originalPointers.ids[result.Pointer()]=v.Origin;typedPointerOrigins[pointerKey{result.Pointer(),typ}]=v.Origin;if originPointerAddrs[v.Origin]==nil{originPointerAddrs[v.Origin]=map[uintptr]bool{}};originPointerAddrs[v.Origin][result.Pointer()]=true;if typedPointerOriginKeys[v.Origin]==nil{typedPointerOriginKeys[v.Origin]=map[pointerKey]bool{}};typedPointerOriginKeys[v.Origin][pointerKey{result.Pointer(),typ}]=true};originalPointers.Unlock()
    st.originDepth++;item,e:=decodeIn(st,v.Elements[0],typ.Elem());st.originDepth--;if e!=nil{return result,e};result.Elem().Set(item);if v.Origin!=0{st.pointees=append(st.pointees,v.Origin)}
   case "map":if typ.Kind()!=reflect.Map{return result,fmt.Errorf("map for %s",typ)};result=reflect.MakeMapWithSize(typ,len(v.Entries));for _,entry:=range v.Entries{key,e:=decodeIn(st,entry.Key,typ.Key());if e!=nil{return result,e};item,e:=decodeIn(st,entry.Value,typ.Elem());if e!=nil{return result,e};result.SetMapIndex(key,item)}
   case "struct":if typ.Kind()!=reflect.Struct{return result,fmt.Errorf("struct for %s",typ)};if len(v.Elements)>0&&(len(v.Fields)>0||len(v.Elements)!=typ.NumField()){return result,fmt.Errorf("invalid positional field count or mixed fields for %s",typ)};if codec,ok:=localStructCodecs[typ];ok{var err error;result,err=codec.decode(st,v);if err!=nil{return result,err};break};for name,field:=range v.Fields{slot:=result.FieldByName(name);if !slot.IsValid(){return result,fmt.Errorf("unknown field %s of %s",name,typ)};if !slot.CanSet(){return result,fmt.Errorf("unexported field %s of %s cannot cross the dependency boundary",name,typ)};item,e:=decodeIn(st,field,slot.Type());if e!=nil{return result,e};slot.Set(item)}
@@ -1152,7 +1180,7 @@ func dispatch(q request)(reply response){
  // header, and the interpreter rebinds its own supplying variable to the handle
  // minted here, which shares the same backing array. No copy is written back.
  for _,i:=range q.Transfers {if i<0||i>=len(args)||args[i].Kind()!=reflect.Slice{reply.Error="invalid native transfer index";return};reply.Transferred=append(reply.Transferred,sliceBuffer{Index:i,Length:args[i].Len(),Value:encode(args[i])})}
-  defer func(){for _,buffer:=range q.SliceBuffers {v:=args[buffer.Index];reply.SliceUpdates=append(reply.SliceUpdates,sliceBuffer{Index:buffer.Index,Length:v.Len(),Value:structural(v.Slice(0,v.Cap()))})};origins,ptrs:=livePointers(pointerWritebackOrigins(q));for i,origin:=range origins{elem:=structural(ptrs[i].Elem());if !writablePointee(elem.Kind){continue};snapshot:=pointerSnapshot(elem);originalPointers.Lock();changed:=snapshot!=originalPointers.sent[origin];if changed{originalPointers.sent[origin]=snapshot};originalPointers.Unlock();if !changed{continue};reply.PtrUpdates=append(reply.PtrUpdates,value{Kind:"pointer",Type:ptrs[i].Type().String(),Origin:origin,Session:bridgeAuth[:16],Elements:[]value{elem}})}}()
+  defer func(){for _,buffer:=range q.SliceBuffers {v:=args[buffer.Index];reply.SliceUpdates=append(reply.SliceUpdates,sliceBuffer{Index:buffer.Index,Length:v.Len(),Value:structural(v.Slice(0,v.Cap()))})};origins,ptrs:=livePointers(pointerWritebackOrigins(q));for i,origin:=range origins{if raw,ok:=pointeeBytes(ptrs[i]);ok{if update,changed:=bytePointeeUpdate(origin,ptrs[i],raw);changed{reply.PtrUpdates=append(reply.PtrUpdates,update)};continue};elem:=structural(ptrs[i].Elem());if !writablePointee(elem.Kind){continue};snapshot:=pointerSnapshot(elem);originalPointers.Lock();changed:=snapshot!=originalPointers.sent[origin];if changed{originalPointers.sent[origin]=snapshot};originalPointers.Unlock();if !changed{continue};reply.PtrUpdates=append(reply.PtrUpdates,value{Kind:"pointer",Type:ptrs[i].Type().String(),Origin:origin,Session:bridgeAuth[:16],Elements:[]value{elem}})}}()
  if handled,err:=sourceLog(q,args);handled{reply.Error=err;return}
  var returned []reflect.Value
  if q.Receiver!=nil&&q.Selector=="" {if ctx,ok:=reflectedContext(q.Receiver.Handle);ok&&ctx.selector!="" {recv:=structural(ctx.receiver);recv.Origin=ctx.origin;recv.CallArgs=make([]value,len(args));for i,arg:=range args{recv.CallArgs[i]=encode(arg)};out,err:=callback(ctx.selector,recv);if err!=nil{reply.Error=err.Error();return};if len(out)!=signature.NumOut(){reply.Error="original reflected method returned wrong result count";return};for i,item:=range out{v,err:=decode(item,signature.Out(i));if err!=nil{reply.Error=err.Error();return};returned=append(returned,v)};for _,v:=range returned{reply.Values=append(reply.Values,encode(v))};return}}
@@ -1201,6 +1229,7 @@ func main(){
  // Waiting for those calls would orphan listeners after host termination.
  for {var q request;if err:=decoder.Decode(&q);err!=nil{close(handles.stop);return};if q.Op=="close"{close(handles.stop);return}
   releaseHandles(q.Releases)
+  if releaseOrigins(q.OriginReleases)>0{bppRuntime.GC()}
   if q.Op=="release"{continue}
   if q.Op=="callback-reply" {callbacks.Lock();wait:=callbacks.waiting[q.ID];callbacks.Unlock();if wait!=nil{wait<-q};continue}
   // A dependency call may end this serving goroutine with runtime.Goexit

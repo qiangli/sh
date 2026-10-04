@@ -123,9 +123,7 @@ func (r *Runner) goSourceSharedHeap(ctx context.Context, req bashPPEvalRequest, 
 	if req.Bridge == nil || v.Session != req.Bridge.id {
 		return nil, true, fmt.Errorf("gosource: heap.Interface pointer belongs to another dependency session")
 	}
-	req.Bridge.mu.Lock()
-	ptr := req.Bridge.origins[v.Origin]
-	req.Bridge.mu.Unlock()
+	ptr, _ := req.Bridge.originLookup(v.Origin)
 	if ptr == nil {
 		return nil, true, fmt.Errorf("gosource: heap.Interface receiver identity expired")
 	}

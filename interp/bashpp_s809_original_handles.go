@@ -82,9 +82,7 @@ func (r *Runner) goSourceOriginalHandleCell(req bashPPEvalRequest, v bashPPBridg
 	if !materialised {
 		return nil, false
 	}
-	session.mu.Lock()
-	ptr := session.origins[v.Origin]
-	session.mu.Unlock()
+	ptr, _ := session.originLookup(v.Origin)
 	if ptr == nil || ptr.target == nil {
 		return nil, false
 	}

@@ -3,6 +3,7 @@ package interp
 // Sprint: #165; Story: #99; Story-ID: ca559d7ee23d
 
 import (
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -11,7 +12,9 @@ import (
 // no origin, another session's origin, or an origin never registered each
 // fail closed rather than binding to arbitrary storage.
 func TestSprint165BackReferenceFailsClosed(t *testing.T) {
-	session := &bashPPNativeSession{id: "session-a", origins: map[uint64]*bashPPPointer{1: {target: &bashPPCell{}}}}
+	kept := &bashPPCell{}
+	session := &bashPPNativeSession{id: "session-a", origins: map[uint64]*bashPPOriginRecord{1: newOriginRecord(&bashPPPointer{target: kept})}}
+	defer runtime.KeepAlive(kept)
 	r := &Runner{}
 	r.bashPPTools.bridge = session
 	cases := []struct {
@@ -35,7 +38,10 @@ func TestSprint165BackReferenceFailsClosed(t *testing.T) {
 		})
 	}
 	ptr, err := r.bashPPBridgeBackReferencePointer(bashPPBridgeValue{Kind: "pointer", Origin: 1, Session: "session-a"})
-	if err != nil || ptr != session.origins[1] {
+	live, _ := session.originLookup(1)
+	// Each lookup materialises a fresh wrapper, so identity is compared
+	// by storage, not by wrapper pointer.
+	if err != nil || ptr == nil || live == nil || ptr.target != kept || live.target != kept {
 		t.Fatalf("a registered origin resolves to its pointer: %v %v", ptr, err)
 	}
 	// A pointer WITH a pointee is not a back-reference.

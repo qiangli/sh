@@ -988,10 +988,16 @@ func (s *bashPPNativeSession) applyNativePointerUpdates(req bashPPEvalRequest, r
 		if update.Origin == 0 || update.Session != s.id {
 			return fmt.Errorf("gosource: native pointer writeback has invalid origin")
 		}
-		s.mu.Lock()
-		ptr := s.origins[update.Origin]
-		s.mu.Unlock()
-		if ptr == nil {
+		ptr, live := s.originLookup(update.Origin)
+		if !live {
+			// The worker prunes released origins before rendering
+			// writebacks, but a reply already in flight may still name
+			// one: its target storage is unreachable, so the write is
+			// unobservable and dropped. An origin that never existed
+			// still fails closed.
+			if s.originExpired(update.Origin) {
+				continue
+			}
 			return fmt.Errorf("gosource: native pointer writeback target expired")
 		}
 		if len(update.Elements) != 1 {
@@ -1167,6 +1173,16 @@ func (r *Runner) bashPPBridgeCollection(value any, meta *bashPPCollectionMeta, t
 		// can parse, exactly like the inferred-length form above.
 		if result.Kind == "array" && !inferredArray && r.bashPPGoSource && !r.bashPPBridgeResolvableArrayType(typ, collection) {
 			result.Type = "[" + strconv.Itoa(len(value)) + "]" + r.bashPPBridgeTypeIdentity(collection.Element)
+		}
+		// Byte arrays cross in compact form: one value per element would
+		// inflate a 10 MB buffer to gigabytes of JSON, decoded garbage
+		// and pointee snapshots. Only a byte element selects it, and only
+		// a fully extractable image compacts; anything else keeps the
+		// per-element path below.
+		if result.Kind == "array" && r.bashPPGoSource && bashPPByteElementType(r, collection.Element) {
+			if raw, ok := bashPPByteArrayBytes(value); ok {
+				return bashPPBridgeValue{Kind: "bytes", Type: result.Type, Bytes: raw}, nil
+			}
 		}
 		if r.bashPPGoSource && result.Kind == "slice" {
 			if visibleLength < 0 || viewCapacity < visibleLength || viewCapacity > cap(value) || (meta != nil && viewCapacity > cap(children)) {

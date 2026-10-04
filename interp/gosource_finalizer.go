@@ -300,6 +300,7 @@ func (r *Runner) goSourceCollectFinalizers(ctx context.Context, call *syntax.Bas
 	c := r.bashPPConcurrent
 	if c == nil {
 		runtime.GC()
+		r.sweepBridgeOrigins()
 		return nil
 	}
 	c.mu.Lock()
@@ -307,6 +308,7 @@ func (r *Runner) goSourceCollectFinalizers(ctx context.Context, call *syntax.Bas
 	c.mu.Unlock()
 	if table == nil {
 		runtime.GC()
+		r.sweepBridgeOrigins()
 		return nil
 	}
 	table.mu.Lock()
@@ -314,9 +316,11 @@ func (r *Runner) goSourceCollectFinalizers(ctx context.Context, call *syntax.Bas
 	table.mu.Unlock()
 	if idle {
 		runtime.GC()
+		r.sweepBridgeOrigins()
 		return nil
 	}
 	goSourceHostCollect()
+	r.sweepBridgeOrigins()
 	table.mu.Lock()
 	runs := table.ready
 	table.ready = nil
