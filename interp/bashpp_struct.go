@@ -232,6 +232,7 @@ func (r *Runner) bashPPEvalComposite(lit *syntax.BashPPCompositeLit, expected sy
 		return r.bashPPEvalCollection(lit, expected)
 	}
 	fields, typeName, ok := r.bashPPStructFields(typ)
+	importedHeader := false
 	if !ok && r.bashPPGoSource {
 		// Imported structs normally remain dependency-owned. A slice-header
 		// literal is different: the program has just built its three words,
@@ -239,6 +240,7 @@ func (r *Runner) bashPPEvalComposite(lit *syntax.BashPPCompositeLit, expected sy
 		// Restrict the exception to the authenticated header shape.
 		if header, headerOK := r.goSourceUnsafeSliceHeaderFields(typ); headerOK {
 			fields, typeName, ok = header, bashPPTypeText(typ), true
+			importedHeader = true
 		}
 	}
 	if !ok {
@@ -282,6 +284,38 @@ func (r *Runner) bashPPEvalComposite(lit *syntax.BashPPCompositeLit, expected sy
 				continue
 			}
 			bashPPSetInitialStructField(out, meta, flat[i].name, value, child)
+		}
+		return out, meta, nil
+	}
+	if importedHeader {
+		// The imported header's fields come from go/types metadata, not the
+		// interpreted type registry the selector resolver walks. Its shape is
+		// already authenticated as three flat words, so key them by name.
+		seen := make(map[string]bool, len(lit.Elems))
+		for _, elem := range lit.Elems {
+			key, ok := elem.Key.(*syntax.BashPPIdent)
+			if !ok {
+				return nil, nil, fmt.Errorf("%sBASHPP-ESTRUCT-KEY: %s literal field key must be an identifier, not a selector expression", r.bashErrPrefix(elem.Key.Pos()), typeName)
+			}
+			name := key.Name.Value
+			var fieldType syntax.BashPPTypeExpr
+			for _, field := range flat {
+				if field.name == name {
+					fieldType = field.typ
+				}
+			}
+			if fieldType == nil {
+				return nil, nil, fmt.Errorf("%sBASHPP-ESTRUCT-UNKNOWN: %s has no field selector %q", r.bashErrPrefix(key.Pos()), typeName, name)
+			}
+			if seen[name] {
+				return nil, nil, fmt.Errorf("%sBASHPP-ESTRUCT-DUPLICATE: field selector %q is supplied more than once", r.bashErrPrefix(key.Pos()), name)
+			}
+			seen[name] = true
+			value, child, err := r.bashPPEvalTypedValue(elem.Value, fieldType)
+			if err != nil {
+				return nil, nil, err
+			}
+			bashPPSetInitialStructField(out, meta, name, value, child)
 		}
 		return out, meta, nil
 	}
