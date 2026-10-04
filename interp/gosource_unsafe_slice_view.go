@@ -148,21 +148,33 @@ func (r *Runner) goSourceUnsafeStructFields(typ syntax.BashPPTypeExpr) ([]*synta
 	if !ok || named.Name == nil || r.bashPPTools.nativeTypes == nil {
 		return nil, false
 	}
-	name := named.Name.Value
+	name, qualifier := named.Name.Value, ""
 	if dot := strings.LastIndexByte(name, '.'); dot >= 0 {
-		name = name[dot+1:]
+		qualifier, name = name[:dot], name[dot+1:]
 	}
-	var native types.Type
+	// Several imported packages may export a type of the same name: a file
+	// importing both internal/unsafeheader and cmd/compile/internal/types sees
+	// two types called Slice. The qualifier the source wrote selects the
+	// package; only an unqualified or synthetically qualified name falls back
+	// to requiring the name to be unique among the imports.
+	var native, qualified types.Type
+	matches, qualifiedMatches := 0, 0
 	for key, candidate := range r.bashPPTools.nativeTypes {
-		if !strings.HasSuffix(key, "."+name) || !r.goSourceImportsPath(strings.TrimSuffix(key, "."+name)) {
+		path := strings.TrimSuffix(key, "."+name)
+		if path == key || !r.goSourceImportsPath(path) {
 			continue
 		}
-		if native != nil {
-			return nil, false
-		}
 		native = candidate
+		matches++
+		if qualifier != "" && (path == qualifier || strings.HasSuffix(path, "/"+qualifier)) {
+			qualified = candidate
+			qualifiedMatches++
+		}
 	}
-	if native == nil {
+	switch {
+	case qualifiedMatches == 1:
+		native = qualified
+	case matches != 1:
 		return nil, false
 	}
 	structure, ok := types.Unalias(native).Underlying().(*types.Struct)
