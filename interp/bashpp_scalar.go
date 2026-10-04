@@ -28,8 +28,11 @@ type bashPPScalar struct {
 	interfaceValue *bashPPInterfaceValue
 	// nonFinite carries the runtime IEEE values that go/constant deliberately
 	// cannot represent. It is only set for Go-source runtime float operations.
-	nonFinite           float64
-	hasNonFinite        bool
+	nonFinite    float64
+	hasNonFinite bool
+	// nanBits keeps NaN payloads that a float32-to-float64 conversion would quiet.
+	nanBits             uint64
+	nanWidth            int
 	nonFiniteComplex    complex128
 	hasNonFiniteComplex bool
 }
@@ -476,6 +479,9 @@ func (r *Runner) bashPPScalarPath(expr syntax.BashPPExpr) (bashPPScalar, error) 
 		// A NaN or infinity reaches a float element only as its storage
 		// spelling, since go/constant has no value for it.
 		if r.bashPPGoSource && r.bashPPFloatTypeName(typ) {
+			if special, ok := bashPPNaNBitsScalar(value, typ); ok {
+				return special, nil
+			}
 			if special, ok := bashPPNonFiniteText(value); ok {
 				return bashPPNonFiniteScalar(special, typ), nil
 			}
@@ -637,6 +643,15 @@ func (r *Runner) bashPPScalarFromCell(cell *bashPPCell) bashPPScalar {
 	// see the same store; a cell shared with an interpreted goroutine is read
 	// from a snapshot. See bashpp_cell_share.go.
 	cell = cell.view()
+	floatType := cell.typeName
+	if floatType == "" {
+		floatType = bashPPTypeText(cell.declType)
+	}
+	if cell.scalarKind == constant.Float || r.bashPPFloatTypeName(floatType) {
+		if value, ok := bashPPNaNBitsScalar(cell.vr.String(), floatType); ok {
+			return value
+		}
+	}
 	// An interface whose dynamic value has no scalar cell (nil, or a native
 	// value such as a recovered runtime error) reads as its own storage.
 	if cell.interfaceValue != nil && cell.interfaceValue.cell != nil {
@@ -861,6 +876,49 @@ func bashPPNonFiniteScalar(value float64, typ string) bashPPScalar {
 	return bashPPScalar{value: constant.MakeFloat64(0), typ: typ, runtime: true, nonFinite: value, hasNonFinite: true}
 }
 
+// NaNs travel as IEEE bits through text-backed cells and native calls.
+func bashPPNaNBitsScalar(text, typ string) (bashPPScalar, bool) {
+	width := 0
+	switch {
+	case strings.HasPrefix(text, "@f32:"):
+		width = 32
+		text = text[5:]
+	case strings.HasPrefix(text, "@f64:"):
+		width = 64
+		text = text[5:]
+	default:
+		return bashPPScalar{}, false
+	}
+	bits, err := strconv.ParseUint(text, 16, width)
+	if err != nil {
+		return bashPPScalar{}, false
+	}
+	var number float64
+	if width == 32 {
+		number = float64(math.Float32frombits(uint32(bits)))
+	} else {
+		number = math.Float64frombits(bits)
+	}
+	if !math.IsNaN(number) {
+		return bashPPScalar{}, false
+	}
+	value := bashPPNonFiniteScalar(number, typ)
+	value.nanBits, value.nanWidth = bits, width
+	return value, true
+}
+
+func bashPPNaNBitsText(bits uint64, width int) string {
+	if width == 32 {
+		return fmt.Sprintf("@f32:%08x", uint32(bits))
+	}
+	return fmt.Sprintf("@f64:%016x", bits)
+}
+
+func bashPPNaNBitsScalarMust(bits uint64, width int, typ string) bashPPScalar {
+	value, _ := bashPPNaNBitsScalar(bashPPNaNBitsText(bits, width), typ)
+	return value
+}
+
 // bashPPFloatTypeName reports whether the declared name (through any defined
 // type) has a float32 or float64 underlying type.
 func (r *Runner) bashPPFloatTypeName(name string) bool {
@@ -932,6 +990,9 @@ func bashPPScalarStorageString(value bashPPScalar) string {
 		return strconv.FormatComplex(value.nonFiniteComplex, 'g', -1, 128)
 	}
 	if value.hasNonFinite {
+		if value.nanWidth != 0 {
+			return bashPPNaNBitsText(value.nanBits, value.nanWidth)
+		}
 		return strconv.FormatFloat(value.nonFinite, 'g', -1, 64)
 	}
 	return bashPPScalarString(value.value)
@@ -2097,6 +2158,16 @@ func (r *Runner) bashPPConvertScalar(typ string, x bashPPScalar) (bashPPScalar, 
 	case "float32", "float64":
 		// A NaN or infinity converts between the float types as itself.
 		if r.bashPPGoSource && x.hasNonFinite {
+			if x.nanWidth != 0 {
+				if x.nanWidth == 32 && typ == "float32" || x.nanWidth == 64 && typ == "float64" {
+					x.typ = typ
+					return x, nil
+				}
+				if typ == "float64" {
+					return bashPPNaNBitsScalarMust(uint64(math.Float64bits(float64(math.Float32frombits(uint32(x.nanBits))))), 64, typ), nil
+				}
+				return bashPPNaNBitsScalarMust(uint64(math.Float32bits(float32(math.Float64frombits(x.nanBits)))), 32, typ), nil
+			}
 			return bashPPNonFiniteScalar(x.nonFinite, typ), nil
 		}
 		if x.value.Kind() == constant.Int || x.value.Kind() == constant.Float {
