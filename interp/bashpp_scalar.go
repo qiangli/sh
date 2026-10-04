@@ -1730,7 +1730,11 @@ func bashPPCompareValuesWithRunner(r *Runner, left any, leftMeta *bashPPCollecti
 	}
 	sameType := bashPPTypeText(leftMeta.typ) == bashPPTypeText(rightMeta.typ)
 	if !sameType && r != nil && r.bashPPGoSource {
-		sameType = r.bashPPTypeAssignable(leftMeta.typ, rightMeta.typ) && r.bashPPTypeAssignable(rightMeta.typ, leftMeta.typ)
+		if leftMeta.kind == "channel" && rightMeta.kind == "channel" {
+			sameType = r.goSourceChannelComparisonTypes(leftMeta.typ, rightMeta.typ)
+		} else {
+			sameType = r.bashPPTypeAssignable(leftMeta.typ, rightMeta.typ) && r.bashPPTypeAssignable(rightMeta.typ, leftMeta.typ)
+		}
 	}
 	if leftMeta.kind != rightMeta.kind || !sameType {
 		return false, fmt.Errorf("BASHPP-ECOMPARE-TYPE: mismatched comparison")
@@ -1796,6 +1800,29 @@ func bashPPCompareValuesWithRunner(r *Runner, left any, leftMeta *bashPPCollecti
 		return true, nil
 	}
 	return false, fmt.Errorf("BASHPP-ECOMPARE-NONCOMPARABLE: unsupported comparison")
+}
+
+// Channel operands with the same element type may be compared when either can
+// be assigned to the other's type. Go permits a bidirectional channel value
+// to compare with its send-only or receive-only view; requiring assignment in
+// both directions incorrectly rejected that valid comparison.
+func (r *Runner) goSourceChannelComparisonTypes(left, right syntax.BashPPTypeExpr) bool {
+	leftNamed := r.bashPPCanonicalAssignableType(left)
+	rightNamed := r.bashPPCanonicalAssignableType(right)
+	_, leftIsNamed := leftNamed.(*syntax.BashPPNamedType)
+	_, rightIsNamed := rightNamed.(*syntax.BashPPNamedType)
+	if leftIsNamed && rightIsNamed && bashPPTypeText(leftNamed) != bashPPTypeText(rightNamed) {
+		return false
+	}
+	l, ok := r.bashPPUnderlyingType(leftNamed).(*syntax.BashPPChanType)
+	if !ok {
+		return false
+	}
+	rc, ok := r.bashPPUnderlyingType(rightNamed).(*syntax.BashPPChanType)
+	if !ok || bashPPTypeText(l.Element) != bashPPTypeText(rc.Element) {
+		return false
+	}
+	return l.Direction == rc.Direction || l.Direction == "" || rc.Direction == ""
 }
 
 func bashPPPointerComparable(meta *bashPPCollectionMeta) bool {
