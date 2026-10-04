@@ -318,22 +318,6 @@ func fastDecodeScalar(v bashPPBridgeValue, target reflect.Type) (reflect.Value, 
 		}
 		r.SetUint(x)
 	case reflect.Float32, reflect.Float64:
-		if bits, ok := bashPPNaNBitsScalar(v.Text, v.Type); ok {
-			if target.Kind() == reflect.Float32 {
-				if bits.nanWidth == 32 {
-					r.Set(reflect.ValueOf(math.Float32frombits(uint32(bits.nanBits))).Convert(target))
-				} else {
-					r.SetFloat(float64(float32(math.Float64frombits(bits.nanBits))))
-				}
-			} else {
-				if bits.nanWidth == 64 {
-					r.Set(reflect.ValueOf(math.Float64frombits(bits.nanBits)).Convert(target))
-				} else {
-					r.SetFloat(float64(math.Float32frombits(uint32(bits.nanBits))))
-				}
-			}
-			return r, true
-		}
 		var x float64
 		x, err = strconv.ParseFloat(v.Text, target.Bits())
 		if v.Kind != "float" {
@@ -376,13 +360,6 @@ func fastEncodeScalar(v reflect.Value) bashPPBridgeValue {
 		out.Kind, out.Text = "uint", strconv.FormatUint(v.Uint(), 10)
 	case reflect.Float32, reflect.Float64:
 		out.Kind, out.Text = "float", strconv.FormatFloat(v.Float(), 'g', -1, v.Type().Bits())
-		if math.IsNaN(v.Float()) {
-			if v.Kind() == reflect.Float32 {
-				out.Text = bashPPNaNBitsText(uint64(math.Float32bits(v.Convert(reflect.TypeFor[float32]()).Interface().(float32))), 32)
-			} else {
-				out.Text = bashPPNaNBitsText(math.Float64bits(v.Convert(reflect.TypeFor[float64]()).Interface().(float64)), 64)
-			}
-		}
 	case reflect.Complex64, reflect.Complex128:
 		out.Kind, out.Text = "complex", strconv.FormatComplex(v.Complex(), 'g', -1, v.Type().Bits())
 	}

@@ -436,9 +436,6 @@ func (value bashPPBridgeValue) scalar() (bashPPScalar, error) {
 		}
 		scalar.value = bashPPParseComplex(value.Text)
 	case "float":
-		if bits, ok := bashPPNaNBitsScalar(value.Text, value.Type); ok {
-			return bits, nil
-		}
 		// math.NaN() and math.Inf(1) cross as the text go/constant cannot
 		// hold; they are the runtime non-finite scalar, not an invalid one.
 		if special, ok := bashPPNonFiniteText(value.Text); ok {
@@ -459,7 +456,7 @@ func (value bashPPBridgeValue) scalar() (bashPPScalar, error) {
 func bridgeScalar(value bashPPScalar) (bashPPBridgeValue, error) {
 	out := bashPPBridgeValue{Type: value.typ}
 	if value.hasNonFinite {
-		return bashPPBridgeValue{Kind: "float", Type: value.typ, Text: bashPPScalarStorageString(value)}, nil
+		return bashPPBridgeValue{Kind: "float", Type: value.typ, Text: strconv.FormatFloat(value.nonFinite, 'g', -1, 64)}, nil
 	}
 	if value.hasNonFiniteComplex {
 		return bashPPBridgeValue{Kind: "complex", Type: value.typ, Text: strconv.FormatComplex(value.nonFiniteComplex, 'g', -1, 128)}, nil
@@ -844,9 +841,6 @@ func (r *Runner) bashPPNativeIndexedPointer(index *syntax.BashPPIndexExpr) (bash
 // bashPPBridgeFloatText normalises one shell-held float, including the exact
 // rational spelling the interpreter uses for a non-representable constant.
 func bashPPBridgeFloatText(text string) (string, bool) {
-	if _, ok := bashPPNaNBitsScalar(text, ""); ok {
-		return text, true
-	}
 	number := constant.MakeFromLiteral(text, token.FLOAT, 0)
 	if number.Kind() == constant.Unknown {
 		numerator, denominator, ok := strings.Cut(text, "/")
