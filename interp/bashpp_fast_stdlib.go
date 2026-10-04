@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // The table is deliberately made of linked, typed symbols. A Go import alias
@@ -346,11 +347,33 @@ func fastRandDebugSetting(req bashPPEvalRequest, name string) string {
 			debug = value
 		}
 	}
+	// The original program's default GODEBUG (its module's go directive,
+	// godebug lines and //go:debug directives) applies beneath the
+	// environment, exactly as in a native build and as the worker link
+	// replays it; see bashPPDefaultGODEBUG.
+	debug = fastProgramDefaultGODEBUG(req) + "," + debug
 	value := ""
 	for _, setting := range strings.Split(debug, ",") {
 		if selected, ok := strings.CutPrefix(setting, name+"="); ok {
 			value = selected
 		}
 	}
+	return value
+}
+
+// fastDefaultGODEBUG caches the default GODEBUG of each original program
+// directory: establishing it runs the go command once.
+var fastDefaultGODEBUG sync.Map
+
+func fastProgramDefaultGODEBUG(req bashPPEvalRequest) string {
+	key := req.SourceDir
+	if key == "" {
+		key = bashPPModuleRequest(req).Dir
+	}
+	if cached, ok := fastDefaultGODEBUG.Load(key); ok {
+		return cached.(string)
+	}
+	value := bashPPDefaultGODEBUG(context.Background(), req)
+	fastDefaultGODEBUG.Store(key, value)
 	return value
 }
