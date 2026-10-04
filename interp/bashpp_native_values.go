@@ -956,7 +956,7 @@ func (r *Runner) bashPPBridgePointerValue(ptr *bashPPPointer) (bashPPBridgeValue
 		// The pointee is the interface variable, whatever it holds.
 		pointerType = "*" + inner.Interface
 	}
-	return bashPPBridgeValue{Origin: origin, Session: session.id, Kind: "pointer", Type: pointerType, Elements: []bashPPBridgeValue{inner}}, nil
+	return bashPPBridgeValue{Origin: origin, Session: session.id, Kind: "pointer", Type: pointerType, Elements: []bashPPBridgeValue{inner}, Within: r.bashPPTransportWithin(session, ptr)}, nil
 }
 
 func (s *bashPPNativeSession) applyNativePointerUpdates(req bashPPEvalRequest, reply bashPPBridgeResponse) error {

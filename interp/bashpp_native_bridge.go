@@ -104,6 +104,10 @@ type bashPPBridgeValue struct {
 	Elements  []bashPPBridgeValue          `json:"elements,omitempty"`
 	Fields    map[string]bashPPBridgeValue `json:"fields,omitempty"`
 	Entries   []bashPPBridgeEntry          `json:"entries,omitempty"`
+	// Within places a pointer to an array element (or to a subobject of one)
+	// inside the dependency-side storage of the enclosing array; see
+	// bashpp_s374_element_address.go. Only the interpreter sends it.
+	Within *bashPPBridgeWithin `json:"within,omitempty"`
 
 	// NilChannel marks a dependency channel handle whose value is nil. A nil
 	// channel never communicates, so a select arm on it needs no arbitration.
