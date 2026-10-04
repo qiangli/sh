@@ -5177,7 +5177,132 @@ func stmtUpdatesPipeStatus(st *syntax.Stmt) bool {
 	return true
 }
 
+// stmtSync runs one statement. A Go-form statement that carries no
+// redirection takes [Runner.stmtSyncGoForm], whose host frame holds none of
+// the redirection bookkeeping: a recursive Go-form call re-enters stmtSync
+// once per interpreted level.
 func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
+	if len(st.Redirs) == 0 && st.Cmd != nil && bashPPGoFormCommand(st.Cmd) {
+		r.stmtSyncGoForm(ctx, st)
+		return
+	}
+	r.stmtSyncGeneral(ctx, st)
+}
+
+// stmtSyncGoForm is [Runner.stmtSyncGeneral] for a statement with a command
+// and no redirections: the same redirection scope, saved standard streams and
+// status handling, without the descriptor-table snapshots only a redirection
+// can need.
+func (r *Runner) stmtSyncGoForm(ctx context.Context, st *syntax.Stmt) {
+	r.exit.noNegate = false
+
+	scopeIndex := len(r.redirScopes)
+	r.redirScopes = append(r.redirScopes, redirScope{closeAt: -1})
+	r.curStmtPos = st.Pos()
+	r.curStmtEnd = st.End()
+	r.coprocReapedFds = nil
+
+	saved := &stmtStreams{
+		stdin: r.stdin, stdinTTYFallback: r.stdinTTYFallback, stdinDevTTY: r.stdinDevTTY,
+		stdout: r.stdout, stderr: r.stderr,
+		stdinRedirected: r.stdinRedirected, stdinClosed: r.stdinClosed,
+	}
+	defer r.stmtSyncGoFormLeave(scopeIndex, r.asyncStdinExplicit, r.redirMoveCloseFds)
+	if r.bashPPHasFIFOs() {
+		r.redirScopes[scopeIndex].fifoRestoreRefs = saved.fifoRefs
+	}
+	r.redirMoveCloseFds = nil
+
+	r.stmtRunCmd(ctx, st)
+	if !r.redirScopes[scopeIndex].persist {
+		r.stdin, r.stdout, r.stderr = saved.stdin, saved.stdout, saved.stderr
+		r.stdinTTYFallback = saved.stdinTTYFallback
+		r.stdinDevTTY = saved.stdinDevTTY
+		r.stdinRedirected = saved.stdinRedirected
+		r.stdinClosed = saved.stdinClosed
+	}
+}
+
+// stmtStreams is the standard-stream state a statement restores when it ends.
+type stmtStreams struct {
+	stdin            *os.File
+	stdinTTYFallback bool
+	stdinDevTTY      bool
+	stdout, stderr   io.Writer
+	stdinRedirected  bool
+	stdinClosed      bool
+}
+
+// fifoRefs retains the FIFO endpoints among the streams the statement will
+// restore; see [redirScope].
+func (s *stmtStreams) fifoRefs(refs map[*os.File]bool) {
+	bashPPFIFORef(refs, s.stdin)
+	bashPPFIFORef(refs, s.stdout)
+	bashPPFIFORef(refs, s.stderr)
+}
+
+// stmtSyncGoFormLeave undoes what [Runner.stmtSyncGoForm] set up, in the
+// order [Runner.stmtSyncGeneral]'s deferred calls run.
+func (r *Runner) stmtSyncGoFormLeave(scopeIndex int, asyncStdinExplicit bool, redirMoveCloseFds map[int]bool) {
+	r.redirMoveCloseFds = redirMoveCloseFds
+	r.asyncStdinExplicit = asyncStdinExplicit
+	for _, closer := range r.redirScopes[scopeIndex].boundaryClosers {
+		closer.Close()
+	}
+	r.redirScopes = r.redirScopes[:scopeIndex]
+	if r.bashPPHasFIFOs() {
+		r.bashPPReconcileFIFOs()
+	}
+}
+
+// stmtRunCmd runs a statement's command and settles its status: negation,
+// the ERR trap and errexit.
+func (r *Runner) stmtRunCmd(ctx context.Context, st *syntax.Stmt) {
+	if r.exit.ok() && st.Cmd != nil {
+		// A negated stmt suppresses `set -e`-driven exit for the
+		// command it wraps — bash treats `! cmd` like `cmd || true`
+		// for errexit purposes.
+		if st.Negated {
+			oldNoErrExit := r.noErrExit
+			r.noErrExit = true
+			r.cmd(ctx, st.Cmd)
+			r.noErrExit = oldNoErrExit
+			r.exit.noNegate = r.exit.exiting || r.exit.returning || r.exit.fatalExit
+			// Clear any pending exit propagated by inner stmts
+			// under errexit; the outer `!` will set the final
+			// success/failure below.
+			r.exit.exiting = false
+			r.exit.discarding = false
+		} else {
+			r.cmd(ctx, st.Cmd)
+		}
+	}
+	if st.Negated && !r.exit.exiting && !r.exit.returning && !r.exit.fatalExit && !r.exit.noNegate {
+		if r.exit.ok() {
+			r.exit.code = 1
+		} else {
+			r.exit.clear()
+		}
+	} else if errExitExemptByAndOr(st.Cmd) || r.exit.errexitExempt {
+	} else if !r.exit.ok() && !r.noErrExit {
+		if !r.inFunc {
+			prevLineno := r.ecfg.OverrideLineno
+			r.ecfg.OverrideLineno = int(st.Pos().Line())
+			r.trapCallback(ctx, r.trapCallbacks["ERR"], "error")
+			r.ecfg.OverrideLineno = prevLineno
+		}
+		// If the "errexit" option is set and a command failed, exit the shell. Exceptions:
+		//
+		//   conditions (if <cond>, while <cond>, etc)
+		//   part of && or || lists; excluded via "else" above
+		//   preceded by !; excluded via "else" above
+		if r.opts[optErrExit] {
+			r.exit.exiting = true
+		}
+	}
+}
+
+func (r *Runner) stmtSyncGeneral(ctx context.Context, st *syntax.Stmt) {
 	r.exit.noNegate = false
 
 	scopeIndex := len(r.redirScopes)
@@ -5505,48 +5630,7 @@ func (r *Runner) stmtSync(ctx context.Context, st *syntax.Stmt) {
 	}
 	redirsPrepared = true
 	r.curStmtPos = oldCurStmtPos
-	if r.exit.ok() && st.Cmd != nil {
-		// A negated stmt suppresses `set -e`-driven exit for the
-		// command it wraps — bash treats `! cmd` like `cmd || true`
-		// for errexit purposes.
-		if st.Negated {
-			oldNoErrExit := r.noErrExit
-			r.noErrExit = true
-			r.cmd(ctx, st.Cmd)
-			r.noErrExit = oldNoErrExit
-			r.exit.noNegate = r.exit.exiting || r.exit.returning || r.exit.fatalExit
-			// Clear any pending exit propagated by inner stmts
-			// under errexit; the outer `!` will set the final
-			// success/failure below.
-			r.exit.exiting = false
-			r.exit.discarding = false
-		} else {
-			r.cmd(ctx, st.Cmd)
-		}
-	}
-	if st.Negated && !r.exit.exiting && !r.exit.returning && !r.exit.fatalExit && !r.exit.noNegate {
-		if r.exit.ok() {
-			r.exit.code = 1
-		} else {
-			r.exit.clear()
-		}
-	} else if errExitExemptByAndOr(st.Cmd) || r.exit.errexitExempt {
-	} else if !r.exit.ok() && !r.noErrExit {
-		if !r.inFunc {
-			prevLineno := r.ecfg.OverrideLineno
-			r.ecfg.OverrideLineno = int(st.Pos().Line())
-			r.trapCallback(ctx, r.trapCallbacks["ERR"], "error")
-			r.ecfg.OverrideLineno = prevLineno
-		}
-		// If the "errexit" option is set and a command failed, exit the shell. Exceptions:
-		//
-		//   conditions (if <cond>, while <cond>, etc)
-		//   part of && or || lists; excluded via "else" above
-		//   preceded by !; excluded via "else" above
-		if r.opts[optErrExit] {
-			r.exit.exiting = true
-		}
-	}
+	r.stmtRunCmd(ctx, st)
 	if !keepRedirs() {
 		r.stdin, r.stdout, r.stderr = oldIn, oldOut, oldErr
 		r.stdinTTYFallback = oldStdinTTYFallback
@@ -5700,54 +5784,87 @@ func (r *Runner) checkFuncDeclRedirs(ctx context.Context, body *syntax.Stmt) boo
 	return true
 }
 
+// cmd runs one command. Go-form statements and brace groups take a small
+// host frame of their own instead of sharing [Runner.cmdGeneral]'s: a recursive Go-form call
+// re-enters cmd once per interpreted level, and the shell command cases'
+// locals would otherwise be reserved on the host stack at every level. An
+// xtrace run keeps the general path so its prefix is expanded exactly as
+// before.
 func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
+	block, isBlock := cm.(*syntax.Block)
+	if r.opts[optXTrace] || !(isBlock || bashPPGoFormCommand(cm)) {
+		r.cmdGeneral(ctx, cm)
+		return
+	}
 	if r.stop(ctx) {
 		return
 	}
 	if r.bashPPGoTask {
-		defer func() {
-			canceled := r.bashPPTaskCanceled || errors.Is(r.exit.err, context.Canceled) || errors.Is(r.exit.err, context.DeadlineExceeded)
-			if !canceled {
-				r.bashPPTaskFailed = r.exit.code != 0
-				r.bashPPTaskFailCode = r.exit.code
-			}
-			// A failing command is not a safe launch-handshake point: if it is
-			// the function's terminal command, task completion must record and
-			// propagate cancellation before waking the owner. If later shell code
-			// recovers the status, that later successful command can wake it.
-			// A Bash++ return is also unsettled here: `return 7` records a value
-			// with status zero before the result-less function converts it to
-			// status 7. Keep the handshake closed while that return unwinds,
-			// including through enclosing block commands.
-			if r.bashPPConcurrent != nil && !r.bashPPTaskFailed && !r.exit.returning {
-				r.bashPPConcurrent.arm(r.bashPPTaskState)
-			}
-		}()
+		defer r.cmdGoTaskSettled()
 	}
-
-	tracingEnabled := r.opts[optXTrace]
-	trace := r.tracer(cm.Pos())
-
-	switch cm := cm.(type) {
-	case *syntax.SourceBlock:
-		// The complete source unit is prepared before its first statement.
-		// A declaration block has no execution side effect at this point.
+	if isBlock {
+		r.cmdBlock(ctx, block)
 		return
-	case *syntax.BashPPAgenticBlock:
-		saved := r.bashPPAgentic
-		r.bashPPAgentic = true
-		defer func() { r.bashPPAgentic = saved }()
-		r.stmts(ctx, cm.Body.Stmts)
-	case *syntax.Block:
-		// `{ ...; }` is a Go block in the bash++ dialect: a `var` declared
-		// inside it is gone at the closing brace. Shell assignments in the
-		// same braces keep bash's lifetime, which is why only the typed
-		// scope is pushed here. An empty block declares nothing, so it needs
-		// no scope of its own.
-		if r.bashPPScope != nil && len(cm.Stmts) > 0 {
-			defer r.bashPPPushScope()()
-		}
-		r.stmts(ctx, cm.Stmts)
+	}
+	r.cmdGoForm(ctx, cm)
+}
+
+// cmdBlock runs a brace group.
+func (r *Runner) cmdBlock(ctx context.Context, cm *syntax.Block) {
+	// `{ ...; }` is a Go block in the bash++ dialect: a `var` declared
+	// inside it is gone at the closing brace. Shell assignments in the
+	// same braces keep bash's lifetime, which is why only the typed
+	// scope is pushed here. An empty block declares nothing, so it needs
+	// no scope of its own.
+	if r.bashPPScope != nil && len(cm.Stmts) > 0 {
+		defer r.bashPPPushScope()()
+	}
+	r.stmts(ctx, cm.Stmts)
+}
+
+// cmdGoTaskSettled records a Go task's command outcome once the command has
+// run; see the launch-handshake notes inside.
+func (r *Runner) cmdGoTaskSettled() {
+	canceled := r.bashPPTaskCanceled || errors.Is(r.exit.err, context.Canceled) || errors.Is(r.exit.err, context.DeadlineExceeded)
+	if !canceled {
+		r.bashPPTaskFailed = r.exit.code != 0
+		r.bashPPTaskFailCode = r.exit.code
+	}
+	// A failing command is not a safe launch-handshake point: if it is
+	// the function's terminal command, task completion must record and
+	// propagate cancellation before waking the owner. If later shell code
+	// recovers the status, that later successful command can wake it.
+	// A Bash++ return is also unsettled here: `return 7` records a value
+	// with status zero before the result-less function converts it to
+	// status 7. Keep the handshake closed while that return unwinds,
+	// including through enclosing block commands.
+	if r.bashPPConcurrent != nil && !r.bashPPTaskFailed && !r.exit.returning {
+		r.bashPPConcurrent.arm(r.bashPPTaskState)
+	}
+}
+
+// bashPPGoFormCommand reports whether cm is one of the statements
+// [Runner.cmdGoForm] runs.
+func bashPPGoFormCommand(cm syntax.Command) bool {
+	switch cm.(type) {
+	case *syntax.BashPPDecl, *syntax.BashPPConstGroup, *syntax.BashPPShortDecl,
+		*syntax.BashPPGo, *syntax.BashPPSend, *syntax.BashPPReceive,
+		*syntax.BashPPClose, *syntax.BashPPSelect, *syntax.BashPPRange,
+		*syntax.BashPPAssign, *syntax.BashPPCall, *syntax.BashPPCommandCall,
+		*syntax.BashPPFuncDecl, *syntax.BashPPReturn, *syntax.BashPPDefer,
+		*syntax.BashPPSwitch, *syntax.BashPPImport, *syntax.BashPPIf,
+		*syntax.BashPPFor, *syntax.BashPPForAssign, *syntax.BashPPIncDec,
+		*syntax.BashPPUpdate, *syntax.BashPPBranch, *syntax.BashPPLabeled,
+		*syntax.BashPPGoto:
+		return true
+	}
+	return false
+}
+
+// cmdGoForm runs a Go-form statement and reports whether cm was one. It must
+// stay in step with [bashPPGoFormCommand].
+func (r *Runner) cmdGoForm(ctx context.Context, cm syntax.Command) bool {
+	switch cm := cm.(type) {
 	// Statements that can name a type are rebound against the enclosing
 	// generic frame's type arguments before they run, on a clone: the AST is
 	// shared by every instantiation, so `var zero T` must not be rewritten in
@@ -5810,6 +5927,35 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 		}
 	case *syntax.BashPPGoto:
 		r.bashPPGotoStmt(cm)
+	default:
+		return false
+	}
+	return true
+}
+
+func (r *Runner) cmdGeneral(ctx context.Context, cm syntax.Command) {
+	if r.stop(ctx) {
+		return
+	}
+	if r.bashPPGoTask {
+		defer r.cmdGoTaskSettled()
+	}
+
+	tracingEnabled := r.opts[optXTrace]
+	trace := r.tracer(cm.Pos())
+
+	switch cm := cm.(type) {
+	case *syntax.SourceBlock:
+		// The complete source unit is prepared before its first statement.
+		// A declaration block has no execution side effect at this point.
+		return
+	case *syntax.BashPPAgenticBlock:
+		saved := r.bashPPAgentic
+		r.bashPPAgentic = true
+		defer func() { r.bashPPAgentic = saved }()
+		r.stmts(ctx, cm.Body.Stmts)
+	case *syntax.Block:
+		r.cmdBlock(ctx, cm)
 	case *syntax.Subshell:
 		r2 := r.subshell(false)
 		if bg, _ := ctx.Value(bgProcCtxKey{}).(*bgProc); bg != nil && bg.carrierRootSubshell == cm {
@@ -8714,6 +8860,9 @@ func (r *Runner) cmd(ctx context.Context, cm syntax.Command) {
 			r2.exit.discarding = false
 		}()
 	default:
+		if r.cmdGoForm(ctx, cm) {
+			return
+		}
 		// Should only happen if we forgot a case above.
 		r.errf("unhandled command node: %T\n", cm)
 		r.exit.code = 1

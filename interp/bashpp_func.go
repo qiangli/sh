@@ -2283,97 +2283,8 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 	}
 	shortFailureMark := r.bashPPShortFailureSeq
 
-	// Parameters and named results are typed bindings; a shell assignment in
-	// the body writes through to them, which is what lets a named result be
-	// set with `n=5` and read back by a bare return.
-	//
-	// The variadic parameter binds the REMAINING arguments as an indexed
-	// variable, so the body reads them with the array spellings the shell
-	// already has — `${rest[@]}`, `${#rest[@]}` — and can forward them with
-	// `rest...`. Zero remaining arguments still bind the name, to an empty
-	// list: a variadic parameter is never unset, exactly as a nil slice in Go
-	// is still a slice.
-	for i, param := range params {
-		if param.variadic {
-			// An original Go program's variadic parameter IS a slice: it is
-			// printed as one, measured with len, indexed, resliced and passed
-			// on. The indexed shell binding below carries none of that, so a
-			// Go-source frame binds a real slice cell instead.
-			if r.bashPPGoSource && param.name != "" {
-				if !r.goSourceBindVariadic(param, args[i:], callCells[min(i, len(callCells)):], callSpread) {
-					return nil
-				}
-				break
-			}
-			if param.name != "" {
-				rest := append([]string(nil), args[i:]...)
-				_ = r.bashPPScope.declare(param.name,
-					expand.Variable{Set: true, Kind: expand.Indexed, List: rest}, false)
-				// The indexed binding above is what lets the body keep using
-				// `${rest[@]}`; this collection meta rides alongside it so a
-				// two-variable `for i, v := range rest` sees each element's value
-				// and declared type instead of falling through to the scalar
-				// range path, which has no notion of a list at all and would
-				// treat len(rest) as an integer to count up to.
-				r.bashPPScope.lookup(param.name).valueMeta = &bashPPCollectionMeta{
-					kind:     "slice",
-					typ:      &syntax.BashPPCollectionType{Kind: "slice", Element: param.typ},
-					sequence: make([]*bashPPCollectionMeta, len(rest)),
-				}
-			}
-			break
-		}
-		if param.name == "" {
-			continue
-		}
-		if i < len(callCells) && callCells[i] != nil {
-			copy, err := r.goSourceExpectedCell(callCells[i], param.typ)
-			if err != nil {
-				r.exit.fatal(err)
-				return nil
-			}
-			// The parameter owns a private copy of the argument. A cell
-			// the expected-type conversion already made is that copy.
-			if copy == callCells[i] {
-				copy = bashPPCopyAssignmentCell(copy)
-			}
-			copy.channel = nil
-			copy.channelOwner = nil
-			copy.constant = false
-			copy.vr.ReadOnly = false
-			copy.vr.Exported = false
-			if err := r.bashPPBindInterfaceParam(copy, param.typ); err != nil {
-				r.errf("%v\n", err)
-				r.exit = exitStatus{code: 2}
-				return nil
-			}
-			if param.typ != nil {
-				copy.declType = param.typ
-			}
-			r.bashPPScope.entries[param.name] = copy
-		} else {
-			_ = r.bashPPScope.declare(param.name,
-				expand.Variable{Set: true, Kind: expand.String, Str: args[i]}, false)
-		}
-		if i < len(callChannels) && callChannels[i] != nil {
-			cell := r.bashPPScope.lookup(param.name)
-			cell.channel, cell.channelOwner = callChannels[i], r.bashPPConcurrent
-		}
-		if i < len(callInterfaces) && callInterfaces[i] != nil && !(r.bashPPGoSource && i < len(callCells) && callCells[i] != nil) {
-			cell := r.bashPPScope.lookup(param.name)
-			cell.interfaceValue = callInterfaces[i]
-		}
-		if base := strings.TrimPrefix(param.declared, "*"); base != "" {
-			if _, ok := r.bashPPTypes[base]; ok {
-				cell := r.bashPPScope.lookup(param.name)
-				cell.typeName = base
-				cell.pointer = r.bashPPDeclaredPointer(param.declared)
-				cell.nilPointer = cell.pointer && args[i] == ""
-				if r.bashPPGoSource && cell.pointer {
-					cell.nilPointer = cell.view().pointerValue == nil
-				}
-			}
-		}
+	if !r.bashPPBindParams(params, args, callCells, callChannels, callInterfaces, callSpread) {
+		return nil
 	}
 	resultNames := bashppResultNames(fn.bodyResults())
 	if r.bashPPGoSource {
@@ -2398,7 +2309,7 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 		decorated = true
 		decoratedResults, _ = r.bashPPInvokeDecorated(ctx, fn, args, callCells, callChannels, resultNames, bashPPDecoratorRungs(fn.decl.Decorators, fn.advised))
 	} else if body := fn.body(); body != nil {
-		r.stmts(ctx, body.Stmts)
+		r.bashPPRunBody(ctx, body.Stmts)
 	}
 
 	// Results are settled BEFORE the deferred calls run, as Go sets a
@@ -2454,6 +2365,131 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 		}
 		return nil
 	}
+	results, settled := r.bashPPSettleResultCells(fn, results, resultNames, decorated)
+	if !settled {
+		return nil
+	}
+	// A status recover used to REPORT its answer — "nothing to recover",
+	// which is what the bare `recover()` of a guard like `defer rec()` says
+	// on a frame that did not panic — is that call's, not this frame's. A
+	// Go function has no status of its own, so the answer is consumed at
+	// the func boundary too: left in place it made a task whose last frame
+	// ended on such a guard a failed task, and a program whose main did so
+	// exit 1. The stamp is what tells this status from a real failure that
+	// merely inherited the exemption.
+	if r.bashPPGoSource && r.exit.recoverSeq != 0 && r.exit.errexitExempt && !r.exit.exiting && !r.exit.fatalExit {
+		r.exit.code, r.exit.err, r.exit.recoverSeq, r.exit.errexitExempt = 0, nil, 0, false
+	}
+	// A Go-form return is consumed at the func boundary, exactly as a shell
+	// function's `return` is in [Runner.call]; it must not unwind the caller.
+	r.exit.returning = false
+	return results
+}
+
+// bashPPBindParams binds a call's arguments to the callee's parameters in the
+// frame [Runner.bashPPInvoke] has just entered, and reports whether the call
+// may proceed. It is a function of its own, as [Runner.bashPPSettleResultCells]
+// is, so that its locals are not held on the host stack for the whole of every
+// interpreted call level.
+func (r *Runner) bashPPBindParams(params []bashPPParam, args []string, callCells []*bashPPCell, callChannels []*bashPPChannel, callInterfaces []*bashPPInterfaceValue, callSpread bool) bool {
+	// Parameters and named results are typed bindings; a shell assignment in
+	// the body writes through to them, which is what lets a named result be
+	// set with `n=5` and read back by a bare return.
+	//
+	// The variadic parameter binds the REMAINING arguments as an indexed
+	// variable, so the body reads them with the array spellings the shell
+	// already has — `${rest[@]}`, `${#rest[@]}` — and can forward them with
+	// `rest...`. Zero remaining arguments still bind the name, to an empty
+	// list: a variadic parameter is never unset, exactly as a nil slice in Go
+	// is still a slice.
+	for i, param := range params {
+		if param.variadic {
+			// An original Go program's variadic parameter IS a slice: it is
+			// printed as one, measured with len, indexed, resliced and passed
+			// on. The indexed shell binding below carries none of that, so a
+			// Go-source frame binds a real slice cell instead.
+			if r.bashPPGoSource && param.name != "" {
+				if !r.goSourceBindVariadic(param, args[i:], callCells[min(i, len(callCells)):], callSpread) {
+					return false
+				}
+				break
+			}
+			if param.name != "" {
+				rest := append([]string(nil), args[i:]...)
+				_ = r.bashPPScope.declare(param.name,
+					expand.Variable{Set: true, Kind: expand.Indexed, List: rest}, false)
+				// The indexed binding above is what lets the body keep using
+				// `${rest[@]}`; this collection meta rides alongside it so a
+				// two-variable `for i, v := range rest` sees each element's value
+				// and declared type instead of falling through to the scalar
+				// range path, which has no notion of a list at all and would
+				// treat len(rest) as an integer to count up to.
+				r.bashPPScope.lookup(param.name).valueMeta = &bashPPCollectionMeta{
+					kind:     "slice",
+					typ:      &syntax.BashPPCollectionType{Kind: "slice", Element: param.typ},
+					sequence: make([]*bashPPCollectionMeta, len(rest)),
+				}
+			}
+			break
+		}
+		if param.name == "" {
+			continue
+		}
+		if i < len(callCells) && callCells[i] != nil {
+			copy, err := r.goSourceExpectedCell(callCells[i], param.typ)
+			if err != nil {
+				r.exit.fatal(err)
+				return false
+			}
+			// The parameter owns a private copy of the argument. A cell
+			// the expected-type conversion already made is that copy.
+			if copy == callCells[i] {
+				copy = bashPPCopyAssignmentCell(copy)
+			}
+			copy.channel = nil
+			copy.channelOwner = nil
+			copy.constant = false
+			copy.vr.ReadOnly = false
+			copy.vr.Exported = false
+			if err := r.bashPPBindInterfaceParam(copy, param.typ); err != nil {
+				r.errf("%v\n", err)
+				r.exit = exitStatus{code: 2}
+				return false
+			}
+			if param.typ != nil {
+				copy.declType = param.typ
+			}
+			r.bashPPScope.entries[param.name] = copy
+		} else {
+			_ = r.bashPPScope.declare(param.name,
+				expand.Variable{Set: true, Kind: expand.String, Str: args[i]}, false)
+		}
+		if i < len(callChannels) && callChannels[i] != nil {
+			cell := r.bashPPScope.lookup(param.name)
+			cell.channel, cell.channelOwner = callChannels[i], r.bashPPConcurrent
+		}
+		if i < len(callInterfaces) && callInterfaces[i] != nil && !(r.bashPPGoSource && i < len(callCells) && callCells[i] != nil) {
+			cell := r.bashPPScope.lookup(param.name)
+			cell.interfaceValue = callInterfaces[i]
+		}
+		if base := strings.TrimPrefix(param.declared, "*"); base != "" {
+			if _, ok := r.bashPPTypes[base]; ok {
+				cell := r.bashPPScope.lookup(param.name)
+				cell.typeName = base
+				cell.pointer = r.bashPPDeclaredPointer(param.declared)
+				cell.nilPointer = cell.pointer && args[i] == ""
+				if r.bashPPGoSource && cell.pointer {
+					cell.nilPointer = cell.view().pointerValue == nil
+				}
+			}
+		}
+	}
+	return true
+}
+
+// bashPPSettleResultCells builds the result cells a finished frame hands to
+// its caller, and reports whether the results are valid.
+func (r *Runner) bashPPSettleResultCells(fn *bashPPFunc, results, resultNames []string, decorated bool) ([]string, bool) {
 	// A named result may have been reassigned by a deferred call, so it is
 	// read here rather than trusted from before the defers ran.
 	results = r.bashPPFinalResults(results, resultNames)
@@ -2484,7 +2520,7 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 		}
 		if i < len(resultTypes) && !r.bashPPCheckChannelResult(fn, resultTypes[i], source) {
 			r.bashPPResultCells = nil
-			return nil
+			return nil, false
 		}
 		if source != nil {
 			r.bashPPResultCells[i] = bashPPCopyAssignmentCell(source)
@@ -2497,27 +2533,13 @@ func (r *Runner) bashPPInvoke(ctx context.Context, fn *bashPPFunc, args []string
 			if err != nil {
 				r.exit.fatal(err)
 				r.bashPPResultCells = nil
-				return nil
+				return nil, false
 			}
 			r.bashPPResultCells[i].declType = resultTypes[i]
 			r.bashPPResultCells[i].typeName = bashPPNamedTypeBase(resultTypes[i])
 		}
 	}
-	// A status recover used to REPORT its answer — "nothing to recover",
-	// which is what the bare `recover()` of a guard like `defer rec()` says
-	// on a frame that did not panic — is that call's, not this frame's. A
-	// Go function has no status of its own, so the answer is consumed at
-	// the func boundary too: left in place it made a task whose last frame
-	// ended on such a guard a failed task, and a program whose main did so
-	// exit 1. The stamp is what tells this status from a real failure that
-	// merely inherited the exemption.
-	if r.bashPPGoSource && r.exit.recoverSeq != 0 && r.exit.errexitExempt && !r.exit.exiting && !r.exit.fatalExit {
-		r.exit.code, r.exit.err, r.exit.recoverSeq, r.exit.errexitExempt = 0, nil, 0, false
-	}
-	// A Go-form return is consumed at the func boundary, exactly as a shell
-	// function's `return` is in [Runner.call]; it must not unwind the caller.
-	r.exit.returning = false
-	return results
+	return results, true
 }
 
 // bashPPFrame is one Go-form invocation's saved caller state.
@@ -2900,98 +2922,14 @@ func (r *Runner) bashPPReturnStmt(ctx context.Context, ret *syntax.BashPPReturn)
 		return
 	}
 	if r.bashPPBridgeHandles(ret.Call) {
-		values, err := r.bashPPBridgeCall(ctx, ret.Call)
-		if err != nil {
-			if !r.bashPPPanicking() {
-				r.exit.fatal(err)
-			}
-			return
-		}
-		result := bashPPReturnState{active: true}
-		for _, value := range values {
-			var cell *bashPPCell
-			if r.bashPPGoSource {
-				// The dependency's result crosses as the value it is —
-				// a nil *map[int]bool from reflect keeps its type name —
-				// so a declared interface result can box it with that
-				// dynamic type and a caller's assertion sees it (bug510).
-				cell = r.goSourceNativeValueCell(value)
-			} else if scalar, err := value.scalar(); err == nil {
-				cell = &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarString(scalar.value)}, scalarKind: scalar.value.Kind(), typeName: value.Type, declType: &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.Type}}}
-			} else {
-				copy := value
-				cell = &bashPPCell{vr: expand.NewObject(&copy)}
-			}
-			result.values = append(result.values, cell.vr.String())
-			result.cells = append(result.cells, cell)
-		}
-		r.bashPPReturn = result
-		r.exit.returning = true
+		r.bashPPReturnBridgeCall(ctx, ret)
 		return
 	}
 	if ret.Call != nil {
-		// `return float64(f)` is a conversion, not a call; the Go front end
-		// cannot tell the two apart from syntax alone and delivers both as a
-		// call, so the conversion is recognized here rather than refused as an
-		// undeclared callable.
-		if conv, ok := r.bashPPConversionCall(ret.Call); ok {
-			r.bashPPReturnScalarExpr(conv)
+		if r.bashPPReturnCallValue(ret) {
 			return
 		}
-		// `return new(T)` likewise arrives as a call; it is the allocation
-		// the Go front end spells as a NewExpr everywhere else.
-		if alloc, ok := r.goSourceNewCall(ret.Call); ok {
-			r.bashPPReturnScalarExpr(alloc)
-			return
-		}
-		if cell, handled, err := r.goSourceBuiltinResult(ret.Call); handled {
-			if err != nil {
-				r.bashPPShortFailureSeq++
-				return
-			}
-			r.bashPPReturn = bashPPReturnState{active: true, values: []string{cell.vr.String()}, cells: []*bashPPCell{bashPPCopyAssignmentCell(cell)}}
-			r.exit.returning = true
-			return
-		}
-		// `return recover()`: the predeclared recover yields the interface
-		// value it recovered (or the nil interface), never a declared callable.
-		if cell, handled := r.bashPPReturnRecover(ret.Call); handled {
-			r.bashPPReturn = bashPPReturnState{active: true, values: []string{cell.vr.String()}, cells: []*bashPPCell{cell}}
-			r.exit.returning = true
-			return
-		}
-		fn, ok := r.bashPPLookupFunc(ret.Call)
-		if !ok {
-			// A lookup that raised — a method selected on a nil interface —
-			// is unwinding the frame; marking it failed as well would make
-			// the frame exit 2 after a deferred call has recovered the panic.
-			if r.bashPPPanicking() {
-				return
-			}
-			r.bashPPShortFailureSeq++
-			if r.exit.code == 0 {
-				r.errf("BASHPP-ERETURN-CALL: return requires a declared callable\n")
-				r.exit = exitStatus{code: 2}
-			}
-			return
-		}
-		args, ok := r.bashPPCallValues(ret.Call, fn)
-		if !ok {
-			r.bashPPShortFailureSeq++
-			return
-		}
-		failureMark := r.bashPPShortFailureSeq
-		values := r.bashPPInvoke(ctx, fn, args)
-		if r.exit.code != 0 && !r.bashPPPanicking() {
-			r.bashPPShortFailureSeq++
-			return
-		}
-		if r.bashPPPanicking() || r.exit.exiting || r.exit.fatalExit || r.exit.err != nil || r.bashPPShortFailureSeq != failureMark {
-			return
-		}
-		cells := append([]*bashPPCell(nil), r.bashPPResultCells...)
-		r.bashPPReturn = bashPPReturnState{active: true, values: values, cells: cells}
-		r.exit.returning = true
+		r.bashPPReturnCallInvoke(ctx, ret)
 		return
 	}
 	if ret.FuncLit != nil {
@@ -3008,6 +2946,119 @@ func (r *Runner) bashPPReturnStmt(ctx context.Context, ret *syntax.BashPPReturn)
 		r.bashPPReturnScalarExpr(ret.Expr)
 		return
 	}
+	r.bashPPReturnWords(ret)
+}
+
+// The helpers below are the arms of [Runner.bashPPReturnStmt]. Each has a host
+// frame of its own: `return f(x)` re-enters the evaluator once per interpreted
+// call level, and one shared frame would reserve every arm's locals at each.
+
+// bashPPReturnBridgeCall returns the results of a dependency call.
+func (r *Runner) bashPPReturnBridgeCall(ctx context.Context, ret *syntax.BashPPReturn) {
+	values, err := r.bashPPBridgeCall(ctx, ret.Call)
+	if err != nil {
+		if !r.bashPPPanicking() {
+			r.exit.fatal(err)
+		}
+		return
+	}
+	result := bashPPReturnState{active: true}
+	for _, value := range values {
+		var cell *bashPPCell
+		if r.bashPPGoSource {
+			// The dependency's result crosses as the value it is —
+			// a nil *map[int]bool from reflect keeps its type name —
+			// so a declared interface result can box it with that
+			// dynamic type and a caller's assertion sees it (bug510).
+			cell = r.goSourceNativeValueCell(value)
+		} else if scalar, err := value.scalar(); err == nil {
+			cell = &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: bashPPScalarString(scalar.value)}, scalarKind: scalar.value.Kind(), typeName: value.Type, declType: &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.Type}}}
+		} else {
+			copy := value
+			cell = &bashPPCell{vr: expand.NewObject(&copy)}
+		}
+		result.values = append(result.values, cell.vr.String())
+		result.cells = append(result.cells, cell)
+	}
+	r.bashPPReturn = result
+	r.exit.returning = true
+}
+
+// bashPPReturnCallValue handles a returned call that is not a call of a
+// declared callable — a conversion, an allocation, a builtin, recover — and
+// reports whether it was one.
+func (r *Runner) bashPPReturnCallValue(ret *syntax.BashPPReturn) bool {
+	// `return float64(f)` is a conversion, not a call; the Go front end
+	// cannot tell the two apart from syntax alone and delivers both as a
+	// call, so the conversion is recognized here rather than refused as an
+	// undeclared callable.
+	if conv, ok := r.bashPPConversionCall(ret.Call); ok {
+		r.bashPPReturnScalarExpr(conv)
+		return true
+	}
+	// `return new(T)` likewise arrives as a call; it is the allocation
+	// the Go front end spells as a NewExpr everywhere else.
+	if alloc, ok := r.goSourceNewCall(ret.Call); ok {
+		r.bashPPReturnScalarExpr(alloc)
+		return true
+	}
+	if cell, handled, err := r.goSourceBuiltinResult(ret.Call); handled {
+		if err != nil {
+			r.bashPPShortFailureSeq++
+			return true
+		}
+		r.bashPPReturn = bashPPReturnState{active: true, values: []string{cell.vr.String()}, cells: []*bashPPCell{bashPPCopyAssignmentCell(cell)}}
+		r.exit.returning = true
+		return true
+	}
+	// `return recover()`: the predeclared recover yields the interface
+	// value it recovered (or the nil interface), never a declared callable.
+	if cell, handled := r.bashPPReturnRecover(ret.Call); handled {
+		r.bashPPReturn = bashPPReturnState{active: true, values: []string{cell.vr.String()}, cells: []*bashPPCell{cell}}
+		r.exit.returning = true
+		return true
+	}
+	return false
+}
+
+// bashPPReturnCallInvoke returns the results of calling a declared callable.
+func (r *Runner) bashPPReturnCallInvoke(ctx context.Context, ret *syntax.BashPPReturn) {
+	fn, ok := r.bashPPLookupFunc(ret.Call)
+	if !ok {
+		// A lookup that raised — a method selected on a nil interface —
+		// is unwinding the frame; marking it failed as well would make
+		// the frame exit 2 after a deferred call has recovered the panic.
+		if r.bashPPPanicking() {
+			return
+		}
+		r.bashPPShortFailureSeq++
+		if r.exit.code == 0 {
+			r.errf("BASHPP-ERETURN-CALL: return requires a declared callable\n")
+			r.exit = exitStatus{code: 2}
+		}
+		return
+	}
+	args, ok := r.bashPPCallValues(ret.Call, fn)
+	if !ok {
+		r.bashPPShortFailureSeq++
+		return
+	}
+	failureMark := r.bashPPShortFailureSeq
+	values := r.bashPPInvoke(ctx, fn, args)
+	if r.exit.code != 0 && !r.bashPPPanicking() {
+		r.bashPPShortFailureSeq++
+		return
+	}
+	if r.bashPPPanicking() || r.exit.exiting || r.exit.fatalExit || r.exit.err != nil || r.bashPPShortFailureSeq != failureMark {
+		return
+	}
+	cells := append([]*bashPPCell(nil), r.bashPPResultCells...)
+	r.bashPPReturn = bashPPReturnState{active: true, values: values, cells: cells}
+	r.exit.returning = true
+}
+
+// bashPPReturnWords returns shell-word results.
+func (r *Runner) bashPPReturnWords(ret *syntax.BashPPReturn) {
 	vals := make([]string, len(ret.Results))
 	cells := make([]*bashPPCell, len(ret.Results))
 	for i, w := range ret.Results {
@@ -3023,6 +3074,17 @@ func (r *Runner) bashPPReturnStmt(ctx context.Context, ret *syntax.BashPPReturn)
 // bashPPReturnScalarExpr settles a single scalar result, retaining the value's
 // type so a defined type reaches the caller as itself.
 func (r *Runner) bashPPReturnScalarExpr(expr syntax.BashPPExpr) {
+	if r.bashPPReturnValueCell(expr) {
+		return
+	}
+	r.bashPPReturnScalarValue(expr)
+}
+
+// bashPPReturnValueCell handles a returned expression whose value is carried
+// by a cell rather than computed as a scalar, and reports whether expr was
+// one. It is separate from [Runner.bashPPReturnScalarValue] so that neither
+// reserves the other's locals on the host stack of a recursive return.
+func (r *Runner) bashPPReturnValueCell(expr syntax.BashPPExpr) bool {
 	// Only the mirrored method frame's own returned expression may defer an
 	// imported composite to the callback worker's declared reflect result type.
 	// Locals and nested helper returns inside the callback still materialise in
@@ -3041,32 +3103,32 @@ func (r *Runner) bashPPReturnScalarExpr(expr syntax.BashPPExpr) {
 			if err != nil {
 				r.exit.fatal(&goSourceError{prefix: r.bashErrPrefix(expr.Pos()), err: err})
 				r.bashPPShortFailureSeq++
-				return
+				return true
 			}
 			cell := goSourceNativeValueCell(value)
 			r.bashPPReturn = bashPPReturnState{active: true, values: []string{cell.vr.String()}, cells: []*bashPPCell{cell}}
 			r.exit.returning = true
-			return
+			return true
 		}
 	}
 	if cell, handled, err := r.goSourceNilValueCell(expr); handled {
 		if err != nil {
 			r.exit.fatal(err)
-			return
+			return true
 		}
 		r.bashPPReturn = bashPPReturnState{active: true, values: []string{cell.vr.String()}, cells: []*bashPPCell{cell}}
 		r.exit.returning = true
-		return
+		return true
 	}
 
 	if cell, handled, err := r.goSourceChannelValueCell(expr); handled {
 		if err != nil {
 			r.bashPPGoSendError(expr, err)
-			return
+			return true
 		}
 		r.bashPPReturn = bashPPReturnState{active: true, values: []string{cell.vr.String()}, cells: []*bashPPCell{cell}}
 		r.exit.returning = true
-		return
+		return true
 	}
 	// An imported value returned as itself — `return color.RGBAModel`,
 	// `return image.Rect(…)` — crosses back as the authenticated native handle
@@ -3078,16 +3140,16 @@ func (r *Runner) bashPPReturnScalarExpr(expr syntax.BashPPExpr) {
 			// Native evaluation may already have recorded a Go panic or exit.
 			// Keep that state so deferred recover and cancellation can unwind.
 			if errors.Is(err, errBashPPScalarInterrupted) || r.bashPPPanicking() || r.exit.exiting || r.exit.fatalExit {
-				return
+				return true
 			}
 			r.exit.fatal(&goSourceError{prefix: r.bashErrPrefix(expr.Pos()), err: err})
 			r.bashPPShortFailureSeq++
-			return
+			return true
 		}
 		cell := goSourceNativeValueCell(value)
 		r.bashPPReturn = bashPPReturnState{active: true, values: []string{cell.vr.String()}, cells: []*bashPPCell{cell}}
 		r.exit.returning = true
-		return
+		return true
 	}
 	// A returned value need not be scalar: `return &V{…}`, `return *p` and
 	// `return v.Inner` all name storage the caller receives as a value, and
@@ -3098,18 +3160,23 @@ func (r *Runner) bashPPReturnScalarExpr(expr syntax.BashPPExpr) {
 		// is unwinding; the interrupt is not a diagnostic, and reporting
 		// it would exit 2 after a deferred recover has caught the panic.
 		if errors.Is(structuredErr, errBashPPScalarInterrupted) || r.bashPPPanicking() || r.exit.exiting || r.exit.fatalExit {
-			return
+			return true
 		}
 		r.errf("%v\n", structuredErr)
 		r.exit = exitStatus{code: 2}
 		r.bashPPShortFailureSeq++
-		return
+		return true
 	}
 	if structured != nil {
 		r.bashPPReturn = bashPPReturnState{active: true, values: []string{structured.vr.String()}, cells: []*bashPPCell{structured}}
 		r.exit.returning = true
-		return
+		return true
 	}
+	return false
+}
+
+// bashPPReturnScalarValue returns the scalar expr evaluates to.
+func (r *Runner) bashPPReturnScalarValue(expr syntax.BashPPExpr) {
 	value, err := r.bashPPEvalScalarExpr(expr)
 	if err != nil {
 		if errors.Is(err, errBashPPScalarInterrupted) {

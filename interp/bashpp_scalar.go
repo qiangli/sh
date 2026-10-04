@@ -95,67 +95,7 @@ func (r *Runner) bashPPEvalScalarExpr(expr syntax.BashPPExpr) (result bashPPScal
 		value, err := bashPPBasicScalar(x)
 		return value, err
 	case *syntax.BashPPCall:
-		if r.bashPPGoSource && bashPPRecoverExpr(x) && r.bashPPFuncs["recover"] == nil && (r.bashPPScope == nil || r.bashPPScope.lookup("recover") == nil) {
-			iv, _ := r.bashPPRecoverInterfaceValue()
-			if iv.cell == nil {
-				return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-NIL: recover returned nil interface")
-			}
-			return r.bashPPScalarFromCell(iv.cell), nil
-		}
-		if v, handled, err := r.bashPPComplexBuiltin(x); handled {
-			return v, err
-		}
-		if x.CalleeExpr != nil {
-			if r.bashPPGoSource {
-				return r.bashPPScalarFuncCall(x)
-			}
-			return bashPPScalar{}, fmt.Errorf("gosource: computed call runtime is not implemented")
-		}
-		// An immediately-invoked literal — `if func() bool {…}() {…}` — is a
-		// call whose callee the lookup already resolves from the literal.
-		if x.FuncLit != nil {
-			return r.bashPPScalarFuncCall(x)
-		}
-		if len(x.Fun) == 0 {
-			return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-FORM: unsupported scalar call")
-		}
-		// A selector callee is a method value — `v.Abs()`, `p.q.M()` — which
-		// the callable lookup resolves against the receiver's type. Only the
-		// bare `len`/`cap`/`copy`/`min`/`max` spellings are builtins with a
-		// scalar result.
-		if len(x.Fun) > 1 || (x.Fun[0].Value != "len" && x.Fun[0].Value != "cap" && x.Fun[0].Value != "copy" && x.Fun[0].Value != "min" && x.Fun[0].Value != "max") {
-			return r.bashPPScalarFuncCall(x)
-		}
-		name := x.Fun[0].Value
-		if r.bashPPFuncs[name] != nil || (r.bashPPScope != nil && r.bashPPScope.lookup(name) != nil) {
-			return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-CALL: scalar %s requires the unshadowed builtin", name)
-		}
-		// `copy(dst, src)` and `min`/`max` used as values — `if copy(s1, s2)
-		// != n`, `1 + max(a, b)` — share the general builtin evaluator rather
-		// than the len/cap-only path below.
-		if name == "copy" || name == "min" || name == "max" {
-			cell, produced := r.bashPPRunValueBuiltin(name, x)
-			if !produced || cell == nil {
-				return bashPPScalar{}, errBashPPScalarInterrupted
-			}
-			return r.bashPPScalarFromCell(cell), nil
-		}
-		if cell, ok := r.goSourceStaticArrayLength(name, x); ok {
-			return r.bashPPScalarFromCell(cell), nil
-		}
-		args := make([]bashPPBuiltinArg, len(x.Args))
-		for i := range x.Args {
-			var err error
-			args[i], err = r.goSourceBuiltinArg(x, i)
-			if err != nil {
-				return bashPPScalar{}, err
-			}
-		}
-		cell, err := r.bashPPBuiltinLength(name, x, args)
-		if err != nil {
-			return bashPPScalar{}, err
-		}
-		return r.bashPPScalarFromCell(cell), nil
+		return r.bashPPEvalScalarCall(expr, x)
 	case *syntax.BashPPIdent:
 		if x.Name.Value == "nil" {
 			return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-NIL: nil is not a scalar")
@@ -164,194 +104,302 @@ func (r *Runner) bashPPEvalScalarExpr(expr syntax.BashPPExpr) (result bashPPScal
 	case *syntax.BashPPParenExpr:
 		return r.bashPPEvalScalarExpr(x.X)
 	case *syntax.BashPPUnaryExpr:
-		// A Go receive is spelled as a unary operator but is a channel
-		// operation, not arithmetic. See bashpp_chan_value.go.
-		if value, handled, err := r.bashPPGoReceiveScalar(x); handled {
-			return value, err
-		}
-		v, err := r.bashPPEvalScalarExpr(x.X)
-		if err != nil {
-			return bashPPScalar{}, err
-		}
-		return r.bashPPUnaryScalar(bashPPOpToken(x.Op.Value), v)
+		return r.bashPPEvalScalarUnary(expr, x)
 	case *syntax.BashPPBinaryExpr:
-		op := bashPPOpToken(x.Op.Value)
-		if op == token.EQL || op == token.NEQ {
-			ok, err := r.bashPPCompareExpr(x.X, op, x.Y)
-			if err == nil {
-				return bashPPScalar{value: constant.MakeBool(ok)}, nil
-			}
-			if !bashPPComparableFallback(err) {
-				return bashPPScalar{}, err
-			}
-		}
-		left, err := r.bashPPEvalScalarExpr(x.X)
-		if err != nil {
-			return bashPPScalar{}, err
-		}
-		if op == token.LAND || op == token.LOR {
-			if left.value.Kind() != constant.Bool {
-				return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-OPERAND: logical operand must be boolean")
-			}
-			if known, boolean := r.bashPPBooleanExprShape(x.Y); known && !boolean {
-				return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-OPERAND: logical operand must be boolean")
-			}
-			truth := constant.BoolVal(left.value)
-			if op == token.LAND && !truth || op == token.LOR && truth {
-				return left, nil
-			}
-		}
-		right, err := r.bashPPEvalScalarExpr(x.Y)
-		if err != nil {
-			return bashPPScalar{}, err
-		}
-		return r.bashPPBinaryScalar(bashPPOpToken(x.Op.Value), left, right)
+		return r.bashPPEvalScalarBinary(expr, x)
 	case *syntax.BashPPTypeAssertExpr:
-		// `fmt.Println(i.(string))`: a one-result assertion used as a value.
-		// The comma-ok spelling has its own statement forms; here a failure is
-		// Go's panic, which surfaces as this expression's error.
-		if x.TypeToken != nil {
-			return bashPPScalar{}, fmt.Errorf("BASHPP-EASSERT-TYPE: .(type) is only valid in a type switch")
-		}
-		_, source, err := r.bashPPTypeAssert(x, false)
-		if err != nil {
-			return bashPPScalar{}, err
-		}
-		if source == nil {
-			return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-OPERAND: asserted value is not a scalar")
-		}
-		return r.bashPPScalarFromCell(source), nil
+		return r.bashPPEvalScalarTypeAssert(expr, x)
 	case *syntax.BashPPConvertExpr:
-		// `string(bs)` reads a byte or rune slice, not a scalar; see
-		// bashPPConvertCollectionScalar in bashpp_collection_convert.go. It
-		// reports false for every conversion whose operand is already scalar,
-		// which keeps the named-scalar path below unchanged.
-		scalar, operand, handled, err := r.bashPPConvertCollectionScalar(x)
-		if handled {
-			return scalar, err
-		}
-		if r.bashPPGoSource {
-			if scalar, handled, err := r.goSourceUnsafePointerWord(x); handled {
-				return scalar, err
-			}
-		}
-		// A call operand the reader above already ran must not run again.
-		v := bashPPScalar{}
-		if operand != nil {
-			v = r.bashPPScalarFromCell(operand)
-		} else if v, err = r.bashPPEvalScalarExpr(x.X); err != nil {
-			return bashPPScalar{}, err
-		}
-		// `IteratorFunc[int](it)`: a function value converted to a named
-		// function type keeps its handle and takes the name, which is what
-		// its methods are then resolved on.
-		if target := r.bashPPConvertTarget(x); target != nil && v.value != nil && v.value.Kind() == constant.String {
-			if _, ok := r.bashPPUnderlyingType(target).(*syntax.BashPPFuncType); ok {
-				if _, closure := r.bashPPClosure(constant.StringVal(v.value)); closure {
-					return bashPPScalar{value: v.value, typ: bashPPTypeText(target), runtime: true}, nil
-				}
-			}
-		}
-		// A conversion to an interface type — `(J)(t)`, `I[T](x)`, an
-		// anonymous `(interface{ M() })(v)` — is an interface assignment,
-		// not a representation change: the checked program guarantees the
-		// operand implements it, so the value keeps its dynamic identity.
-		// A named pointer type — `Peano(p)` with `type Peano *Peano` — is
-		// the same identity conversion with the target's name attached.
-		if r.bashPPGoSource {
-			if target := r.bashPPConvertTarget(x); target != nil {
-				if _, iface := r.bashPPInterfaceType(target); iface {
-					return v, nil
-				}
-				if _, pointer := r.bashPPUnderlyingType(target).(*syntax.BashPPPointerType); pointer {
-					return bashPPScalar{value: v.value, typ: bashPPTypeText(target), runtime: true}, nil
-				}
-			}
-		}
-		return r.bashPPConvertNamedScalar(r.bashPPConvertTargetName(x), x.ConvTypeExpr, v)
+		return r.bashPPEvalScalarConvert(expr, x)
 	case *syntax.BashPPIndexExpr:
-		// Strings are scalar values, not collection objects. Go indexing is by
-		// byte, so keep it in the scalar evaluator and leave other index shapes
-		// to the structured reader below.
-		stringOperand := x.GoString
-		switch operand := x.X.(type) {
-		case *syntax.BashPPIdent:
-			// A pointer or structured variable is never a string operand,
-			// whatever its (empty) scalar spelling: `p[i]` on a pointer to
-			// an array reads through p below.
-			stringOperand = !r.goSourceStructuredIdent(operand)
-		case *syntax.BashPPBasicLit, *syntax.BashPPParenExpr:
-			stringOperand = true
-		default:
-			if typ := r.bashPPExprScalarType(x.X); typ != nil {
-				stringOperand = bashPPTypeText(r.bashPPUnderlyingType(typ)) == "string"
-			}
-		}
-		if stringOperand {
-			base, err := r.bashPPEvalScalarExpr(x.X)
-			if err != nil {
-				return r.bashPPScalarPath(expr)
-			}
-			if base.value.Kind() != constant.String {
-				return r.bashPPScalarPath(expr)
-			}
-			text := constant.StringVal(base.value)
-			index, err := r.bashPPCollectionIndex(x.Index)
-			if err != nil {
-				return bashPPScalar{}, err
-			}
-			if index.outOfBounds(len(text)) {
-				if r.bashPPGoSource {
-					// Indexing a string out of range is Go's recoverable runtime
-					// panic, not the classic hard diagnostic.
-					return bashPPScalar{}, r.bashPPSprint162CollectionBoundsPanic(x, index, len(text))
-				}
-				return bashPPScalar{}, fmt.Errorf("BASHPP-ECOLLECTION-BOUNDS: index %s out of bounds for length %d", index.text, len(text))
-			}
-			return bashPPScalar{value: constant.MakeUint64(uint64(text[index.value])), typ: "uint8", runtime: true}, nil
-		}
-		return r.bashPPScalarPath(expr)
+		return r.bashPPEvalScalarIndex(expr, x)
 	case *syntax.BashPPSliceExpr:
-		if r.bashPPGoSource && !x.GoString {
-			return r.bashPPScalarPath(expr)
-		}
-		base, err := r.bashPPEvalScalarExpr(x.X)
-		if err != nil || base.value.Kind() != constant.String {
-			return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-OPERAND: sliced value is not a string")
-		}
-		if x.Max != nil {
-			return bashPPScalar{}, fmt.Errorf("BASHPP-ECOLLECTION-SLICE: three-index slicing is not defined on strings")
-		}
-		text := constant.StringVal(base.value)
-		low, lowRuntime, err := r.bashPPStringSliceBound(x.Low, 0)
-		if err != nil {
-			return bashPPScalar{}, err
-		}
-		high, highRuntime, err := r.bashPPStringSliceBound(x.High, len(text))
-		if err != nil {
-			return bashPPScalar{}, err
-		}
-		if low.less(bashPPCollectionIndexInt(0)) || high.less(low) || high.greaterThan(len(text)) {
-			// A runtime-typed bound (or a runtime string operand) faults as
-			// Go's recoverable slice-bounds panic; a wholly constant invalid
-			// slice is the Go-source checker's compile-time error and stays a
-			// front-end diagnostic here.
-			if r.bashPPGoSource && (base.runtime || lowRuntime || highRuntime) {
-				return bashPPScalar{}, r.goSourceSliceBoundsPanic(x, low, high, bashPPCollectionIndexInt(0), len(text), len(text), false)
-			}
-			return bashPPScalar{}, fmt.Errorf("BASHPP-ECOLLECTION-BOUNDS: slice [%s:%s] out of bounds for length %d", low.text, high.text, len(text))
-		}
-		return bashPPScalar{value: constant.MakeString(text[low.value:high.value]), typ: "string", runtime: true}, nil
+		return r.bashPPEvalScalarSlice(expr, x)
 	case *syntax.BashPPSelectorExpr, *syntax.BashPPDerefExpr:
 		return r.bashPPScalarPath(expr)
 	case *syntax.BashPPFuncLit:
-		// A literal in value position — `Func(func() {})` — is the same
-		// closure a declaration would bind: its handle, typed by its own
-		// signature so a conversion or method lookup resolves against it.
-		fn, vr := r.bashPPMakeClosure(x)
-		return bashPPScalar{value: constant.MakeString(vr.Str), typ: bashPPTypeText(bashPPFuncLitType(fn.lit)), runtime: true}, nil
+		return r.bashPPEvalScalarFuncLit(expr, x)
 	}
 	return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-FORM: unsupported scalar expression %T", expr)
+}
+
+// bashPPEvalScalarCall is the BashPPCall case of [Runner.bashPPEvalScalarExpr], kept in
+// a frame of its own so the cases do not share one large host frame.
+func (r *Runner) bashPPEvalScalarCall(_ syntax.BashPPExpr, x *syntax.BashPPCall) (bashPPScalar, error) {
+	if r.bashPPGoSource && bashPPRecoverExpr(x) && r.bashPPFuncs["recover"] == nil && (r.bashPPScope == nil || r.bashPPScope.lookup("recover") == nil) {
+		iv, _ := r.bashPPRecoverInterfaceValue()
+		if iv.cell == nil {
+			return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-NIL: recover returned nil interface")
+		}
+		return r.bashPPScalarFromCell(iv.cell), nil
+	}
+	if v, handled, err := r.bashPPComplexBuiltin(x); handled {
+		return v, err
+	}
+	if x.CalleeExpr != nil {
+		if r.bashPPGoSource {
+			return r.bashPPScalarFuncCall(x)
+		}
+		return bashPPScalar{}, fmt.Errorf("gosource: computed call runtime is not implemented")
+	}
+	// An immediately-invoked literal — `if func() bool {…}() {…}` — is a
+	// call whose callee the lookup already resolves from the literal.
+	if x.FuncLit != nil {
+		return r.bashPPScalarFuncCall(x)
+	}
+	if len(x.Fun) == 0 {
+		return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-FORM: unsupported scalar call")
+	}
+	// A selector callee is a method value — `v.Abs()`, `p.q.M()` — which
+	// the callable lookup resolves against the receiver's type. Only the
+	// bare `len`/`cap`/`copy`/`min`/`max` spellings are builtins with a
+	// scalar result.
+	if len(x.Fun) > 1 || (x.Fun[0].Value != "len" && x.Fun[0].Value != "cap" && x.Fun[0].Value != "copy" && x.Fun[0].Value != "min" && x.Fun[0].Value != "max") {
+		return r.bashPPScalarFuncCall(x)
+	}
+	name := x.Fun[0].Value
+	if r.bashPPFuncs[name] != nil || (r.bashPPScope != nil && r.bashPPScope.lookup(name) != nil) {
+		return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-CALL: scalar %s requires the unshadowed builtin", name)
+	}
+	// `copy(dst, src)` and `min`/`max` used as values — `if copy(s1, s2)
+	// != n`, `1 + max(a, b)` — share the general builtin evaluator rather
+	// than the len/cap-only path below.
+	if name == "copy" || name == "min" || name == "max" {
+		cell, produced := r.bashPPRunValueBuiltin(name, x)
+		if !produced || cell == nil {
+			return bashPPScalar{}, errBashPPScalarInterrupted
+		}
+		return r.bashPPScalarFromCell(cell), nil
+	}
+	if cell, ok := r.goSourceStaticArrayLength(name, x); ok {
+		return r.bashPPScalarFromCell(cell), nil
+	}
+	args := make([]bashPPBuiltinArg, len(x.Args))
+	for i := range x.Args {
+		var err error
+		args[i], err = r.goSourceBuiltinArg(x, i)
+		if err != nil {
+			return bashPPScalar{}, err
+		}
+	}
+	cell, err := r.bashPPBuiltinLength(name, x, args)
+	if err != nil {
+		return bashPPScalar{}, err
+	}
+	return r.bashPPScalarFromCell(cell), nil
+}
+
+// bashPPEvalScalarUnary is the BashPPUnaryExpr case of [Runner.bashPPEvalScalarExpr], kept in
+// a frame of its own so the cases do not share one large host frame.
+func (r *Runner) bashPPEvalScalarUnary(_ syntax.BashPPExpr, x *syntax.BashPPUnaryExpr) (bashPPScalar, error) {
+	// A Go receive is spelled as a unary operator but is a channel
+	// operation, not arithmetic. See bashpp_chan_value.go.
+	if value, handled, err := r.bashPPGoReceiveScalar(x); handled {
+		return value, err
+	}
+	v, err := r.bashPPEvalScalarExpr(x.X)
+	if err != nil {
+		return bashPPScalar{}, err
+	}
+	return r.bashPPUnaryScalar(bashPPOpToken(x.Op.Value), v)
+}
+
+// bashPPEvalScalarBinary is the BashPPBinaryExpr case of [Runner.bashPPEvalScalarExpr], kept in
+// a frame of its own so the cases do not share one large host frame.
+func (r *Runner) bashPPEvalScalarBinary(_ syntax.BashPPExpr, x *syntax.BashPPBinaryExpr) (bashPPScalar, error) {
+	op := bashPPOpToken(x.Op.Value)
+	if op == token.EQL || op == token.NEQ {
+		ok, err := r.bashPPCompareExpr(x.X, op, x.Y)
+		if err == nil {
+			return bashPPScalar{value: constant.MakeBool(ok)}, nil
+		}
+		if !bashPPComparableFallback(err) {
+			return bashPPScalar{}, err
+		}
+	}
+	left, err := r.bashPPEvalScalarExpr(x.X)
+	if err != nil {
+		return bashPPScalar{}, err
+	}
+	if op == token.LAND || op == token.LOR {
+		if left.value.Kind() != constant.Bool {
+			return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-OPERAND: logical operand must be boolean")
+		}
+		if known, boolean := r.bashPPBooleanExprShape(x.Y); known && !boolean {
+			return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-OPERAND: logical operand must be boolean")
+		}
+		truth := constant.BoolVal(left.value)
+		if op == token.LAND && !truth || op == token.LOR && truth {
+			return left, nil
+		}
+	}
+	right, err := r.bashPPEvalScalarExpr(x.Y)
+	if err != nil {
+		return bashPPScalar{}, err
+	}
+	return r.bashPPBinaryScalar(bashPPOpToken(x.Op.Value), left, right)
+}
+
+// bashPPEvalScalarTypeAssert is the BashPPTypeAssertExpr case of [Runner.bashPPEvalScalarExpr], kept in
+// a frame of its own so the cases do not share one large host frame.
+func (r *Runner) bashPPEvalScalarTypeAssert(_ syntax.BashPPExpr, x *syntax.BashPPTypeAssertExpr) (bashPPScalar, error) {
+	// `fmt.Println(i.(string))`: a one-result assertion used as a value.
+	// The comma-ok spelling has its own statement forms; here a failure is
+	// Go's panic, which surfaces as this expression's error.
+	if x.TypeToken != nil {
+		return bashPPScalar{}, fmt.Errorf("BASHPP-EASSERT-TYPE: .(type) is only valid in a type switch")
+	}
+	_, source, err := r.bashPPTypeAssert(x, false)
+	if err != nil {
+		return bashPPScalar{}, err
+	}
+	if source == nil {
+		return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-OPERAND: asserted value is not a scalar")
+	}
+	return r.bashPPScalarFromCell(source), nil
+}
+
+// bashPPEvalScalarConvert is the BashPPConvertExpr case of [Runner.bashPPEvalScalarExpr], kept in
+// a frame of its own so the cases do not share one large host frame.
+func (r *Runner) bashPPEvalScalarConvert(_ syntax.BashPPExpr, x *syntax.BashPPConvertExpr) (bashPPScalar, error) {
+	// `string(bs)` reads a byte or rune slice, not a scalar; see
+	// bashPPConvertCollectionScalar in bashpp_collection_convert.go. It
+	// reports false for every conversion whose operand is already scalar,
+	// which keeps the named-scalar path below unchanged.
+	scalar, operand, handled, err := r.bashPPConvertCollectionScalar(x)
+	if handled {
+		return scalar, err
+	}
+	if r.bashPPGoSource {
+		if scalar, handled, err := r.goSourceUnsafePointerWord(x); handled {
+			return scalar, err
+		}
+	}
+	// A call operand the reader above already ran must not run again.
+	v := bashPPScalar{}
+	if operand != nil {
+		v = r.bashPPScalarFromCell(operand)
+	} else if v, err = r.bashPPEvalScalarExpr(x.X); err != nil {
+		return bashPPScalar{}, err
+	}
+	// `IteratorFunc[int](it)`: a function value converted to a named
+	// function type keeps its handle and takes the name, which is what
+	// its methods are then resolved on.
+	if target := r.bashPPConvertTarget(x); target != nil && v.value != nil && v.value.Kind() == constant.String {
+		if _, ok := r.bashPPUnderlyingType(target).(*syntax.BashPPFuncType); ok {
+			if _, closure := r.bashPPClosure(constant.StringVal(v.value)); closure {
+				return bashPPScalar{value: v.value, typ: bashPPTypeText(target), runtime: true}, nil
+			}
+		}
+	}
+	// A conversion to an interface type — `(J)(t)`, `I[T](x)`, an
+	// anonymous `(interface{ M() })(v)` — is an interface assignment,
+	// not a representation change: the checked program guarantees the
+	// operand implements it, so the value keeps its dynamic identity.
+	// A named pointer type — `Peano(p)` with `type Peano *Peano` — is
+	// the same identity conversion with the target's name attached.
+	if r.bashPPGoSource {
+		if target := r.bashPPConvertTarget(x); target != nil {
+			if _, iface := r.bashPPInterfaceType(target); iface {
+				return v, nil
+			}
+			if _, pointer := r.bashPPUnderlyingType(target).(*syntax.BashPPPointerType); pointer {
+				return bashPPScalar{value: v.value, typ: bashPPTypeText(target), runtime: true}, nil
+			}
+		}
+	}
+	return r.bashPPConvertNamedScalar(r.bashPPConvertTargetName(x), x.ConvTypeExpr, v)
+}
+
+// bashPPEvalScalarIndex is the BashPPIndexExpr case of [Runner.bashPPEvalScalarExpr], kept in
+// a frame of its own so the cases do not share one large host frame.
+func (r *Runner) bashPPEvalScalarIndex(expr syntax.BashPPExpr, x *syntax.BashPPIndexExpr) (bashPPScalar, error) {
+	// Strings are scalar values, not collection objects. Go indexing is by
+	// byte, so keep it in the scalar evaluator and leave other index shapes
+	// to the structured reader below.
+	stringOperand := x.GoString
+	switch operand := x.X.(type) {
+	case *syntax.BashPPIdent:
+		// A pointer or structured variable is never a string operand,
+		// whatever its (empty) scalar spelling: `p[i]` on a pointer to
+		// an array reads through p below.
+		stringOperand = !r.goSourceStructuredIdent(operand)
+	case *syntax.BashPPBasicLit, *syntax.BashPPParenExpr:
+		stringOperand = true
+	default:
+		if typ := r.bashPPExprScalarType(x.X); typ != nil {
+			stringOperand = bashPPTypeText(r.bashPPUnderlyingType(typ)) == "string"
+		}
+	}
+	if stringOperand {
+		base, err := r.bashPPEvalScalarExpr(x.X)
+		if err != nil {
+			return r.bashPPScalarPath(expr)
+		}
+		if base.value.Kind() != constant.String {
+			return r.bashPPScalarPath(expr)
+		}
+		text := constant.StringVal(base.value)
+		index, err := r.bashPPCollectionIndex(x.Index)
+		if err != nil {
+			return bashPPScalar{}, err
+		}
+		if index.outOfBounds(len(text)) {
+			if r.bashPPGoSource {
+				// Indexing a string out of range is Go's recoverable runtime
+				// panic, not the classic hard diagnostic.
+				return bashPPScalar{}, r.bashPPSprint162CollectionBoundsPanic(x, index, len(text))
+			}
+			return bashPPScalar{}, fmt.Errorf("BASHPP-ECOLLECTION-BOUNDS: index %s out of bounds for length %d", index.text, len(text))
+		}
+		return bashPPScalar{value: constant.MakeUint64(uint64(text[index.value])), typ: "uint8", runtime: true}, nil
+	}
+	return r.bashPPScalarPath(expr)
+}
+
+// bashPPEvalScalarSlice is the BashPPSliceExpr case of [Runner.bashPPEvalScalarExpr], kept in
+// a frame of its own so the cases do not share one large host frame.
+func (r *Runner) bashPPEvalScalarSlice(expr syntax.BashPPExpr, x *syntax.BashPPSliceExpr) (bashPPScalar, error) {
+	if r.bashPPGoSource && !x.GoString {
+		return r.bashPPScalarPath(expr)
+	}
+	base, err := r.bashPPEvalScalarExpr(x.X)
+	if err != nil || base.value.Kind() != constant.String {
+		return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-OPERAND: sliced value is not a string")
+	}
+	if x.Max != nil {
+		return bashPPScalar{}, fmt.Errorf("BASHPP-ECOLLECTION-SLICE: three-index slicing is not defined on strings")
+	}
+	text := constant.StringVal(base.value)
+	low, lowRuntime, err := r.bashPPStringSliceBound(x.Low, 0)
+	if err != nil {
+		return bashPPScalar{}, err
+	}
+	high, highRuntime, err := r.bashPPStringSliceBound(x.High, len(text))
+	if err != nil {
+		return bashPPScalar{}, err
+	}
+	if low.less(bashPPCollectionIndexInt(0)) || high.less(low) || high.greaterThan(len(text)) {
+		// A runtime-typed bound (or a runtime string operand) faults as
+		// Go's recoverable slice-bounds panic; a wholly constant invalid
+		// slice is the Go-source checker's compile-time error and stays a
+		// front-end diagnostic here.
+		if r.bashPPGoSource && (base.runtime || lowRuntime || highRuntime) {
+			return bashPPScalar{}, r.goSourceSliceBoundsPanic(x, low, high, bashPPCollectionIndexInt(0), len(text), len(text), false)
+		}
+		return bashPPScalar{}, fmt.Errorf("BASHPP-ECOLLECTION-BOUNDS: slice [%s:%s] out of bounds for length %d", low.text, high.text, len(text))
+	}
+	return bashPPScalar{value: constant.MakeString(text[low.value:high.value]), typ: "string", runtime: true}, nil
+}
+
+// bashPPEvalScalarFuncLit is the BashPPFuncLit case of [Runner.bashPPEvalScalarExpr], kept in
+// a frame of its own so the cases do not share one large host frame.
+func (r *Runner) bashPPEvalScalarFuncLit(_ syntax.BashPPExpr, x *syntax.BashPPFuncLit) (bashPPScalar, error) {
+	// A literal in value position — `Func(func() {})` — is the same
+	// closure a declaration would bind: its handle, typed by its own
+	// signature so a conversion or method lookup resolves against it.
+	fn, vr := r.bashPPMakeClosure(x)
+	return bashPPScalar{value: constant.MakeString(vr.Str), typ: bashPPTypeText(bashPPFuncLitType(fn.lit)), runtime: true}, nil
 }
 
 // bashPPReparseIntegerCarrier reconstructs an integer scalar from the decimal
