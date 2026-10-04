@@ -113,6 +113,10 @@ func (r *Runner) bashPPGoReceiveScalar(x *syntax.BashPPUnaryExpr) (bashPPScalar,
 	if !r.bashPPGoSource || x == nil || x.Op == nil || x.Op.Value != "<-" {
 		return bashPPScalar{}, false, nil
 	}
+	if cell, ok := r.bashPPScalarReceiveMemo[x]; ok {
+		delete(r.bashPPScalarReceiveMemo, x)
+		return r.bashPPScalarFromCell(cell), true, nil
+	}
 	cell, _ := r.bashPPReceiveCell(r.ectx, &syntax.BashPPReceive{Arrow: x.Pos(), ChanExpr: x.X}, nil)
 	if cell == nil {
 		return bashPPScalar{}, true, errBashPPScalarInterrupted

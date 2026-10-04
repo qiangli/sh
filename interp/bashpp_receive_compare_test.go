@@ -4,6 +4,8 @@
 package interp_test
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -39,6 +41,7 @@ func main() {
 	fmt.Println(<-ch == v)
 	fmt.Println(<-ch)
 }
+
 `,
 			want: "true\n2\n",
 		},
@@ -57,6 +60,7 @@ func main() {
 	fmt.Println((<-ch) == v)
 	fmt.Println(<-ch)
 }
+
 `,
 			want: "true\n8\n",
 		},
@@ -114,6 +118,66 @@ func main() {
 `,
 			want: "false\n4\n",
 		},
+		{
+			// A literal sibling takes the scalar fallback only after both
+			// operands were read, so the receive had already consumed its
+			// value; the fallback must compare that value, not receive again.
+			name: "recv-left-literal-right",
+			src: `package main
+
+import "fmt"
+
+func main() {
+	ch := make(chan int32, 2)
+	ch <- 123
+	ch <- 124
+	if <-ch != 123 {
+		panic("wrong value")
+	}
+	fmt.Println(len(ch), <-ch)
+}
+`,
+			want: "1 124\n",
+		},
+		{
+			name: "literal-left-recv-right",
+			src: `package main
+
+import "fmt"
+
+func main() {
+	ch := make(chan string, 2)
+	ch <- "a"
+	ch <- "b"
+	fmt.Println("a" == <-ch)
+	fmt.Println(len(ch), <-ch)
+}
+`,
+			want: "true\n1 b\n",
+		},
+		{
+			// On an unbuffered channel the second receive never returns: the
+			// receiver must finish after one send.
+			name: "recv-literal-unbuffered",
+			src: `package main
+
+import "fmt"
+
+func main() {
+	c := make(chan int64)
+	done := make(chan bool)
+	go func() {
+		if <-c != 123456 {
+			panic("wrong value")
+		}
+		done <- true
+	}()
+	c <- 123456
+	fmt.Println(<-done)
+}
+`,
+			want: "true\n",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -127,5 +191,39 @@ func main() {
 				t.Fatalf("stdout=%q, want %q (stderr=%q)", out, tc.want, errOut)
 			}
 		})
+	}
+}
+
+func TestBashPPInlineReceiveBinaryEvaluatesOnceAcrossOperators(t *testing.T) {
+	operations := []struct {
+		op        string
+		leftWant  string
+		rightWant string
+	}{
+		{"==", "false", "false"}, {"!=", "true", "true"},
+		{"<", "false", "true"}, {"<=", "false", "true"},
+		{">", "true", "false"}, {">=", "true", "false"},
+		{"+", "10", "10"}, {"-", "6", "-6"}, {"*", "16", "16"},
+		{"/", "4", "0"}, {"%", "0", "2"}, {"<<", "32", "512"},
+		{">>", "2", "0"}, {"&", "0", "0"}, {"|", "10", "10"},
+		{"^", "10", "10"}, {"&^", "8", "2"},
+	}
+
+	var src, want strings.Builder
+	src.WriteString("package main\n\nimport \"fmt\"\n\nfunc main() {\n")
+	for _, tc := range operations {
+		fmt.Fprintf(&src, "{ ch := make(chan int, 1); ch <- 8; fmt.Println(<-ch %s 2) }\n", tc.op)
+		fmt.Fprintf(&src, "{ ch := make(chan int, 1); ch <- 8; fmt.Println(2 %s <-ch) }\n", tc.op)
+		fmt.Fprintf(&want, "%s\n%s\n", tc.leftWant, tc.rightWant)
+	}
+	src.WriteString("}\n")
+
+	dir := t.TempDir()
+	out, errOut, err := bashPPRunGoSource(t, dir, dir+"/original.go", src.String())
+	if err != nil {
+		t.Fatalf("Runner: %v; stdout=%q stderr=%q", err, out, errOut)
+	}
+	if out != want.String() {
+		t.Fatalf("stdout=%q, want %q (stderr=%q)", out, want.String(), errOut)
 	}
 }

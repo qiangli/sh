@@ -209,6 +209,16 @@ func (r *Runner) bashPPEvalScalarUnary(_ syntax.BashPPExpr, x *syntax.BashPPUnar
 func (r *Runner) bashPPEvalScalarBinary(_ syntax.BashPPExpr, x *syntax.BashPPBinaryExpr) (bashPPScalar, error) {
 	op := bashPPOpToken(x.Op.Value)
 	if op == token.EQL || op == token.NEQ {
+		// Comparable evaluation preserves collection metadata, but a scalar-only
+		// operand can make it fall back after an inline receive has already run.
+		// Keep that received cell for the scalar retry so a consuming operand is
+		// still evaluated exactly once.
+		var previous map[*syntax.BashPPUnaryExpr]*bashPPCell
+		if r.bashPPGoSource && (bashPPExprIsReceive(x.X) || bashPPExprIsReceive(x.Y)) {
+			previous = r.bashPPScalarReceiveMemo
+			r.bashPPScalarReceiveMemo = make(map[*syntax.BashPPUnaryExpr]*bashPPCell)
+			defer func() { r.bashPPScalarReceiveMemo = previous }()
+		}
 		ok, err := r.bashPPCompareExpr(x.X, op, x.Y)
 		if err == nil {
 			return bashPPScalar{value: constant.MakeBool(ok)}, nil
@@ -1464,6 +1474,9 @@ func (r *Runner) bashPPComparableExpr(expr syntax.BashPPExpr) (bashPPComparableV
 			cell, _ := r.bashPPReceiveCell(r.ectx, &syntax.BashPPReceive{Arrow: x.Pos(), ChanExpr: x.X}, nil)
 			if cell == nil {
 				return bashPPComparableValue{}, errBashPPScalarInterrupted
+			}
+			if r.bashPPScalarReceiveMemo != nil {
+				r.bashPPScalarReceiveMemo[x] = cell
 			}
 			if _, ok := r.bashPPUnderlyingType(cell.declType).(*syntax.BashPPChanType); ok {
 				var value any = cell.vr.Str

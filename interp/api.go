@@ -137,6 +137,12 @@ type Runner struct {
 	// dialect takes: the read/write hooks in vars.go are one nil check.
 	// bashPPGoSource selects ordinary Go package scope semantics for gosource trees.
 	bashPPGoSource bool
+	// bashPPScalarReceiveMemo holds cells consumed while a scalar comparison is
+	// being attempted. If that attempt falls back to scalar evaluation, the
+	// receive expression consumes its saved cell rather than reading the channel
+	// again. It is scoped by bashPPEvalScalarBinary and is never shared between
+	// evaluations or runners.
+	bashPPScalarReceiveMemo map[*syntax.BashPPUnaryExpr]*bashPPCell
 	// goSourceUnsafeOpaqueIDs assigns runner-owned words for
 	// uintptr(unsafe.Pointer(p)). It is shared with Go-source task snapshots
 	// so shared captured cells keep one observable pointer identity without
