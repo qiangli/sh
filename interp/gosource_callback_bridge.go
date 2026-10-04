@@ -48,6 +48,7 @@ func goSourceInterpretedCallable(name string) bool {
 	switch name {
 	case "slices.Sort", "slices.Equal", "slices.Collect",
 		"slices.SortFunc", "slices.SortStableFunc", "slices.EqualFunc", "slices.IndexFunc", "slices.ContainsFunc",
+		"slices.Index", "slices.Contains",
 		"cmp.Compare", "cmp.Less":
 		return true
 	}
@@ -277,8 +278,77 @@ func (r *Runner) goSourceGenericCallbackHelper(ctx context.Context, req bashPPEv
 		return r.goSourceSlicesEqualFunc(ctx, req, q)
 	case "slices.IndexFunc", "slices.ContainsFunc":
 		return r.goSourceSlicesSearchFunc(ctx, req, q, name == "slices.ContainsFunc")
+	case "slices.Index", "slices.Contains":
+		return goSourceSlicesSearch(q, name == "slices.Contains")
 	}
 	return nil, false, nil
+}
+
+// goSourceSlicesSearch answers slices.Index and slices.Contains over the
+// transported elements. Both only read the slice and compare with ==, so no
+// method of the element type can run and nothing is retained: the search is
+// the same whether or not the element type carries callbacks. A pointer is
+// compared by the identity of the storage it names (its transport origin),
+// never by its pointee. An element kind whose == this cannot decide leaves the
+// call to the dependency, as before.
+func goSourceSlicesSearch(q *bashPPBridgeRequest, contains bool) ([]bashPPBridgeValue, bool, error) {
+	if len(q.Args) != 2 {
+		return nil, false, nil
+	}
+	elements, err := goSourceSequenceElements(q.Args[0])
+	if err != nil {
+		return nil, false, nil
+	}
+	index := -1
+	for i, element := range elements {
+		equal, decided := goSourceTransportedEqual(element, q.Args[1])
+		if !decided {
+			return nil, false, nil
+		}
+		if equal {
+			index = i
+			break
+		}
+	}
+	if contains {
+		return []bashPPBridgeValue{{Kind: "bool", Type: "bool", Text: strconv.FormatBool(index >= 0)}}, true, nil
+	}
+	return []bashPPBridgeValue{{Kind: "int", Type: "int", Text: strconv.Itoa(index)}}, true, nil
+}
+
+// goSourceTransportedEqual decides a == b for two transported values of one
+// static type: nil pointers, interpreter pointers of one session (by origin)
+// and primitive scalars. decided is false for everything else.
+func goSourceTransportedEqual(a, b bashPPBridgeValue) (equal, decided bool) {
+	if a.Interface != "" || b.Interface != "" {
+		return false, false
+	}
+	if a.Kind == "nil" || b.Kind == "nil" {
+		other := a
+		if a.Kind == "nil" {
+			other = b
+		}
+		if other.Kind == "nil" {
+			return true, true
+		}
+		// A non-nil interpreter pointer never equals nil.
+		return false, other.Kind == "pointer" && other.Origin != 0
+	}
+	if a.Kind == "pointer" && b.Kind == "pointer" {
+		if a.Origin == 0 || b.Origin == 0 || a.Session != b.Session {
+			return false, false
+		}
+		return a.Origin == b.Origin, true
+	}
+	switch a.Kind {
+	case "string", "bool", "int", "uint", "float":
+		if a.Kind != b.Kind {
+			return false, false
+		}
+		equal, err := nativeSliceScalarEqual(a, b)
+		return equal, err == nil
+	}
+	return false, false
 }
 
 // goSourceSlicesEqualFunc answers slices.EqualFunc over the live original
