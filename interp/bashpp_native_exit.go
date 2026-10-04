@@ -66,6 +66,16 @@ func (r *Runner) bashPPNativeExitStatus(err error) bool {
 		code = 130 // shell status while unwinding; Run reproduces the full Windows exit.
 	}
 	r.exit = exitStatus{code: code, exiting: true}
+	if c := r.bashPPConcurrent; c != nil {
+		c.mu.Lock()
+		if c.mainGoexit && !c.exitCalled {
+			c.exitCalled = true
+			c.exitStatus = status
+			c.cancel()
+			c.changed.Broadcast()
+		}
+		c.mu.Unlock()
+	}
 	if windowsBreak {
 		r.bashPPForwardedDeath = status
 	} else if exit.forwarded && status > 128 {
