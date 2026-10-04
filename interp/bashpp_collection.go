@@ -1093,7 +1093,11 @@ func (r *Runner) bashPPEvalElement(expr syntax.BashPPExpr, expected syntax.BashP
 	// particular, each NaN map insertion is a distinct key and a NaN lookup
 	// never finds an existing entry.
 	if scalar.hasNonFinite {
-		value := r.bashPPContextualCollectionValue(scalar.nonFinite, expected)
+		var value any = scalar.nonFinite
+		if scalar.nanWidth != 0 {
+			value = bashPPScalarStorageString(scalar)
+		}
+		value = r.bashPPContextualCollectionValue(value, expected)
 		if err := r.bashPPCheckCollectionValue(value, expected); err != nil {
 			return nil, nil, err
 		}
@@ -1325,6 +1329,9 @@ func (r *Runner) bashPPStringCarriesInteger(typ syntax.BashPPTypeExpr, text stri
 }
 
 func bashPPCollectionFloatText(text string) bool {
+	if _, ok := bashPPNaNBitsScalar(text, ""); ok {
+		return true
+	}
 	if _, err := strconv.ParseFloat(text, 64); err == nil {
 		return true
 	}
