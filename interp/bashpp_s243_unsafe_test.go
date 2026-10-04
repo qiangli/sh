@@ -65,10 +65,22 @@ func main() {
 		qt.Assert(t, qt.Equals(stderr, ""))
 	})
 
+	t.Run("receive through view", func(t *testing.T) {
+		src := strings.Replace(prefix, `import "unsafe"`, `import ("fmt"; "unsafe")`, 1) + `
+func main() {
+	p := &Source{1, 2, 3}
+	v := (*Blank)(unsafe.Pointer(p))
+	c := make(chan Blank, 1)
+	c <- Blank{}
+	select { case *v = <-c: }
+	fmt.Println(*v == (Blank{}), *p)
+}`
+		differGoSource(t, src, nil, "")
+	})
+
 	for _, tc := range []struct{ name, target, want string }{
-		{"receive through view", `func main() { p := &Source{1, 2, 3}; v := (*Blank)(unsafe.Pointer(p)); c := make(chan Blank, 1); c <- Blank{}; select { case *v = <-c: } }`, "BASHPP-EUNSAFE-WRITE"},
-		{"write through view", `func main() { p := &Source{1, 2, 3}; v := (*Blank)(unsafe.Pointer(p)); *v = Blank{} }`, "BASHPP-EUNSAFE-WRITE"},
-		{"observable target", `type Bad struct { x, _, _ int }; var _ = *(*Bad)(unsafe.Pointer(&Source{}))`, "BASHPP-EUNSAFE-VIEW"},
+		{"write through view", `func main() { p := &Source{1, 2, 3}; v := (*Blank)(unsafe.Pointer(p)); *v = Blank{} }`, "BASHPP-EUNSAFE-WRITE: writes through reinterpreted blank views cannot preserve blank-field bytes"},
+		{"observable target", `type Bad struct { x, _, _ int }; var _ = *(*Bad)(unsafe.Pointer(&Source{}))`, "BASHPP-EUNSAFE-VIEW: target Bad mixes observable fields with blank-field bytes that cannot be represented"},
 		{"trailing zero field padding", `type Padded struct { x int; z struct{} }; type Small struct { _ int }; var _ = *(*Small)(unsafe.Pointer(&Padded{}))`, "BASHPP-EUNSAFE-LAYOUT"},
 		{"layout mismatch", `type Bad struct { _, _ int }; var _ = *(*Bad)(unsafe.Pointer(&Source{}))`, "BASHPP-EUNSAFE-LAYOUT"},
 	} {

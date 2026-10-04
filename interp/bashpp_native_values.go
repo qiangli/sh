@@ -1006,6 +1006,9 @@ func (r *Runner) bashPPWriteBridgePointer(ptr *bashPPPointer, value bashPPBridge
 	if ptr != nil && ptr.unsafeView != nil {
 		return fmt.Errorf("BASHPP-EUNSAFE-WRITE: writes through reinterpreted blank views are unsupported")
 	}
+	if ptr != nil && ptr.unsafeOverlay != nil && ptr.unsafeOverlay.target.blank {
+		return fmt.Errorf("BASHPP-EUNSAFE-WRITE: writes through reinterpreted blank views cannot preserve blank-field bytes")
+	}
 	if ptr != nil && ptr.unsafeSlice != nil {
 		return fmt.Errorf("BASHPP-EUNSAFE-WRITE: writes through a reinterpreted slice header are unsupported")
 	}

@@ -1288,6 +1288,11 @@ func (r *Runner) bashPPDerefAssign(target *syntax.BashPPDerefExpr, rhs syntax.Ba
 		r.exit.code = 2
 		return
 	}
+	if ptr.unsafeOverlay != nil && ptr.unsafeOverlay.target.blank {
+		r.errf("BASHPP-EUNSAFE-WRITE: writes through reinterpreted blank views cannot preserve blank-field bytes\n")
+		r.exit.code = 2
+		return
+	}
 	value, meta, err := r.bashPPEvalTypedValue(rhs, ptr.elem)
 	if err != nil {
 		// An interrupted right-hand side (a receive unwound by program

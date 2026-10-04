@@ -300,6 +300,10 @@ type goSourceUnsafeLayout struct {
 	elem    *goSourceUnsafeLayout
 	count   int
 	padding bool
+	// blank reports bytes occupied by blank fields, including through nested
+	// structs and arrays. Unlike ordinary alignment padding, those bytes are
+	// copied by whole-value assignment but have no interpreter field storage.
+	blank bool
 }
 
 type goSourceUnsafeLayoutField struct {
@@ -371,7 +375,7 @@ func (r *Runner) goSourceUnsafeByteLayout(typ syntax.BashPPTypeExpr, depth int) 
 		if n != 0 && elem.size > math.MaxInt32/n {
 			return refuse("array type")
 		}
-		return &goSourceUnsafeLayout{kind: 'a', size: n * elem.size, align: elem.align, typ: typ, elem: elem, count: n, padding: elem.padding}, nil
+		return &goSourceUnsafeLayout{kind: 'a', size: n * elem.size, align: elem.align, typ: typ, elem: elem, count: n, padding: elem.padding, blank: elem.blank}, nil
 	case *syntax.BashPPStructType:
 		fields, _, ok := r.bashPPStructFields(typ)
 		if !ok {
@@ -404,6 +408,9 @@ func (r *Runner) goSourceUnsafeByteLayout(typ syntax.BashPPTypeExpr, depth int) 
 			offset := int(offsets[i])
 			if offset > end || field.name == "_" || layout.padding {
 				out.padding = true
+			}
+			if field.name == "_" || layout.blank {
+				out.blank = true
 			}
 			if field.name != "_" {
 				out.fields = append(out.fields, goSourceUnsafeLayoutField{name: field.name, offset: offset, layout: layout})
@@ -488,6 +495,9 @@ func (r *Runner) goSourceUnsafeStructOverlay(source, target syntax.BashPPTypeExp
 	}
 	if from.size != to.size || from.align != to.align {
 		return nil, fmt.Errorf("BASHPP-EUNSAFE-LAYOUT: %s (%d bytes, align %d) and %s (%d bytes, align %d) cannot share a struct overlay", bashPPTypeText(source), from.size, from.align, bashPPTypeText(target), to.size, to.align)
+	}
+	if to.blank && len(to.fields) != 0 {
+		return nil, goSourceUnsafeViewErr("target %s mixes observable fields with blank-field bytes that cannot be represented", bashPPTypeText(target))
 	}
 	return &goSourceUnsafeOverlayView{r: r, source: from, target: to}, nil
 }
