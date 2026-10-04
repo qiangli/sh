@@ -206,7 +206,7 @@ func bashPPBuildLocalTypeDeclCache(file *syntax.File) *bashPPLocalTypeDeclCache 
 		}
 	}
 	sort.Strings(cache.reservedNames)
-	typeParams := map[string]bool{}
+	typeParams := map[string]bool{"_": true}
 	stmtsByTop := make(map[*syntax.Stmt][]*syntax.Stmt, len(file.Stmts))
 	cache.fullScans = 1
 	for _, top := range file.Stmts {
@@ -242,6 +242,10 @@ func bashPPBuildLocalTypeDeclCache(file *syntax.File) *bashPPLocalTypeDeclCache 
 			case *syntax.BashPPInterfaceType:
 				if len(n.Methods) > 0 {
 					cache.anonymous = append(cache.anonymous, n)
+				}
+			case *syntax.BashPPReceiver:
+				for _, param := range n.TypeParams {
+					typeParams[param.Value] = true
 				}
 			case *syntax.BashPPTypeParam:
 				for _, name := range n.Names {
