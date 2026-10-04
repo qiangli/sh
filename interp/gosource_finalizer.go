@@ -293,23 +293,27 @@ func (r *Runner) goSourceFinalizerThrow(message string) {
 }
 
 // goSourceCollectFinalizers completes a host collection for runtime.GC and
-// runs the finalizers it made ready. Nothing happens for a program that has
-// never armed one.
+// runs the finalizers it made ready. Even without armed finalizers, source GC
+// must collect this heap: the dependency runtime cannot collect interpreter
+// values in this process.
 func (r *Runner) goSourceCollectFinalizers(ctx context.Context, call *syntax.BashPPCall) error {
 	c := r.bashPPConcurrent
 	if c == nil {
+		runtime.GC()
 		return nil
 	}
 	c.mu.Lock()
 	table := c.finalizers
 	c.mu.Unlock()
 	if table == nil {
+		runtime.GC()
 		return nil
 	}
 	table.mu.Lock()
 	idle := len(table.armed) == 0 && len(table.ready) == 0
 	table.mu.Unlock()
 	if idle {
+		runtime.GC()
 		return nil
 	}
 	goSourceHostCollect()
