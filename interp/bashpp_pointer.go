@@ -542,6 +542,37 @@ func (r *Runner) bashPPAddress(expr syntax.BashPPExpr) (result *bashPPPointer, e
 	}
 
 ordinaryAddress:
+	// f().field[i] names no variable, but the collection it indexes lives
+	// behind the pointer the call returned. Resolve that field's address by
+	// the selector rules above, which run the call once, and continue the
+	// path from there to the element.
+	if index, indexed := expr.(*syntax.BashPPIndexExpr); indexed && r.bashPPGoSource {
+		if _, rooted := bashPPCollectionRoot(expr); !rooted {
+			if selector, selected := index.X.(*syntax.BashPPSelectorExpr); selected {
+				base, err := r.bashPPAddress(selector)
+				if err != nil {
+					return nil, err
+				}
+				collection, found := r.bashPPUnderlyingType(base.elem).(*syntax.BashPPCollectionType)
+				if found && (collection.Kind == "slice" || collection.Kind == "array") {
+					at, err := r.bashPPCollectionIndex(index.Index)
+					if err != nil {
+						return nil, err
+					}
+					value, _, _, err := base.read()
+					if err != nil {
+						return nil, err
+					}
+					seq, _ := value.([]any)
+					if at.outOfBounds(len(seq)) {
+						return nil, r.bashPPSprint162CollectionBoundsPanic(index, at, len(seq))
+					}
+					path := append(append([]bashPPPointerStep(nil), base.path...), bashPPPointerStep{index: at.value})
+					return &bashPPPointer{target: base.target, path: path, elem: collection.Element}, nil
+				}
+			}
+		}
+	}
 	root, ok := bashPPCollectionRoot(expr)
 	if !ok || r.bashPPScope == nil {
 		return nil, fmt.Errorf("%sBASHPP-ENONADDRESSABLE: operand is not addressable (%T)", r.bashErrPrefix(expr.Pos()), expr)
