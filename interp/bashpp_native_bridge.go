@@ -322,6 +322,10 @@ type bashPPNativeSession struct {
 	// next request carries them to the worker. Both protected by mu.
 	originOpen         map[uint64]*bashPPOriginHold
 	originReleaseQueue []uint64
+	// originSweepNext is the table size at which the next unforced sweep is
+	// worth a collection: twice what the last sweep left alive. Without it a
+	// table of live origins above the cap would collect on every transport.
+	originSweepNext int
 	// Native uintptr results whose address is a transported original pointer.
 	// Protected by mu; retaining the pointer also keeps its interpreter cell live.
 	addressOrigins  map[uint64]*bashPPPointer

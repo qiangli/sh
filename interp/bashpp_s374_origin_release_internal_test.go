@@ -159,3 +159,52 @@ func main() {
 		t.Log(string(output))
 	}
 }
+
+// TestS374OriginSweepIsAmortisedOverLiveOrigins pins the cost of a table
+// that is over the cap but entirely live (test/fixedbugs/issue27695.go with
+// two processors): an unforced sweep that found nothing to release must not
+// run again, with its full collection, until the table has doubled.
+func TestS374OriginSweepIsAmortisedOverLiveOrigins(t *testing.T) {
+	old := bashPPOriginKeepCap
+	bashPPOriginKeepCap = 8
+	defer func() { bashPPOriginKeepCap = old }()
+	s := &bashPPNativeSession{id: "origin-sweep-amortised"}
+	var live []*bashPPCell
+	add := func(n int) {
+		for i := 0; i < n; i++ {
+			cell := &bashPPCell{}
+			live = append(live, cell)
+			bashPPTransportOrigin(s, &bashPPPointer{target: cell})
+		}
+	}
+	add(16)
+	if next := s.originSweepNext; next < 2*bashPPOriginKeepCap {
+		t.Fatalf("no sweep threshold recorded after passing the cap: %d", next)
+	}
+	threshold := s.originSweepNext
+	// Below the threshold an unforced sweep is a no-op: it must leave the
+	// identity index in place, which a real sweep drops before collecting.
+	s.mu.Lock()
+	s.reindexOriginsLocked()
+	s.mu.Unlock()
+	if released := s.sweepTransportOrigins(false); released != nil {
+		t.Fatalf("unforced sweep below the threshold released %d origins", len(released))
+	}
+	if s.originIndex == nil {
+		t.Fatal("unforced sweep below the threshold still ran a collection pass")
+	}
+	if s.originSweepNext != threshold {
+		t.Fatalf("threshold moved without a sweep: %d, want %d", s.originSweepNext, threshold)
+	}
+	// A forced sweep (an explicit runtime.GC in the program) is never skipped.
+	for i := 1; i < len(live); i++ {
+		live[i] = nil
+	}
+	for i := 0; i < 3; i++ {
+		runtime.GC()
+	}
+	if released := s.sweepTransportOrigins(true); len(released) == 0 {
+		t.Fatal("forced sweep released nothing although the cells are dead")
+	}
+	runtime.KeepAlive(live)
+}

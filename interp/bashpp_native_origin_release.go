@@ -171,7 +171,7 @@ func (s *bashPPNativeSession) pinTransportOrigin(id uint64) {
 // The index is rebuilt from the survivors. It returns the released IDs.
 func (s *bashPPNativeSession) sweepTransportOrigins(force bool) []uint64 {
 	s.mu.Lock()
-	if !force && len(s.origins) <= bashPPOriginKeepCap {
+	if !force && (len(s.origins) <= bashPPOriginKeepCap || len(s.origins) < s.originSweepNext) {
 		s.mu.Unlock()
 		return nil
 	}
@@ -209,6 +209,9 @@ func (s *bashPPNativeSession) sweepTransportOrigins(force bool) []uint64 {
 		s.originReleaseQueue = append(s.originReleaseQueue, released...)
 	}
 	s.reindexOriginsLocked()
+	// Amortise: the survivors are live, so the next unforced sweep waits
+	// until the table has doubled past them.
+	s.originSweepNext = 2 * len(s.origins)
 	return released
 }
 
