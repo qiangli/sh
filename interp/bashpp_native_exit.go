@@ -135,6 +135,11 @@ func (r *Runner) bashPPNativeRequest(ctx context.Context, req bashPPEvalRequest,
 		r.exit.fatal(ctx.Err())
 		return nil, errBashPPScalarInterrupted
 	}
+	var callbackGoexit *bashPPCallbackGoexit
+	if errors.As(err, &callbackGoexit) {
+		r.bashPPRaiseGoexit()
+		return nil, errBashPPScalarInterrupted
+	}
 	var callbackPanic *bashPPCallbackPanic
 	if errors.As(err, &callbackPanic) {
 		r.bashPPRaise(callbackPanic.value)

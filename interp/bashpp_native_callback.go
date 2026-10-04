@@ -565,8 +565,13 @@ func (r *Runner) bashPPNativeCallback(ctx context.Context, selector string, recv
 	entry := len(r.callStack)
 	results := r.bashPPInvoke(ctx, bound, arguments)
 	if r.bashPPCallbackRaised(entry) && !r.exit.exiting {
-		payload := r.bashPPPanic.value()
+		payload, goexit := r.bashPPPanic.value(), r.bashPPGoexiting()
 		r.bashPPPanic, r.exit = savedPanic, savedExit
+		if goexit {
+			// The body ended by runtime.Goexit: the goroutine which raised
+			// this callback ends too. See bashpp_goexit.go.
+			return []bashPPBridgeValue{{Kind: bashPPGoexitKind}}, nil
+		}
 		return []bashPPBridgeValue{bashPPBridgePanicString(payload)}, nil
 	}
 	if err := ctx.Err(); err != nil {

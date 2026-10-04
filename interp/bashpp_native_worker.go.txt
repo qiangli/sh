@@ -463,6 +463,9 @@ func callback(selector string, recv value) ([]value,error) {
  if reply.Receiver!=nil && recv.Origin!=0 {if _,err:=decode(*reply.Receiver,nil);err!=nil{return nil,err}}
  if reply.Error=="" {if err:=applyCallbackSliceReply(reply.SliceBuffers);err!=nil{return nil,err}}
  if reply.Error!=""{return nil,fmt.Errorf("%s",reply.Error)}
+ // The original body ended by runtime.Goexit (a dependency call it made
+ // ended its serving goroutine): end the goroutine that raised the callback.
+ if len(reply.Values)==1 && reply.Values[0].Kind=="goexit" {bppRuntime.Goexit()}
  if len(reply.Values)==1 && reply.Values[0].Kind=="panic" {panic(originalCallbackPanic{reply.Values[0]})}
  return reply.Values,nil
 }
@@ -1095,5 +1098,8 @@ func main(){
  // Waiting for those calls would orphan listeners after host termination.
  for {var q request;if err:=decoder.Decode(&q);err!=nil{close(handles.stop);return};if q.Op=="close"{close(handles.stop);return}
   if q.Op=="callback-reply" {callbacks.Lock();wait:=callbacks.waiting[q.ID];callbacks.Unlock();if wait!=nil{wait<-q};continue}
-  go func(){if q.Route {defer routeEnter(q.ID)()};if q.PanicOnFault {old:=bppDebug.SetPanicOnFault(true);defer bppDebug.SetPanicOnFault(old)};answer:=response{ID:q.ID};if q.PanicOnFault {defer func(){if r:=recover();r!=nil{answer=response{ID:q.ID,Error:fmt.Sprintf("native dependency panic: %v",r)};if a,ok:=r.(interface{Addr()uintptr});ok{addr:=uint64(a.Addr());answer.PanicAddr=&addr}else if addr,ok:=nativeFaultAddr(q);ok{answer.PanicAddr=&addr};sendAnswer(answer)}}()};answer=dispatch(q);sendAnswer(answer)}()}
+  // A dependency call may end this serving goroutine with runtime.Goexit
+  // (testing.T.FailNow, SkipNow). The request is still answered, as ended by
+  // Goexit, so the interpreter can end the goroutine which made the call.
+  go func(){answered:=false;defer func(){if answered{return};if e:=recover();e!=nil{panic(e)};sendAnswer(response{ID:q.ID,Panic:&value{Kind:"goexit"}})}();if q.Route {defer routeEnter(q.ID)()};if q.PanicOnFault {old:=bppDebug.SetPanicOnFault(true);defer bppDebug.SetPanicOnFault(old)};answer:=response{ID:q.ID};if q.PanicOnFault {defer func(){if r:=recover();r!=nil{answer=response{ID:q.ID,Error:fmt.Sprintf("native dependency panic: %v",r)};if a,ok:=r.(interface{Addr()uintptr});ok{addr:=uint64(a.Addr());answer.PanicAddr=&addr}else if addr,ok:=nativeFaultAddr(q);ok{answer.PanicAddr=&addr};answered=true;sendAnswer(answer)}}()};answer=dispatch(q);answered=true;sendAnswer(answer)}()}
 }

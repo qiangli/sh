@@ -298,6 +298,11 @@ func (r *Runner) bashPPRecover() (any, bool) {
 	if !r.bashPPPanic.active {
 		return nil, false
 	}
+	// runtime.Goexit is not a panic: recover returns nil and the goroutine
+	// keeps ending. See bashpp_goexit.go.
+	if r.bashPPGoexiting() {
+		return nil, false
+	}
 	if r.bashPPDeferDepth == 0 || len(r.callStack) != r.bashPPDeferDepth {
 		return nil, false
 	}
@@ -341,6 +346,19 @@ func (r *Runner) bashPPRecover() (any, bool) {
 // Classic Bash++ reports only the panic chain. GoSource also reports the real
 // interpreted function frames and panic site it retained at the raise point.
 func (r *Runner) bashPPPanicTerminate() {
+	if r.bashPPGoexiting() {
+		// The Goexit left the outermost interpreted frame with its deferred
+		// calls run. A goroutine simply ends; the main goroutine ending this
+		// way leaves the program with no goroutine able to finish it.
+		r.bashPPPanic = bashPPPanicState{}
+		if r.bashPPGoTask {
+			r.exit = exitStatus{}
+			return
+		}
+		r.errf("fatal error: no goroutines (main called runtime.Goexit) - deadlock!\n")
+		r.exit = exitStatus{code: bashPPPanicStatus, exiting: true}
+		return
+	}
 	var b strings.Builder
 	for i, value := range r.bashPPPanic.chain {
 		if i > 0 {

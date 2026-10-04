@@ -1142,6 +1142,9 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 			if err := s.applyNativePointerUpdates(req, reply); err != nil {
 				return nil, err
 			}
+			if reply.Panic != nil && reply.Panic.Kind == bashPPGoexitKind {
+				return nil, &bashPPCallbackGoexit{}
+			}
 			if reply.Panic != nil {
 				return nil, &bashPPCallbackPanic{value: reply.Panic.stringText()}
 			}
