@@ -1080,7 +1080,8 @@ func (r *Runner) bashPPBinaryScalar(op token.Token, left, right bashPPScalar) (b
 	comparison := op == token.EQL || op == token.NEQ || op == token.LSS || op == token.LEQ || op == token.GTR || op == token.GEQ
 	shift := op == token.SHL || op == token.SHR
 	if !comparison && !shift {
-		if left.typ != "" && right.typ != "" && left.typ != right.typ {
+		if left.typ != "" && right.typ != "" && left.typ != right.typ &&
+			!r.goSourceImportedScalarTypesIdentical(left.typ, right.typ) {
 			return bashPPScalar{}, fmt.Errorf("BASHPP-EEXPR-MISMATCH: mismatched scalar types %s and %s", left.typ, right.typ)
 		}
 		// An untyped constant combines with a typed operand only when the

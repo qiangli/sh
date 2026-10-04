@@ -99,6 +99,27 @@ func (r *Runner) goSourceImportedScalarByPackageName(packageName, typeName strin
 	return found
 }
 
+func (r *Runner) goSourceImportedScalarIdentity(name string) (string, bool) {
+	typ, ok := r.goSourceImportedScalarType(name)
+	if !ok {
+		return "", false
+	}
+	named, ok := types.Unalias(typ).(*types.Named)
+	if !ok || named.Obj() == nil || named.Obj().Pkg() == nil {
+		return "", false
+	}
+	return named.Obj().Pkg().Path() + "." + named.Obj().Name(), true
+}
+
+func (r *Runner) goSourceImportedScalarTypesIdentical(left, right string) bool {
+	if left == "" || right == "" {
+		return false
+	}
+	leftIdentity, leftOK := r.goSourceImportedScalarIdentity(left)
+	rightIdentity, rightOK := r.goSourceImportedScalarIdentity(right)
+	return leftOK && rightOK && leftIdentity == rightIdentity
+}
+
 func (r *Runner) goSourceImportsPath(path string) bool {
 	for _, imported := range r.bashPPImports {
 		if imported == path {

@@ -343,6 +343,9 @@ func (r *Runner) bashPPTypeAssignable(actual, expected syntax.BashPPTypeExpr) bo
 	if bashPPTypeText(actual) == bashPPTypeText(expected) {
 		return true
 	}
+	if r.goSourceImportedScalarTypesIdentical(bashPPTypeText(actual), bashPPTypeText(expected)) {
+		return true
+	}
 	actual, expected = r.bashPPResolvedArrayLengths(actual), r.bashPPResolvedArrayLengths(expected)
 	if bashPPTypeText(actual) == bashPPTypeText(expected) {
 		return true

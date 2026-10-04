@@ -573,6 +573,7 @@ func (r *Runner) bashPPTypedScalarDeclValue(d *syntax.BashPPDecl) (expand.Variab
 	if value.typ != "" {
 		actual, _ := bashPPScalarNamedType(value.typ)
 		if value.typ != bashPPTypeText(d.DeclTypeExpr) &&
+			!r.goSourceImportedScalarTypesIdentical(value.typ, bashPPTypeText(d.DeclTypeExpr)) &&
 			!r.goSourceNativeTypeIdentical(actual, d.DeclTypeExpr) &&
 			!r.bashPPTypeAssignable(actual, d.DeclTypeExpr) {
 			return expand.Variable{}, constant.Unknown, true, fmt.Errorf("BASHPP-EASSIGN-TYPE: cannot use %s as %s in declaration", value.typ, bashPPTypeText(d.DeclTypeExpr))
@@ -2331,7 +2332,8 @@ func (r *Runner) bashPPSwitchCaseScalar(tag bashPPScalar, expr syntax.BashPPExpr
 }
 
 func (r *Runner) bashPPSwitchComparable(tag, candidate bashPPScalar) error {
-	if tag.typ != "" && candidate.typ != "" && tag.typ != candidate.typ {
+	if tag.typ != "" && candidate.typ != "" && tag.typ != candidate.typ &&
+		!r.goSourceImportedScalarTypesIdentical(tag.typ, candidate.typ) {
 		tagType, _ := bashPPScalarNamedType(tag.typ)
 		candidateType, _ := bashPPScalarNamedType(candidate.typ)
 		// A scalar read from an interface cell has already passed Go's static

@@ -20,3 +20,38 @@ func side() int { did++; return 1 }
 		t.Fatalf("run error=%v stderr=%q", err, stderr)
 	}
 }
+
+func TestGoSourceS374ImportedFileModeAliasIdentity(t *testing.T) {
+	out, stderr, err := runGoSource(t, "s374-filemode-alias-identity", `package main
+
+import (
+	"fmt"
+	"io/fs"
+	"os"
+)
+
+func mode() fs.FileMode { return os.ModeSymlink | 0o644 }
+
+func accept(os.FileMode) {}
+
+func main() {
+	m := mode()
+	if m&os.ModeSymlink == 0 {
+		panic("missing symlink bit")
+	}
+	var om os.FileMode = m
+	accept(m)
+	seen := map[os.FileMode]string{om: "ok"}
+	fmt.Println(seen[m])
+	switch m {
+	case os.ModeSymlink | 0o644:
+		fmt.Println("switch")
+	default:
+		panic("missed switch")
+	}
+}
+`)
+	if err != nil || stderr != "" || out != "ok\nswitch\n" {
+		t.Fatalf("err=%v stdout=%q stderr=%q", err, out, stderr)
+	}
+}
