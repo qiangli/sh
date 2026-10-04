@@ -349,21 +349,14 @@ func (r *Runner) bashPPPanicTerminate() {
 	if r.bashPPGoexiting() {
 		// The Goexit left the outermost interpreted frame with its deferred
 		// calls run. A goroutine simply ends; the main goroutine ending this
-		// way leaves remaining interpreted goroutines to keep running until
-		// they finish or one calls os.Exit.
+		// way leaves the program with no goroutine able to finish it.
 		r.bashPPPanic = bashPPPanicState{}
 		if r.bashPPGoTask {
 			r.exit = exitStatus{}
 			return
 		}
-		r.bashPPMainGoexit = true
-		if c := r.bashPPConcurrent; c != nil {
-			c.mu.Lock()
-			c.mainGoexit = true
-			c.changed.Broadcast()
-			c.mu.Unlock()
-		}
-		r.exit = exitStatus{exiting: true}
+		r.errf("fatal error: no goroutines (main called runtime.Goexit) - deadlock!\n")
+		r.exit = exitStatus{code: bashPPPanicStatus, exiting: true}
 		return
 	}
 	var b strings.Builder

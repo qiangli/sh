@@ -355,8 +355,6 @@ type Runner struct {
 	// closure, interface, collection, and declared-type provenance.
 	bashPPResultCells  []*bashPPCell
 	bashPPGoTask       bool
-	bashPPMainGoexit   bool
-	bashPPBlocking     bool
 	bashPPHostedTask   bool
 	bashPPHostedDecls  map[string]BashPPDeclaration
 	bashPPDeclRefused  bool

@@ -283,13 +283,6 @@ type bashPPConcurrent struct {
 	// finalizers holds the program's armed finalizers; see
 	// gosource_finalizer.go.
 	finalizers *goSourceFinalizers
-
-	mainGoexit  bool
-	mainBlocked bool
-	blocked     int
-	deadlock    bool
-	exitCalled  bool
-	exitStatus  int
 }
 
 // bashPPLockedWriter serializes one Write call at a time across every task in
@@ -579,74 +572,23 @@ func (r *Runner) bashPPArmBeforeBlock(ctx context.Context) bool {
 	return true
 }
 
-func (c *bashPPConcurrent) blockStartOrDeadlock(r *Runner) bool {
-	if c == nil {
-		return false
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.deadlock {
-		return true
-	}
-	if r.bashPPGoTask {
-		c.blocked++
-	} else {
-		c.mainBlocked = true
-	}
-	deadlocked := false
-	if !r.bashPPGoTask {
-		deadlocked = c.active == c.blocked
-	} else if c.mainGoexit || c.mainBlocked {
-		deadlocked = c.blocked == c.active
-	}
-	if deadlocked {
-		if r.bashPPGoTask {
-			c.blocked--
-		} else {
-			c.mainBlocked = false
-		}
-		c.deadlock = true
-		c.cancel()
-		c.changed.Broadcast()
-		r.errf("fatal error: all goroutines are asleep - deadlock!\n")
-		r.exit = exitStatus{code: bashPPPanicStatus, exiting: true}
-		return true
-	}
-	r.bashPPBlocking = true
-	return false
-}
-
-func (c *bashPPConcurrent) blockEnd(r *Runner) {
-	if c == nil {
-		return
-	}
-	c.mu.Lock()
-	if r.bashPPGoTask {
-		c.blocked--
-	} else {
-		c.mainBlocked = false
-	}
-	c.mu.Unlock()
-}
-
-func (r *Runner) bashPPBlockEnd() {
-	if !r.bashPPBlocking {
-		return
-	}
-	r.bashPPBlocking = false
-	if c := r.bashPPConcurrent; c != nil {
-		c.blockEnd(r)
-	}
-}
-
 func (r *Runner) bashPPDeadlockIfNoTasks(ctx context.Context) bool {
-	if !r.bashPPGoSource || r.bashPPConcurrent == nil {
+	if !r.bashPPGoSource || r.bashPPGoTask || r.bashPPConcurrent == nil {
 		return false
 	}
 	if err := r.bashPPTaskContext(ctx).Err(); err != nil {
 		return false
 	}
-	return r.bashPPConcurrent.blockStartOrDeadlock(r)
+	c := r.bashPPConcurrent
+	c.mu.Lock()
+	deadlocked := c.active == 0
+	c.mu.Unlock()
+	if !deadlocked {
+		return false
+	}
+	r.errf("fatal error: all goroutines are asleep - deadlock!\n")
+	r.exit = exitStatus{code: bashPPPanicStatus}
+	return true
 }
 
 // bashPPTaskOpen acquires a filesystem descriptor without ever blocking on a
@@ -927,7 +869,6 @@ func (r *Runner) bashPPSend(ctx context.Context, s *syntax.BashPPSend) {
 	if r.bashPPDeadlockIfNoTasks(ctx) {
 		return
 	}
-	defer r.bashPPBlockEnd()
 	select {
 	case c.ch <- v:
 	case <-c.closing:
@@ -982,7 +923,6 @@ func (r *Runner) bashPPReceiveCell(ctx context.Context, recv *syntax.BashPPRecei
 		if r.bashPPDeadlockIfNoTasks(ctx) {
 			return nil, false
 		}
-		defer r.bashPPBlockEnd()
 		select {
 		case v, open = <-c.ch:
 		case <-taskCtx.Done():
@@ -1178,7 +1118,6 @@ func (r *Runner) bashPPTaskSnapshot(ordinal uint64, shared map[*bashPPCell]bool)
 }
 
 func (r *Runner) closeBashPPTaskResources() {
-	r.bashPPBlockEnd()
 	r.stopSignalSubscriptions()
 	// Background jobs, coprocs, and process substitutions created by this task
 	// inherit its group context. Cancel and join them before releasing their fd
@@ -1358,110 +1297,31 @@ func (r *Runner) bashPPWait(ctx context.Context) {
 	}
 	if c == nil {
 		r.bashPPPruneIssuedHandles(nil)
-		if r.bashPPMainGoexit {
-			r.errf("fatal error: no goroutines (main called runtime.Goexit) - deadlock!\n")
-			r.exit = exitStatus{code: bashPPPanicStatus, exiting: true}
-		}
 		return
 	}
-	if !r.bashPPMainGoexit {
-		// EOF is the structured lifetime boundary. Successful blocked tasks must
-		// not keep a File Run alive forever.
-		c.cancel()
-		c.mu.Lock()
-		for c.active != 0 {
-			c.changed.Wait()
-		}
-		c.quiesced = true
-		failure := c.primaryFailureLocked()
-		c.mu.Unlock()
-		r.bashPPPruneIssuedHandles(c)
-		c.closeFIFOs(nil)
-		r.bashPPClearChannelRefs(c)
-		if failure != nil {
-			r.errf("bash++: task failed: %s\n", failure.text)
-			if r.exit.code == 0 {
-				r.exit.code = failure.code
-			}
-		}
-		// A completed File Run never lends its quiesced registry to a later Run.
-		// Handles left in persistent shell variables consequently become invalid
-		// capabilities rather than aliases into stale channel state.
-		r.bashPPConcurrent = nil
-		return
-	}
-
-	// Main goroutine called runtime.Goexit: keep running until every other
-	// interpreted goroutine has finished or one calls os.Exit; report deadlock
-	// only when no goroutine can make progress.
+	// EOF is the structured lifetime boundary. Successful blocked tasks must
+	// not keep a File Run alive forever.
+	c.cancel()
 	c.mu.Lock()
-	for c.active != 0 && !c.exitCalled && !c.deadlock && ctx.Err() == nil {
+	for c.active != 0 {
 		c.changed.Wait()
 	}
-	if ctx.Err() != nil && !c.exitCalled && !c.deadlock {
-		c.cancel()
-		for c.active != 0 {
-			c.changed.Wait()
-		}
-		c.quiesced = true
-		c.mu.Unlock()
-		r.bashPPPruneIssuedHandles(c)
-		c.closeFIFOs(nil)
-		r.bashPPClearChannelRefs(c)
-		r.bashPPConcurrent = nil
-		r.exit.fatal(ctx.Err())
-		return
-	}
-	if c.exitCalled {
-		code := c.exitStatus
-		c.cancel()
-		for c.active != 0 {
-			c.changed.Wait()
-		}
-		c.quiesced = true
-		c.mu.Unlock()
-		r.bashPPPruneIssuedHandles(c)
-		c.closeFIFOs(nil)
-		r.bashPPClearChannelRefs(c)
-		r.bashPPConcurrent = nil
-		r.exit = exitStatus{code: uint8(code), exiting: true}
-		if code != 0 {
-			r.exit.fatalExit = true
-			r.exit.err = ExitStatus(uint8(code))
-		}
-		return
-	}
-	if c.deadlock {
-		c.cancel()
-		for c.active != 0 {
-			c.changed.Wait()
-		}
-		c.quiesced = true
-		c.mu.Unlock()
-		r.bashPPPruneIssuedHandles(c)
-		c.closeFIFOs(nil)
-		r.bashPPClearChannelRefs(c)
-		r.bashPPConcurrent = nil
-		r.exit = exitStatus{code: bashPPPanicStatus, exiting: true}
-		return
-	}
-	// c.active == 0: every other interpreted goroutine has finished without calling os.Exit.
 	c.quiesced = true
 	failure := c.primaryFailureLocked()
 	c.mu.Unlock()
 	r.bashPPPruneIssuedHandles(c)
 	c.closeFIFOs(nil)
 	r.bashPPClearChannelRefs(c)
-	r.bashPPConcurrent = nil
 	if failure != nil {
 		r.errf("bash++: task failed: %s\n", failure.text)
 		if r.exit.code == 0 {
 			r.exit.code = failure.code
 		}
-		return
 	}
-	r.errf("fatal error: no goroutines (main called runtime.Goexit) - deadlock!\n")
-	r.exit = exitStatus{code: bashPPPanicStatus, exiting: true}
+	// A completed File Run never lends its quiesced registry to a later Run.
+	// Handles left in persistent shell variables consequently become invalid
+	// capabilities rather than aliases into stale channel state.
+	r.bashPPConcurrent = nil
 }
 
 func (r *Runner) bashPPPruneIssuedHandles(c *bashPPConcurrent) {
@@ -1778,7 +1638,6 @@ func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
 		if r.bashPPDeadlockIfNoTasks(ctx) {
 			return
 		}
-		defer r.bashPPBlockEnd()
 		<-taskCtx.Done()
 		r.bashPPTaskCanceled = true
 		r.exit.code = 1
@@ -1831,7 +1690,6 @@ func (r *Runner) bashPPSelect(ctx context.Context, s *syntax.BashPPSelect) {
 				return
 			}
 			i, v, open = reflect.Select(cases)
-			r.bashPPBlockEnd()
 		}
 	}
 	releaseSends()
@@ -1955,12 +1813,10 @@ func (r *Runner) bashPPRangeChannel(ctx context.Context, rng *syntax.BashPPRange
 			select {
 			case v, open = <-c.ch:
 			case <-taskCtx.Done():
-				r.bashPPBlockEnd()
 				r.bashPPTaskCanceled = true
 				r.exit.code = 1
 				return
 			}
-			r.bashPPBlockEnd()
 		}
 		if !open {
 			return

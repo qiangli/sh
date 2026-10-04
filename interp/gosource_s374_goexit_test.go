@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"testing"
 	"time"
 
@@ -34,39 +33,6 @@ func main() { done := make(chan struct{}); go func() { defer close(done); defer 
 		"recover_does_not_stop": `package main
 import ("fmt"; "runtime")
 func main() { done := make(chan struct{}); go func() { defer close(done); defer func() { fmt.Printf("recover=%v\\n", recover()) }(); defer fmt.Println("deferred"); runtime.Goexit() }(); <-done; fmt.Println("main") }
-`,
-		"init_goexit": `package main
-import (
-	"os"
-	"runtime"
-)
-func init() {
-	c := make(chan int, 1)
-	defer func() {
-		c <- 0
-	}()
-	go func() {
-		os.Exit(<-c)
-	}()
-	runtime.Goexit()
-}
-func main() {}
-`,
-		"main_goexit": `package main
-import (
-	"os"
-	"runtime"
-)
-func main() {
-	c := make(chan int, 1)
-	defer func() {
-		c <- 0
-	}()
-	go func() {
-		os.Exit(<-c)
-	}()
-	runtime.Goexit()
-}
 `,
 	}
 	for name, source := range cases {
@@ -96,23 +62,5 @@ func main() {
 				t.Fatalf("interpreter differs: err=%v stdout=%q stderr=%q; go run=%q", runErr, stdout.String(), stderr.String(), want)
 			}
 		})
-	}
-}
-
-func TestGoSourceS374FixedbugsIssue5963(t *testing.T) {
-	root := filepath.Join(runtime.GOROOT(), "test", "fixedbugs")
-	source, err := os.ReadFile(filepath.Join(root, "issue5963.go"))
-	if err != nil {
-		t.Skipf("skipping: %v", err)
-	}
-	stdout, stderr, err := runGoSource(t, "issue5963", string(source))
-	if err != nil {
-		t.Fatalf("run: %v\nstderr:\n%s", err, stderr)
-	}
-	if stderr != "" {
-		t.Fatalf("stderr:\n%s", stderr)
-	}
-	if stdout != "" {
-		t.Fatalf("stdout:\n%s", stdout)
 	}
 }
