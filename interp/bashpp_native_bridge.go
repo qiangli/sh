@@ -55,6 +55,9 @@ type bashPPBridgeValue struct {
 	// values (bashpp_s248_reflected_method.go); neither ever crosses.
 	localReflect *goSourceLocalReflect
 	localCell    *bashPPCell
+	// A pointer argument keeps its storage live while the request is being
+	// assembled, before openOriginRequest can claim its transport origin.
+	localOrigin *bashPPPointer
 
 	// reflectCopy marks a handle derived from an admitted reflect.ValueOf
 	// copy (reflectedValueCopy). Host-only: it is set on replies by the
@@ -148,11 +151,11 @@ type bashPPBridgeEntry struct {
 	Value bashPPBridgeValue `json:"value"`
 }
 type bashPPBridgeRequest struct {
-	AckHandles   bool                      `json:"ack_handles,omitempty"`
-	Releases     []uint64                  `json:"releases,omitempty"`
-	OriginReleases []uint64                `json:"origin_releases,omitempty"`
-	SliceBuffers []bashPPNativeSliceBuffer `json:"slice_buffers,omitempty"`
-	sliceTargets []*bashPPNativeSlice
+	AckHandles     bool                      `json:"ack_handles,omitempty"`
+	Releases       []uint64                  `json:"releases,omitempty"`
+	OriginReleases []uint64                  `json:"origin_releases,omitempty"`
+	SliceBuffers   []bashPPNativeSliceBuffer `json:"slice_buffers,omitempty"`
+	sliceTargets   []*bashPPNativeSlice
 	// sliceMutating[i] distinguishes a full in-place mutation writeback (sort)
 	// from the byte-read writeback: a read fills a caller buffer up to its
 	// capacity, while a mutation reorders exactly the visible length. Host-only.
