@@ -170,6 +170,7 @@ func (r *Runner) goSourceInvokeCallbackCells(ctx context.Context, fn *bashPPFunc
 	}()
 	r.bashPPCallChannels, r.bashPPCallInterfaces = nil, nil
 	r.bashPPCallCells = cells
+	r.bashPPResultCells = nil
 	failure := r.bashPPShortFailureSeq
 	r.bashPPInvoke(ctx, fn, texts)
 	if r.bashPPPanicking() || r.exit.exiting || r.exit.fatalExit || r.exit.err != nil || r.bashPPShortFailureSeq != failure {

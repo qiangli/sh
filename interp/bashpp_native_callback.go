@@ -562,8 +562,15 @@ func (r *Runner) bashPPNativeCallback(ctx context.Context, selector string, recv
 		}
 		r.bashPPCallCells = cells
 	}
+	r.bashPPResultCells = nil
 	entry := len(r.callStack)
 	results := r.bashPPInvoke(ctx, bound, arguments)
+	if r.bashPPGoexiting() {
+		r.bashPPPanic, r.exit = savedPanic, savedExit
+		// The body ended by runtime.Goexit: the goroutine which raised
+		// this callback ends too. See bashpp_goexit.go.
+		return []bashPPBridgeValue{{Kind: bashPPGoexitKind}}, nil
+	}
 	if r.bashPPCallbackRaised(entry) && !r.exit.exiting {
 		payload, goexit := r.bashPPPanic.value(), r.bashPPGoexiting()
 		r.bashPPPanic, r.exit = savedPanic, savedExit
@@ -591,8 +598,8 @@ func (r *Runner) bashPPNativeCallback(ctx context.Context, selector string, recv
 	// crosses back as typed values, so a native handle stays an authenticated
 	// handle rather than being flattened into text.
 	if want := bashppParams(bound.results()); !bashPPStringResult(want) {
-		if len(results) != len(want) || len(r.bashPPResultCells) != len(want) {
-			return nil, fmt.Errorf("gosource: original %s returned %d values, want %d", selector, len(results), len(want))
+		if len(r.bashPPResultCells) != len(want) {
+			return nil, fmt.Errorf("gosource: original %s returned %d values, want %d", selector, len(r.bashPPResultCells), len(want))
 		}
 		for _, cell := range r.bashPPResultCells {
 			value, err := r.bashPPBridgeCell(cell)

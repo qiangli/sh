@@ -558,11 +558,13 @@ func decodeIn(st *decodeState, v value, target reflect.Type)(reflect.Value,error
    if (target==nil||target.Kind()!=reflect.Func)&&typ!=nil&&typ.Kind()==reflect.Func{target=typ}
    if target==nil||target.Kind()!=reflect.Func{return result,fmt.Errorf("original callback requires a typed function parameter")}
    result=reflect.MakeFunc(target,func(args []reflect.Value)[]reflect.Value{
-    inputs:=make([]value,len(args));for i,arg:=range args {inputs[i]=encode(arg)}
-    returned,err:=callback("",value{Kind:"callback",Handle:v.Handle,Elements:inputs});if err!=nil{panic(err)}
-    if len(returned)!=target.NumOut(){panic(fmt.Errorf("original callback result count mismatch"))}
-    outputs:=make([]reflect.Value,len(returned));for i,item:=range returned {output,err:=decode(item,target.Out(i));if err!=nil{panic(err)};outputs[i]=output};return outputs
-   })
+   inputs:=make([]value,len(args));for i,arg:=range args {inputs[i]=encode(arg)}
+   returned,err:=callback("",value{Kind:"callback",Handle:v.Handle,Elements:inputs});if err!=nil{panic(err)}
+   if len(returned)==1 && returned[0].Kind=="goexit" {bppRuntime.Goexit()}
+   if len(returned)==1 && returned[0].Kind=="panic" {panic(originalCallbackPanic{returned[0]})}
+   if len(returned)!=target.NumOut(){panic(fmt.Errorf("original callback result count mismatch"))}
+   outputs:=make([]reflect.Value,len(returned));for i,item:=range returned {output,err:=decode(item,target.Out(i));if err!=nil{panic(err)};outputs[i]=output};return outputs
+  })
    return result,nil
   case "string":if typ.Kind()!=reflect.String{return result,fmt.Errorf("string for %s",typ)};if v.Bytes!=nil{result.SetString(string(v.Bytes))}else{result.SetString(v.Text)}
   case "bool":b,e:=strconv.ParseBool(v.Text);if e!=nil||typ.Kind()!=reflect.Bool{return result,fmt.Errorf("invalid bool")};result.SetBool(b)

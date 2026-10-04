@@ -53,6 +53,74 @@ func main() {
 	}
 }
 
+// TestS374ConstraintEvalTestdirExperimentTagSkip exercises cmd/internal/testdir's
+// actual build-tag callback shape. On a toolchain without GOEXPERIMENT=simd,
+// the goexperiment.simd half of this expression is false even on amd64, so the
+// harness must skip the file instead of running it.
+//
+// Sprint: #374; Story: #1537; Story-ID: 875fb3251256
+func TestS374ConstraintEvalTestdirExperimentTagSkip(t *testing.T) {
+	const source = `package main
+
+import (
+	"fmt"
+	"go/build"
+	"go/build/constraint"
+	"slices"
+	"strings"
+	"unicode"
+)
+
+type context struct {
+	GOOS   string
+	GOARCH string
+}
+
+func (ctxt *context) match(name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, c := range name {
+		if !unicode.IsLetter(c) && !unicode.IsDigit(c) && c != '_' && c != '.' {
+			return false
+		}
+	}
+	if slices.Contains(build.Default.ReleaseTags, name) {
+		return true
+	}
+	if strings.HasPrefix(name, "goexperiment.") {
+		return slices.Contains(build.Default.ToolTags, name)
+	}
+	if name == ctxt.GOOS || name == "gc" {
+		return true
+	}
+	if name == ctxt.GOARCH {
+		return true
+	}
+	return false
+}
+
+func main() {
+	expr, err := constraint.Parse("//go:build goexperiment.simd && amd64")
+	if err != nil {
+		panic(err)
+	}
+	ctxt := &context{GOOS: "linux", GOARCH: "amd64"}
+	fmt.Println(expr.Eval(ctxt.match))
+}
+`
+	dir := t.TempDir()
+	path := filepath.Join(dir, "original.go")
+	if err := os.WriteFile(path, []byte(source), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	oracle := runNativeOracle(t, dir, path, nil, "")
+	got := runGoSourceRunner(t, dir, path, source, nil, "")
+	if got.stdout != oracle.stdout || got.stderr != oracle.stderr || got.status != oracle.status {
+		t.Fatalf("interp=%+v oracle=%+v", got, oracle)
+	}
+}
+
 // TestS319ConstraintEvalForeignImplementationRefuses proves that observed
 // dispatch is not a package-wide name match. An external type can satisfy
 // constraint.Expr by embedding it and overriding Eval; both a top-level value

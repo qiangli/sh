@@ -118,3 +118,105 @@ func main() {
 		t.Logf("stdout:\n%s\nstderr:\n%s", got.stdout, got.stderr)
 	}
 }
+
+// TestGoSourceS374ConstraintSkipInsideTestingCallback pins the
+// cmd/internal/testdir failure mode from story #1537: a dependency-owned
+// constraint.Expr calls an interpreted method-value predicate, the interpreted
+// test reaches t.Skip, and the dependency callback must end the native testing
+// goroutine with runtime.Goexit rather than returning the private goexit marker
+// as an ordinary Eval result.
+//
+// Sprint: #374; Story: #1537; Story-ID: 875fb3251256
+func TestGoSourceS374ConstraintSkipInsideTestingCallback(t *testing.T) {
+	xtest := gosource.PackageSpec{Path: "example.com/constraintskip_test", Sources: []gosource.Source{s249Source("constraintskip_test.go", `package constraintskip_test
+
+import (
+	"fmt"
+	"go/build/constraint"
+	"testing"
+)
+
+type context struct{}
+
+func (*context) match(tag string) bool {
+	switch tag {
+	case "amd64":
+		return true
+	case "goexperiment.simd":
+		return false
+	default:
+		panic(tag)
+	}
+}
+
+func TestConstraintSkip(t *testing.T) {
+	line := "//go:build goexperiment.simd && amd64"
+	expr, err := constraint.Parse(line)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !expr.Eval((&context{}).match) {
+		t.Skip(line)
+	}
+	fmt.Println("unreachable after build-constraint skip")
+}
+
+func TestAfter(t *testing.T) {
+	fmt.Println("after ran")
+}
+`)}}
+	driver := s249Source("_testmain.go", `package main
+
+import (
+	"os"
+	"testing"
+	"testing/internal/testdeps"
+
+	_xtest "example.com/constraintskip_test"
+)
+
+var tests = []testing.InternalTest{
+	{"TestConstraintSkip", _xtest.TestConstraintSkip},
+	{"TestAfter", _xtest.TestAfter},
+}
+
+var benchmarks = []testing.InternalBenchmark{}
+var fuzzTargets = []testing.InternalFuzzTarget{}
+var examples = []testing.InternalExample{}
+
+func init() {
+	testdeps.ModulePath = "example.com/constraintskip"
+	testdeps.ImportPath = "example.com/constraintskip"
+}
+
+func main() {
+	m := testing.MainStart(testdeps.TestDeps{}, tests, benchmarks, fuzzTargets, examples)
+	os.Exit(m.Run())
+}
+`)
+	got, err := runS249PackageTestMain(t, []gosource.Source{driver}, []gosource.PackageSpec{xtest}, "-test.v", "-test.timeout=30s")
+	if err != nil {
+		t.Fatalf("Runner: %v; stderr: %s", err, got.stderr)
+	}
+	if got.status != 0 {
+		t.Errorf("status = %d, want 0\nstdout:\n%s\nstderr:\n%s", got.status, got.stdout, got.stderr)
+	}
+	for _, want := range []string{
+		"--- SKIP: TestConstraintSkip",
+		"//go:build goexperiment.simd && amd64",
+		"after ran\n",
+		"--- PASS: TestAfter",
+	} {
+		if !strings.Contains(got.stdout, want) {
+			t.Errorf("stdout lacks %q", want)
+		}
+	}
+	for _, unwanted := range []string{"unreachable", "panic:", "original callback result count mismatch"} {
+		if strings.Contains(got.stdout+got.stderr, unwanted) {
+			t.Errorf("output contains %q", unwanted)
+		}
+	}
+	if t.Failed() {
+		t.Logf("stdout:\n%s\nstderr:\n%s", got.stdout, got.stderr)
+	}
+}

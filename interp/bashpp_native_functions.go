@@ -509,9 +509,16 @@ func (r *Runner) bashPPRunCallbackFunc(ctx context.Context, fn *bashPPFunc, args
 		}
 		cells[i], texts[i] = cell, text
 	}
+	r.bashPPResultCells = nil
 	r.bashPPCallCells = cells
 	entry := len(r.callStack)
-	results := r.bashPPInvoke(ctx, fn, texts)
+	r.bashPPInvoke(ctx, fn, texts)
+	if r.bashPPGoexiting() {
+		r.bashPPPanic, r.exit = savedPanic, savedExit
+		// The body ended by runtime.Goexit: the goroutine which raised
+		// this callback ends too. See bashpp_goexit.go.
+		return []bashPPBridgeValue{{Kind: bashPPGoexitKind}}, nil
+	}
 	if r.bashPPCallbackRaised(entry) && !r.exit.exiting {
 		payload, goexit := r.bashPPPanic.value(), r.bashPPGoexiting()
 		r.bashPPPanic, r.exit = savedPanic, savedExit
@@ -531,7 +538,11 @@ func (r *Runner) bashPPRunCallbackFunc(ctx context.Context, fn *bashPPFunc, args
 	if r.exit.exiting || r.exit.fatalExit || r.exit.code != 0 || r.bashPPShortFailureSeq != failure {
 		return nil, fmt.Errorf("gosource: original function callback failed (status %d)", r.exit.code)
 	}
-	if len(results) != bashppResultCount(fn.results()) || len(results) != len(r.bashPPResultCells) {
+	want := bashppResultCount(fn.results())
+	if want == 0 {
+		return nil, nil
+	}
+	if len(r.bashPPResultCells) != want {
 		return nil, fmt.Errorf("gosource: original callback result count mismatch")
 	}
 	for _, cell := range r.bashPPResultCells {
