@@ -3,7 +3,6 @@
 package interp_test
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/go-quicktest/qt"
