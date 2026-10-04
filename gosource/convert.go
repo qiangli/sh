@@ -530,6 +530,7 @@ func (c *converter) checkedType(typ types.Type, at ast.Node, what string) s.Bash
 		c.fail(at, what)
 		return nil
 	}
+	c.bindSyntheticChannelTypes(parsed, typ)
 	c.syntheticPos = at.Pos()
 	result := c.typ(parsed)
 	c.syntheticPos = token.NoPos

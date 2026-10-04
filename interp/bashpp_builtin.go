@@ -868,8 +868,9 @@ func (r *Runner) bashPPBuiltinLength(name string, c *syntax.BashPPCall, args []b
 		return nil, fmt.Errorf("BASHPP-EBUILTIN-ARITY: %s expects exactly 1 argument; got %d argument(s)", name, len(args))
 	}
 	arg := args[0]
-	if r.bashPPGoSource && arg.cell != nil && arg.cell.vr.Kind == expand.String && arg.cell.vr.Str == "" {
-		if _, ok := arg.typ.(*syntax.BashPPChanType); ok {
+	// Resident channels in aggregates carry identity in metadata, not text.
+	if r.bashPPGoSource && arg.channel == nil && arg.cell != nil && arg.cell.vr.Kind == expand.String && arg.cell.vr.Str == "" {
+		if _, ok := r.bashPPUnderlyingType(arg.typ).(*syntax.BashPPChanType); ok {
 			return bashPPBuiltinScalarCell("0"), nil
 		}
 	}

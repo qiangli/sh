@@ -90,8 +90,9 @@ func (m channelTypeKeyMemo) keys(t types.Type) []string {
 }
 
 func (c *converter) planLocalChannelTypes() {
-	parent, selected, boundary := map[string]string{}, map[string]bool{}, map[string]bool{}
+	parent, candidates, boundary := map[string]string{}, map[string]bool{}, map[string]bool{}
 	typeKeys := channelTypeKeyMemo{}
+	opaque := false
 	var find func(string) string
 	find = func(x string) string {
 		if parent[x] == "" {
@@ -181,6 +182,15 @@ func (c *converter) planLocalChannelTypes() {
 
 	for _, f := range c.files {
 		ast.Inspect(f, func(n ast.Node) bool {
+			if e, ok := n.(ast.Expr); ok {
+				t := c.info.TypeOf(e)
+				if channelOpaqueStorage(t, map[types.Type]bool{}) {
+					opaque = true
+				}
+				for _, key := range typeKeys.keys(t) {
+					candidates[key] = true
+				}
+			}
 			switch x := n.(type) {
 			case *ast.Ident:
 				// An imported function or variable can cross through a local
@@ -189,6 +199,9 @@ func (c *converter) planLocalChannelTypes() {
 				// syntactically direct imported call.
 				if obj := c.info.ObjectOf(x); obj != nil && obj.Pkg() != nil && obj.Pkg().Path() != c.packagePath {
 					mark(obj.Type())
+					if obj.Pkg().Path() == "unsafe" {
+						opaque = true
+					}
 				}
 			case *ast.TypeAssertExpr:
 				// An opaque interface can conceal a native channel. A checked
@@ -220,7 +233,7 @@ func (c *converter) planLocalChannelTypes() {
 					if key == "" {
 						continue
 					}
-					selected[key] = true
+					candidates[key] = true
 					if first == "" {
 						first = key
 					} else {
@@ -229,10 +242,18 @@ func (c *converter) planLocalChannelTypes() {
 				}
 				// Do not prune: native calls in arm bodies invalidate the proof.
 			case *ast.CallExpr:
-				if native(x.Fun) {
+				// Only a statically bound local function, literal, builtin or
+				// conversion is known not to call the dependency worker.
+				if native(x.Fun) || !c.localChannelCall(x.Fun) {
 					mark(c.info.TypeOf(x))
+					if sel, ok := ast.Unparen(x.Fun).(*ast.SelectorExpr); ok {
+						mark(c.info.TypeOf(sel.X))
+					}
 					for _, a := range x.Args {
 						mark(c.info.TypeOf(a))
+						if channelCallbackType(c.info.TypeOf(a), c.packagePath) {
+							opaque = true
+						}
 					}
 				}
 			case *ast.AssignStmt:
@@ -268,9 +289,111 @@ func (c *converter) planLocalChannelTypes() {
 		bad[find(key)] = true
 	}
 	c.localChannelTypes = map[string]bool{}
-	for key := range selected {
-		if !bad[find(key)] {
+	for key := range candidates {
+		if !opaque && !bad[find(key)] {
 			c.localChannelTypes[key] = true
 		}
 	}
+}
+
+// Opaque storage loses the concrete provenance needed by a type-wide proof.
+// Reject the package certificate rather than attempt dynamic migration. Do not
+// descend into function signatures here: ordinary fmt calls have ...any formal
+// parameters, but their actual arguments are examined at the call boundary.
+func channelOpaqueStorage(t types.Type, seen map[types.Type]bool) bool {
+	if t == nil || seen[t] {
+		return false
+	}
+	seen[t] = true
+	switch x := t.Underlying().(type) {
+	case *types.Interface:
+		return true
+	case *types.Pointer:
+		return channelOpaqueStorage(x.Elem(), seen)
+	case *types.Slice:
+		return channelOpaqueStorage(x.Elem(), seen)
+	case *types.Array:
+		return channelOpaqueStorage(x.Elem(), seen)
+	case *types.Map:
+		return channelOpaqueStorage(x.Key(), seen) || channelOpaqueStorage(x.Elem(), seen)
+	case *types.Struct:
+		for i := 0; i < x.NumFields(); i++ {
+			if channelOpaqueStorage(x.Field(i).Type(), seen) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// A callable or method-bearing object may expose captured package storage
+// without mentioning it in its signature. Keep every channel native when such
+// a value is offered to an unknown/native callee, even through an aggregate.
+func channelCallbackType(t types.Type, packagePath string) bool {
+	seen := map[types.Type]bool{}
+	var visit func(types.Type) bool
+	visit = func(t types.Type) bool {
+		if t == nil || seen[t] {
+			return false
+		}
+		seen[t] = true
+		for _, receiver := range []types.Type{t, types.NewPointer(t)} {
+			methods := types.NewMethodSet(receiver)
+			for i := 0; i < methods.Len(); i++ {
+				obj := methods.At(i).Obj()
+				if obj.Pkg() != nil && obj.Pkg().Path() == packagePath {
+					return true
+				}
+			}
+		}
+		switch x := t.Underlying().(type) {
+		case *types.Signature:
+			return true
+		case *types.Pointer:
+			return visit(x.Elem())
+		case *types.Array:
+			return visit(x.Elem())
+		case *types.Slice:
+			return visit(x.Elem())
+		case *types.Map:
+			return visit(x.Key()) || visit(x.Elem())
+		case *types.Struct:
+			for i := 0; i < x.NumFields(); i++ {
+				if visit(x.Field(i).Type()) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	return visit(t)
+}
+
+func (c *converter) localChannelCall(e ast.Expr) bool {
+	e = ast.Unparen(e)
+	if c.info.Types[e].IsType() {
+		return true
+	}
+	switch x := e.(type) {
+	case *ast.FuncLit:
+		return true
+	case *ast.IndexExpr:
+		return c.localChannelCall(x.X)
+	case *ast.IndexListExpr:
+		return c.localChannelCall(x.X)
+	case *ast.Ident:
+		switch o := c.info.ObjectOf(x).(type) {
+		case *types.Builtin:
+			return true
+		case *types.Func:
+			return o.Pkg() != nil && o.Pkg().Path() == c.packagePath
+		}
+	case *ast.SelectorExpr:
+		if sel := c.info.Selections[x]; sel != nil {
+			_, iface := sel.Recv().Underlying().(*types.Interface)
+			o, ok := sel.Obj().(*types.Func)
+			return !iface && ok && o.Pkg() != nil && o.Pkg().Path() == c.packagePath
+		}
+	}
+	return false
 }

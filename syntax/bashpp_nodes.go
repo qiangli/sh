@@ -1458,8 +1458,8 @@ type BashPPChanType struct {
 	Arrow     Pos
 	Direction string
 	// LocalDomain is set by Go-source package planning when every channel
-	// type connected to this one by a select is interpreter-owned and none
-	// crosses a native package boundary.
+	// type connected by assignment, payload or select is interpreter-owned
+	// and none crosses a native package boundary. Inferred types retain it.
 	LocalDomain bool
 	Element     BashPPTypeExpr
 	Elem        *Lit

@@ -1733,6 +1733,23 @@ func (r *Runner) bashPPRange(ctx context.Context, rng *syntax.BashPPRange) {
 	if r.bashPPRangeLines(ctx, rng) || r.bashPPRangeForeignIterator(ctx, rng) {
 		return
 	}
+	// A field, index or directional conversion can hold a resident channel.
+	// Classify its static type before the collection dispatcher erases its
+	// capability into an aggregate value. Evaluate the operand exactly once.
+	if r.bashPPGoSource && rng.Expr != nil {
+		if typ, ok := r.goSourceStaticExprType(rng.Expr); ok {
+			if _, channel := r.bashPPUnderlyingType(typ).(*syntax.BashPPChanType); channel {
+				if c, ok := r.goSourceChannelOperand(rng.Expr, rng.Chan, "receive"); ok {
+					if c.native != nil {
+						r.goSourceRangeNativeChannel(ctx, rng, c.native)
+					} else {
+						r.bashPPRangeChannel(ctx, rng, c)
+					}
+				}
+				return
+			}
+		}
+	}
 	if r.goSourceRangeFunction(ctx, rng) {
 		return
 	}
