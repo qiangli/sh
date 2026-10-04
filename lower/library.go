@@ -1,6 +1,7 @@
 package lower
 
 import (
+	"bytes"
 	"fmt"
 	"go/ast"
 	"go/format"
@@ -135,6 +136,69 @@ func identifiersIn(text string) map[string]bool {
 			ids[lit] = true
 		}
 	}
+}
+
+// pruneUnusedGoSourceImports removes imports that are absent from the Go the
+// emitter actually writes. The Go-source converter may need a checked type
+// for interpretation, then omit that type in the native declaration; Go may
+// also evaluate a constant (such as an array bound using unsafe.Sizeof) before
+// lowering sees the source expression. In both cases the original import can
+// become unused in the generated Go.
+func pruneUnusedGoSourceImports(source string, bindings map[string]string, cgo map[string]bool) ([]byte, map[string]bool, error) {
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "generated.go", source, parser.ParseComments)
+	if err != nil {
+		return nil, nil, err
+	}
+	used := map[string]bool{}
+	ast.Inspect(f, func(n ast.Node) bool {
+		sel, ok := n.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		if id, ok := sel.X.(*ast.Ident); ok {
+			used[id.Name] = true
+		}
+		return true
+	})
+	data := []byte(source)
+	var ranges [][2]int
+	retained := map[string]bool{}
+	for _, spec := range f.Imports {
+		path, err := strconv.Unquote(spec.Path.Value)
+		if err != nil {
+			return nil, nil, err
+		}
+		alias := ""
+		if spec.Name != nil {
+			alias = spec.Name.Name
+		} else {
+			for key, p := range bindings {
+				if p == path && !strings.Contains(key, " ") {
+					alias = key
+					break
+				}
+			}
+		}
+		if alias == "" || alias == "." || alias == "_" || cgo[alias] || used[alias] {
+			retained[path] = true
+			continue
+		}
+		pos := fset.Position(spec.Pos()).Offset
+		start := bytes.LastIndex(data[:pos], []byte("\n")) + 1
+		end := bytes.IndexByte(data[pos:], '\n')
+		if end < 0 {
+			end = len(data)
+		} else {
+			end += pos + 1
+		}
+		ranges = append(ranges, [2]int{start, end})
+	}
+	for i := len(ranges) - 1; i >= 0; i-- {
+		r := ranges[i]
+		data = append(data[:r[0]], data[r[1]:]...)
+	}
+	return data, retained, nil
 }
 
 // libraryImportLines spells the imports of one emitted library file. An

@@ -175,3 +175,41 @@ func Sizes() int {
 		}
 	}
 }
+
+// TestGoSourceMultiPackageImportIsNotUnused reproduces compiledir packages:
+// a function in pkg2 exposes a named type from one, then pkg3 uses pkg2's
+// inferred result. The emitted ordinary Go only needs pkg2 in its initializer.
+func TestGoSourceMultiPackageImportIsNotUnused(t *testing.T) {
+	one := []gosource.Source{{Name: "one.go", Data: []byte("package one\ntype T struct { X int }\n")}}
+	two := []gosource.Source{{Name: "pkg2.go", Data: []byte("package pkg2\nimport \"./one\"\nfunc F() *one.T { return nil }\nvar V = []one.T{{}}\n")}}
+	three := []gosource.Source{{Name: "pkg3.go", Data: []byte("package pkg3\nimport \"./pkg2\"\nvar x = pkg2.F()\nvar v = pkg2.V\n")}}
+	specs := []gosource.PackageSpec{{Path: "test/one", Sources: one}, {Path: "test/pkg2", Sources: two}}
+	program, err := gosource.Load(three, gosource.Options{ImportBase: "test", ImportPath: "test/pkg3", Packages: specs, PreserveNativeInit: true})
+	if err != nil {
+		t.Fatalf("Load pkg3: %v", err)
+	}
+	result, err := lower.Compile(program.File, lower.Options{Package: program.Package, Importer: program.Importer})
+	if err != nil {
+		t.Fatalf("lower pkg3: %v", err)
+	}
+	if strings.Contains(string(result.Source), `__gosource_import_type_0 "test/one"`) {
+		t.Fatalf("generated Go retained the synthetic import:\n%s", result.Source)
+	}
+}
+
+func TestGoSourceArrayBoundsKeepUnsafeImport(t *testing.T) {
+	source := `package main
+import "unsafe"
+type A [unsafe.Sizeof(byte(0))]*byte
+func F() byte { panic("unreachable") }
+type B [unsafe.Sizeof(F())]*byte
+func main() {}
+`
+	program, err := gosource.Parse(strings.NewReader(source), "bug517.go", gosource.Options{RunMain: true})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if _, err := lower.Compile(program.File, lower.Options{Origin: "bug517.go"}); err != nil {
+		t.Fatalf("lower: %v", err)
+	}
+}

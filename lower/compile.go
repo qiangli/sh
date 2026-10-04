@@ -553,6 +553,25 @@ func compilePass(file *syntax.File, options Options, globalTypes map[string]stri
 	}
 	rawText = strings.ReplaceAll(rawText, "/*"+e.prefix+"status0*/", status0)
 	rawText = strings.ReplaceAll(rawText, "/*"+e.prefix+"status1*/", status1)
+	if e.goSource {
+		pruned, retained, err := pruneUnusedGoSourceImports(rawText, e.imports, e.cgoAliases)
+		if err != nil {
+			return nil, e.fail(file, CodeExpr, "generated Go imports are not syntactically valid: "+err.Error())
+		}
+		rawText = string(pruned)
+		fromSource := map[string]bool{}
+		for _, path := range e.imports {
+			fromSource[path] = true
+		}
+		filtered := imports[:0]
+		for _, path := range imports {
+			if fromSource[path] && !retained[path] {
+				continue
+			}
+			filtered = append(filtered, path)
+		}
+		imports = filtered
+	}
 	source, err := format.Source([]byte(rawText))
 	if err != nil {
 		return nil, e.fail(file, CodeExpr, "generated Go is not syntactically valid: "+err.Error())
