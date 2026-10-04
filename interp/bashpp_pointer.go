@@ -568,7 +568,7 @@ ordinaryAddress:
 		}
 		return ptr, nil
 	}
-	if _, direct := expr.(*syntax.BashPPIdent); direct && typ == nil {
+	if _, direct := expr.(*syntax.BashPPIdent); direct && typ == nil && stored.typeName == "" {
 		// A short declaration initialized by a function literal stores the
 		// closure handle as text, but its address still has the inferred func
 		// type. Preserve that type on the pointer just as an explicit `var f
