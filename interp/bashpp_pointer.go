@@ -544,7 +544,7 @@ func (r *Runner) bashPPAddress(expr syntax.BashPPExpr) (result *bashPPPointer, e
 ordinaryAddress:
 	root, ok := bashPPCollectionRoot(expr)
 	if !ok || r.bashPPScope == nil {
-		return nil, fmt.Errorf("BASHPP-ENONADDRESSABLE: operand is not addressable")
+		return nil, fmt.Errorf("%sBASHPP-ENONADDRESSABLE: operand is not addressable (%T)", r.bashErrPrefix(expr.Pos()), expr)
 	}
 	cell := r.bashPPScope.lookup(root)
 	if cell == nil {
@@ -614,7 +614,7 @@ ordinaryAddress:
 			if isIdent && stored.pointer && inner.Name.Value == root {
 				return nil
 			}
-			return fmt.Errorf("BASHPP-ENONADDRESSABLE: operand is not addressable")
+			return fmt.Errorf("%sBASHPP-ENONADDRESSABLE: operand is not addressable (%T)", r.bashErrPrefix(x.Pos()), x)
 		case *syntax.BashPPSelectorExpr:
 			if err := descend(x.X); err != nil {
 				return err
@@ -711,7 +711,7 @@ ordinaryAddress:
 			}
 			return nil
 		default:
-			return fmt.Errorf("BASHPP-ENONADDRESSABLE: operand is not addressable")
+			return fmt.Errorf("%sBASHPP-ENONADDRESSABLE: operand is not addressable (%T)", r.bashErrPrefix(node.Pos()), node)
 		}
 	}
 	if err := descend(expr); err != nil {
