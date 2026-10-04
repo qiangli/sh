@@ -66,6 +66,14 @@ func bashPPTransportOrigin(session *bashPPNativeSession, ptr *bashPPPointer) uin
 // storage. A later wider view receives a new id because enlarging the worker's
 // old slice would relocate and invalidate reflect.Values already selected
 // from it. The old interpreter view remains live and refreshable independently.
+//
+// The table is bounded: a region the worker may reference past the
+// introducing call — a slice nested in a pointer pointee, refreshed storage,
+// transferred storage — is pinned, and every other region is transient. A
+// transient region's worker copy is decoded fresh per call, so once the table
+// exceeds sliceRegionKeepCap the transient regions are evicted. A later view
+// of an evicted backing simply registers anew; only pinned regions keep a
+// stable identity across eviction, which is exactly the retained set.
 func bashPPTransportSliceOrigin(session *bashPPNativeSession, view []any, meta *bashPPCollectionMeta, typ syntax.BashPPTypeExpr) (uint64, int) {
 	if session == nil || cap(view) == 0 {
 		return 0, 0
@@ -93,6 +101,15 @@ func bashPPTransportSliceOrigin(session *bashPPNativeSession, view []any, meta *
 	session.sliceOriginNext++
 	id := session.sliceOriginNext
 	session.sliceOriginKeep[id] = &bashPPNativeSlice{view: view[:cap(view)], meta: meta, typ: typ}
+	// A slice registered while a pointer pointee is being walked is nested
+	// in that transported pointer, so the worker decodes it into persisted
+	// storage it keeps past the call; pin it against eviction below.
+	if session.slicePinDepth > 0 {
+		if session.slicePinned == nil {
+			session.slicePinned = make(map[uint64]bool)
+		}
+		session.slicePinned[id] = true
+	}
 	session.sliceRegionRoot = sliceRegionInsert(session.sliceRegionRoot, &bashPPSliceRegion{
 		start: data,
 		end:   end,
@@ -101,14 +118,65 @@ func bashPPTransportSliceOrigin(session *bashPPNativeSession, view []any, meta *
 		prio:  sliceRegionPriority(id),
 	})
 	session.sliceRegionCount = len(session.sliceOriginKeep)
+	if len(session.sliceOriginKeep) > sliceRegionKeepCap {
+		session.evictSliceRegionsLocked()
+	}
 	return id, 0
+}
+
+// sliceRegionKeepCap bounds the session's transported slice regions. The
+// table only needs the live transient working set plus the pinned retained
+// set; a million round trips with fresh slices must not retain a million
+// backings. It comfortably holds the focused identity suites' few thousand
+// entries so eviction never disturbs them.
+const sliceRegionKeepCap = 8192
+
+// pinSliceRegionLocked marks id as worker-persisted past its introducing
+// call, so eviction keeps it. The caller holds session.mu; unknown ids are
+// ignored.
+func (s *bashPPNativeSession) pinSliceRegionLocked(id uint64) {
+	if id == 0 {
+		return
+	}
+	if _, ok := s.sliceOriginKeep[id]; !ok {
+		return
+	}
+	if s.slicePinned == nil {
+		s.slicePinned = make(map[uint64]bool)
+	}
+	s.slicePinned[id] = true
+}
+
+// evictSliceRegionsLocked drops transient regions until the table is back
+// near half its bound, freeing their backings for collection when the
+// interpreter itself holds no alias. Pinned regions — the worker-persisted
+// retained set — are never dropped. The caller holds session.mu.
+func (s *bashPPNativeSession) evictSliceRegionsLocked() {
+	for id, kept := range s.sliceOriginKeep {
+		if len(s.sliceOriginKeep) <= sliceRegionKeepCap/2 {
+			break
+		}
+		if s.slicePinned[id] {
+			continue
+		}
+		start := uintptr(0)
+		if kept != nil && cap(kept.view) > 0 {
+			start = reflect.ValueOf(kept.view).Pointer()
+		}
+		delete(s.sliceOriginKeep, id)
+		delete(s.slicePinned, id)
+		if start != 0 {
+			s.sliceRegionRoot = sliceRegionDelete(s.sliceRegionRoot, start, id)
+		}
+	}
+	s.sliceRegionCount = len(s.sliceOriginKeep)
 }
 
 // bashPPSliceRegion is one node of the backing-interval index over
 // sliceOriginKeep. The tree orders regions by (start, id) and each subtree
 // remembers its maximum end, so a containment query visits only regions
-// that can still contain the transported view. The tree is append-only,
-// matching the keep-live table it mirrors.
+// that can still contain the transported view. The tree mirrors the
+// keep-live table: inserts add regions and eviction deletes them.
 type bashPPSliceRegion struct {
 	start, end uintptr
 	capN       int
@@ -160,8 +228,7 @@ func sliceRegionRotateLeft(n *bashPPSliceRegion) *bashPPSliceRegion {
 	return right
 }
 
-// sliceRegionInsert adds a region to the index. Regions never leave the
-// table, so no deletion counterpart exists.
+// sliceRegionInsert adds a region to the index.
 func sliceRegionInsert(root, node *bashPPSliceRegion) *bashPPSliceRegion {
 	if root == nil {
 		node.maxEnd = node.end
@@ -180,6 +247,44 @@ func sliceRegionInsert(root, node *bashPPSliceRegion) *bashPPSliceRegion {
 	}
 	sliceRegionUpdate(root)
 	return root
+}
+
+// sliceRegionDelete removes the region keyed by (start, id) from the index,
+// keeping the heap order and every subtree maximum exact. Eviction is the
+// only remover.
+func sliceRegionDelete(root *bashPPSliceRegion, start uintptr, id uint64) *bashPPSliceRegion {
+	if root == nil {
+		return nil
+	}
+	if start == root.start && id == root.id {
+		return sliceRegionMerge(root.left, root.right)
+	}
+	if start < root.start || start == root.start && id < root.id {
+		root.left = sliceRegionDelete(root.left, start, id)
+	} else {
+		root.right = sliceRegionDelete(root.right, start, id)
+	}
+	sliceRegionUpdate(root)
+	return root
+}
+
+// sliceRegionMerge joins two indexes whose keys are all below (left) and
+// above (right) the removed region, preserving both orders.
+func sliceRegionMerge(left, right *bashPPSliceRegion) *bashPPSliceRegion {
+	if left == nil {
+		return right
+	}
+	if right == nil {
+		return left
+	}
+	if left.prio < right.prio {
+		left.right = sliceRegionMerge(left.right, right)
+		sliceRegionUpdate(left)
+		return left
+	}
+	right.left = sliceRegionMerge(left, right.left)
+	sliceRegionUpdate(right)
+	return right
 }
 
 // sliceRegionLookup reports the tightest region containing [data, end):

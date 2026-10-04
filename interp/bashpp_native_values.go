@@ -941,6 +941,17 @@ func (r *Runner) bashPPBridgePointerValue(ptr *bashPPPointer) (bashPPBridgeValue
 		return bashPPTransportBackReference(session, origin, meta, typ), nil
 	}
 	defer leave()
+	// Slices below this walk decode into worker-persisted storage the
+	// worker keeps past the call, so their regions are pinned while the
+	// walk registers them; see bashPPTransportSliceOrigin.
+	session.mu.Lock()
+	session.slicePinDepth++
+	session.mu.Unlock()
+	defer func() {
+		session.mu.Lock()
+		session.slicePinDepth--
+		session.mu.Unlock()
+	}()
 	inner, isInterface, err := r.goSourceInterfacePointee(ptr)
 	if err != nil {
 		return bashPPBridgeValue{}, err

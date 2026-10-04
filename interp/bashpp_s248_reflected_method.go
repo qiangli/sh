@@ -647,6 +647,9 @@ func (r *Runner) goSourceLocalReflectRefresh(ctx context.Context, req bashPPEval
 	var retainedView bashPPNativeSlice
 	if kept != nil {
 		retainedView = *kept
+		// The worker persists this storage past the refresh, so its
+		// region stays pinned.
+		req.Bridge.pinSliceRegionLocked(storage)
 	}
 	req.Bridge.mu.Unlock()
 	if kept == nil {

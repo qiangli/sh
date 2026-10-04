@@ -173,6 +173,15 @@ func nativeSliceTransferable(req bashPPEvalRequest, q *bashPPBridgeRequest) bool
 		return false
 	}
 	q.Transfers = transfers
+	// The worker retains the decoded slice as the storage of record past
+	// the call, so the supplying regions stay pinned.
+	if req.Bridge != nil {
+		req.Bridge.mu.Lock()
+		for _, i := range transfers {
+			req.Bridge.pinSliceRegionLocked(q.Args[i].Storage)
+		}
+		req.Bridge.mu.Unlock()
+	}
 	return true
 }
 

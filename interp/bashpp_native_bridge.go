@@ -310,6 +310,16 @@ type bashPPNativeSession struct {
 	originNext      uint64
 	sliceOriginKeep map[uint64]*bashPPNativeSlice // widest registered view, kept live
 	sliceOriginNext uint64
+	// slicePinned marks regions the worker may reference past the call
+	// that introduced them — slices nested in a pointer pointee, refreshed
+	// storage, transferred storage — so eviction never drops them. Every
+	// other region is transient and leaves once the table exceeds its bound.
+	// slicePinDepth counts active pointer-pointee walks on this session; a
+	// slice registered while it is nonzero is nested in a transported
+	// pointer and decodes into worker-persisted storage. Both protected by
+	// mu.
+	slicePinned   map[uint64]bool
+	slicePinDepth int
 	// sliceRegionRoot indexes sliceOriginKeep by backing interval so a
 	// transported view finds its tightest containing region without
 	// scanning every registered view; see bashPPTransportSliceOrigin.
