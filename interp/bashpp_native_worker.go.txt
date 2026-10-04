@@ -561,7 +561,13 @@ func decodeIn(st *decodeState, v value, target reflect.Type)(reflect.Value,error
   case "complex":n,e:=strconv.ParseComplex(v.Text,128);if e!=nil{return result,e};if typ.Kind()!=reflect.Complex64&&typ.Kind()!=reflect.Complex128{return result,fmt.Errorf("complex for %s",typ)};if result.OverflowComplex(n){return result,fmt.Errorf("complex overflow")};result.SetComplex(n)
   case "float":n,e:=strconv.ParseFloat(v.Text,64);if e!=nil{return result,e};switch typ.Kind(){case reflect.Float32,reflect.Float64:result.SetFloat(n);case reflect.Complex64,reflect.Complex128:result.SetComplex(complex(n,0));default:return result,fmt.Errorf("float for %s",typ)}
   case "slice","array":if typ.Kind()==reflect.Slice {length:=v.Length;capacity:=v.Capacity;if capacity<len(v.Elements){capacity=len(v.Elements)};if length>capacity||v.Offset<0{return result,fmt.Errorf("invalid slice view")};if st.originDepth>0&&v.Storage!=0{needed:=v.Offset+capacity;originalSlices.Lock();backing:=originalSlices.values[v.Storage];if backing.IsValid()&&(backing.Type()!=typ||backing.Cap()<needed){originalSlices.Unlock();return result,fmt.Errorf("retained slice storage cannot expand without invalidating existing selections")};if !backing.IsValid(){backing=reflect.MakeSlice(typ,needed,needed)};originalSlices.values[v.Storage]=backing.Slice3(0,needed,needed);originalSlices.Unlock();result=backing.Slice3(v.Offset,v.Offset+length,v.Offset+capacity)}else{result=reflect.MakeSlice(typ,length,capacity)}} else if typ.Kind()!=reflect.Array||typ.Len()!=len(v.Elements){return result,fmt.Errorf("invalid collection %s",typ)};write:=result;if typ.Kind()==reflect.Slice&&len(v.Elements)>result.Len(){write=result.Slice3(0,len(v.Elements),result.Cap())};for i,elem:=range v.Elements{item,e:=decodeIn(st,elem,typ.Elem());if e!=nil{return result,e};write.Index(i).Set(item)}
-  case "pointer":if typ.Kind()!=reflect.Pointer{return result,fmt.Errorf("pointer for %s",typ)}
+  case "pointer":
+   // An unsafe.Pointer held in an interface crosses as the pointer it was
+   // converted from, labelled with its dynamic type. Decode that pointer at
+   // the pointee's own type, then convert, so reflect observes unsafe.Pointer
+   // and the address still names the pointee's storage.
+   if typ.Kind()==reflect.UnsafePointer&&len(v.Elements)==1{name:=v.Elements[0].Type;if name==""{name=v.Elements[0].Interface};if name!=""&&resolveType("*"+name)!=nil{typed:=v;typed.Type="*"+name;typed.Interface="";p,e:=decodeIn(st,typed,nil);if e!=nil{return result,e};result=reflect.ValueOf(p.UnsafePointer()).Convert(typ);break}}
+   if typ.Kind()!=reflect.Pointer{return result,fmt.Errorf("pointer for %s",typ)}
    // A back-reference: a pointer already on the interpreter's transport path
    // (a cycle) arrives with its origin and no pointee, and binds to the
    // storage registered for that origin before its pointee was decoded.
