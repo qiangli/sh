@@ -20,6 +20,7 @@ import (
 	"go/token"
 	"go/types"
 	"io"
+	mrand "math/rand"
 	"mvdan.cc/sh/v3/syntax"
 	"net"
 	"os"
@@ -266,6 +267,10 @@ func bashPPNativeNoOutputReply(req bashPPEvalRequest, q bashPPBridgeRequest, rep
 }
 
 type bashPPNativeSession struct {
+	fastRandMu        sync.Mutex
+	fastRand          *mrand.Rand
+	fastRandProof     map[string]bool
+	fastRandProofSeen map[string]bool
 	// Type facts are authenticated on this connection; no native values are cached.
 	handleTypes         map[uint64]uint64
 	localWriters        map[uint64]string

@@ -32,7 +32,8 @@ import (
 )
 
 type bashPPEvalRequest struct {
-	Go string
+	disableFastStdlib bool // internal benchmark/control: preserve the worker route
+	Go                string
 	// BuildGo and BuildEnv are the isolated toolchain used only for helpers
 	// generated or inspected by the interpreter. Go and Env retain the
 	// interpreted program's selected toolchain identity and process semantics,
