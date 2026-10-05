@@ -3123,7 +3123,10 @@ func (r *Runner) bashPPReturnValueCell(expr syntax.BashPPExpr) bool {
 				r.bashPPShortFailureSeq++
 				return true
 			}
-			cell := goSourceNativeValueCell(value)
+			// Bounded scalar envelopes skip the repeated shell-object
+			// validation on every callback; anything else falls back to
+			// the validated cell inside goSourceNativeValueCellTrusted.
+			cell := goSourceNativeValueCellTrusted(value)
 			r.bashPPReturn = bashPPReturnState{active: true, values: []string{cell.vr.String()}, cells: []*bashPPCell{cell}}
 			r.exit.returning = true
 			return true

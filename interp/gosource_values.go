@@ -51,6 +51,101 @@ func goSourceNativeValueCell(value bashPPBridgeValue) *bashPPCell {
 	return cell
 }
 
+// goSourceBoundedScalarEnvelopeLeafLimit caps the fast return-boundary
+// wrapping below: color.RGBA and similar small dependency-owned composites
+// carry a handful of scalar fields, and only such envelopes skip the
+// shell-object validation.
+const goSourceBoundedScalarEnvelopeLeafLimit = 8
+
+// goSourceBoundedScalarComposite reports whether value is a demonstrably
+// bounded scalar envelope: a struct composite with an imported type identity,
+// holding only a few scalar leaves and no handles, origins, storage,
+// callbacks, nested composites, or other transport/host-only state. Only such
+// a value is cheap to validate by construction, so only it may skip the
+// shell-object validation. Interface metadata is allowed: a value returned at
+// an interface result (color.RGBA as color.Color) keeps its static interface
+// type through the normal interface path on either branch.
+func goSourceBoundedScalarComposite(value bashPPBridgeValue) bool {
+	if value.Kind != "struct" || value.Type == "" {
+		return false
+	}
+	leaves := make([]bashPPBridgeValue, 0, len(value.Elements)+len(value.Fields))
+	leaves = append(leaves, value.Elements...)
+	for _, field := range value.Fields {
+		leaves = append(leaves, field)
+	}
+	if len(leaves) == 0 || len(leaves) > goSourceBoundedScalarEnvelopeLeafLimit {
+		return false
+	}
+	if len(value.Entries) > 0 || len(value.Bytes) > 0 || len(value.ReaderBuffer) > 0 ||
+		len(value.CallArgs) > 0 || value.Text != "" {
+		return false
+	}
+	if value.Handle != 0 || value.Origin != 0 || value.Storage != 0 ||
+		value.Lease != 0 || value.NativeTypeID != 0 || value.Offset != 0 ||
+		value.Length != 0 || value.Capacity != 0 || value.ReaderLength != 0 {
+		return false
+	}
+	if value.Callbacks || value.Function || value.Callable != "" ||
+		value.NilChannel || value.copiedResults || value.newCallback ||
+		value.reflectCopy || value.reflectFunction || value.reflectFunc != nil ||
+		value.callRefusal != "" || value.localRefusal != "" ||
+		value.deferredNativeComposite {
+		return false
+	}
+	if value.handleOwner != nil || value.residentSync != nil ||
+		value.sliceView != nil || value.localReflect != nil ||
+		value.localCell != nil || value.localOrigin != nil ||
+		value.NativeType != "" || value.LocalWriter != "" ||
+		value.Signature != "" || value.Session != "" || value.Within != nil {
+		return false
+	}
+	for _, leaf := range leaves {
+		if _, err := leaf.scalar(); err != nil {
+			return false
+		}
+		if len(leaf.Elements) > 0 || len(leaf.Fields) > 0 || len(leaf.Entries) > 0 ||
+			len(leaf.Bytes) > 0 || leaf.Handle != 0 || leaf.Kind == "struct" {
+			return false
+		}
+	}
+	return true
+}
+
+// goSourceNativeValueCellTrusted wraps a composite bridge value the
+// interpreter just built for the bridge encoder, without the shell-object
+// validation goSourceNativeValueCell performs. The fast wrapping applies only
+// to demonstrably bounded scalar envelopes (see
+// goSourceBoundedScalarComposite): a callback whose body returns one small
+// dependency-owned composite per element (the Tour image program's At
+// returning color.RGBA) would otherwise validate and marshal the same value
+// here, again for its string form, and a third time for the mailbox reply,
+// with no new signal. Any other value falls back to goSourceNativeValueCell,
+// preserving the original validation and interface/type semantics.
+func goSourceNativeValueCellTrusted(value bashPPBridgeValue) *bashPPCell {
+	if !goSourceBoundedScalarComposite(value) {
+		return goSourceNativeValueCell(value)
+	}
+	cell := &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.Object, Obj: &value}, typeName: value.Type}
+	if value.Interface != "" {
+		// Same interface attribution as goSourceNativeValueCell, minus only
+		// the preflight the bounded envelope above already establishes: the
+		// payload is the dynamic value itself, not the interface, so a typed
+		// nil asserted out still compares equal to nil.
+		cell.declType = &syntax.BashPPNamedType{Name: &syntax.Lit{Value: value.Interface}}
+		dynamic := bashPPBridgeValueDynamicType(value)
+		concrete := value
+		concrete.Interface = ""
+		payload := &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.Object, Obj: &concrete}, typeName: value.Type, declType: dynamic}
+		cell.interfaceValue = &bashPPInterfaceValue{
+			nilIface: bashPPBridgeValueNilInterface(value),
+			cell:     payload,
+			dynamic:  dynamic,
+		}
+	}
+	return cell
+}
+
 func (r *Runner) goSourceNativeValueCell(value bashPPBridgeValue) *bashPPCell {
 	cell := goSourceNativeValueCell(value)
 	if cell.interfaceValue == nil {

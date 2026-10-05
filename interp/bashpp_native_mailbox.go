@@ -237,8 +237,35 @@ func mailboxCallback(q response,wait chan request)(request,bool,error){
 
 // bashPPMailboxIdle is the serving request's run of empty polls.
 type bashPPMailboxIdle struct {
-	polls uint32
-	since time.Time
+	polls  uint32
+	since  time.Time
+	budget time.Duration
+}
+
+// bashPPMailboxIdleMaxBudget bounds one spin run. Twice the recent serve gap
+// adapts the spin to host speed and callback shape; the cap bounds the burn
+// when the stream actually ends, so a slow body still parks instead of
+// spinning a processor through it.
+const bashPPMailboxIdleMaxBudget = 500 * time.Microsecond
+
+// reset starts a fresh run of empty polls. now is the time of the callback
+// just served and lastServe the previous one; the spin budget covers twice
+// their gap, so a streaming producer whose turnaround sets that gap is met
+// spinning even on a host where the fixed spin would already have expired,
+// while a truly idle request still parks after a bounded burn. Without a
+// previous serve the fixed host spin applies.
+func (i *bashPPMailboxIdle) reset(now, lastServe time.Time) {
+	*i = bashPPMailboxIdle{budget: bashPPMailboxHostSpin}
+	if lastServe.IsZero() {
+		return
+	}
+	gap := now.Sub(lastServe)
+	if gap < 0 {
+		gap = 0
+	}
+	if budget := 2 * gap; budget > i.budget {
+		i.budget = min(budget, bashPPMailboxIdleMaxBudget)
+	}
 }
 
 // The request goroutine is also the mailbox server. spin reports whether an
@@ -256,7 +283,10 @@ func (i *bashPPMailboxIdle) spin() bool {
 			return false
 		}
 		i.since = time.Now()
+		if i.budget <= 0 {
+			i.budget = bashPPMailboxHostSpin
+		}
 		return true
 	}
-	return i.polls&15 != 0 || time.Since(i.since) < bashPPMailboxHostSpin
+	return i.polls&15 != 0 || time.Since(i.since) < i.budget
 }

@@ -66,8 +66,15 @@ func (r *Runner) bashPPNativeCompositeAtBoundary(lit *syntax.BashPPCompositeLit,
 		return value, fmt.Errorf("gosource: imported struct literal mixes keyed and positional fields")
 	}
 	if returnBoundary && !address {
-		value.deferredNativeComposite = true
-		return value, nil
+		// The deferred worker-side reconstruction skips the construct round
+		// trip only for demonstrably bounded scalar envelopes (a few scalar
+		// fields, no handles or nested state). Anything else falls through
+		// to the construct/address request below, preserving the original
+		// dependency-side validation and error identity.
+		if goSourceBoundedScalarComposite(value) {
+			value.deferredNativeComposite = true
+			return value, nil
+		}
 	}
 	op := "construct"
 	if address {

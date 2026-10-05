@@ -1075,6 +1075,7 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 		return nil, s.closedWriteError(ctx, err)
 	}
 	var mailboxIdle bashPPMailboxIdle
+	var mailboxLastServe time.Time
 	// This parked request owns its callback channel for the loop's whole
 	// lifetime: an unrelated top-level request waits on the callback gate
 	// before it can install its own channel, and a nested request runs on
@@ -1089,7 +1090,9 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 	for {
 		if mailboxActive {
 			if slot, callback, ok := requestMailbox.take(); ok {
-				mailboxIdle = bashPPMailboxIdle{}
+				now := time.Now()
+				mailboxIdle.reset(now, mailboxLastServe)
+				mailboxLastServe = now
 				callbackFrames := testingFrames
 				if !testingBarrier {
 					callbackFrames = nil
@@ -1165,12 +1168,12 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 				}
 				requestMailbox.unpark()
 				if event == 0 {
-					mailboxIdle = bashPPMailboxIdle{}
+					mailboxIdle.reset(time.Now(), mailboxLastServe)
 					continue
 				}
 			}
 		} else {
-			mailboxIdle = bashPPMailboxIdle{}
+			mailboxIdle.reset(time.Now(), mailboxLastServe)
 			select {
 			case callback = <-callbacks:
 				event = 1
@@ -1182,7 +1185,7 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 				event = 4
 			}
 		}
-		mailboxIdle = bashPPMailboxIdle{}
+		mailboxIdle.reset(time.Now(), mailboxLastServe)
 		switch event {
 		case 1:
 			// The callback installs a write barrier on the interpreter's
