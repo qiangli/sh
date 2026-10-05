@@ -13,6 +13,7 @@ func TestLanguageTable(t *testing.T) {
 		"c": "c", "cpp": "cpp", "cxx": "cpp",
 		"go":         "go",
 		"powershell": "powershell", "pwsh": "powershell", "ps1": "powershell", "PWSH": "powershell",
+		"csharp": "csharp", "cs": "csharp", "CS": "csharp",
 	} {
 		if got := CanonicalLanguage(spelling); got != canonical {
 			t.Errorf("CanonicalLanguage(%q) = %q, want %q", spelling, got, canonical)
@@ -31,6 +32,14 @@ func TestLanguageTable(t *testing.T) {
 	}
 	if _, err := Prepare(context.Background(), []Block{{Language: "yaml", Source: "a: 1"}}, map[string]Analyzer{}); err == nil || err.Error() != `polyglot: unsupported language "yaml"` {
 		t.Errorf("Prepare(yaml) = %v", err)
+	}
+	// Both Windows-familiar fences lower: the binary drives the same pinned
+	// pwsh worker the interpreter does.
+	for _, language := range []string{"powershell", "csharp"} {
+		row, _ := LookupLanguage(language)
+		if row.LoweredRuntime == nil || row.LoweredRuntime("x.", "nil") == "" {
+			t.Errorf("row %s has no lowered runtime", language)
+		}
 	}
 	for _, row := range Languages() {
 		if row.NewRuntime == nil || row.LoweredRuntime == nil {

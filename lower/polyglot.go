@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"go/token"
 	"os"
 	"path/filepath"
 	"sort"
@@ -62,7 +63,43 @@ func (e *emitter) hasForeign() bool {
 }
 
 func (e *emitter) seedsForeignImports() bool {
-	return e.mixedShell && (len(e.foreignImports) > 0 || e.hasForeignStreams())
+	if !e.mixedShell {
+		return false
+	}
+	if len(e.foreignImports) > 0 || e.hasForeignStreams() {
+		return true
+	}
+	for _, plan := range e.foreignPlans {
+		if plan.Alias != "" && foreignCommandLanguage(plan.Language) {
+			return true
+		}
+	}
+	return false
+}
+
+// foreignCommandLanguage reports whether an aliased fence's exports run as
+// command words (`ps.Greet world`) in the interpreter, so a lowered shell
+// region must reach the same worker. Other rows' `alias.name` words stay
+// ordinary command lookups, as they are interpreted.
+func foreignCommandLanguage(language string) bool {
+	return language == "python" || language == "powershell"
+}
+
+// seedsForeignPlan reports whether an aliased fence module is bound in the
+// region backend: a command-capable row, or one whose streams a region reads.
+func seedsForeignPlan(plan polyglot.Plan) bool {
+	if plan.Alias == "" {
+		return false
+	}
+	if foreignCommandLanguage(plan.Language) {
+		return true
+	}
+	for _, export := range plan.Exports {
+		if export.Signature.Iterator != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func (e *emitter) hasForeignStreams() bool {
@@ -106,7 +143,7 @@ func (e *emitter) foreignImportSeed() string {
 		fmt.Fprintf(&out, "%s:%spython%d", strconv.Quote(alias), e.prefix, e.foreignImportAliases[alias])
 	}
 	for i, plan := range e.foreignPlans {
-		if plan.Alias == "" {
+		if !seedsForeignPlan(plan) {
 			continue
 		}
 		if len(aliases) > 0 {
@@ -296,6 +333,12 @@ func (e *emitter) prepareForeign(ctx context.Context, file *syntax.File) error {
 			reserved[plan.Alias] = "foreign module"
 		}
 		for _, export := range plan.Exports {
+			if !token.IsIdentifier(export.Name) {
+				// A PowerShell Verb-Noun export is no Bash# call name (the
+				// hyphen is a minus there) and no Go identifier; the worker
+				// still loads it, so it stays reachable inside the fence.
+				continue
+			}
 			name := export.Name
 			if plan.Alias != "" {
 				name = plan.Alias + "." + name
@@ -536,11 +579,17 @@ func (e *emitter) foreignDeclarations() string {
 			e.foreignGlobals[alias] = true
 			fmt.Fprintf(&out, "type %s struct{}\nvar %s %s\n", typ, alias, typ)
 			for _, export := range plan.Exports {
+				if !token.IsIdentifier(export.Name) {
+					continue
+				}
 				out.WriteString(e.foreignWrapper("("+alias+" "+typ+") ", module, export, plan.Runner != ""))
 				out.WriteString(e.foreignErrWrapper(i, module, plan.Alias, export, plan.Runner != ""))
 			}
 		} else {
 			for _, export := range plan.Exports {
+				if !token.IsIdentifier(export.Name) {
+					continue
+				}
 				out.WriteString(e.foreignWrapper("", module, export, plan.Runner != ""))
 				out.WriteString(e.foreignErrWrapper(i, module, plan.Alias, export, plan.Runner != ""))
 			}
@@ -603,7 +652,7 @@ func (e *emitter) foreignExports(exports []polyglot.Export) string {
 	var out strings.Builder
 	fmt.Fprintf(&out, "[]%spolyglot.Export{", e.prefix)
 	for _, export := range exports {
-		fmt.Fprintf(&out, "{Name:%s,Signature:%spolyglot.Signature{Params:%#v,Results:%#v,Dynamic:%t,Variadic:%t,Iterator:%q,Filter:%t},Effects:%#v},", strconv.Quote(export.Name), e.prefix, export.Signature.Params, export.Signature.Results, export.Signature.Dynamic, export.Signature.Variadic, export.Signature.Iterator, export.Signature.Filter, export.Effects)
+		fmt.Fprintf(&out, "{Name:%s,Signature:%spolyglot.Signature{Params:%#v,Results:%#v,Dynamic:%t,Variadic:%t,Iterator:%q,Filter:%t,PipeInput:%t},Effects:%#v},", strconv.Quote(export.Name), e.prefix, export.Signature.Params, export.Signature.Results, export.Signature.Dynamic, export.Signature.Variadic, export.Signature.Iterator, export.Signature.Filter, export.Signature.PipeInput, export.Effects)
 	}
 	out.WriteByte('}')
 	return out.String()

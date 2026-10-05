@@ -58,6 +58,14 @@ def main() -> str:
 value := py.main()
 echo "value=$value"
 `,
+		"command form": `~~~python as py
+def greet(name: str) -> int:
+    print("hello " + name)
+    return 0
+~~~
+py.greet world
+echo "status=$?"
+`,
 		"structured object round trip": `~~~python
 def record() -> dict[str, list[int]]:
     return {"items": [3, 4]}
@@ -347,4 +355,159 @@ func testForeignParityArtifactAt(t *testing.T, source, filename, nativePostlude 
 		t.Fatalf("interpreted=(%q,%q) native=(%q,%q)", interpreted.String(), interpretedErr.String(), native.String(), nativeErr.String())
 	}
 	return native.String()
+}
+
+// requirePowerShell gates the PowerShell and C# parity tests on a real pwsh 7:
+// both fences run through it (C# compiles via Add-Type), in the interpreter
+// and in the lowered binary alike. The cross-OS proof is the sprint's shared
+// host evidence; BASHPP_PWSH names a provisioned runtime explicitly.
+func requirePowerShell(t *testing.T) {
+	t.Helper()
+	if command := os.Getenv("BASHPP_PWSH"); command != "" {
+		if _, err := exec.LookPath(command); err == nil {
+			return
+		}
+	}
+	if _, err := exec.LookPath("pwsh"); err != nil {
+		t.Skip("pwsh unavailable")
+	}
+}
+
+func TestPowerShellFenceInterpretedNativeParity(t *testing.T) {
+	requirePowerShell(t)
+	tests := map[string]struct{ source, want string }{
+		// A Verb-Noun export is no Bash# call name; it lowers as a fence-local
+		// helper and the program still builds.
+		"typed qualified": {`~~~powershell as ps
+function Add-Numbers {
+    [OutputType([long])]
+    param([long]$a, [long]$b)
+    $a + $b
+}
+function Add {
+    [OutputType([long])]
+    param([long]$a, [long]$b)
+    Write-Host "powershell"
+    Add-Numbers $a $b
+}
+~~~
+x := ps.Add(20, 22)
+echo "x=$x"
+`, "powershell\nx=42\n"},
+		"typed direct state": {`~~~pwsh
+$script:calls = 0
+function Bump {
+    [OutputType([long])]
+    param()
+    $script:calls++
+    $script:calls
+}
+function Greet {
+    [OutputType([string])]
+    param([string]$name)
+    "hello $name"
+}
+~~~
+a := Bump()
+b := Bump()
+g := Greet("a b")
+echo "$a$b|$g"
+`, "12|hello a b\n"},
+		"structured object round trip": {`~~~powershell as ps
+function Make {
+    [OutputType([hashtable])]
+    param([long]$n)
+    @{ items = @($n, ($n + 1)) }
+}
+function Bounce {
+    [OutputType([hashtable])]
+    param([hashtable]$value)
+    $value
+}
+~~~
+value := ps.Make(3)
+again := ps.Bounce(value)
+echo "$value|$again"
+`, `{"items":[3,4]}|{"items":[3,4]}` + "\n"},
+		// The command form: argv words, the success stream as bytes on
+		// stdout, a pipeline-reading function as a stdin filter, and a
+		// terminating error as status 1 — the same in a lowered region.
+		"command form": {`~~~powershell as ps
+function Greet {
+    param([string]$name)
+    "hello $name"
+}
+function Shout {
+    process { $_.ToUpper() }
+}
+function Fail { throw 'nope' }
+~~~
+ps.Greet world
+printf 'beta\nalpha\n' | ps.Shout | sort
+ps.Fail 2>/dev/null
+echo "failed=$?"
+`, "hello world\nALPHA\nBETA\nfailed=1\n"},
+		"dynamic structured error": {`~~~powershell as ps
+function Fail { throw "boom" }
+~~~
+value, callErr := ps.Fail()
+echo "$value:$callErr"
+`, ":RuntimeException: boom\n"},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			got := testPythonFenceInterpretedNativeParityAt(t, tc.source, "input.bsh")
+			if got != tc.want {
+				t.Fatalf("output = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCSharpFenceInterpretedNativeParity(t *testing.T) {
+	requirePowerShell(t)
+	tests := map[string]struct{ source, want string }{
+		"typed qualified": {`~~~csharp as cs
+using System;
+public static long Add(long a, long b) { Console.WriteLine("csharp"); return a + b; }
+public static string Greet(string name) => "hello " + name;
+~~~
+x := cs.Add(20, 22)
+g := cs.Greet("a b")
+echo "x=$x|$g"
+`, "csharp\nx=42|hello a b\n"},
+		"static state": {`~~~cs
+static int calls;
+public static int Count() => ++calls;
+~~~
+a := Count()
+b := Count()
+echo "$a$b"
+`, "12\n"},
+		"structured object": {`~~~csharp as cs
+using System.Collections.Generic;
+public class Point { public int X { get; set; } public string Label = ""; }
+public static Point Make(int x, string label) => new Point { X = x, Label = label };
+public static List<int> Range(int n) { var r = new List<int>(); for (var i = 1; i <= n; i++) r.Add(i); return r; }
+~~~
+p := cs.Make(7, seven)
+r := cs.Range(3)
+echo "$p|$r"
+`, `{"Label":"seven","X":7}|[1,2,3]` + "\n"},
+		"structured error": {`~~~csharp as cs
+using System;
+public static string Fail(string message) => throw new InvalidOperationException(message);
+~~~
+value, callErr := cs.Fail(nope)
+echo "$value:$callErr"
+`, ":InvalidOperationException: nope\n"},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			got := testPythonFenceInterpretedNativeParityAt(t, tc.source, "input.bsh")
+			if got != tc.want {
+				t.Fatalf("output = %q, want %q", got, tc.want)
+			}
+		})
+	}
 }

@@ -203,6 +203,19 @@ request/result frame, exposes ordinary stdout/stderr, and turns panics,
 build/worker failures, malformed frames, and non-nil trailing errors into
 Bash++ call errors.
 
+## PowerShell and C# fences
+
+`~~~powershell` (`pwsh`, `ps1`) and `~~~csharp` (`cs`) run in one persistent
+PowerShell 7 worker per module; C# compiles through `Add-Type` in it. Both
+lower: the lowered program embeds the fence source and the environment plan
+resolved at compile time, and starts the same worker, so interpreted and
+lowered output match byte for byte. **The lowered binary still needs PowerShell
+7 on the target at run time**, as a lowered Python fence needs Python; it
+embeds neither PowerShell nor a compiled C# assembly. An aliased Python or
+PowerShell fence's exports run as command words (`ps.Greet world`) in lowered
+shell regions too. A `Verb-Noun` PowerShell export is not a Bash# call name
+and gets no lowered wrapper. Full contract: `bashsharp/docs/powershell-csharp-fences.md`.
+
 ## Shell dialect islands
 
 `~~~bash` and `~~~sh` contain only top-level shell function declarations.
