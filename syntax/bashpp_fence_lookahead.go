@@ -63,6 +63,35 @@ func init() {
 		}
 		return strings.TrimPrefix(declaration, "func ")
 	}, "go")
+	// A PowerShell function header is `function Name {` (or `filter Name {`),
+	// with an optional scope modifier (`global:Name`). Only a name that is a
+	// valid Bash# identifier promotes to a bare call; a Verb-Noun name like
+	// `Get-Item` carries a hyphen and is rejected here, so it is reached only
+	// through the string-keyed call form (S358.0), never a bareword.
+	bashppRegisterFenceLookahead(func(line string) string {
+		declaration := strings.TrimSpace(line)
+		rest := ""
+		for _, kw := range []string{"function ", "filter "} {
+			if r, ok := strings.CutPrefix(declaration, kw); ok {
+				rest = strings.TrimSpace(r)
+				break
+			}
+		}
+		if rest == "" {
+			return ""
+		}
+		name := rest
+		if i := strings.IndexAny(rest, " \t({"); i >= 0 {
+			name = rest[:i]
+		}
+		if i := strings.LastIndex(name, ":"); i >= 0 {
+			name = name[i+1:]
+		}
+		if name == "" {
+			return ""
+		}
+		return name + "("
+	}, "powershell", "pwsh", "ps1")
 	bashppRegisterFenceLookahead(func(line string) string {
 		before, _, ok := strings.Cut(strings.TrimSpace(line), "()")
 		if !ok {

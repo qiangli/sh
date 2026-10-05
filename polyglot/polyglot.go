@@ -1074,9 +1074,15 @@ func (m *Module) handleRequest(ctx context.Context, handle *Handle, request map[
 
 func (m *Module) request(ctx context.Context, request map[string]any, annotation any) (CallResult, error) {
 	id, _ := request["id"].(uint64)
-	if py, ok := m.runtime.(Python); ok && py.Cwd != nil {
+	var cwd func() string
+	if py, ok := m.runtime.(Python); ok {
+		cwd = py.Cwd
+	} else if ps, ok := m.runtime.(PowerShell); ok {
+		cwd = ps.Cwd
+	}
+	if cwd != nil {
 		if op, _ := request["op"].(string); op != "job_join" && op != "job_leave" {
-			if dir := py.Cwd(); dir != "" {
+			if dir := cwd(); dir != "" {
 				request["cwd"] = dir
 			}
 		}
@@ -1133,11 +1139,13 @@ func (m *Module) exchangeContext(ctx context.Context, request any, response *wor
 	if in == nil || out == nil {
 		return errors.New("foreign worker is not running")
 	}
-	// On Windows the TypeScript and Rust workers share stdout with island
-	// output, so only marker-framed lines are protocol.
+	// On Windows the TypeScript, Rust and PowerShell workers share stdout with
+	// island output (there is no fd 3 on Windows), so only marker-framed lines
+	// are protocol.
 	_, typeScript := m.runtime.(TypeScript)
 	_, rust := m.runtime.(Rust)
-	requireMarker := runtime.GOOS == "windows" && (typeScript || rust)
+	_, powershell := m.runtime.(PowerShell)
+	requireMarker := runtime.GOOS == "windows" && (typeScript || rust || powershell)
 	// The exchange goroutine also serves the shell callbacks the worker
 	// nests inside this request; a callback that calls the module again
 	// re-enters on this goroutine while the caller stays parked here, so

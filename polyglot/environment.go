@@ -242,6 +242,10 @@ func DiscoverEnvironment(request EnvironmentRequest) (EnvironmentPlan, error) {
 		projectMetadata = nativeProjectMetadata
 	} else if lang == "go" {
 		projectMetadata = goProjectMetadata
+	} else if lang == "powershell" {
+		// A PowerShell fence has no project manifest: only the pwsh runtime is
+		// resolved, so nothing contributes to ResolutionFiles here.
+		projectMetadata = nil
 	}
 	for _, name := range projectMetadata {
 		if file := canonicalExistingFile(filepath.Join(root, name)); file != "" {
@@ -259,6 +263,9 @@ func DiscoverEnvironment(request EnvironmentRequest) (EnvironmentPlan, error) {
 	}
 	if lang == "go" {
 		return discoverGoEnvironment(plan, selected, env)
+	}
+	if lang == "powershell" {
+		return discoverPowerShellEnvironment(plan, selected, env)
 	}
 	metadata, err := discoverPythonMetadata(root)
 	if err != nil {
@@ -646,6 +653,64 @@ func rustLaunchEnvironment(env map[string]string) []string {
 			out = append(out, key+"="+value)
 		}
 	}
+	sort.Strings(out)
+	return out
+}
+
+// discoverPowerShellEnvironment resolves the pwsh runtime for a PowerShell
+// fence. The BASHPP_PWSH override names a program explicitly (an absolute path
+// or a bare name on PATH) and never goes through the resolver; otherwise the
+// embedder's ToolResolver answers "pwsh" (bashy provisions the pinned
+// PowerShell 7), falling back to a PATH lookup for a standalone engine. There
+// is no project manifest to inventory — only the runtime is selected.
+func discoverPowerShellEnvironment(plan EnvironmentPlan, selected *environmentOverlay, env map[string]string) (EnvironmentPlan, error) {
+	requested := "pwsh"
+	if selected != nil && selected.Runtime != "" {
+		requested = selected.Runtime
+		plan.Explanation = append(plan.Explanation, "selected bashpp overlay")
+	}
+	var err error
+	if override := env["BASHPP_PWSH"]; override != "" {
+		requested = override
+		plan.Explanation = append(plan.Explanation, "runtime executable overridden")
+		plan.Executable, err = resolveOverride(env, requested)
+	} else if filepath.IsAbs(requested) {
+		plan.Executable, err = canonicalExecutable(requested, env)
+	} else if argv, why, rerr := resolveTool(env, requested); rerr == nil {
+		if err = plan.applyTool(argv, env); err == nil {
+			plan.Explanation = append(plan.Explanation, why)
+		}
+	} else {
+		err = rerr
+	}
+	if err != nil {
+		return EnvironmentPlan{}, fmt.Errorf("polyglot: PowerShell runtime unavailable: %w", err)
+	}
+	plan.Manager, plan.Runtime = "pwsh", "pwsh"
+	plan.Env = powerShellLaunchEnvironment(env)
+	plan.Fingerprint, err = environmentFingerprint(plan)
+	if err != nil {
+		return EnvironmentPlan{}, err
+	}
+	return plan.Clone(), nil
+}
+
+// powerShellLaunchEnvironment is the pwsh child environment: the portable keys
+// plus the Windows ones the .NET host and PowerShell need to locate HOME, the
+// temp directory and its module path, with telemetry opted out so a worker
+// never phones home.
+func powerShellLaunchEnvironment(env map[string]string) []string {
+	var out []string
+	for _, key := range []string{"PATH", "HOME", "SystemRoot", "TMPDIR", "TEMP", "TMP",
+		"PATHEXT", "ComSpec", "SystemDrive", "windir",
+		"ProgramFiles", "ProgramFiles(x86)", "ProgramW6432", "ProgramData",
+		"APPDATA", "LOCALAPPDATA", "USERPROFILE", "HOMEDRIVE", "HOMEPATH",
+		"PSModulePath", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME"} {
+		if value := environmentValue(env, key); value != "" {
+			out = append(out, key+"="+value)
+		}
+	}
+	out = append(out, "POWERSHELL_TELEMETRY_OPTOUT=1", "DOTNET_CLI_TELEMETRY_OPTOUT=1", "DOTNET_NOLOGO=1")
 	sort.Strings(out)
 	return out
 }

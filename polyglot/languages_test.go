@@ -12,6 +12,7 @@ func TestLanguageTable(t *testing.T) {
 		"rust": "rust", "rs": "rust",
 		"c": "c", "cpp": "cpp", "cxx": "cpp",
 		"go": "go",
+		"powershell": "powershell", "pwsh": "powershell", "ps1": "powershell", "PWSH": "powershell",
 	} {
 		if got := CanonicalLanguage(spelling); got != canonical {
 			t.Errorf("CanonicalLanguage(%q) = %q, want %q", spelling, got, canonical)
