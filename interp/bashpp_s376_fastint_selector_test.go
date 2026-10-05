@@ -80,3 +80,26 @@ func main() {
 		t.Fatalf("run=%v stdout=%q stderr=%q", err, out, stderr)
 	}
 }
+
+func TestS376FastIntSelectorSeesUnsafeAliasWrites(t *testing.T) {
+	out, stderr, err := runGoSource(t, "fastint-selector-unsafe", `package main
+import ("fmt"; "unsafe")
+type T struct{ a, b int }
+type U struct{ b, a int }
+func main() {
+ p := new(T)
+ q := (*U)(unsafe.Pointer(p))
+ q.a = 9
+ q.b = 4
+ fmt.Println(p.a == 9, p.a+p.b, p.b != 4)
+ v := T{}
+ w := (*U)(unsafe.Pointer(&v))
+ w.b = 5
+ fmt.Println(v.a == 5, v.a*2)
+}
+`)
+	want := "false 13 true\ntrue 10\n"
+	if err != nil || stderr != "" || out != want {
+		t.Fatalf("run=%v stdout=%q stderr=%q want=%q", err, out, stderr, want)
+	}
+}

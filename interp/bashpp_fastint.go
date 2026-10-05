@@ -63,7 +63,8 @@ func (r *Runner) bashPPFastIntScalar(expr syntax.BashPPExpr) (bashPPScalar, bool
 	// ahead of every scalar evaluation, most of which are not in the subset.
 	switch expr.(type) {
 	case *syntax.BashPPIdent, *syntax.BashPPBinaryExpr, *syntax.BashPPIndexExpr,
-		*syntax.BashPPParenExpr, *syntax.BashPPUnaryExpr, *syntax.BashPPSelectorExpr:
+		*syntax.BashPPParenExpr, *syntax.BashPPUnaryExpr, *syntax.BashPPConvertExpr,
+		*syntax.BashPPSelectorExpr:
 	default:
 		return bashPPScalar{}, false
 	}
@@ -205,6 +206,20 @@ func (r *Runner) bashPPFastIntExpr(expr syntax.BashPPExpr) (bashPPFastInt, bool)
 		return r.bashPPFastIntIndex(x)
 	case *syntax.BashPPSelectorExpr:
 		return r.bashPPFastIntSelector(x)
+	case *syntax.BashPPConvertExpr:
+		// `int(v)` of an int operand is the operand with the type int. The
+		// Go front end spells an untyped constant's implicit conversion this
+		// way — `k*N` with `const N = 2e6` arrives as `k*int(N)` — and a
+		// constant stays a constant through it.
+		if x.GoStringConstant || r.bashPPConvertTargetName(x) != "int" {
+			return bashPPFastInt{}, false
+		}
+		if x.ConvTypeExpr != nil && !bashPPFastIntType(x.ConvTypeExpr) {
+			return bashPPFastInt{}, false
+		}
+		value, ok := r.bashPPFastIntExpr(x.X)
+		value.typed = true
+		return value, ok
 	}
 	return bashPPFastInt{}, false
 }
@@ -331,7 +346,8 @@ func (r *Runner) bashPPFastIntSelector(x *syntax.BashPPSelectorExpr) (bashPPFast
 	if cell.pointer {
 		ptr := cell.pointerValue
 		if ptr == nil || ptr.cold != nil || len(ptr.path) != 0 || ptr.target == nil ||
-			ptr.target.guard != nil || ptr.target.pointer || ptr.target.vr.Kind != expand.Object {
+			ptr.target.guard != nil || ptr.target.pointer || ptr.target.interfaceValue != nil ||
+			ptr.target.unsafeAllocation != nil || ptr.target.vr.Kind != expand.Object {
 			return bashPPFastInt{}, false
 		}
 		value, meta = ptr.target.vr.Obj, bashPPCellMeta(ptr.target)
@@ -485,25 +501,26 @@ func (r *Runner) bashPPRangeKeyReusable(rng *syntax.BashPPRange) bool {
 // built from. None of them can retain a variable: they read values, assign
 // values, call by value and branch.
 var bashPPCaptureFreeTypes = map[reflect.Type]bool{
-	reflect.TypeFor[syntax.Block]():            true,
-	reflect.TypeFor[syntax.Stmt]():             true,
-	reflect.TypeFor[syntax.Lit]():              true,
-	reflect.TypeFor[syntax.Pos]():              true,
-	reflect.TypeFor[syntax.Comment]():          true,
-	reflect.TypeFor[syntax.Word]():             true,
-	reflect.TypeFor[syntax.SglQuoted]():        true,
-	reflect.TypeFor[syntax.DblQuoted]():        true,
-	reflect.TypeFor[syntax.StartSite]():        true,
-	reflect.TypeFor[syntax.BashPPIf]():         true,
-	reflect.TypeFor[syntax.BashPPAssign]():     true,
-	reflect.TypeFor[syntax.BashPPCall]():       true,
-	reflect.TypeFor[syntax.BashPPBranch]():     true,
-	reflect.TypeFor[syntax.BashPPIdent]():      true,
-	reflect.TypeFor[syntax.BashPPBasicLit]():   true,
-	reflect.TypeFor[syntax.BashPPBinaryExpr](): true,
-	reflect.TypeFor[syntax.BashPPUnaryExpr]():  true,
-	reflect.TypeFor[syntax.BashPPParenExpr]():  true,
-	reflect.TypeFor[syntax.BashPPIndexExpr]():  true,
+	reflect.TypeFor[syntax.Block]():             true,
+	reflect.TypeFor[syntax.Stmt]():              true,
+	reflect.TypeFor[syntax.Lit]():               true,
+	reflect.TypeFor[syntax.Pos]():               true,
+	reflect.TypeFor[syntax.Comment]():           true,
+	reflect.TypeFor[syntax.Word]():              true,
+	reflect.TypeFor[syntax.SglQuoted]():         true,
+	reflect.TypeFor[syntax.DblQuoted]():         true,
+	reflect.TypeFor[syntax.StartSite]():         true,
+	reflect.TypeFor[syntax.BashPPIf]():          true,
+	reflect.TypeFor[syntax.BashPPAssign]():      true,
+	reflect.TypeFor[syntax.BashPPCall]():        true,
+	reflect.TypeFor[syntax.BashPPBranch]():      true,
+	reflect.TypeFor[syntax.BashPPIdent]():       true,
+	reflect.TypeFor[syntax.BashPPBasicLit]():    true,
+	reflect.TypeFor[syntax.BashPPBinaryExpr]():  true,
+	reflect.TypeFor[syntax.BashPPUnaryExpr]():   true,
+	reflect.TypeFor[syntax.BashPPParenExpr]():   true,
+	reflect.TypeFor[syntax.BashPPIndexExpr]():   true,
+	reflect.TypeFor[syntax.BashPPConvertExpr](): true,
 	// A call records the names of its result types.
 	reflect.TypeFor[syntax.BashPPNamedType](): true,
 }
