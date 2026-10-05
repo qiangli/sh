@@ -1605,6 +1605,12 @@ func (r *Runner) bashPPComparableExpr(expr syntax.BashPPExpr) (bashPPComparableV
 				case *syntax.BashPPChanType:
 					kind = "channel"
 				}
+				// A variable short-declared from a nil channel carries no
+				// channel type; once a channel is assigned to it, the
+				// identity on the cell says what it holds.
+				if kind == "" && cell.channel != nil {
+					kind = "channel"
+				}
 				if kind != "" {
 					var value any = cell.vr.Str
 					if cell.vr.Str == "" || cell.vr.Str == "nil" {

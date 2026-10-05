@@ -1293,6 +1293,25 @@ func (r *Runner) bashPPGo(ctx context.Context, g *syntax.BashPPGo) {
 	<-state.ready
 }
 
+// bashPPAdoptTaskFailure gives the owner a failed task's status. A failure
+// cancels the owning run, so an owner that was blocked at the time — main
+// asleep, receiving or locking while a goroutine panics — ends with that
+// interruption as its own nonzero status. The status is the failure's echo
+// rather than a second failure, and the task's replaces it; a canceled task
+// records no failure, so one that is recorded was never caused by a
+// cancellation from outside. An owner that is itself panicking keeps its own.
+func (r *Runner) bashPPAdoptTaskFailure(ctx context.Context, failure *bashPPTaskFailure) {
+	echo := r.exit.code != 0 && !r.bashPPPanicking() &&
+		(errors.Is(r.exit.err, context.Canceled) || ctx != nil && ctx.Err() != nil)
+	if r.exit.code != 0 && !echo {
+		return
+	}
+	r.exit.code = failure.code
+	if echo {
+		r.exit.exiting, r.exit.fatalExit, r.exit.err = true, true, ExitStatus(failure.code)
+	}
+}
+
 func (r *Runner) bashPPWait(ctx context.Context) {
 	c := r.bashPPConcurrent
 	if r.bashPPGoTask {
@@ -1341,9 +1360,7 @@ func (r *Runner) bashPPWait(ctx context.Context) {
 		r.bashPPConcurrent = nil
 		if failure != nil {
 			r.errf("bash++: task failed: %s\n", failure.text)
-			if r.exit.code == 0 {
-				r.exit.code = failure.code
-			}
+			r.bashPPAdoptTaskFailure(ctx, failure)
 			return
 		}
 		r.errf("fatal error: no goroutines (main called runtime.Goexit) - deadlock!\n")
@@ -1365,9 +1382,7 @@ func (r *Runner) bashPPWait(ctx context.Context) {
 	r.bashPPClearChannelRefs(c)
 	if failure != nil {
 		r.errf("bash++: task failed: %s\n", failure.text)
-		if r.exit.code == 0 {
-			r.exit.code = failure.code
-		}
+		r.bashPPAdoptTaskFailure(ctx, failure)
 	}
 	// A completed File Run never lends its quiesced registry to a later Run.
 	// Handles left in persistent shell variables consequently become invalid
