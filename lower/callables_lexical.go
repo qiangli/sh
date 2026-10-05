@@ -27,6 +27,14 @@ func (e *emitter) lexicalKind(name string) string {
 		kind = "KindInterface"
 	case projectObject:
 		kind = "KindObject"
+	case projectFloat:
+		if p.runtimeFloat {
+			// Runtime float provenance (a foreign call result) renders in a
+			// shell exchange exactly as the interpreter renders it, with
+			// FormatFloat 'g'; retained-literal floats stay scalar and are
+			// re-spelled from their exact provenance, never projected here.
+			kind = "KindFloat"
+		}
 	}
 	return e.prefix + "rt." + kind
 }

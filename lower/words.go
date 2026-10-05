@@ -187,6 +187,27 @@ func (e *emitter) parameter(p *syntax.ParamExp) (string, error) {
 		}
 		return fallback, nil
 	}
+	// ${name:+word} over a known typed binding: the binding's established
+	// projection decides null-ness, so a foreign error binding selects its
+	// alternate exactly when the interpreter's cell text is non-empty.
+	if p.Param != nil && p.Exp != nil && p.Exp.Op == syntax.AlternateUnsetOrNull && p.Index == nil && !p.Length && !p.Excl && e.shellKnown(p.Param.Value) {
+		value, err := e.projectBinding(p, p.Param.Value, p.Param.Value)
+		if err != nil {
+			return "", err
+		}
+		if e.execution {
+			value = e.program() + ".ShellBinding(" + strconv.Quote(p.Param.Value) + ",func() string {return " + e.prefix + "rt.Word(" + value + ")})"
+		}
+		alternate := `""`
+		if p.Exp.Word != nil {
+			alternate, err = e.stringParts(p.Exp.Word.Parts)
+			if err != nil {
+				return "", err
+			}
+		}
+		e.bridge = true
+		return e.prefix + "rt.BindingValue(" + e.prefix + "rt.Word(" + value + `) != "",` + alternate + `,"")`, nil
+	}
 	if p.Param != nil && e.shellKnown(p.Param.Value) && p.Index != nil && p.Exp == nil && !p.Excl {
 		if index, ok := p.Index.(*syntax.Word); ok {
 			if index.Lit() == "@" && p.Length {

@@ -47,6 +47,12 @@ const (
 	// KindInterface renders an interface root: empty when the interface is
 	// nil, and otherwise the plain scalar text of the named value it holds.
 	KindInterface
+	// KindFloat renders a floating binding whose value crossed a foreign
+	// boundary. The interpreter renders a foreign float result with
+	// strconv.FormatFloat 'g' (interp's foreignResult), so this kind carries
+	// runtime provenance; native floats without retained literal provenance
+	// remain refused under KindScalar.
+	KindFloat
 )
 
 // InvalidObject is the one fixed marker every unsafely coercible value
@@ -113,9 +119,26 @@ func ProjectErr(value any, kind Kind) (string, error) {
 		return "", nil
 	case KindInterface:
 		return interfaceText(value)
+	case KindFloat:
+		return floatText(value)
 	default:
 		return scalarText(value, kind)
 	}
+}
+
+// floatText renders a floating binding that carries runtime provenance — a
+// foreign call result, which the interpreter renders with FormatFloat 'g'
+// rather than from a retained source literal. A non-float value under this
+// kind falls back to the scalar rules.
+func floatText(value any) (string, error) {
+	v := reflect.ValueOf(value)
+	if v.IsValid() {
+		switch v.Kind() {
+		case reflect.Float32, reflect.Float64:
+			return strconv.FormatFloat(v.Float(), 'g', -1, 64), nil
+		}
+	}
+	return scalarText(value, KindFloat)
 }
 
 // Project is ProjectErr for call sites that have no failure plumbing of their

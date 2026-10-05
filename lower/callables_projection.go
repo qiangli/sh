@@ -226,7 +226,7 @@ func (e *emitter) callProjection(c *syntax.BashPPCall, index int) projection {
 			parts[i] = part.Value
 		}
 		if foreign, ok := e.foreignFunctions[strings.Join(parts, ".")]; ok {
-			if p, ok := e.declResultProjection(lowerForeignDecl(foreign.export), index); ok {
+			if p, ok := e.foreignResultProjection(foreign, index); ok {
 				return p
 			}
 		}
@@ -239,11 +239,34 @@ func (e *emitter) callProjection(c *syntax.BashPPCall, index int) projection {
 		if name == "make" && c.ArgType != nil {
 			return nativeAggregateProjection()
 		}
+		if foreign, ok := e.foreignFunctions[name]; ok {
+			if p, ok := e.foreignResultProjection(foreign, index); ok {
+				return p
+			}
+		}
 		if p, ok := e.declResultProjection(e.functionDecls[name], index); ok {
 			return p
 		}
 	}
 	return scalarProjection()
+}
+
+// foreignResultProjection projects result index of a fence export. A float
+// result carries runtime provenance — the engine renders a foreign float with
+// FormatFloat 'g' (interp's foreignResult), never from a retained source
+// literal. One binding past the declared results is the explicit error
+// opt-in, an interface root like the error it is.
+func (e *emitter) foreignResultProjection(foreign foreignFunction, index int) (projection, bool) {
+	if p, ok := e.declResultProjection(lowerForeignDecl(foreign.export), index); ok {
+		if p.kind == projectFloat {
+			p.runtimeFloat = true
+		}
+		return p, true
+	}
+	if !foreign.export.Signature.Dynamic && index == len(foreign.export.Signature.Results) {
+		return interfaceProjection(), true
+	}
+	return projection{}, false
 }
 func (e *emitter) declResultProjection(f *syntax.BashPPFuncDecl, index int) (projection, bool) {
 	if f == nil {

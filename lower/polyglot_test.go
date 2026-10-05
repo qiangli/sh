@@ -464,6 +464,52 @@ echo "$value:$callErr"
 	}
 }
 
+// The sprint-358 both-fence smoke fixture, verbatim: one program carrying a
+// PowerShell fence and a C# fence, a foreign double result interpolated as a
+// word ($half), the checked error form's ${failErr:+error} expansion, and a
+// final shell region matching the foreign error's text. The interpreted
+// stdout is pinned by SHA-256
+// 5e0a962c1b15a14dd48f33eb19e9144f08441c667a102bf479c638fd2df973c3; the
+// lowered binary must reproduce stdout, stderr and exit byte for byte.
+func TestBothFenceSmokeParity(t *testing.T) {
+	requirePowerShell(t)
+	source := `~~~pwsh as ps
+function Square {
+    [OutputType([long])]
+    param([long]$n)
+    return ($n * $n)
+}
+~~~
+x := ps.Square(6)
+echo "square=$x"
+
+~~~csharp as cs
+using System;
+using System.Linq;
+
+public static long Square(long x) => x * x;
+public static string Join(string sep, long n) => string.Join(sep, Enumerable.Range(1, (int)n));
+public static double Half(double x) => x / 2;
+public static string Fail(string why) => throw new InvalidOperationException(why);
+~~~
+sq := cs.Square(6)
+echo "square=$sq"
+joined := cs.Join("-", 3)
+echo "join=$joined"
+five := 5.0
+half := cs.Half(five)
+echo "half=$half"
+failed, failErr := cs.Fail("nope")
+echo "fail=$failed:${failErr:+error}"
+[[ $failErr == *InvalidOperationException*nope* ]] && echo "message=nope"
+`
+	got := testPythonFenceInterpretedNativeParityAt(t, source, "input.bsh")
+	want := "square=36\nsquare=36\njoin=1-2-3\nhalf=2.5\nfail=:error\nmessage=nope\n"
+	if got != want {
+		t.Fatalf("output = %q, want %q", got, want)
+	}
+}
+
 func TestCSharpFenceInterpretedNativeParity(t *testing.T) {
 	requirePowerShell(t)
 	tests := map[string]struct{ source, want string }{
