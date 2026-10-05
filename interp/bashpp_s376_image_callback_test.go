@@ -2,7 +2,11 @@
 
 package interp_test
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/go-quicktest/qt"
+)
 
 // Sprint: #376; Story: #1507; Story-ID: 0cde6d446a94
 //
@@ -40,6 +44,50 @@ func (m Image) At(x, y int) color.Color {
 
 func main() {
 	m := Image{256, 256}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, m); err != nil {
+		panic(err)
+	}
+	fmt.Printf("%d %x\n", buf.Len(), sha256.Sum256(buf.Bytes()))
+}
+`, nil, "")
+}
+
+// The same callback shape at a bounded size: every At still returns a
+// dependency-owned composite through the deferred return path, and the
+// encoded PNG must still match native byte for byte. This keeps coverage of
+// the per-callback return mechanism without the full 256 by 256 cost.
+func TestGoSourceImageEncodeCallbacksSmall(t *testing.T) {
+	differGoSource(t, `package main
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"fmt"
+	"image"
+	"image/color"
+	"image/png"
+)
+
+type Image struct {
+	Height, Width int
+}
+
+func (m Image) ColorModel() color.Model {
+	return color.RGBAModel
+}
+
+func (m Image) Bounds() image.Rectangle {
+	return image.Rect(0, 0, m.Height, m.Width)
+}
+
+func (m Image) At(x, y int) color.Color {
+	c := uint8(x ^ y)
+	return color.RGBA{c, c, 255, 255}
+}
+
+func main() {
+	m := Image{16, 16}
 	var buf bytes.Buffer
 	if err := png.Encode(&buf, m); err != nil {
 		panic(err)
@@ -92,4 +140,29 @@ func main() {
 	}
 }
 `, nil, "")
+}
+
+// Mixed-dialect coverage of small imported composites: the .bsh program
+// obtains a small nested composite (image.Rectangle) through the supported
+// imported-call shape and reads every scalar leaf through field selectors.
+// The per-callback deferred return path is GoSource-only (it requires the
+// gosource parse flag), so it stays covered by the GoSource tests above and
+// the original validated return path; this pins that small composite input keeps its
+// exact validated behavior on the mixed path the story ships as .bsh.
+func TestS376ImageCallbackBoundaryMixed(t *testing.T) {
+	src := `import "image"
+func main() {
+ r := image.Rect(0, 0, 4, 4)
+ x0 := r.Min.X
+ y0 := r.Min.Y
+ x1 := r.Max.X
+ y1 := r.Max.Y
+ printf '%s %s %s %s\n' "$x0" "$y0" "$x1" "$y1"
+}
+main()
+`
+	out, stderr, err := runBashSharpCall(t, src)
+	qt.Assert(t, qt.IsNil(err), qt.Commentf("stderr=%q", stderr))
+	qt.Assert(t, qt.Equals(stderr, ""))
+	qt.Assert(t, qt.Equals(out, "0 0 4 4\n"))
 }

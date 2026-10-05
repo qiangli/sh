@@ -67,3 +67,24 @@ func TestS376CallbackMailboxParkSeesPublishedRequest(t *testing.T) {
 		t.Fatal("wake was not delivered")
 	}
 }
+
+// A streaming producer sets the serve gap, and the next spin budget covers
+// twice that gap so the producer is met spinning on hosts where the fixed
+// spin would already have expired. Without history the fixed spin applies,
+// and a long-ended stream still parks after a bounded burn.
+func TestS376CallbackMailboxIdleAdaptsToServeGap(t *testing.T) {
+	now := time.Now()
+	var idle bashPPMailboxIdle
+	idle.reset(now, time.Time{})
+	if idle.budget != bashPPMailboxHostSpin {
+		t.Fatalf("no history budget %s, want fixed %s", idle.budget, bashPPMailboxHostSpin)
+	}
+	idle.reset(now, now.Add(-100*time.Microsecond))
+	if idle.budget != 200*time.Microsecond {
+		t.Fatalf("streaming budget %s, want twice the 100µs gap", idle.budget)
+	}
+	idle.reset(now, now.Add(-10*time.Millisecond))
+	if idle.budget != bashPPMailboxIdleMaxBudget {
+		t.Fatalf("idle budget %s, want cap %s", idle.budget, bashPPMailboxIdleMaxBudget)
+	}
+}
