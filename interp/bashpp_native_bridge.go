@@ -861,6 +861,10 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 				s.ackHandleReply(reply.ID)
 				continue
 			}
+			if reply.Op == "callback-mailbox-wake" {
+				mailbox.notify()
+				continue
+			}
 			s.adoptHandleResponse(&reply)
 			if reply.Op == "callback" {
 				// The waiting request executes its own callback; this reader
@@ -1076,7 +1080,7 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 		}
 		return nil, s.closedWriteError(ctx, err)
 	}
-	var mailboxSpin uint32
+	var mailboxIdle bashPPMailboxIdle
 	// This parked request owns its callback channel for the loop's whole
 	// lifetime: an unrelated top-level request waits on the callback gate
 	// before it can install its own channel, and a nested request runs on
@@ -1091,7 +1095,7 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 	for {
 		if mailboxActive {
 			if slot, callback, ok := requestMailbox.take(); ok {
-				mailboxSpin = 0
+				mailboxIdle = bashPPMailboxIdle{}
 				callbackFrames := testingFrames
 				if !testingBarrier {
 					callbackFrames = nil
@@ -1151,11 +1155,28 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 			case <-s.done:
 				event = 4
 			default:
-				bashPPMailboxWaitYield(&mailboxSpin)
-				continue
+				if mailboxIdle.spin() || !requestMailbox.park() {
+					continue
+				}
+				select {
+				case callback = <-callbacks:
+					event = 1
+				case reply = <-wait:
+					event = 2
+				case <-ctx.Done():
+					event = 3
+				case <-s.done:
+					event = 4
+				case <-requestMailbox.wake:
+				}
+				requestMailbox.unpark()
+				if event == 0 {
+					mailboxIdle = bashPPMailboxIdle{}
+					continue
+				}
 			}
 		} else {
-			mailboxSpin = 0
+			mailboxIdle = bashPPMailboxIdle{}
 			select {
 			case callback = <-callbacks:
 				event = 1
@@ -1167,7 +1188,7 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 				event = 4
 			}
 		}
-		mailboxSpin = 0
+		mailboxIdle = bashPPMailboxIdle{}
 		switch event {
 		case 1:
 			// The callback installs a write barrier on the interpreter's

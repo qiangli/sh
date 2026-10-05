@@ -26,6 +26,14 @@ const (
 	bashPPMailboxRequest  = 2
 	bashPPMailboxServing  = 3
 	bashPPMailboxReply    = 4
+	// Each slot's worker-parked word and the host-parked count share the
+	// header with the state and the two payload sizes.
+	bashPPMailboxWorkerParked = 12
+	bashPPMailboxHostParked   = 16
+	// Both waiters spin briefly, which covers a callback whose body is short,
+	// and then park on the control connection.
+	bashPPMailboxHostSpin   = 50 * time.Microsecond
+	bashPPMailboxWorkerSpin = 100 * time.Microsecond
 )
 
 type bashPPCallbackMailbox struct {
@@ -36,6 +44,9 @@ type bashPPCallbackMailbox struct {
 	refs    int
 	closing bool
 	once    sync.Once
+	// wake receives the worker's notice that it published a request while
+	// the serving request was parked.
+	wake chan struct{}
 }
 
 func (m *bashPPCallbackMailbox) word(slot, offset int) *uint32 {
@@ -89,6 +100,42 @@ func (m *bashPPCallbackMailbox) answer(slot int, answer bashPPBridgeRequest) boo
 	return true
 }
 
+// workerParked reports whether the callback waiting on slot gave up spinning
+// and must be woken through the control connection. The worker stores the
+// word before it re-reads the slot state, and the host reads it after it
+// stores the reply, so one of the two always observes the other.
+func (m *bashPPCallbackMailbox) workerParked(slot int) bool {
+	return atomic.LoadUint32(m.word(slot, bashPPMailboxWorkerParked)) != 0
+}
+
+// park announces that the serving request is about to block. It reports
+// false, leaving the request unparked, when a callback was published first.
+func (m *bashPPCallbackMailbox) park() bool {
+	atomic.AddUint32(m.word(0, bashPPMailboxHostParked), 1)
+	for slot := 0; slot < bashPPMailboxSlots; slot++ {
+		if atomic.LoadUint32(m.word(slot, 0)) == bashPPMailboxRequest {
+			m.unpark()
+			return false
+		}
+	}
+	return true
+}
+
+func (m *bashPPCallbackMailbox) unpark() {
+	atomic.AddUint32(m.word(0, bashPPMailboxHostParked), ^uint32(0))
+}
+
+// notify is the control reader's delivery of a worker wake.
+func (m *bashPPCallbackMailbox) notify() {
+	if m == nil {
+		return
+	}
+	select {
+	case m.wake <- struct{}{}:
+	default:
+	}
+}
+
 func (m *bashPPCallbackMailbox) close() {
 	if m == nil {
 		return
@@ -128,7 +175,7 @@ func (m *bashPPCallbackMailbox) release() {
 func bashPPMailboxWorkerSource(enabled bool) (imports, implementation string) {
 	if !enabled {
 		return "", `func openCallbackMailbox(){}
-func mailboxCallback(response)(request,bool,error){return request{},false,nil}`
+func mailboxCallback(response,chan request)(request,bool,error){return request{},false,nil}`
 	}
 	imports = `
  "os"
@@ -145,46 +192,71 @@ const callbackMailboxFree uint32=%d
 const callbackMailboxWriting uint32=%d
 const callbackMailboxRequest uint32=%d
 const callbackMailboxReply uint32=%d
+const callbackMailboxWorkerParked=%d
+const callbackMailboxHostParked=%d
+const callbackMailboxSpinTime=bppMailboxTime.Duration(%d)
 var callbackMailbox []byte
 func callbackMailboxWord(slot,offset int)*uint32{return (*uint32)(unsafe.Pointer(&callbackMailbox[slot*callbackMailboxSlotSize+offset]))}
 func callbackMailboxRequestBytes(slot int)[]byte{start:=slot*callbackMailboxSlotSize+callbackMailboxHeader;return callbackMailbox[start:start+callbackMailboxHalf]}
 func callbackMailboxReplyBytes(slot int)[]byte{start:=slot*callbackMailboxSlotSize+callbackMailboxHeader+callbackMailboxHalf;return callbackMailbox[start:(slot+1)*callbackMailboxSlotSize]}
-func callbackMailboxWaitYield(spin *uint32){n:=atomic.AddUint32(spin,1);if n<64{bppRuntime.Gosched();return};d:=bppMailboxTime.Microsecond;if n>512{d=50*bppMailboxTime.Microsecond}else if n>128{d=10*bppMailboxTime.Microsecond};bppMailboxTime.Sleep(d)}
+func callbackMailboxSpin(slot int)bool{
+ if bppRuntime.GOMAXPROCS(0)==1{return atomic.LoadUint32(callbackMailboxWord(slot,0))==callbackMailboxReply}
+ start:=bppMailboxTime.Now()
+ for n:=1;;n++{if atomic.LoadUint32(callbackMailboxWord(slot,0))==callbackMailboxReply{return true};if n&255==0&&bppMailboxTime.Since(start)>callbackMailboxSpinTime{return false}}
+}
 %s
-func mailboxCallback(q response)(request,bool,error){
+func mailboxCallback(q response,wait chan request)(request,bool,error){
  if callbackMailbox==nil{return request{},false,nil}
  payload,err:=json.Marshal(q);if err!=nil||len(payload)>callbackMailboxHalf{return request{},false,err}
  slot:=-1
  for i:=0;i<callbackMailboxSlots;i++{if atomic.CompareAndSwapUint32(callbackMailboxWord(i,0),callbackMailboxFree,callbackMailboxWriting){slot=i;break}}
  if slot<0{return request{},false,nil}
  copy(callbackMailboxRequestBytes(slot),payload);atomic.StoreUint32(callbackMailboxWord(slot,4),uint32(len(payload)));atomic.StoreUint32(callbackMailboxWord(slot,0),callbackMailboxRequest)
- var spin uint32
- for atomic.LoadUint32(callbackMailboxWord(slot,0))!=callbackMailboxReply{select{case <-handles.stop:atomic.StoreUint32(callbackMailboxWord(slot,0),callbackMailboxFree);return request{},true,fmt.Errorf("interpreter connection closed during callback");default:callbackMailboxWaitYield(&spin)}}
+ // A parked server is woken through the control connection. It counts itself
+ // parked before its last look at the slots, so this load cannot miss it.
+ if atomic.LoadUint32(callbackMailboxWord(0,callbackMailboxHostParked))!=0{outbound.Lock();if outbound.encoder!=nil{outbound.encoder.Encode(response{Op:"callback-mailbox-wake"})};outbound.Unlock()}
+ // An overflowing reply arrives on wait before its marker is published, so
+ // it can be what ends a park; keep it and take the marker that follows.
+ var early *request
+ for !callbackMailboxSpin(slot){
+  if early!=nil{select{case <-handles.stop:atomic.StoreUint32(callbackMailboxWord(slot,0),callbackMailboxFree);return request{},true,fmt.Errorf("interpreter connection closed during callback");default:bppRuntime.Gosched();continue}}
+  atomic.StoreUint32(callbackMailboxWord(slot,callbackMailboxWorkerParked),1)
+  if atomic.LoadUint32(callbackMailboxWord(slot,0))==callbackMailboxReply{atomic.StoreUint32(callbackMailboxWord(slot,callbackMailboxWorkerParked),0);break}
+  select{case m:=<-wait:if m.Op=="callback-reply"{early=&m};case <-handles.stop:atomic.StoreUint32(callbackMailboxWord(slot,callbackMailboxWorkerParked),0);atomic.StoreUint32(callbackMailboxWord(slot,0),callbackMailboxFree);return request{},true,fmt.Errorf("interpreter connection closed during callback")}
+  atomic.StoreUint32(callbackMailboxWord(slot,callbackMailboxWorkerParked),0)
+ }
  n:=int(atomic.LoadUint32(callbackMailboxWord(slot,8)));var reply request
  if n<=0||n>len(callbackMailboxReplyBytes(slot)){err=fmt.Errorf("invalid callback mailbox reply size")}else{err=json.Unmarshal(callbackMailboxReplyBytes(slot)[:n],&reply)}
  atomic.StoreUint32(callbackMailboxWord(slot,0),callbackMailboxFree)
+ if err==nil&&early!=nil{reply=*early}
  return reply,true,err
 }
-`, bashPPMailboxSlots, bashPPMailboxSlotSize, bashPPMailboxHeader, bashPPMailboxHalf, bashPPMailboxFree, bashPPMailboxWriting, bashPPMailboxRequest, bashPPMailboxReply, bashPPMailboxOpenWorkerSource())
+`, bashPPMailboxSlots, bashPPMailboxSlotSize, bashPPMailboxHeader, bashPPMailboxHalf, bashPPMailboxFree, bashPPMailboxWriting, bashPPMailboxRequest, bashPPMailboxReply, bashPPMailboxWorkerParked, bashPPMailboxHostParked, int64(bashPPMailboxWorkerSpin), bashPPMailboxOpenWorkerSource())
 	return imports, implementation
 }
 
-// The request goroutine is also the mailbox server. Yield briefly on an empty
-// poll so parallel callback frames can publish work, then sleep with a bounded
-// backoff. Gosched alone leaves the idle owner permanently runnable; with many
-// testing callbacks it competes once per callback step with the frames and the
-// control reader it exists to serve. This mirrors the worker-side wait policy.
-func bashPPMailboxWaitYield(spin *uint32) {
-	*spin++
-	if *spin < 64 {
-		runtime.Gosched()
-		return
+// bashPPMailboxIdle is the serving request's run of empty polls.
+type bashPPMailboxIdle struct {
+	polls uint32
+	since time.Time
+}
+
+// The request goroutine is also the mailbox server. spin reports whether an
+// empty poll should be repeated at once; after a bounded time it reports that
+// the request should park instead. The spin never yields or sleeps: a yield
+// wakes an idle scheduler thread on every round, and a timer shorter than a
+// millisecond rounds up to one on Linux, either of which then becomes what
+// every callback costs. With one processor the spin would only keep the
+// control reader and parallel callback frames from running, so the request
+// parks on its first empty poll.
+func (i *bashPPMailboxIdle) spin() bool {
+	i.polls++
+	if i.polls == 1 {
+		if runtime.GOMAXPROCS(0) == 1 {
+			return false
+		}
+		i.since = time.Now()
+		return true
 	}
-	delay := time.Microsecond
-	if *spin > 512 {
-		delay = 50 * time.Microsecond
-	} else if *spin > 128 {
-		delay = 10 * time.Microsecond
-	}
-	time.Sleep(delay)
+	return i.polls&15 != 0 || time.Since(i.since) < bashPPMailboxHostSpin
 }
