@@ -153,6 +153,10 @@ func (s *bashPPScope) put(name string, cell *bashPPCell) {
 // lookup finds the innermost binding of name, or nil.
 func (s *bashPPScope) lookup(name string) *bashPPCell {
 	for at := s; at != nil; at = at.parent {
+		// Most blocks between a loop body and its function declare nothing.
+		if len(at.entries) == 0 {
+			continue
+		}
 		if cell, ok := at.entries[name]; ok {
 			return cell
 		}

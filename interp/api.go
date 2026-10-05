@@ -317,6 +317,11 @@ type Runner struct {
 	// current-scope commit rules. Transactions nest across function calls, so a
 	// declaration evaluated by an RHS cannot be mistaken for the caller's LHS.
 	bashPPShortTxn *bashPPShortDeclTxn
+	// goSourceLivenessFirst/Len/Plan memoize this runner's last
+	// goSourceLivenessFor answer, keyed exactly as the shared cache is.
+	goSourceLivenessFirst *syntax.Stmt
+	goSourceLivenessLen   int
+	goSourceLivenessPlan  *goSourceLivenessPlan
 	// bashPPRangeKeyReuse memoizes, per range statement, whether its body can
 	// retain the key variable; see bashPPRangeKeyReusable. It belongs to one
 	// runner and is never copied to another.
