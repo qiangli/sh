@@ -16,7 +16,7 @@ func syncTypeName(t types.Type) string {
 		return ""
 	}
 	switch n.Obj().Name() {
-	case "Mutex", "WaitGroup":
+	case "Mutex", "RWMutex", "WaitGroup":
 		return "sync." + n.Obj().Name()
 	}
 	return ""
@@ -75,6 +75,8 @@ func syncMethod(o types.Object) bool {
 	switch syncTypeName(t) {
 	case "sync.Mutex":
 		return f.Name() == "Lock" || f.Name() == "Unlock" || f.Name() == "TryLock"
+	case "sync.RWMutex":
+		return f.Name() == "RLock" || f.Name() == "RUnlock" || f.Name() == "Lock" || f.Name() == "Unlock" || f.Name() == "TryLock" || f.Name() == "TryRLock"
 	case "sync.WaitGroup":
 		return f.Name() == "Add" || f.Name() == "Done" || f.Name() == "Wait"
 	}

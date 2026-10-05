@@ -11,13 +11,17 @@ import (
 )
 
 // Host-only ownership. changed allows cancellation without leaving goroutines
-// parked forever in Mutex.Lock or WaitGroup.Wait after a program ends.
+// parked forever in Mutex.Lock, RWMutex read/write locks or WaitGroup.Wait
+// after a program ends.
 // gate serializes the notification bookkeeping with the real Go operations.
 type goSourceResidentSync struct {
 	gate    sync.Mutex
 	mutex   sync.Mutex
+	rwmu    sync.RWMutex
 	wg      sync.WaitGroup
 	locked  bool
+	wlocked bool
+	readers int
 	count   int
 	changed chan struct{}
 }
@@ -164,6 +168,83 @@ func (r *Runner) goSourceResidentSyncRequest(ctx context.Context, q bashPPBridge
 			}
 			s.locked = false
 			s.mutex.Unlock()
+			s.notify()
+			return nil, true, nil
+		}
+	case "sync.RWMutex":
+		switch q.Selector {
+		case "RLock", "TryRLock":
+			for {
+				s.gate.Lock()
+				acquired := !s.wlocked && s.rwmu.TryRLock()
+				if acquired {
+					s.readers++
+				}
+				var wake <-chan struct{}
+				if !acquired {
+					wake = s.wake()
+				}
+				s.gate.Unlock()
+				if q.Selector == "TryRLock" {
+					return []bashPPBridgeValue{{Kind: "bool", Type: "bool", Text: strconv.FormatBool(acquired)}}, true, nil
+				}
+				if acquired {
+					return nil, true, nil
+				}
+				if !r.bashPPArmBeforeBlock(ctx) {
+					return nil, true, errBashPPScalarInterrupted
+				}
+				select {
+				case <-wake:
+				case <-ctx.Done():
+					return nil, true, ctx.Err()
+				}
+			}
+		case "RUnlock":
+			s.gate.Lock()
+			defer s.gate.Unlock()
+			if s.readers <= 0 {
+				return nil, true, fmt.Errorf("sync: RUnlock of unlocked RWMutex")
+			}
+			s.readers--
+			s.rwmu.RUnlock()
+			s.notify()
+			return nil, true, nil
+		case "Lock", "TryLock":
+			for {
+				s.gate.Lock()
+				acquired := !s.wlocked && s.readers == 0 && s.rwmu.TryLock()
+				if acquired {
+					s.wlocked = true
+				}
+				var wake <-chan struct{}
+				if !acquired {
+					wake = s.wake()
+				}
+				s.gate.Unlock()
+				if q.Selector == "TryLock" {
+					return []bashPPBridgeValue{{Kind: "bool", Type: "bool", Text: strconv.FormatBool(acquired)}}, true, nil
+				}
+				if acquired {
+					return nil, true, nil
+				}
+				if !r.bashPPArmBeforeBlock(ctx) {
+					return nil, true, errBashPPScalarInterrupted
+				}
+				select {
+				case <-wake:
+				case <-ctx.Done():
+					return nil, true, ctx.Err()
+				}
+			}
+		case "Unlock":
+			s.gate.Lock()
+			defer s.gate.Unlock()
+			if !s.wlocked {
+				return nil, true, fmt.Errorf("sync: unlock of unlocked RWMutex")
+			}
+			s.wlocked = false
+			s.rwmu.Unlock()
 			s.notify()
 			return nil, true, nil
 		}
