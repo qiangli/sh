@@ -19,7 +19,7 @@ parser, CRLF input is normalized to LF. Backtick and quote runs retain their
 Classic shell meanings.
 
 A fence is a declaration unit, not an implicit command. Python, TypeScript,
-Rust, C, C++, Go, Bash, and POSIX sh are implemented adapters. Python blocks
+Rust, C, C++, Go, PowerShell, C#, Bash, and POSIX sh are implemented adapters. Python blocks
 may contain one module docstring followed by ordinary synchronous,
 undecorated function declarations. Imports, classes,
 async declarations, decorators, executable top-level statements, and
@@ -203,18 +203,96 @@ request/result frame, exposes ordinary stdout/stderr, and turns panics,
 build/worker failures, malformed frames, and non-nil trailing errors into
 Bash++ call errors.
 
-## PowerShell and C# fences
+## PowerShell fences
 
-`~~~powershell` (`pwsh`, `ps1`) and `~~~csharp` (`cs`) run in one persistent
-PowerShell 7 worker per module; C# compiles through `Add-Type` in it. Both
-lower: the lowered program embeds the fence source and the environment plan
-resolved at compile time, and starts the same worker, so interpreted and
-lowered output match byte for byte. **The lowered binary still needs PowerShell
-7 on the target at run time**, as a lowered Python fence needs Python; it
-embeds neither PowerShell nor a compiled C# assembly. An aliased Python or
-PowerShell fence's exports run as command words (`ps.Greet world`) in lowered
-shell regions too. A `Verb-Noun` PowerShell export is not a Bash# call name
-and gets no lowered wrapper. Full contract: `bashsharp/docs/powershell-csharp-fences.md`.
+`~~~powershell` (aliases `~~~pwsh`, `~~~ps1`) exposes its public function
+definitions through the same direct or `as NAME` call model as the other
+islands (`~~~powershell as ps`, then `ps.Shout("hi")`). One persistent
+PowerShell 7 worker serves each module for its lifetime.
+
+**Exported-call convention.** A function with typed parameters is a typed
+call: `[string]` takes a Bash# string, `[long]` an int, `[double]` a float,
+`[bool]` a bool, `[byte[]]` bytes, and collections cross as a Bash# `Object`
+(JSON at the boundary). A function with no declared return type is dynamic
+and binds both results (`shouted, serr := ps.Shout("hi")`). A `Verb-Noun`
+export (`Get-Item`) is not a Bash# call name — the hyphen is a minus in a
+qualified call and has no lowered wrapper — so it is reached by string key
+(`ps.call("Get-Item", path)`) while staying loaded for the fence's other
+functions. An aliased fence's exports also run as command words
+(`ps.Greet world`) in lowered shell regions.
+
+**Value, error and pipe boundary.** Scalars and bytes cross as values; lists
+and maps cross as JSON through the island boundary, never as a PowerShell
+object pipeline — the shell pipe stays bytes. A terminating error or an
+uncaught `throw` is the call's error (bound to `err` in a typed call, exit
+status `1` with the message on stderr in command form); non-terminating
+errors (`Write-Error`) go to stderr without failing the call. A function
+that reads pipeline input — a `process` block, a `$input` reference, or a
+`ValueFromPipeline` parameter — runs as a filter over the command's stdin,
+one line per item; any other function never reads stdin. Text on stdout and
+stderr is normalized to `\n` on every OS; `byte[]` output passes through
+untouched. Bash# adopts neither `$ErrorActionPreference`, `ExecutionPolicy`,
+providers, case-insensitivity nor the Verb-Noun command system.
+
+**Runtime.** Both fences resolve through bashy's toolchain resolver to one
+pinned, digest-verified PowerShell 7.6.6 archive per platform, downloaded on
+demand and cached; a fence never resolves its tool from `PATH`, and
+`BASHPP_PWSH` is the one explicit override. The fence lowers: the lowered
+program embeds the fence source and the environment plan resolved at compile
+time and starts the same worker, so interpreted and lowered output match
+byte for byte — but **the lowered binary still needs PowerShell 7 on the
+target at run time**, as a lowered Python fence needs Python. Nothing from
+Microsoft is compiled into, linked with or vendored in bashy. Verified
+licence evidence (MIT root license in every archive, the common MIT/BSD-2
+notice, and the closed native payloads the Windows zips add) is inventoried
+per archive in `bashy/docs/fence-toolchain-licenses.md`.
+
+**Windows PowerShell 5.1 is not the guest runtime.** The fence always runs
+on the provisioned PowerShell 7.
+
+Full contract: `bashsharp/docs/powershell-csharp-fences.md`.
+
+## C# fences
+
+`~~~csharp` (alias `~~~cs`) exposes `public static` methods through the same
+direct or `as NAME` call model (`~~~csharp as cs`, then `cs.Square(6)`). It
+compiles through `Add-Type` in the same provisioned PowerShell 7 worker as
+the PowerShell fence, so one pinned archive serves both languages.
+
+**Exported-call convention.** A `~~~csharp` fence is a declaration unit, not
+a program: leading `using` lines carry into the generated unit, then each
+`public static` method is one Bash# callable with one signature. Instance
+methods, constructors, non-public members, overloads, generic methods and
+`ref`/`out` parameters are refused at preparation; there are no top-level
+statements and no `Main`. A fence-declared class or struct result crosses as
+a dict of its public properties and fields, an enum as its name, and every
+other parameter/result type maps by the shared value table (`string`,
+`long`/`int`, `double`, `bool`, `byte[]`, objects as JSON).
+
+**Value and error boundary.** Arguments convert to the declared parameter
+types (a missing argument takes the parameter's default); `Console` output
+during a call is that call's stdout and stderr. An uncaught exception is the
+call's error carrying the exception type and message; a typed call binds it
+with one extra `err` result. Compilation failures report with
+source-location diagnostics naming the script file and the fence's own lines
+before the workflow runs, and a failed compile leaves no cache entry. The
+compiled assembly and export list are cached under the user cache, keyed by
+the generated source and a content hash of the `pwsh` launcher and the
+compiler assemblies beside it. A `#:package` / `#:` directive or
+`#r "nuget: …"` line is refused at prepare: NuGet restore is a separate
+follow-up, not part of this contract.
+
+**Runtime.** Same provisioned PowerShell 7.6.6 as the PowerShell fence (same
+pins, same `BASHPP_PWSH` override, same per-archive licence inventory in
+`bashy/docs/fence-toolchain-licenses.md`). The fence lowers with the same
+parity and the same requirement: **the lowered binary still needs the
+provisioned PowerShell 7 where it runs**; it embeds neither PowerShell, the
+CLR nor a compiled C# assembly. Native AOT is not attempted.
+
+**Windows PowerShell 5.1 is not the guest runtime.** C# compiles through the
+provisioned PowerShell 7 on every OS; no .NET SDK is installed or required.
+
+Full contract: `bashsharp/docs/powershell-csharp-fences.md`.
 
 ## Shell dialect islands
 
