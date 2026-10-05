@@ -353,9 +353,10 @@ type bashPPNativeSession struct {
 	sliceRegionCount int
 	start            sync.Mutex
 	write            sync.Mutex
-	// encoder is created with conn and used only with write held. Keeping it
-	// session-owned avoids rebuilding JSON's encoder state for every imported
-	// call, without extending any request or response object's lifetime.
+	outbox           bashPPBridgeOutbox
+	// encoder is created with conn and used only with write held, by the
+	// close message. Every other message goes through the outbox
+	// (bashpp_native_group_write.go).
 	encoder             *json.Encoder
 	verifiedPlan        *bashPPNativeRequestPlan // protected by mu
 	mu                  sync.Mutex
@@ -842,6 +843,7 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 	// systems which cannot unlink an executable while it is running.
 	cleanup()
 	_ = conn.SetDeadline(time.Time{})
+	bashPPBridgeSocketBuffers(conn)
 	s.mu.Lock()
 	s.conn = conn
 	s.encoder = bashPPBridgeEncoder(conn)
@@ -1053,23 +1055,15 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 		s.mu.Unlock()
 		s.closeOriginRequest(originSet)
 	}()
-	s.write.Lock()
-	encoder := s.encoder
-	if encoder == nil {
-		// A live connection always installs its encoder before begin returns.
-		// Keep this refusal explicit rather than silently constructing a second
-		// encoder whose ownership would not match the connection lifetime.
-		s.write.Unlock()
-		return nil, s.closedWriteError(ctx, errors.New("gosource: native bridge encoder is unavailable"))
-	}
 	if os.Getenv("S374_ORIGIN_DEBUG") != "" {
 		fmt.Fprintf(os.Stderr, "s374send: op=%s sel=%s nargs=%d\n", q.Op, q.Selector, len(q.Args))
 	}
-	q.Releases = s.takeHandleReleases()
-	originSet = collectBridgeOrigins(&q)
-	q.OriginReleases = s.openOriginRequest(originSet)
-	err = encoder.Encode(q)
-	s.write.Unlock()
+	err = s.sendMessage(func() any {
+		q.Releases = s.takeHandleReleases()
+		originSet = collectBridgeOrigins(&q)
+		q.OriginReleases = s.openOriginRequest(originSet)
+		return q
+	})
 	if err != nil {
 		// The worker never saw this batch; re-queue it for the next
 		// request rather than dropping the releases with the failed send.
@@ -1770,6 +1764,7 @@ func bashPPNativeSource(ctx context.Context, req bashPPEvalRequest) (string, err
 	}
 	locals.WriteString(codecs)
 	source := strings.Replace(bashPPNativeWorker, "//IMPORTS", imports.String(), 1)
+	source = strings.Replace(source, "//ROUTESLOTS", bashPPRouteSlotWorkerSource(), 1)
 	source = strings.Replace(source, "//EMBEDS", embeds.String(), 1)
 	source = strings.Replace(source, "//SYMBOLS", symbols.String(), 1)
 	source = strings.Replace(source, "//TYPES", typeEntries.String(), 1)

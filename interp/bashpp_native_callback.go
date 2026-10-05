@@ -9,7 +9,6 @@ package interp
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"go/constant"
@@ -175,9 +174,7 @@ func (s *bashPPNativeSession) answerMailboxCallback(mailbox *bashPPCallbackMailb
 		// The waiter spins first, so a short body is answered with no
 		// socket write at all; only a parked waiter needs the wake.
 		if conn != nil && mailbox.workerParked(slot) {
-			s.write.Lock()
-			_ = json.NewEncoder(conn).Encode(bashPPBridgeRequest{ID: answer.ID, Op: "callback-mailbox-wake"})
-			s.write.Unlock()
+			_ = s.sendMessage(func() any { return bashPPBridgeRequest{ID: answer.ID, Op: "callback-mailbox-wake"} })
 		}
 		return
 	}
@@ -187,9 +184,7 @@ func (s *bashPPNativeSession) answerMailboxCallback(mailbox *bashPPCallbackMailb
 	if conn == nil {
 		sendErr = errors.New("gosource: callback connection closed")
 	} else {
-		s.write.Lock()
-		sendErr = json.NewEncoder(conn).Encode(answer)
-		s.write.Unlock()
+		sendErr = s.sendMessage(func() any { return answer })
 	}
 	marker := bashPPBridgeRequest{ID: answer.ID, Op: "callback-mailbox-overflow"}
 	if sendErr != nil {
@@ -404,9 +399,7 @@ func (s *bashPPNativeSession) serveCallback(ctx context.Context, owner *Runner, 
 	conn := s.conn
 	s.mu.Unlock()
 	if conn != nil {
-		s.write.Lock()
-		_ = json.NewEncoder(conn).Encode(answer)
-		s.write.Unlock()
+		_ = s.sendMessage(func() any { return answer })
 	}
 }
 

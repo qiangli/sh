@@ -44,6 +44,7 @@ import (
 // this large generated source lets self-reexec children share its compiled
 // archive while every linked helper still receives fresh connection secrets.
 var bridgeNetwork = ""
+const bridgeSocketBuffer = 1 << 20
 var bridgeAddress = ""
 var bridgeAuthPath = ""
 var bridgeAuth = ""
@@ -99,6 +100,8 @@ type bppProtocolEntry struct {Key value `json:"key"`; Value value `json:"value"`
 type sliceBuffer struct {Index int `json:"index"`;Length int `json:"length"`;Value value `json:"value"`}
 type request struct {
  AckHandles bool `json:"ack_handles,omitempty"`
+ // routeSlot is one more than the route slot this request is served beneath.
+ routeSlot int `json:"-"`
 
  Releases []uint64 `json:"releases,omitempty"`; OriginReleases []uint64 `json:"origin_releases,omitempty"`
  SliceBuffers []sliceBuffer `json:"slice_buffers,omitempty"`; Transfers []int `json:"transfers,omitempty"`; ID uint64 `json:"id"`; Op string `json:"op"`; PanicOnFault bool `json:"panic_on_fault,omitempty"`; PointerReadOnly bool `json:"pointer_read_only,omitempty"`; Selector string `json:"selector"`; AccessPackage string `json:"access_package,omitempty"`; Instance string `json:"instance,omitempty"`; Receiver *value `json:"receiver,omitempty"`; Args []value `json:"args,omitempty"`; Spread bool `json:"spread,omitempty"`; FormatOnly string `json:"format_only,omitempty"`; SourceFile string `json:"source_file,omitempty"`; SourceLine int `json:"source_line,omitempty"`; LogPrint string `json:"log_print,omitempty"`; Values []value `json:"values,omitempty"`; Error string `json:"error,omitempty"`; Route bool `json:"route,omitempty"` }
@@ -386,7 +389,7 @@ func acceptHandleReply(q *request){
  if q.Receiver!=nil{pinHandleValue(q.Receiver)}
  for i:=range q.Values{pinHandleValue(&q.Values[i])}
  for i:=range q.SliceBuffers{pinHandleValue(&q.SliceBuffers[i].Value)}
- outbound.Lock();_ = outbound.encoder.Encode(response{ID:q.ID,Op:"handle-ack"});outbound.Unlock()
+ _ = sendMessage(response{ID:q.ID,Op:"handle-ack"})
 }
 func exportHandles(r *response){
  if r.Receiver!=nil{exportHandleValue(r.Receiver)}
@@ -518,7 +521,32 @@ func structuralPath(v reflect.Value,path map[uintptr]bool) value {
 // never compiles an original body; the generated mirror method's entire body
 // is this protocol exchange.
 var callbacks = struct { sync.Mutex; next uint64; waiting map[uint64]chan request }{waiting: map[uint64]chan request{}}
-var outbound = struct { sync.Mutex; encoder *json.Encoder }{}
+var outbound = struct { sync.Mutex; conn net.Conn }{}
+// sendMessage is the helper's half of the control connection's group commit
+// (bashpp_native_group_write.go): a sender encodes into the open batch and
+// writes it unless a write is in progress, in which case the writer takes it
+// with everything else that accumulated meanwhile.
+type bppOutBatch struct {buf *bytes.Buffer;done chan struct{};err error}
+var bppOutQueue = struct { sync.Mutex; batch *bppOutBatch; spare *bytes.Buffer; flushing bool }{}
+const bppOutFlushRounds=8
+func sendMessage(m any) error {
+ bppOutQueue.Lock();b:=bppOutQueue.batch;if b==nil{b=&bppOutBatch{buf:bppOutQueue.spare,done:make(chan struct{})};bppOutQueue.spare=nil;if b.buf==nil{b.buf=new(bytes.Buffer)};bppOutQueue.batch=b};mark:=b.buf.Len()
+ if err:=json.NewEncoder(b.buf).Encode(m);err!=nil{b.buf.Truncate(mark);bppOutQueue.Unlock();return err}
+ if bppOutQueue.flushing{bppOutQueue.Unlock();<-b.done;return b.err}
+ bppOutQueue.flushing=true;bppOutQueue.Unlock()
+ flushOutQueue();<-b.done;return b.err
+}
+func flushOutQueue() {
+ for round:=0;;round++ {
+  bppOutQueue.Lock();b:=bppOutQueue.batch
+  if b==nil{bppOutQueue.flushing=false;bppOutQueue.Unlock();return}
+  if round==bppOutFlushRounds{bppOutQueue.Unlock();go flushOutQueue();return}
+  bppOutQueue.batch=nil;bppOutQueue.Unlock()
+  outbound.Lock();if outbound.conn==nil{b.err=fmt.Errorf("no interpreter connection")}else{_,b.err=outbound.conn.Write(b.buf.Bytes())};outbound.Unlock()
+  if b.buf.Cap()<=bridgeSocketBuffer{b.buf.Reset();bppOutQueue.Lock();bppOutQueue.spare=b.buf;bppOutQueue.Unlock()};b.buf=nil
+  close(b.done)
+ }
+}
 // Scratch belongs to one active dispatch, including its callbacks and deferred
 // writeback. Pool pointers, not slice headers (boxing a header allocates).
 // Fixed storage bounds retention; unusually wide calls use an unpooled slice.
@@ -554,11 +582,34 @@ func enterCallbackSliceFrame(buffers []sliceBuffer,args []reflect.Value)func(){i
 func callbackSliceSnapshot()[]sliceBuffer{callbackSliceFrames.Lock();active:=len(callbackSliceFrames.frames);callbackSliceFrames.Unlock();if active==0{return nil};g:=goroutineID();callbackSliceFrames.Lock();frame:=callbackSliceFrames.frames[g];callbackSliceFrames.Unlock();if frame==nil{return nil};out:=make([]sliceBuffer,len(frame.buffers));for i,buffer:=range frame.buffers{if buffer.Index<0||buffer.Index>=len(frame.args){continue};v:=frame.args[buffer.Index];out[i]=sliceBuffer{Index:buffer.Index,Length:v.Len(),Value:structural(v.Slice(0,v.Cap()))}};return out}
 func applyCallbackSliceReply(buffers []sliceBuffer)error{var frame *callbackSliceFrame;callbackSliceFrames.Lock();active:=len(callbackSliceFrames.frames);callbackSliceFrames.Unlock();if active>0{g:=goroutineID();callbackSliceFrames.Lock();frame=callbackSliceFrames.frames[g];callbackSliceFrames.Unlock()};if frame==nil {if len(buffers)==0{return nil};return fmt.Errorf("callback slice frame expired")};if len(buffers)!=len(frame.buffers){return fmt.Errorf("callback slice refresh count mismatch")};for i,buffer:=range buffers{sent:=frame.buffers[i];if buffer.Index!=sent.Index||buffer.Index<0||buffer.Index>=len(frame.args){return fmt.Errorf("callback slice refresh index mismatch")};dst:=frame.args[buffer.Index];src,err:=decode(buffer.Value,dst.Type());if err!=nil{return err};if src.Kind()!=reflect.Slice||src.Len()!=dst.Len(){return fmt.Errorf("callback slice refresh shape mismatch")};reflect.Copy(dst,src)};return nil}
 func routeEnter(parent uint64) func() {g:=goroutineID();routes.Lock();routes.ids[g]=parent;routes.active++;routes.Unlock();return func(){routes.Lock();delete(routes.ids,g);routes.active--;routes.Unlock()}}
-func routeParent() uint64 {routes.Lock();active:=routes.active;routes.Unlock();if active==0{return 0};g:=goroutineID();routes.Lock();defer routes.Unlock();return routes.ids[g]}
+// Route slots (bashpp_native_route_slots.go): a routed dispatch runs beneath
+// one of bppRouteSlotFuncs and a callback finds it by walking its own return
+// addresses, so the common lookup captures no goroutine stack. A slot's
+// parent is written by the goroutine that claimed the slot and read only
+// beneath that slot's frame, on that same goroutine.
+//ROUTESLOTS
+var bppRouteSlotEntries = func() map[uintptr]int {m:=make(map[uintptr]int,bppRouteSlotCount);for i,f:=range bppRouteSlotFuncs{m[reflect.ValueOf(f).Pointer()]=i};return m}()
+var bppRouteSlotParents [bppRouteSlotCount]uint64
+var bppRouteSlotFree = func() []int {free:=make([]int,bppRouteSlotCount);for i:=range free{free[i]=bppRouteSlotCount-1-i};return free}()
+func routeSlotClaim(parent uint64) int {routes.Lock();defer routes.Unlock();n:=len(bppRouteSlotFree);if n==0{return -1};slot:=bppRouteSlotFree[n-1];bppRouteSlotFree=bppRouteSlotFree[:n-1];bppRouteSlotParents[slot]=parent;routes.active++;return slot}
+func routeSlotRelease(slot int) {routes.Lock();bppRouteSlotParents[slot]=0;bppRouteSlotFree=append(bppRouteSlotFree,slot);routes.active--;routes.Unlock()}
+const routeSlotWalk=64
+func routeParent() uint64 {
+ routes.Lock();active:=routes.active;routes.Unlock();if active==0{return 0}
+ var pcs [routeSlotWalk]uintptr
+ for skip:=2;skip<2+8*routeSlotWalk;skip+=routeSlotWalk {
+  n:=bppRuntime.Callers(skip,pcs[:])
+  for _,pc:=range pcs[:n]{if f:=bppRuntime.FuncForPC(pc-1);f!=nil{if slot,ok:=bppRouteSlotEntries[f.Entry()];ok{return bppRouteSlotParents[slot]}}}
+  if n<routeSlotWalk{break}
+ }
+ // No slot frame within reach: every routed dispatch is also known by its
+ // goroutine number (routeEnter), and any other goroutine by none.
+ g:=goroutineID();routes.Lock();defer routes.Unlock();return routes.ids[g]
+}
 //CALLBACKMAILBOX
 func callback(selector string, recv value) ([]value,error) {
- outbound.Lock();encoder:=outbound.encoder;outbound.Unlock()
- if encoder==nil {return nil,fmt.Errorf("no interpreter connection for %s",selector)}
+ outbound.Lock();connected:=outbound.conn!=nil;outbound.Unlock()
+ if !connected {return nil,fmt.Errorf("no interpreter connection for %s",selector)}
  callbacks.Lock();callbacks.next++;id:=callbacks.next;wait:=make(chan request,1);callbacks.waiting[id]=wait;callbacks.Unlock()
  defer func(){callbacks.Lock();delete(callbacks.waiting,id);callbacks.Unlock()}()
  message:=response{ID:id,Op:"callback",Selector:selector,Receiver:&recv,Parent:routeParent(),SliceUpdates:callbackSliceSnapshot()}
@@ -566,7 +617,7 @@ func callback(selector string, recv value) ([]value,error) {
  var reply request;handled:=false;var err error
  if message.Parent==0 {reply,handled,err=mailboxCallback(message,wait)}
  if err!=nil{return nil,err}
- if !handled {outbound.Lock();err=encoder.Encode(message);outbound.Unlock();if err!=nil{return nil,err};reply=<-wait}
+ if !handled {if err=sendMessage(message);err!=nil{return nil,err};reply=<-wait}
  if handled && reply.Op=="callback-mailbox-overflow" && reply.Error=="" {select{case reply=<-wait:case <-handles.stop:return nil,fmt.Errorf("interpreter connection closed during callback")}}
  acceptHandleReply(&reply)
  defer bppRuntime.KeepAlive(&reply)
@@ -1192,7 +1243,10 @@ func dispatch(q request)(reply response){
  if q.Spread&&(!signature.IsVariadic()||len(args)!=n){reply.Error="invalid spread call";return}
  leaveCallbackSlices:=enterCallbackSliceFrame(q.SliceBuffers,args);defer leaveCallbackSlices()
  args=originalFmtArgs(fn,args,q.Spread)
- returned=callDependency(fn,args,q.Spread)
+ // The dependency is entered beneath the request's slot frame a second time:
+ // a callback then finds its route a few small frames up, without unwinding
+ // this function.
+ if q.routeSlot>0 {bppRouteSlotFuncs[q.routeSlot-1](func(){returned=callDependency(fn,args,q.Spread)})} else {returned=callDependency(fn,args,q.Spread)}
  for _,v:=range returned{encoded:=encode(v);markOriginalUintptr(v,&encoded);if encoded.Kind=="handle" {
    var ctx reflectedMethodContext;valid:=false
    if q.Receiver==nil&&len(q.Args)==1&&q.Args[0].Origin!=0&&v.Type()==reflect.TypeFor[reflect.Value](){snapshot:=reflect.New(args[0].Type()).Elem();snapshot.Set(args[0]);ctx=reflectedMethodContext{receiver:snapshot};if args[0].Kind()==reflect.Pointer{ctx.origin=q.Args[0].Origin};valid=true
@@ -1203,12 +1257,16 @@ func dispatch(q request)(reply response){
 func nativeFaultAddr(q request)(uint64,bool){if q.Receiver==nil||len(q.Args)<1{return 0,false};switch q.Op{case "index","byte-set":default:return 0,false};n,err:=strconv.Atoi(q.Args[0].Text);if err!=nil||n<0{return 0,false};rv,err:=decode(*q.Receiver,nil);if err!=nil{return 0,false};for rv.Kind()==reflect.Interface&&!rv.IsNil(){rv=rv.Elem()};switch rv.Kind(){case reflect.Slice:if rv.Type().Elem().Kind()!=reflect.Uint8||n>=rv.Len(){return 0,false};return uint64(rv.Pointer()+uintptr(n)),true;case reflect.Array:if rv.Type().Elem().Kind()!=reflect.Uint8||n>=rv.Len()||!rv.CanAddr(){return 0,false};return uint64(rv.UnsafeAddr()+uintptr(n)),true};return 0,false}
 var outputBarrierStdoutSequence uint64
 var outputBarrierStderrSequence uint64
+// Each marker is numbered in the order it is written to its stream; the
+// answer naming it may reach the control connection in any order.
+var outputBarrierOrder sync.Mutex
 func sendAnswer(answer response){
  exportHandles(&answer)
- outbound.Lock();defer outbound.Unlock()
+ outputBarrierOrder.Lock()
  if bridgeStdoutBarrier!="" {if _,err:=bppOS.Stdout.Write([]byte(bridgeAuth+"-stdout"));err==nil{outputBarrierStdoutSequence++;answer.OutputBarrierStdout=outputBarrierStdoutSequence}}
  if bridgeStderrBarrier!="" {if _,err:=bppOS.Stderr.Write([]byte(bridgeAuth+"-stderr"));err==nil{outputBarrierStderrSequence++;answer.OutputBarrierStderr=outputBarrierStderrSequence}}
- _ = outbound.encoder.Encode(answer)
+ outputBarrierOrder.Unlock()
+ _ = sendMessage(answer)
 }
 func loadBridgeAuth(){
  if bridgeAuth!="" {return}
@@ -1227,7 +1285,8 @@ func main(){
  openCallbackMailbox()
  conn,err:=net.Dial(bridgeNetwork,bridgeAddress);if err!=nil{panic(err)};defer conn.Close()
  encoder:=json.NewEncoder(conn);if err=encoder.Encode(bridgeAuth);err!=nil{return};decoder:=json.NewDecoder(conn)
- outbound.Lock();outbound.encoder=encoder;outbound.Unlock()
+ if c,ok:=conn.(interface{SetReadBuffer(int)error;SetWriteBuffer(int)error});ok{c.SetReadBuffer(bridgeSocketBuffer);c.SetWriteBuffer(bridgeSocketBuffer)}
+ outbound.Lock();outbound.conn=conn;outbound.Unlock()
  // Host EOF/close ends the dependency process, including blocked native calls.
  // Waiting for those calls would orphan listeners after host termination.
  for {var q request;if err:=decoder.Decode(&q);err!=nil{close(handles.stop);return};if q.Op=="close"{close(handles.stop);return}
@@ -1239,5 +1298,8 @@ func main(){
   // A dependency call may end this serving goroutine with runtime.Goexit
   // (testing.T.FailNow, SkipNow). The request is still answered, as ended by
   // Goexit, so the interpreter can end the goroutine which made the call.
-  go func(){answered:=false;defer func(){if answered{return};if e:=recover();e!=nil{panic(e)};sendAnswer(response{ID:q.ID,Panic:&value{Kind:"goexit"}})}();if q.Route {defer routeEnter(q.ID)()};if q.PanicOnFault {old:=bppDebug.SetPanicOnFault(true);defer bppDebug.SetPanicOnFault(old)};answer:=response{ID:q.ID};if q.PanicOnFault {defer func(){if r:=recover();r!=nil{answer=response{ID:q.ID,Error:fmt.Sprintf("native dependency panic: %v",r)};if a,ok:=r.(interface{Addr()uintptr});ok{addr:=uint64(a.Addr());answer.PanicAddr=&addr}else if addr,ok:=nativeFaultAddr(q);ok{answer.PanicAddr=&addr};answered=true;sendAnswer(answer)}}()};answer=dispatch(q);answered=true;sendAnswer(answer)}()}
+  // A slot frame is beneath the whole served request; a deeper stack than the
+  // walk reaches, or no free slot, is found by goroutine number instead.
+  serve:=func(){answered:=false;defer func(){if answered{return};if e:=recover();e!=nil{panic(e)};sendAnswer(response{ID:q.ID,Panic:&value{Kind:"goexit"}})}();if q.PanicOnFault {old:=bppDebug.SetPanicOnFault(true);defer bppDebug.SetPanicOnFault(old)};answer:=response{ID:q.ID};if q.PanicOnFault {defer func(){if r:=recover();r!=nil{answer=response{ID:q.ID,Error:fmt.Sprintf("native dependency panic: %v",r)};if a,ok:=r.(interface{Addr()uintptr});ok{addr:=uint64(a.Addr());answer.PanicAddr=&addr}else if addr,ok:=nativeFaultAddr(q);ok{answer.PanicAddr=&addr};answered=true;sendAnswer(answer)}}()};answer=dispatch(q);answered=true;sendAnswer(answer)}
+  go func(){if !q.Route{serve();return};defer routeEnter(q.ID)();if slot:=routeSlotClaim(q.ID);slot>=0{defer routeSlotRelease(slot);q.routeSlot=slot+1;bppRouteSlotFuncs[slot](serve);return};serve()}()}
 }

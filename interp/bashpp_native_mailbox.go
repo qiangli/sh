@@ -214,7 +214,7 @@ func mailboxCallback(q response,wait chan request)(request,bool,error){
  copy(callbackMailboxRequestBytes(slot),payload);atomic.StoreUint32(callbackMailboxWord(slot,4),uint32(len(payload)));atomic.StoreUint32(callbackMailboxWord(slot,0),callbackMailboxRequest)
  // A parked server is woken through the control connection. It counts itself
  // parked before its last look at the slots, so this load cannot miss it.
- if atomic.LoadUint32(callbackMailboxWord(0,callbackMailboxHostParked))!=0{outbound.Lock();if outbound.encoder!=nil{outbound.encoder.Encode(response{Op:"callback-mailbox-wake"})};outbound.Unlock()}
+ if atomic.LoadUint32(callbackMailboxWord(0,callbackMailboxHostParked))!=0{sendMessage(response{Op:"callback-mailbox-wake"})}
  // An overflowing reply arrives on wait before its marker is published, so
  // it can be what ends a park; keep it and take the marker that follows.
  var early *request
