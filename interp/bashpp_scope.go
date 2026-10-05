@@ -134,6 +134,22 @@ func newBashPPScope(parent *bashPPScope) *bashPPScope {
 	return &bashPPScope{parent: parent, entries: make(map[string]*bashPPCell)}
 }
 
+// newBashPPBlockScope is the scope [Runner.bashPPPushScope] enters. Its entry
+// map is allocated by the first declaration: most blocks a loop body enters
+// declare nothing, and a nil map reads, ranges and deletes as an empty one.
+// Every write to a scope's entries therefore goes through [bashPPScope.put].
+func newBashPPBlockScope(parent *bashPPScope) *bashPPScope {
+	return &bashPPScope{parent: parent}
+}
+
+// put binds name to cell in THIS block, replacing any binding it had.
+func (s *bashPPScope) put(name string, cell *bashPPCell) {
+	if s.entries == nil {
+		s.entries = make(map[string]*bashPPCell)
+	}
+	s.entries[name] = cell
+}
+
 // lookup finds the innermost binding of name, or nil.
 func (s *bashPPScope) lookup(name string) *bashPPCell {
 	for at := s; at != nil; at = at.parent {
@@ -159,7 +175,7 @@ func (s *bashPPScope) declare(name string, vr expand.Variable, constant bool) er
 		return fmt.Errorf("%s redeclared in this block", name)
 	}
 	vr.ReadOnly = vr.ReadOnly || constant
-	s.entries[name] = &bashPPCell{vr: vr, constant: constant}
+	s.put(name, &bashPPCell{vr: vr, constant: constant})
 	return nil
 }
 
@@ -206,7 +222,7 @@ func (s *bashPPScope) snapshot() *bashPPScope {
 	}
 	out := newBashPPScope(s.parent.snapshot())
 	for name, cell := range s.entries {
-		out.entries[name] = cell
+		out.put(name, cell)
 	}
 	return out
 }
@@ -406,7 +422,7 @@ func cloneBashPPVariable(vr expand.Variable) expand.Variable {
 // statements and nothing else.
 func (r *Runner) bashPPPushScope() func() {
 	previous := r.bashPPScope
-	r.bashPPScope = newBashPPScope(previous)
+	r.bashPPScope = newBashPPBlockScope(previous)
 	return func() { r.bashPPScope = previous }
 }
 

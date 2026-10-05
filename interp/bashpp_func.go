@@ -2476,7 +2476,7 @@ func (r *Runner) bashPPBindParams(params []bashPPParam, args []string, callCells
 			if param.typ != nil {
 				copy.declType = param.typ
 			}
-			r.bashPPScope.entries[param.name] = copy
+			r.bashPPScope.put(param.name, copy)
 		} else {
 			_ = r.bashPPScope.declare(param.name,
 				expand.Variable{Set: true, Kind: expand.String, Str: args[i]}, false)
@@ -2644,10 +2644,10 @@ func (r *Runner) bashPPEnterFrame(fn *bashPPFunc, args []string) *bashPPFrame {
 	if fn.decl != nil && fn.decl.Receiver != nil && fn.decl.Receiver.Name != nil && fn.decl.Receiver.Name.Value != "_" && fn.receiver != nil {
 		recv := fn.decl.Receiver
 		if recv.Pointer {
-			r.bashPPScope.entries[recv.Name.Value] = fn.receiver
+			r.bashPPScope.put(recv.Name.Value, fn.receiver)
 		} else {
 			copyCell := *fn.receiver.view()
-			r.bashPPScope.entries[recv.Name.Value] = &copyCell
+			r.bashPPScope.put(recv.Name.Value, &copyCell)
 		}
 	}
 	r.goSourceEnterInitializerFrame()
@@ -3394,7 +3394,7 @@ func (r *Runner) bashPPRunDefers(ctx context.Context, mark int) {
 						saved := r.bashPPScope
 						r.bashPPScope = newBashPPScope(saved)
 						for name, cell := range d.captured {
-							r.bashPPScope.entries[name] = cell
+							r.bashPPScope.put(name, cell)
 						}
 						r.bashPPRunValueBuiltin(d.predeclared, d.call)
 						r.bashPPScope = saved

@@ -65,7 +65,7 @@ func (r *Runner) goSourceLinknameDeclaration(d *syntax.BashPPDecl) (error, bool)
 	if _, exists := r.bashPPScope.entries[d.Name.Value]; exists && d.Name.Value != "_" {
 		return fmt.Errorf("%s redeclared in this block", d.Name.Value), true
 	}
-	r.bashPPScope.entries[d.Name.Value] = cell
+	r.bashPPScope.put(d.Name.Value, cell)
 	return nil, true
 }
 

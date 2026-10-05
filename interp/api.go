@@ -317,6 +317,10 @@ type Runner struct {
 	// current-scope commit rules. Transactions nest across function calls, so a
 	// declaration evaluated by an RHS cannot be mistaken for the caller's LHS.
 	bashPPShortTxn *bashPPShortDeclTxn
+	// bashPPRangeKeyReuse memoizes, per range statement, whether its body can
+	// retain the key variable; see bashPPRangeKeyReusable. It belongs to one
+	// runner and is never copied to another.
+	bashPPRangeKeyReuse map[*syntax.BashPPRange]bool
 	// bashPPShortFailureSeq lets a function invocation distinguish an ordinary
 	// non-zero body status from a diagnosed short-declaration failure which
 	// must not be cleared while settling declared results.

@@ -5202,14 +5202,17 @@ func (r *Runner) stmtSyncGoForm(ctx context.Context, st *syntax.Stmt) {
 	r.curStmtEnd = st.End()
 	r.coprocReapedFds = nil
 
-	saved := &stmtStreams{
+	saved := stmtStreams{
 		stdin: r.stdin, stdinTTYFallback: r.stdinTTYFallback, stdinDevTTY: r.stdinDevTTY,
 		stdout: r.stdout, stderr: r.stderr,
 		stdinRedirected: r.stdinRedirected, stdinClosed: r.stdinClosed,
 	}
 	defer r.stmtSyncGoFormLeave(scopeIndex, r.asyncStdinExplicit, r.redirMoveCloseFds)
 	if r.bashPPHasFIFOs() {
-		r.redirScopes[scopeIndex].fifoRestoreRefs = saved.fifoRefs
+		// Only a statement that can see a FIFO retains its streams past its
+		// own frame, so only that one pays for a heap copy of them.
+		retained := saved
+		r.redirScopes[scopeIndex].fifoRestoreRefs = retained.fifoRefs
 	}
 	r.redirMoveCloseFds = nil
 

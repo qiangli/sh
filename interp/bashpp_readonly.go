@@ -77,6 +77,13 @@ func (r *Runner) bashPPAssign(ctx context.Context, assign *syntax.BashPPAssign) 
 		r.exit = exitStatus{code: 2}
 		return
 	}
+	// `x[i] = v` over int elements has one meaning and no effects beyond the
+	// store; see bashpp_fastint.go.
+	if assign.Call == nil && assign.Recv == nil && len(assign.Names) == 0 && assign.ValueExpr != nil {
+		if index, ok := assign.TargetExpr.(*syntax.BashPPIndexExpr); ok && r.bashPPFastIntIndexAssign(index, assign.ValueExpr) {
+			return
+		}
+	}
 	// `p = new(T)`, `ps[i] = new(T)`: the Go front end lowers the allocation
 	// as the NewExpr in ValueExpr and also records the call. The allocation
 	// is what is assigned; the call spelling would look up `new` as a

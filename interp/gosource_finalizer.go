@@ -260,7 +260,7 @@ func (s *bashPPScope) narrowed(names map[string]bool) *bashPPScope {
 	out := newBashPPScope(s.parent.narrowed(names))
 	for name, cell := range s.entries {
 		if names[name] {
-			out.entries[name] = cell
+			out.put(name, cell)
 		}
 	}
 	return out
