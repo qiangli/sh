@@ -9652,8 +9652,15 @@ func (r *Runner) localeDecimalPoint() string {
 func (r *Runner) stmts(ctx context.Context, stmts []*syntax.Stmt) {
 	var live *goSourceLivenessPlan
 	scope, frame := r.bashPPScope, r.bashPPGoSource && r.bashPPFuncActive > 0
-	if frame {
-		live = goSourceLivenessFor(stmts)
+	if frame && len(stmts) > 0 {
+		// A loop body asks for the same list's plan on every iteration; the
+		// last answer saves the shared cache's interface-keyed lookup.
+		if r.goSourceLivenessFirst == stmts[0] && r.goSourceLivenessLen == len(stmts) {
+			live = r.goSourceLivenessPlan
+		} else {
+			live = goSourceLivenessFor(stmts)
+			r.goSourceLivenessFirst, r.goSourceLivenessLen, r.goSourceLivenessPlan = stmts[0], len(stmts), live
+		}
 	}
 	for i := 0; i < len(stmts); i++ {
 		r.stmt(ctx, stmts[i])
