@@ -17,6 +17,7 @@ import (
 	"mvdan.cc/sh/v3/internal"
 	"mvdan.cc/sh/v3/interp"
 	"mvdan.cc/sh/v3/lower"
+	"mvdan.cc/sh/v3/polyglot"
 	"mvdan.cc/sh/v3/syntax"
 )
 
@@ -473,7 +474,11 @@ echo "$value:$callErr"
 // lowered binary must reproduce stdout, stderr and exit byte for byte.
 func TestBothFenceSmokeParity(t *testing.T) {
 	requirePowerShell(t)
-	source := `~~~pwsh as ps
+	testBothFenceSmoke(t)
+}
+
+// bothFenceSmokeSource is script/sprint-358-both-smoke.bsh, verbatim.
+const bothFenceSmokeSource = `~~~pwsh as ps
 function Square {
     [OutputType([long])]
     param([long]$n)
@@ -503,11 +508,42 @@ failed, failErr := cs.Fail("nope")
 echo "fail=$failed:${failErr:+error}"
 [[ $failErr == *InvalidOperationException*nope* ]] && echo "message=nope"
 `
-	got := testPythonFenceInterpretedNativeParityAt(t, source, "input.bsh")
+
+func testBothFenceSmoke(t *testing.T) {
+	t.Helper()
+	got := testPythonFenceInterpretedNativeParityAt(t, bothFenceSmokeSource, "input.bsh")
 	want := "square=36\nsquare=36\njoin=1-2-3\nhalf=2.5\nfail=:error\nmessage=nope\n"
 	if got != want {
 		t.Fatalf("output = %q, want %q", got, want)
 	}
+}
+
+// A framework-dependent PowerShell launch — the arm64 musl image's route,
+// where the resolver answers pwsh with [dotnet, pwsh.dll] — must survive
+// lowering: the generated EnvironmentPlan once dropped ExecutableArgs, so the
+// native binary ran bare dotnet and failed "load PowerShell module: EOF"
+// while the interpreter passed. BASHPP_TEST_PWSH_DLL names a pwsh.dll to run
+// under the dotnet on PATH; no pwsh is needed on PATH.
+func TestBothFenceSmokeFrameworkDependentParity(t *testing.T) {
+	dll := os.Getenv("BASHPP_TEST_PWSH_DLL")
+	if dll == "" {
+		t.Skip("BASHPP_TEST_PWSH_DLL unset")
+	}
+	dotnet, err := exec.LookPath("dotnet")
+	if err != nil {
+		t.Skip("dotnet unavailable")
+	}
+	t.Setenv("BASHPP_PWSH", "")
+	previous := polyglot.ToolResolver
+	t.Cleanup(func() { polyglot.ToolResolver = previous })
+	polyglot.ToolResolver = func(name string) ([]string, string, error) {
+		if name == "pwsh" {
+			return []string{dotnet, dll}, "framework-dependent pwsh", nil
+		}
+		path, err := exec.LookPath(name)
+		return []string{path}, "PATH", err
+	}
+	testBothFenceSmoke(t)
 }
 
 func TestCSharpFenceInterpretedNativeParity(t *testing.T) {
