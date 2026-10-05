@@ -2,6 +2,7 @@ package polyglot
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
@@ -60,6 +61,40 @@ func TestDiscoverPowerShellEnvironmentUnavailable(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "PowerShell runtime unavailable") {
 		t.Fatalf("unavailable error = %v", err)
+	}
+}
+
+func TestDiscoverPowerShellEnvironmentCarriesProvisionedRuntimeControls(t *testing.T) {
+	root := t.TempDir()
+	pwsh := filepath.Join(root, "pwsh")
+	writeEnvironmentFile(t, pwsh, "fixture pwsh")
+	t.Setenv("LD_LIBRARY_PATH", "")
+	t.Setenv("DOTNET_SYSTEM_GLOBALIZATION_INVARIANT", "")
+	saved := ToolResolver
+	ToolResolver = func(name string) ([]string, string, error) {
+		if err := os.Setenv("LD_LIBRARY_PATH", filepath.Join(root, "libs")); err != nil {
+			return nil, "", err
+		}
+		if err := os.Setenv("DOTNET_SYSTEM_GLOBALIZATION_INVARIANT", "1"); err != nil {
+			return nil, "", err
+		}
+		return []string{pwsh}, "pinned PowerShell", nil
+	}
+	t.Cleanup(func() { ToolResolver = saved })
+	plan, err := DiscoverEnvironment(EnvironmentRequest{
+		Source: filepath.Join(root, "program.bpp"), Language: "powershell",
+		Environ: []string{"PATH=" + root},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"LD_LIBRARY_PATH=" + filepath.Join(root, "libs"),
+		"DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1",
+	} {
+		if !slices.Contains(plan.Env, want) {
+			t.Fatalf("PowerShell worker lost %q: %v", want, plan.Env)
+		}
 	}
 }
 

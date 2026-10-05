@@ -679,6 +679,17 @@ func discoverPowerShellEnvironment(plan EnvironmentPlan, selected *environmentOv
 	} else if argv, why, rerr := resolveTool(env, requested); rerr == nil {
 		if err = plan.applyTool(argv, env); err == nil {
 			plan.Explanation = append(plan.Explanation, why)
+			// The embedder's provisioner can select a private .NET runtime and
+			// install child-process controls while resolving pwsh. Discovery
+			// copied request.Environ before that call, so carry those controls
+			// into the worker's own environment snapshot.
+			if ToolResolver != nil {
+				for _, key := range []string{"LD_LIBRARY_PATH", "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT", "DOTNET_ROOT"} {
+					if value, ok := os.LookupEnv(key); ok {
+						env[key] = value
+					}
+				}
+			}
 		}
 	} else {
 		err = rerr
@@ -705,7 +716,8 @@ func powerShellLaunchEnvironment(env map[string]string) []string {
 		"PATHEXT", "ComSpec", "SystemDrive", "windir",
 		"ProgramFiles", "ProgramFiles(x86)", "ProgramW6432", "ProgramData",
 		"APPDATA", "LOCALAPPDATA", "USERPROFILE", "HOMEDRIVE", "HOMEPATH",
-		"PSModulePath", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME"} {
+		"PSModulePath", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME",
+		"LD_LIBRARY_PATH", "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT", "DOTNET_ROOT", "SSL_CERT_FILE"} {
 		if value := environmentValue(env, key); value != "" {
 			out = append(out, key+"="+value)
 		}
