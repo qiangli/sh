@@ -1870,7 +1870,9 @@ func bashPPCompareValuesWithRunner(r *Runner, left any, leftMeta *bashPPCollecti
 				return true, nil
 			}
 		}
-		for field := range leftLayout {
+		// Layout is sparse: scalar fields have no runtime metadata. The
+		// payload, not the layout map, determines which fields exist.
+		for field := range leftMap {
 			ok, err := compareField(field)
 			if err != nil || !ok {
 				return ok, err

@@ -52,7 +52,11 @@ func bashPPStorageSetField(m map[string]any, layout map[string]*bashPPCollection
 	bashPPStorageMu.Lock()
 	m[key] = value
 	if layout != nil {
-		layout[key] = child
+		if child == nil {
+			delete(layout, key)
+		} else {
+			layout[key] = child
+		}
 	}
 	bashPPStorageMu.Unlock()
 }
