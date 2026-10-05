@@ -286,7 +286,7 @@ func TestS376ScaledReproMeasurements(t *testing.T) {
 	for _, n := range scales {
 		elapsed, allocBytes, allocCount := runScaledRepro(t, n)
 		bytesPerElem := float64(allocBytes) / float64(n)
-		timePerIter := float64(elapsed.Nanoseconds()) / float64(36*n) // 14n writes + 22n reads = 36n
+		timePerIter := float64(elapsed.Nanoseconds()) / float64(18*n) // 7 f calls write n, 11 g calls read n
 		t.Logf("N=%-6d elapsed=%-12v alloc=%-10d bytes (%8.1f B/elem) mallocs=%-8d (%.2f µs/iter)",
 			n, elapsed, allocBytes, bytesPerElem, allocCount, timePerIter/1000)
 	}
@@ -362,4 +362,174 @@ func main() {
 	runPart("copy_20x", copySrc)
 	runPart("write_7x", writeLoopSrc)
 	runPart("read_11x", readLoopSrc)
+}
+
+// TestS376LoopFastPathSemantics pins the Go behaviour of the loop shapes the
+// typed int evaluator, the reused range key and the copy-free key-only array
+// range take over, next to the shapes that must stay on the general path.
+func TestS376LoopFastPathSemantics(t *testing.T) {
+	const src = `package main
+
+import "fmt"
+
+const N = 2e3
+
+type Big = [N]int
+type Celsius int
+
+func fill(k int) (x Big) {
+	for i := range x {
+		x[i] = k*N + i
+	}
+	return
+}
+
+func check(k int, x Big) int {
+	bad := 0
+	for i := range x {
+		if x[i] != k*N+i {
+			bad++
+		}
+	}
+	return bad
+}
+
+func main() {
+	a := fill(3)
+	fmt.Println(check(3, a), check(4, a), a[0], a[N-1])
+
+	// A key-only range never reads the array, so assigning it in the body
+	// changes neither the trip count nor later keys.
+	var b [4]int
+	trips := 0
+	for i := range b {
+		b = [4]int{9, 9, 9, 9}
+		b[i] = i
+		trips++
+	}
+	fmt.Println(trips, b)
+
+	// A value range iterates a copy.
+	c := [3]int{1, 2, 3}
+	sum := 0
+	for _, v := range c {
+		c[2] = 100
+		sum += v
+	}
+	fmt.Println(sum, c)
+
+	// Assigning the key lasts for one iteration.
+	var keys []int
+	var d [3]int
+	for i := range d {
+		keys = append(keys, i)
+		i = 40
+		d[0] += i
+	}
+	fmt.Println(keys, d)
+
+	// Each iteration has its own variable for a closure or an address.
+	var fns []func() int
+	var ptrs []*int
+	var e [3]int
+	for i := range e {
+		fns = append(fns, func() int { return i })
+	}
+	for i := range e {
+		ptrs = append(ptrs, &i)
+	}
+	fmt.Println(fns[0](), fns[1](), fns[2](), *ptrs[0], *ptrs[1], *ptrs[2])
+
+	// Arithmetic, division, named and sized integer types.
+	big := 1 << 40
+	one, zero := 1, 0
+	var w [2]int
+	w[0] = big/4*3 + one
+	w[1] = -big/8 - big/8
+	fmt.Println(w, w[0] > w[1], 7/(one+one), -7%(one+one+one), 7&^one|8^one)
+	var temps [3]Celsius
+	var wide [3]int64
+	for i := range temps {
+		temps[i] = Celsius(i) * 2
+		wide[i] = int64(i) << 40
+	}
+	fmt.Println(temps, wide, temps[1] == 2, wide[2] > wide[1])
+
+	// Block scopes inside a reused iteration still shadow and expire.
+	s := []int{5, 6, 7}
+	total := 0
+	for i := range s {
+		if s[i] > 5 {
+			total := s[i] * 10
+			_ = total
+		}
+		{
+			i := i + 100
+			total += i
+		}
+		total += s[i]
+	}
+	fmt.Println(total)
+
+	func() {
+		defer func() { fmt.Println("recovered:", recover()) }()
+		fmt.Println(one / zero)
+	}()
+	func() {
+		defer func() { fmt.Println("recovered:", recover()) }()
+		idx := 3
+		s[idx] = one
+	}()
+	func() {
+		defer func() { fmt.Println("recovered:", recover()) }()
+		idx := -1
+		fmt.Println(s[idx+zero] == one)
+	}()
+}
+`
+	differGoSource(t, src, nil, "")
+}
+
+// TestS376LoopFastPathConcurrentReaders runs concurrent key-only ranges and
+// by-value copies over one shared array under the race detector's eye.
+func TestS376LoopFastPathConcurrentReaders(t *testing.T) {
+	const src = `package main
+
+import (
+	"fmt"
+	"sync"
+)
+
+var shared [64]int
+
+func sum(x [64]int) int {
+	n := 0
+	for i := range x {
+		n += x[i]
+	}
+	return n
+}
+
+func main() {
+	for i := range shared {
+		shared[i] = i
+	}
+	var wg sync.WaitGroup
+	out := make([]int, 4)
+	for w := 0; w < 4; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			n := 0
+			for i := range shared {
+				n += shared[i]
+			}
+			out[w] = n + sum(shared)
+		}()
+	}
+	wg.Wait()
+	fmt.Println(out)
+}
+`
+	differGoSource(t, src, nil, "")
 }

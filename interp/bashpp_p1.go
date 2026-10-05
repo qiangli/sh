@@ -1846,7 +1846,7 @@ func (r *Runner) bashPPRollbackShortDecl(txn *bashPPShortDeclTxn) {
 	for i := range txn.saved {
 		saved := &txn.saved[i]
 		saved.cell.publish(&saved.before)
-		entries[saved.name] = saved.cell
+		txn.scope.put(saved.name, saved.cell)
 	}
 }
 
@@ -2807,8 +2807,12 @@ func (r *Runner) bashPPIf(ctx context.Context, i *syntax.BashPPIf) {
 	if r.bashPPScope == nil {
 		r.bashPPScope = newBashPPScope(nil)
 	}
-	leave := r.bashPPPushScope()
-	defer leave()
+	// The if's own scope holds what its init clause declares; the branches are
+	// blocks with scopes of their own, so an if without one needs none.
+	if i.InitStmt != nil || i.Init != nil {
+		leave := r.bashPPPushScope()
+		defer leave()
+	}
 	r.exit.clear()
 	if i.InitStmt != nil || i.Init != nil {
 		if i.InitStmt != nil {
@@ -2926,7 +2930,7 @@ func (r *Runner) bashPPFor(ctx context.Context, loop *syntax.BashPPFor) {
 		for _, name := range iterationNames {
 			if old := r.bashPPScope.entries[name]; old != nil {
 				copyCell := *old.view()
-				r.bashPPScope.entries[name] = &copyCell
+				r.bashPPScope.put(name, &copyCell)
 			}
 		}
 		if loop.Post != nil {

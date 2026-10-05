@@ -681,18 +681,41 @@ func (r *Runner) bashPPRangeCollectionValue(ctx context.Context, rng *syntax.Bas
 	}
 	switch meta.kind {
 	case "array", "inferred-array":
+		// One key type serves the whole loop: it is only ever read.
+		keyType := bashPPRangeNamedType("int")
+		if !bashPPRangeBindsValue(rng) {
+			// With at most one iteration variable Go ranges an array from 0
+			// to len-1 and never indexes it, so there is no copy to observe:
+			// the length is the type's, whatever the body assigns.
+			length := len(value.([]any))
+			first, finished := r.bashPPRangeReusedKey(ctx, rng, keyType, length)
+			if finished {
+				return true
+			}
+			for i := first; i < length; i++ {
+				if !r.bashPPRangeIteration(ctx, rng, i, keyType, nil, nil, collection.Element) {
+					return true
+				}
+			}
+			break
+		}
 		value, meta = bashPPCopyArrayValue(value, meta)
 		sequence := value.([]any)
 		for i, elem := range sequence {
-			if !r.bashPPRangeIteration(ctx, rng, i, bashPPRangeNamedType("int"), elem, meta.sequence[i], collection.Element) {
+			if !r.bashPPRangeIteration(ctx, rng, i, keyType, elem, meta.sequence[i], collection.Element) {
 				return true
 			}
 		}
 	case "slice":
 		sequence, _ := value.([]any)
 		length := len(sequence)
-		for i := 0; i < length; i++ {
-			if !r.bashPPRangeIteration(ctx, rng, i, bashPPRangeNamedType("int"), sequence[i], meta.sequence[i], collection.Element) {
+		keyType := bashPPRangeNamedType("int")
+		first, finished := r.bashPPRangeReusedKey(ctx, rng, keyType, length)
+		if finished {
+			return true
+		}
+		for i := first; i < length; i++ {
+			if !r.bashPPRangeIteration(ctx, rng, i, keyType, sequence[i], meta.sequence[i], collection.Element) {
 				return true
 			}
 		}
@@ -791,6 +814,12 @@ func bashPPRangeBindsNames(rng *syntax.BashPPRange) bool {
 	return false
 }
 
+// bashPPRangeBindsValue reports whether a range declares a non-blank second
+// iteration variable, the only one that reads an element.
+func bashPPRangeBindsValue(rng *syntax.BashPPRange) bool {
+	return len(rng.Names) == 2 && rng.Names[1].Value != "_"
+}
+
 // bashPPRangeControl reduces the runner state one executed loop body leaves to
 // whether the range should continue. Every range shape shares it, so break,
 // continue, return and abandonment behave identically across them.
@@ -837,7 +866,15 @@ func (r *Runner) bashPPDeclareRangeValue(name string, value any, typ syntax.Bash
 		}
 		return
 	}
-	r.bashPPDeclareName(name, expand.Variable{Set: true, Kind: expand.String, Str: fmt.Sprint(value)})
+	// An int key is by far the commonest iteration value; its spelling is the
+	// one fmt would produce.
+	text := ""
+	if n, ok := value.(int); ok {
+		text = strconv.Itoa(n)
+	} else {
+		text = fmt.Sprint(value)
+	}
+	r.bashPPDeclareName(name, expand.Variable{Set: true, Kind: expand.String, Str: text})
 	cell := r.bashPPScope.lookup(name)
 	cell.declType = typ
 	if named, ok := typ.(*syntax.BashPPNamedType); ok {

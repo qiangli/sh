@@ -351,7 +351,7 @@ func (r *Runner) goSourceBuiltinLaunch(call *syntax.BashPPCall, name string) *go
 		leave := child.bashPPPushScope()
 		defer leave()
 		for argName, cell := range cells {
-			child.bashPPScope.entries[argName] = cell
+			child.bashPPScope.put(argName, cell)
 		}
 		if bashPPValueBuiltin(name) {
 			child.bashPPRunValueBuiltin(name, captured)
@@ -380,7 +380,7 @@ func (r *Runner) goSourcePanicLaunch(call *syntax.BashPPCall) *goSourceNativeLau
 	// paths. Bind the already evaluated value, never the source expression.
 	leave := r.bashPPPushScope()
 	for name, cell := range cells {
-		r.bashPPScope.entries[name] = cell
+		r.bashPPScope.put(name, cell)
 	}
 	args := r.bashPPCallArgValues(captured)
 	var value any

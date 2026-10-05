@@ -735,7 +735,7 @@ func (c *bashPPDecoratorChain) runScripted(ctx context.Context, rung bashPPDecor
 	scope := c.decoratorArgScope()
 	ctxCell := &bashPPCell{declType: &syntax.BashPPPointerType{Element: &syntax.BashPPNamedType{Name: &syntax.Lit{Value: bashPPDecoratorCallType}}}, typeName: bashPPDecoratorCallType}
 	bashPPStoreCellValue(ctxCell, c.ptr, nil)
-	r.bashPPScope.entries[bashPPDecoratorContextName] = ctxCell
+	r.bashPPScope.put(bashPPDecoratorContextName, ctxCell)
 	r.bashPPDecoratorStack = append(r.bashPPDecoratorStack, rung.name)
 	failSeq := r.bashPPDecoratorFailSeq
 	args, ok := r.bashPPCallValues(call, fn)
@@ -1036,7 +1036,7 @@ func (r *Runner) bashPPInvokeDecorated(ctx context.Context, fn *bashPPFunc, args
 						typ:      &syntax.BashPPCollectionType{Kind: "slice", Element: param.typ},
 						sequence: make([]*bashPPCollectionMeta, len(rest)),
 					}
-					r.bashPPScope.entries[param.name] = cell
+					r.bashPPScope.put(param.name, cell)
 				}
 				break
 			}
@@ -1071,7 +1071,7 @@ func (r *Runner) bashPPInvokeDecorated(ctx context.Context, fn *bashPPFunc, args
 				}
 				cell = bound
 			}
-			r.bashPPScope.entries[param.name] = cell
+			r.bashPPScope.put(param.name, cell)
 			if base := strings.TrimPrefix(param.declared, "*"); base != "" {
 				if _, ok := r.bashPPTypes[base]; ok {
 					cell.typeName = base

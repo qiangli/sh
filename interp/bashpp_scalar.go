@@ -50,6 +50,10 @@ func (v bashPPScalar) kind() constant.Kind {
 // bashPPEvalScalarExpr consumes syntax's typed tree. Parsing belongs solely
 // to syntax; this package evaluates the tree it was handed.
 func (r *Runner) bashPPEvalScalarExpr(expr syntax.BashPPExpr) (result bashPPScalar, failure error) {
+	// A typed int expression has one value and no effects; see bashpp_fastint.go.
+	if value, ok := r.bashPPFastIntScalar(expr); ok {
+		return value, nil
+	}
 	defer func() {
 		failure = r.goSourceRuntimeFaultAt(failure, expr)
 		if r.bashPPGoSource && failure != nil && !errors.Is(failure, errBashPPScalarInterrupted) && expr != nil {

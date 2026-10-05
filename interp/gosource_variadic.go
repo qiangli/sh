@@ -45,12 +45,12 @@ func (r *Runner) goSourceBindVariadic(param bashPPParam, args []string, cells []
 		sequence[i], metas[i] = r.goSourceVariadicElement(args[i], cell, param.typ)
 	}
 	meta := &bashPPCollectionMeta{kind: "slice", typ: typ, sequence: metas}
-	r.bashPPScope.entries[param.name] = &bashPPCell{
+	r.bashPPScope.put(param.name, &bashPPCell{
 		vr:        bashPPCollectionVariable(sequence),
 		object:    &bashPPObjectIdentity{collection: meta},
 		valueMeta: meta,
 		declType:  typ,
-	}
+	})
 	return true
 }
 
@@ -70,7 +70,7 @@ func (r *Runner) goSourceBindSpreadVariadic(param bashPPParam, cells []*bashPPCe
 	if cell.declType == nil {
 		cell.declType = typ
 	}
-	r.bashPPScope.entries[param.name] = cell
+	r.bashPPScope.put(param.name, cell)
 	return true
 }
 
