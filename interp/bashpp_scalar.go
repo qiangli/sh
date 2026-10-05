@@ -1745,6 +1745,12 @@ func bashPPCompareValuesWithRunner(r *Runner, left any, leftMeta *bashPPCollecti
 		if r != nil && r.bashPPGoSource {
 			value = bashPPComparablePayload(value, meta)
 		}
+		// An interpreter-owned channel held in a struct field, a collection
+		// element or a copy of one has no payload: its identity is the
+		// metadata. See [Runner.goSourceChannelCellValue].
+		if meta != nil && meta.kind == "channel" && meta.channel != nil {
+			return false, nil
+		}
 		if bashPPPointerComparable(meta) || bashPPNilComparable(meta) {
 			return bashPPNilComparableValue(value) || bashPPNilComparableZero(value, meta), nil
 		}

@@ -15,6 +15,13 @@ import (
 // after a program ends.
 // gate serializes the notification bookkeeping with the real Go operations.
 //
+// changed is a broadcast: every waiter it wakes can proceed (the readers a
+// writer's Unlock admits, a WaitGroup's waiters). Exclusive acquirers — Mutex
+// lockers and RWMutex writers — instead queue one channel each and are woken
+// one at a time, so a release costs one wakeup however many are blocked. A
+// woken waiter that fails its retry queues again; one that abandons its wait
+// hands the wakeup on.
+//
 // RWMutex follows Go's writer preference: a blocked Lock registers in
 // wpending and excludes new readers until it acquires or is cancelled.
 // Readers already blocked when a writer unlocks are admitted ahead of the
@@ -35,6 +42,42 @@ type goSourceResidentSync struct {
 	repoch   uint64
 	count    int
 	changed  chan struct{}
+	queue    []chan struct{}
+}
+
+// enqueue registers one exclusive waiter, reusing w while it is still queued.
+func (s *goSourceResidentSync) enqueue(w chan struct{}) chan struct{} {
+	if w == nil {
+		w = make(chan struct{})
+		s.queue = append(s.queue, w)
+	}
+	return w
+}
+
+// wakeOne releases the longest-queued exclusive waiter to retry.
+func (s *goSourceResidentSync) wakeOne() {
+	if len(s.queue) == 0 {
+		return
+	}
+	close(s.queue[0])
+	s.queue[0] = nil
+	if s.queue = s.queue[1:]; len(s.queue) == 0 {
+		s.queue = nil
+	}
+}
+
+// abandon withdraws w. A waiter already woken passes its wakeup on.
+func (s *goSourceResidentSync) abandon(w chan struct{}) {
+	if w == nil {
+		return
+	}
+	for i, q := range s.queue {
+		if q == w {
+			s.queue = append(s.queue[:i:i], s.queue[i+1:]...)
+			return
+		}
+	}
+	s.wakeOne()
 }
 
 func (s *goSourceResidentSync) notify() {
@@ -153,15 +196,19 @@ func (r *Runner) goSourceResidentSyncRequest(ctx context.Context, q bashPPBridge
 	case "sync.Mutex":
 		switch q.Selector {
 		case "Lock", "TryLock":
+			var wake chan struct{}
+			leave := func() {
+				s.gate.Lock()
+				defer s.gate.Unlock()
+				s.abandon(wake)
+			}
 			for {
 				s.gate.Lock()
 				acquired := s.mutex.TryLock()
 				if acquired {
 					s.locked = true
-				}
-				var wake <-chan struct{}
-				if !acquired {
-					wake = s.wake()
+				} else if q.Selector == "Lock" {
+					wake = s.enqueue(wake)
 				}
 				s.gate.Unlock()
 				if q.Selector == "TryLock" {
@@ -171,11 +218,14 @@ func (r *Runner) goSourceResidentSyncRequest(ctx context.Context, q bashPPBridge
 					return nil, true, nil
 				}
 				if !r.bashPPArmBeforeBlock(ctx) {
+					leave()
 					return nil, true, errBashPPScalarInterrupted
 				}
 				select {
 				case <-wake:
+					wake = nil
 				case <-ctx.Done():
+					leave()
 					return nil, true, ctx.Err()
 				}
 			}
@@ -187,7 +237,7 @@ func (r *Runner) goSourceResidentSyncRequest(ctx context.Context, q bashPPBridge
 			}
 			s.locked = false
 			s.mutex.Unlock()
-			s.notify()
+			s.wakeOne()
 			return nil, true, nil
 		}
 	case "sync.RWMutex":
@@ -204,8 +254,9 @@ func (r *Runner) goSourceResidentSyncRequest(ctx context.Context, q bashPPBridge
 				}
 				waiting = false
 				if s.repoch != epoch {
-					s.rgranted--
-					s.notify()
+					if s.rgranted--; s.readers == 0 && s.rgranted == 0 {
+						s.wakeOne()
+					}
 				} else {
 					s.rwaiting--
 				}
@@ -254,12 +305,14 @@ func (r *Runner) goSourceResidentSyncRequest(ctx context.Context, q bashPPBridge
 			if s.readers <= 0 {
 				return nil, true, fmt.Errorf("sync: RUnlock of unlocked RWMutex")
 			}
-			s.readers--
 			s.rwmu.RUnlock()
-			s.notify()
+			if s.readers--; s.readers == 0 && s.rgranted == 0 {
+				s.wakeOne()
+			}
 			return nil, true, nil
 		case "Lock", "TryLock":
 			pending := false
+			var queued chan struct{}
 			// leave withdraws an abandoned writer and wakes the readers it
 			// was excluding.
 			leave := func() {
@@ -270,20 +323,20 @@ func (r *Runner) goSourceResidentSyncRequest(ctx context.Context, q bashPPBridge
 					s.wpending--
 					s.notify()
 				}
+				s.abandon(queued)
 			}
 			for {
 				s.gate.Lock()
 				acquired := !s.wlocked && s.readers == 0 && s.rgranted == 0 && s.rwmu.TryLock()
-				var wake <-chan struct{}
 				if acquired {
 					s.wlocked = true
 					if pending {
 						pending = false
 						s.wpending--
 					}
-				} else {
-					wake = s.wake()
-					if q.Selector == "Lock" && !pending {
+				} else if q.Selector == "Lock" {
+					queued = s.enqueue(queued)
+					if !pending {
 						pending = true
 						s.wpending++
 					}
@@ -300,7 +353,8 @@ func (r *Runner) goSourceResidentSyncRequest(ctx context.Context, q bashPPBridge
 					return nil, true, errBashPPScalarInterrupted
 				}
 				select {
-				case <-wake:
+				case <-queued:
+					queued = nil
 				case <-ctx.Done():
 					leave()
 					return nil, true, ctx.Err()
@@ -314,9 +368,14 @@ func (r *Runner) goSourceResidentSyncRequest(ctx context.Context, q bashPPBridge
 			}
 			s.wlocked = false
 			s.rwmu.Unlock()
+			s.repoch++
+			if s.rwaiting == 0 {
+				s.wakeOne()
+				return nil, true, nil
+			}
+			// The admitted readers' last RUnlock wakes the next writer.
 			s.rgranted += s.rwaiting
 			s.rwaiting = 0
-			s.repoch++
 			s.notify()
 			return nil, true, nil
 		}

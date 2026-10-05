@@ -33,6 +33,11 @@ import (
 // gets a well-defined one of the values that were actually stored. A cell that
 // was never aliased has a nil guard and pays nothing.
 //
+// The guard is a reader/writer lock: snapshots exclude a publishing writer but
+// not each other. Goroutines that only read one shared binding — a captured
+// pointer every worker dereferences — would otherwise queue on it and spend
+// their time being parked and woken by the host scheduler.
+//
 // THE DISCIPLINE. A guarded region moves struct fields and does nothing else.
 // It must not evaluate guest code, render a value whose String method could
 // re-enter the interpreter, write a diagnostic, or reach for a SECOND cell's
@@ -77,7 +82,7 @@ import (
 // afterwards.
 func (c *bashPPCell) shareGuard() {
 	if c != nil && c.guard == nil {
-		c.guard = new(sync.Mutex)
+		c.guard = new(sync.RWMutex)
 	}
 }
 
@@ -108,9 +113,9 @@ func (c *bashPPCell) view() *bashPPCell {
 	if c == nil || c.guard == nil {
 		return c
 	}
-	c.guard.Lock()
+	c.guard.RLock()
 	dup := *c
-	c.guard.Unlock()
+	c.guard.RUnlock()
 	// The snapshot is private to one goroutine, so reads of it need no guard,
 	// and clearing the field keeps a nested view() from locking again.
 	dup.guard = nil
@@ -189,8 +194,8 @@ func (c *bashPPCell) viewConstant() bool {
 	if c.guard == nil {
 		return c.constant
 	}
-	c.guard.Lock()
-	defer c.guard.Unlock()
+	c.guard.RLock()
+	defer c.guard.RUnlock()
 	return c.constant
 }
 
@@ -203,8 +208,8 @@ func (c *bashPPCell) viewVar() expand.Variable {
 	if c.guard == nil {
 		return c.vr
 	}
-	c.guard.Lock()
-	defer c.guard.Unlock()
+	c.guard.RLock()
+	defer c.guard.RUnlock()
 	return c.vr
 }
 
@@ -219,7 +224,7 @@ func (c *bashPPCell) viewInterface() *bashPPInterfaceValue {
 	if c.guard == nil {
 		return c.interfaceValue
 	}
-	c.guard.Lock()
-	defer c.guard.Unlock()
+	c.guard.RLock()
+	defer c.guard.RUnlock()
 	return c.interfaceValue
 }

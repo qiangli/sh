@@ -97,7 +97,7 @@ type bashPPCell struct {
 	// It is a pointer, not an embedded mutex, because cells are copied by
 	// value here and in bashpp_send/bashpp_generic_body. See
 	// bashpp_cell_share.go for why an aliased cell needs a lock at all.
-	guard *sync.Mutex
+	guard *sync.RWMutex
 }
 
 func (c *bashPPCell) vrValue() any {
