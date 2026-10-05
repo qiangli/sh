@@ -63,7 +63,8 @@ func (r *Runner) bashPPFastIntScalar(expr syntax.BashPPExpr) (bashPPScalar, bool
 	// ahead of every scalar evaluation, most of which are not in the subset.
 	switch expr.(type) {
 	case *syntax.BashPPIdent, *syntax.BashPPBinaryExpr, *syntax.BashPPIndexExpr,
-		*syntax.BashPPParenExpr, *syntax.BashPPUnaryExpr, *syntax.BashPPConvertExpr:
+		*syntax.BashPPParenExpr, *syntax.BashPPUnaryExpr, *syntax.BashPPConvertExpr,
+		*syntax.BashPPSelectorExpr:
 	default:
 		return bashPPScalar{}, false
 	}
@@ -203,6 +204,8 @@ func (r *Runner) bashPPFastIntExpr(expr syntax.BashPPExpr) (bashPPFastInt, bool)
 		return out, true
 	case *syntax.BashPPIndexExpr:
 		return r.bashPPFastIntIndex(x)
+	case *syntax.BashPPSelectorExpr:
+		return r.bashPPFastIntSelector(x)
 	case *syntax.BashPPConvertExpr:
 		// `int(v)` of an int operand is the operand with the type int. The
 		// Go front end spells an untyped constant's implicit conversion this
@@ -316,6 +319,58 @@ func (r *Runner) bashPPFastIntIndex(x *syntax.BashPPIndexExpr) (bashPPFastInt, b
 	}
 	collection, ok := r.bashPPUnderlyingType(meta.typ).(*syntax.BashPPCollectionType)
 	if !ok || !bashPPFastIntType(collection.Element) {
+		return bashPPFastInt{}, false
+	}
+	return bashPPFastInt{n: int64(n), typed: true, runtime: true}, true
+}
+
+// bashPPFastIntSelector reads `v.f` or `p.f` where v names a struct variable,
+// p a pointer to one, and f a declared `int` field stored as a plain host int
+// with no metadata of its own. The storage is reached through the same reader
+// the general evaluator uses; only guarded (goroutine-shared) cells, unsafe
+// views, promoted fields and every other state are declined.
+func (r *Runner) bashPPFastIntSelector(x *syntax.BashPPSelectorExpr) (bashPPFastInt, bool) {
+	if x.Sel == nil {
+		return bashPPFastInt{}, false
+	}
+	ident, ok := x.X.(*syntax.BashPPIdent)
+	if !ok || ident.Name == nil {
+		return bashPPFastInt{}, false
+	}
+	cell := r.bashPPScope.lookup(ident.Name.Value)
+	if cell == nil || cell.guard != nil || cell.interfaceValue != nil || cell.unsafeAllocation != nil {
+		return bashPPFastInt{}, false
+	}
+	var value any
+	var meta *bashPPCollectionMeta
+	if cell.pointer {
+		ptr := cell.pointerValue
+		if ptr == nil || ptr.cold != nil || len(ptr.path) != 0 || ptr.target == nil ||
+			ptr.target.guard != nil || ptr.target.pointer || ptr.target.interfaceValue != nil ||
+			ptr.target.unsafeAllocation != nil || ptr.target.vr.Kind != expand.Object {
+			return bashPPFastInt{}, false
+		}
+		value, meta = ptr.target.vr.Obj, bashPPCellMeta(ptr.target)
+	} else {
+		if cell.vr.Kind != expand.Object {
+			return bashPPFastInt{}, false
+		}
+		value, meta = cell.vr.Obj, bashPPCellMeta(cell)
+	}
+	mapping, ok := value.(map[string]any)
+	if !ok || meta == nil || meta.kind != "struct" {
+		return bashPPFastInt{}, false
+	}
+	sel := r.bashPPResolveField(meta.typ, x.Sel.Value)
+	if sel.ambiguous || len(sel.edges) != 1 || sel.edges[0].pointer || !bashPPFastIntType(sel.fieldType) {
+		return bashPPFastInt{}, false
+	}
+	field, found := bashPPStorageGet(mapping, sel.edges[0].name)
+	if !found || bashPPLayoutGet(meta.mapping, sel.edges[0].name) != nil {
+		return bashPPFastInt{}, false
+	}
+	n, ok := field.(int)
+	if !ok {
 		return bashPPFastInt{}, false
 	}
 	return bashPPFastInt{n: int64(n), typed: true, runtime: true}, true

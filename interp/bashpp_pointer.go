@@ -185,11 +185,63 @@ var bashPPZeroSizeStorage byte
 func (r *Runner) bashPPPointerForStorage(target *bashPPCell, elem syntax.BashPPTypeExpr, standalone bool) *bashPPPointer {
 	ptr := &bashPPPointer{target: target, elem: elem}
 	if standalone && r.bashPPGoSource {
-		if shape, ok := r.bashPPGoShapeType(elem, 0); ok && shape.Size() == 0 {
+		if r.bashPPZeroSizeElem(elem) {
 			ptr.storageAddress = &bashPPZeroSizeStorage
 		}
 	}
 	return ptr
+}
+
+// bashPPZeroSizeElem reports whether a Go object of type elem occupies no
+// storage. Building the reflect shape of a struct is costly and runs for every
+// pointer taken, so a type with a field that certainly has storage is answered
+// from its declaration; every other type keeps the reflect shape as authority.
+func (r *Runner) bashPPZeroSizeElem(elem syntax.BashPPTypeExpr) bool {
+	if r.bashPPKnownSized(elem, 0) {
+		return false
+	}
+	shape, ok := r.bashPPGoShapeType(elem, 0)
+	return ok && shape.Size() == 0
+}
+
+// bashPPKnownSized reports a type that certainly occupies storage. A false
+// answer means only "not established".
+func (r *Runner) bashPPKnownSized(typ syntax.BashPPTypeExpr, depth int) bool {
+	if typ == nil || depth > 8 {
+		return false
+	}
+	if named, ok := typ.(*syntax.BashPPNamedType); ok && named.Name != nil {
+		if _, declared := r.bashPPTypes[named.Name.Value]; !declared && bashPPPredeclaredSizedName(named.Name.Value) {
+			return true
+		}
+	}
+	if _, ok := r.bashPPInterfaceType(typ); ok {
+		return true
+	}
+	switch x := r.bashPPUnderlyingType(typ).(type) {
+	case *syntax.BashPPNamedType:
+		return x.Name != nil && bashPPPredeclaredSizedName(x.Name.Value)
+	case *syntax.BashPPPointerType, *syntax.BashPPChanType, *syntax.BashPPFuncType:
+		return true
+	case *syntax.BashPPCollectionType:
+		return x.Kind == "map" || x.Kind == "slice"
+	case *syntax.BashPPStructType:
+		for _, field := range x.Fields {
+			if r.bashPPKnownSized(field.FieldTypeExpr, depth+1) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func bashPPPredeclaredSizedName(name string) bool {
+	switch name {
+	case "bool", "string", "int8", "uint8", "byte", "int16", "uint16", "int32", "uint32", "rune",
+		"int64", "uint64", "int", "uint", "uintptr", "float32", "float64", "complex64", "complex128":
+		return true
+	}
+	return false
 }
 
 // bashPPPointerMetas shares the layout record of pointer slots by declared type:
@@ -738,7 +790,7 @@ ordinaryAddress:
 	// metadata concurrently before this address reaches the atomic lock.
 	if _, direct := expr.(*syntax.BashPPIdent); direct && typ != nil {
 		ptr.elem = typ
-		if shape, ok := r.bashPPGoShapeType(typ, 0); r.bashPPGoSource && ok && shape.Size() == 0 {
+		if r.bashPPGoSource && r.bashPPZeroSizeElem(typ) {
 			ptr.storageAddress = &bashPPZeroSizeStorage
 		}
 		return ptr, nil
