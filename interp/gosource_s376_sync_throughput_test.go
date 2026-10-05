@@ -10,16 +10,28 @@ package interp_test
 // use by many goroutines. Shapes keep the constructs and constant spelling of
 // test/ken/chan.go and test/fixedbugs/issue79186.go at reduced counts.
 
-import "testing"
+import (
+	"bytes"
+	"context"
+	"errors"
+	"strings"
+	"testing"
+	"time"
+
+	"mvdan.cc/sh/v3/gosource"
+	"mvdan.cc/sh/v3/interp"
+	"mvdan.cc/sh/v3/syntax"
+)
 
 func TestS376ChannelNilComparisonDifferential(t *testing.T) {
 	for name, source := range map[string]string{
-		"field":   `package main;type Chan struct{sc,rc chan int;sv,rv int};func main(){ch:=new(Chan);println(ch.sc!=nil,ch.sc==nil);ch.sc=make(chan int,0);ch.rc=ch.sc;println(ch.sc!=nil,ch.rc!=nil,ch.sc==nil,nil!=ch.rc);ch.rc=nil;println(ch.sc!=nil,ch.rc!=nil,ch.rc==nil)}`,
-		"value":   `package main;type One struct{c chan int};func main(){var v One;println(v.c==nil);v.c=make(chan int,3);println(v.c!=nil,v.c==nil)}`,
-		"literal": `package main;type Chan struct{sc,rc chan int};func main(){lit:=&Chan{sc:make(chan int)};println(lit.sc!=nil,lit.rc!=nil)}`,
-		"copy":    `package main;type Chan struct{sc chan int};func main(){ch:=new(Chan);ch.sc=make(chan int);x:=ch.sc;println(x!=nil,x==nil);x=nil;println(x!=nil,ch.sc!=nil);ch.sc=nil;println(ch.sc!=nil)}`,
-		"element": `package main;func main(){m:=map[string]chan int{"a":make(chan int)};s:=[]chan int{make(chan int),nil};a:=[2]chan int{nil,make(chan int,1)};println(m["a"]!=nil,m["b"]!=nil,s[0]!=nil,s[1]!=nil,a[0]==nil,a[1]==nil)}`,
-		"param":   `package main;type Chan struct{sc,rc chan int};var nc *Chan;func init(){nc=new(Chan)};func count(r0,s0 *Chan)int{a:=0;if r0.rc!=nil{a++};if s0.sc!=nil{a++};return a};func main(){ch:=new(Chan);ch.sc=make(chan int,0);ch.rc=ch.sc;ca:=make([]*Chan,1);ca[0]=ch;done:=make(chan int);go func(){done<-count(ca[0],nc)}();println(count(ch,nc),count(nc,ch),count(ch,ch),<-done)}`,
+		"field":    `package main;type Chan struct{sc,rc chan int;sv,rv int};func main(){ch:=new(Chan);println(ch.sc!=nil,ch.sc==nil);ch.sc=make(chan int,0);ch.rc=ch.sc;println(ch.sc!=nil,ch.rc!=nil,ch.sc==nil,nil!=ch.rc);ch.rc=nil;println(ch.sc!=nil,ch.rc!=nil,ch.rc==nil)}`,
+		"value":    `package main;type One struct{c chan int};func main(){var v One;println(v.c==nil);v.c=make(chan int,3);println(v.c!=nil,v.c==nil)}`,
+		"literal":  `package main;type Chan struct{sc,rc chan int};func main(){lit:=&Chan{sc:make(chan int)};println(lit.sc!=nil,lit.rc!=nil)}`,
+		"copy":     `package main;type Chan struct{sc chan int};func main(){ch:=new(Chan);ch.sc=make(chan int);x:=ch.sc;println(x!=nil,x==nil);x=nil;println(x!=nil,ch.sc!=nil);ch.sc=nil;println(ch.sc!=nil)}`,
+		"nil-copy": `package main;type Chan struct{sc chan int};func main(){ch:=new(Chan);x:=ch.sc;println(x!=nil,x==nil);ch.sc=make(chan int,1);x=ch.sc;println(x!=nil,x==nil);x<-7;println(<-ch.sc);x=nil;println(x!=nil,x==nil,ch.sc!=nil)}`,
+		"element":  `package main;func main(){m:=map[string]chan int{"a":make(chan int)};s:=[]chan int{make(chan int),nil};a:=[2]chan int{nil,make(chan int,1)};println(m["a"]!=nil,m["b"]!=nil,s[0]!=nil,s[1]!=nil,a[0]==nil,a[1]==nil)}`,
+		"param":    `package main;type Chan struct{sc,rc chan int};var nc *Chan;func init(){nc=new(Chan)};func count(r0,s0 *Chan)int{a:=0;if r0.rc!=nil{a++};if s0.sc!=nil{a++};return a};func main(){ch:=new(Chan);ch.sc=make(chan int,0);ch.rc=ch.sc;ca:=make([]*Chan,1);ca[0]=ch;done:=make(chan int);go func(){done<-count(ca[0],nc)}();println(count(ch,nc),count(nc,ch),count(ch,ch),<-done)}`,
 		// The select stage of test/ken/chan.go: a finished channel is set to
 		// nil in its struct, and the loop runs until none is left.
 		"select": `package main
@@ -219,5 +231,38 @@ func main() {
 }`,
 	} {
 		t.Run(name, func(t *testing.T) { s374SyncDifferential(t, source) })
+	}
+}
+
+// A goroutine that panics ends the program with Go's status 2 even when main
+// is blocked at the time. The failure cancels the run to wake main; that
+// cancellation must not replace the status as the program's result.
+func TestS376GoroutinePanicStatusWhileMainBlocked(t *testing.T) {
+	for name, source := range map[string]string{
+		"sleep":   `package main;import("fmt";"time");func main(){go func(){fmt.Println("before");panic("boom")}();time.Sleep(5*time.Second)}`,
+		"mutex":   `package main;import("fmt";"sync");func main(){var m sync.Mutex;m.Lock();go func(){fmt.Println("before");panic("boom")}();m.Lock()}`,
+		"receive": `package main;import "fmt";func main(){c:=make(chan int);go func(){fmt.Println("before");panic("boom")}();<-c}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			p, err := gosource.Parse(strings.NewReader(source), "panic.go", gosource.Options{RunMain: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var out, stderr bytes.Buffer
+			r, err := interp.New(interp.Lang(syntax.LangBashPP), interp.Dir(t.TempDir()), interp.StdIO(nil, &out, &stderr))
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+			err = r.Run(ctx, p.File)
+			var status interp.ExitStatus
+			if !errors.As(err, &status) || status != 2 {
+				t.Fatalf("Run error %v, want exit status 2; stderr=%q", err, stderr.String())
+			}
+			if out.String() != "before\n" || !strings.Contains(stderr.String(), "panic: boom") {
+				t.Fatalf("stdout=%q stderr=%q", out.String(), stderr.String())
+			}
+		})
 	}
 }

@@ -70,7 +70,7 @@ func TestGoSourceNativeChannelValidationBeforeCommunication(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	source := `package main;import "time";func main(){_ = time.Second;println("probe")}`
+	source := `package main;import "time";func main(){_ = time.After;println("probe")}`
 	for round = 0; round < 2; round++ {
 		if round > 0 {
 			runner.Reset()
