@@ -134,6 +134,13 @@ func (r *Runner) bashPPTypeHasValueElements(typ syntax.BashPPTypeExpr) bool {
 	return bashPPElemHasValueSemantics(underlying)
 }
 
+// arrayHasValueElements reports whether the array needs recursive deep-copy.
+// It is a pure read-only query: concurrent by-value copies of the same source
+// array are legal Go and must not race, so this path never materializes the
+// lazy cache on the shared source meta. Write paths precompute the flags at
+// creation and assignment; copies carry the computed result forward on their
+// private metadata. The scalar fast path below keeps bulk copies O(1) without
+// scanning element metadata.
 func (meta *bashPPCollectionMeta) arrayHasValueElements() bool {
 	if meta == nil {
 		return false
@@ -143,20 +150,14 @@ func (meta *bashPPCollectionMeta) arrayHasValueElements() bool {
 	}
 	if col, ok := meta.typ.(*syntax.BashPPCollectionType); ok && col.Kind == "array" && col.Element != nil {
 		if !bashPPElemHasValueSemantics(col.Element) {
-			meta.hasValueElements = false
-			meta.hasValueElementsKnown = true
 			return false
 		}
 	}
 	for _, child := range meta.sequence {
 		if bashPPValueMeta(child) || (child != nil && child.interfaceValue != nil) {
-			meta.hasValueElements = true
-			meta.hasValueElementsKnown = true
 			return true
 		}
 	}
-	meta.hasValueElements = false
-	meta.hasValueElementsKnown = true
 	return false
 }
 
