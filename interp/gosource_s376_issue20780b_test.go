@@ -196,13 +196,15 @@ func main() {
 	differGoSource(t, src, nil, "")
 }
 
-// issue20780bSource returns the exact issue20780b program with a scaled N.
+// issue20780bSource returns the exact issue20780b program with a scaled N. N
+// keeps the root's float spelling (2e6 there): the front end lowers its uses
+// as int(N) conversions, which an integer literal would not exercise.
 func issue20780bSource(n int) string {
 	return fmt.Sprintf(`package main
 
 import "fmt"
 
-const N = %d
+const N = %de0
 
 type Big = [N]int
 
@@ -529,6 +531,47 @@ func main() {
 	}
 	wg.Wait()
 	fmt.Println(out)
+}
+`
+	differGoSource(t, src, nil, "")
+}
+
+// TestS376LoopAllocationBudget is the red-to-green gate for the root's loop
+// shape as the CLI sees it: `const N = 2e6` reaches the evaluator as int(N),
+// and while that conversion fell outside the typed int evaluator every
+// iteration cost about 24 allocations. The budget is twice the measured 6.
+func TestS376LoopAllocationBudget(t *testing.T) {
+	const n = 20000
+	_, _, mallocs := runScaledRepro(t, n)
+	perIteration := float64(mallocs) / float64(18*n)
+	t.Logf("N=%d mallocs=%d (%.2f per loop iteration)", n, mallocs, perIteration)
+	if perIteration > 12 {
+		t.Fatalf("%.2f allocations per loop iteration, budget 12", perIteration)
+	}
+}
+
+// TestS376IntConversionSemantics pins the conversions next to the one the
+// typed int evaluator takes: only int(v) of an int operand is an identity.
+func TestS376IntConversionSemantics(t *testing.T) {
+	const src = `package main
+
+import "fmt"
+
+const N = 2e3
+const Half = 2.5
+
+type ID int
+
+func main() {
+	var x [N]int
+	k, f, id := 3, 7.9, ID(5)
+	var small int8 = -3
+	for i := range x {
+		x[i] = k*N + i
+	}
+	fmt.Println(x[0], x[N-1], x[int(Half*2)], k*int(N)+int(f), int(f)*k)
+	fmt.Println(int(id)+k, ID(k)+id, int(small)*k, int64(k)*N, float64(k)*Half)
+	fmt.Println(x[int(f)] == k*N+7, x[k] != int(N)*k+k, uint(k)+N)
 }
 `
 	differGoSource(t, src, nil, "")
