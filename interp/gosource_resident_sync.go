@@ -51,6 +51,10 @@ func (s *goSourceResidentSync) wake() <-chan struct{} {
 }
 
 func (r *Runner) goSourceResidentSyncType(op string, typ syntax.BashPPTypeExpr, args []bashPPBridgeValue) (bashPPBridgeValue, bool, error) {
+	ptr := false
+	if pt, ok := typ.(*syntax.BashPPPointerType); ok && op == "assignable" {
+		typ, ptr = pt.Element, true
+	}
 	n, ok := typ.(*syntax.BashPPNamedType)
 	if !r.bashPPGoSource || !ok || n.LocalSync == "" {
 		return bashPPBridgeValue{}, false, nil
@@ -63,8 +67,12 @@ func (r *Runner) goSourceResidentSyncType(op string, typ syntax.BashPPTypeExpr, 
 	case "type":
 		return bashPPBridgeValue{Kind: "string", Text: n.LocalSync}, true, nil
 	case "assignable":
-		if len(args) == 1 && args[0].residentSync != nil {
-			return bashPPBridgeValue{Kind: "bool", Text: strconv.FormatBool(args[0].Type == n.LocalSync)}, true, nil
+		if len(args) == 1 && residentSyncValue(args[0]) != nil {
+			want := n.LocalSync
+			if ptr {
+				want = "*" + want
+			}
+			return bashPPBridgeValue{Kind: "bool", Text: strconv.FormatBool(args[0].Type == want)}, true, nil
 		}
 	case "new", "construct", "address":
 		if len(args) > 0 && (len(args[0].Fields) > 0 || len(args[0].Elements) > 0) {

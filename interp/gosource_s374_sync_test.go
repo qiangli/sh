@@ -124,7 +124,7 @@ func TestS374ResidentSyncCertificates(t *testing.T) {
 		{"method-expression", `package main;import "sync";func main(){var m sync.Mutex;(*sync.Mutex).Lock(&m);m.Unlock()}`, false},
 		{"copy", `package main;import "sync";func main(){var m sync.Mutex;n:=m;_=n}`, false},
 		{"aggregate-copy", `package main;import "sync";type B struct{sync.Mutex};func main(){var b B;c:=b;_=c}`, false},
-		{"unsupported", `package main;import "sync";func main(){var w sync.WaitGroup;w.Go(func(){});w.Wait()}`, false},
+		{"unsupported", `package main;import "sync";func main(){var w sync.WaitGroup;g:=w.Go;g(func(){});w.Wait()}`, false},
 		{"comparison", `package main;import "sync";func main(){a:=new(sync.Mutex);b:=a;_=a==b}`, false},
 		{"value-param", `package main;import "sync";func use(m sync.Mutex){};func main(){use(sync.Mutex{})}`, false},
 		{"unsafe", `package main;import("sync";"unsafe");func main(){var m sync.Mutex;_=unsafe.Pointer(&m)}`, false},

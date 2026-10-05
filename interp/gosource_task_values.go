@@ -52,6 +52,16 @@ func (r *Runner) goSourceCapturedHandleCell(cell *bashPPCell) (bool, bool) {
 		}
 		return true, true
 	}
+	if cell.pointer && cell.pointerValue != nil {
+		// A pointer to a resident sync object (new(sync.Mutex), &wg of a
+		// parameter) must keep naming the one host-only object; copying the
+		// pointer cell would leave the task without the variable.
+		if pointee, _, _, err := cell.pointerValue.read(); err == nil {
+			if b, ok := pointee.(*bashPPBridgeValue); ok && b != nil && residentSyncValue(*b) != nil {
+				return true, true
+			}
+		}
+	}
 	v, ok := cell.vr.Obj.(*bashPPBridgeValue)
 	if !ok || v == nil {
 		return false, false
