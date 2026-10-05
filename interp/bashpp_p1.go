@@ -1686,8 +1686,11 @@ type bashPPShortDeclTxn struct {
 	scope  *bashPPScope
 	// saved is every cell the block held when the declaration began, with
 	// its contents, so that a failed declaration puts the block back exactly
-	// as it was: the producer may have written through any of them.
-	saved []bashPPSavedCell
+	// as it was: the producer may have written through any of them. With a
+	// read-only right-hand side it holds only the cells of the names being
+	// declared and blockSnapshot is false.
+	saved         []bashPPSavedCell
+	blockSnapshot bool
 	// names are the left-hand names in order with their positions.
 	names    []bashPPShortName
 	bound    []string
@@ -1736,15 +1739,63 @@ func (txn *bashPPShortDeclTxn) bind(name string) {
 	}
 }
 
+// bashPPPureShortExpr reports whether evaluating expr can only read storage:
+// names, literals, selectors, indexing and dereference, never a call, receive,
+// closure or conversion that might run interpreted code.
+func bashPPPureShortExpr(expr syntax.BashPPExpr) bool {
+	switch x := expr.(type) {
+	case *syntax.BashPPIdent, *syntax.BashPPBasicLit:
+		return true
+	case *syntax.BashPPParenExpr:
+		return bashPPPureShortExpr(x.X)
+	case *syntax.BashPPSelectorExpr:
+		return !x.MethodValue && bashPPPureShortExpr(x.X)
+	case *syntax.BashPPIndexExpr:
+		return bashPPPureShortExpr(x.X) && bashPPPureShortExpr(x.Index)
+	case *syntax.BashPPDerefExpr:
+		return bashPPPureShortExpr(x.X)
+	}
+	return false
+}
+
+func bashPPPureShortDecl(d *syntax.BashPPShortDecl) bool {
+	if d.Call != nil || d.FuncLit != nil || d.Recv != nil || d.MakeChan != nil || d.MethodValue != nil {
+		return false
+	}
+	exprs := d.RhsExprs
+	if len(exprs) == 0 && d.Expr != nil {
+		exprs = []syntax.BashPPExpr{d.Expr}
+	}
+	if len(exprs) == 0 {
+		return false
+	}
+	for _, expr := range exprs {
+		if !bashPPPureShortExpr(expr) {
+			return false
+		}
+	}
+	return true
+}
+
 func (r *Runner) bashPPBeginShortDecl(d *syntax.BashPPShortDecl) (*bashPPShortDeclTxn, bool) {
+	// A producer that can run interpreted code may write through any cell of
+	// the block, so the transaction preserves them all. A read-only right-hand
+	// side can change only the names it declares; snapshotting just those keeps
+	// a run of declarations from copying the whole block each time.
+	snapshotBlock := !r.bashPPGoSource || !bashPPPureShortDecl(d)
 	txn := &bashPPShortDeclTxn{
 		parent: r.bashPPShortTxn,
 		scope:  r.bashPPScope,
-		saved:  make([]bashPPSavedCell, 0, len(r.bashPPScope.entries)),
 		names:  make([]bashPPShortName, 0, len(d.Lhs)),
 	}
-	for name, cell := range r.bashPPScope.entries {
-		txn.saved = append(txn.saved, bashPPSavedCell{name: name, cell: cell, before: *cell.view()})
+	if snapshotBlock {
+		txn.saved = make([]bashPPSavedCell, 0, len(r.bashPPScope.entries))
+		for name, cell := range r.bashPPScope.entries {
+			txn.saved = append(txn.saved, bashPPSavedCell{name: name, cell: cell, before: *cell.view()})
+		}
+		txn.blockSnapshot = true
+	} else {
+		txn.saved = make([]bashPPSavedCell, 0, len(d.Lhs))
 	}
 	for _, lhs := range d.Lhs {
 		name := lhs.Value
@@ -1764,8 +1815,10 @@ func (r *Runner) bashPPBeginShortDecl(d *syntax.BashPPShortDecl) (*bashPPShortDe
 			return nil, false
 		}
 		txn.names = append(txn.names, bashPPShortName{name: name, pos: lhs.Pos()})
-		if _, exists := r.bashPPScope.entries[name]; !exists {
+		if cell, exists := r.bashPPScope.entries[name]; !exists {
 			txn.newName = true
+		} else if !snapshotBlock {
+			txn.saved = append(txn.saved, bashPPSavedCell{name: name, cell: cell, before: *cell.view()})
 		}
 	}
 	r.bashPPShortTxn = txn
@@ -1777,9 +1830,17 @@ func (r *Runner) bashPPBeginShortDecl(d *syntax.BashPPShortDecl) (*bashPPShortDe
 // names introduced since are dropped.
 func (r *Runner) bashPPRollbackShortDecl(txn *bashPPShortDeclTxn) {
 	entries := txn.scope.entries
-	for name := range entries {
-		if txn.savedCell(name) == nil {
-			delete(entries, name)
+	if txn.blockSnapshot {
+		for name := range entries {
+			if txn.savedCell(name) == nil {
+				delete(entries, name)
+			}
+		}
+	} else {
+		for _, n := range txn.names {
+			if txn.savedCell(n.name) == nil {
+				delete(entries, n.name)
+			}
 		}
 	}
 	for i := range txn.saved {

@@ -119,7 +119,7 @@ func (r *Runner) goSourceSetFinalizer(ctx context.Context, objExpr, fnExpr synta
 		r.goSourceFinalizerThrow("runtime.SetFinalizer: first argument is nil")
 		return nil, true, errBashPPScalarInterrupted
 	}
-	if ptr.target == nil || len(ptr.path) > 0 || ptr.storageAddress != nil || ptr.unsafeSource != nil || ptr.unsafeView != nil {
+	if ptr.target == nil || len(ptr.path) > 0 || ptr.storageAddress != nil || ptr.unsafeSource() != nil || ptr.unsafeView() != nil {
 		return nil, true, errors.New(goSourceFinalizerRefusal)
 	}
 	table := r.goSourceFinalizerTable(ctx)

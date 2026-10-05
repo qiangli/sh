@@ -1870,7 +1870,9 @@ func bashPPCompareValuesWithRunner(r *Runner, left any, leftMeta *bashPPCollecti
 				return true, nil
 			}
 		}
-		for field := range leftLayout {
+		// Layout is sparse: scalar fields have no runtime metadata. The
+		// payload, not the layout map, determines which fields exist.
+		for field := range leftMap {
 			ok, err := compareField(field)
 			if err != nil || !ok {
 				return ok, err
@@ -2015,10 +2017,10 @@ func bashPPPointerEqual(left, right any) bool {
 	if lp == nil || rp == nil {
 		return lp == nil && rp == nil
 	}
-	if lp.forged || rp.forged {
-		return lp.forged && rp.forged && lp.unsafeAddress == rp.unsafeAddress
+	if lp.forged() || rp.forged() {
+		return lp.forged() && rp.forged() && lp.unsafeAddress() == rp.unsafeAddress()
 	}
-	if lp.unsafeOffset != rp.unsafeOffset {
+	if lp.unsafeOffset() != rp.unsafeOffset() {
 		return false
 	}
 	if lp.storageAddress != nil || rp.storageAddress != nil {

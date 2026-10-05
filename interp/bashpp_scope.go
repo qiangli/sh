@@ -56,15 +56,12 @@ type bashPPCell struct {
 	// bool, integer, or float expression. Re-parsing vr.Str would turn quoted
 	// "2" into an integer and quoted "true" into a bool at assignment time.
 	// exactScalar preserves untyped Go constants without a text round trip.
-	exactScalar         constant.Value
-	scalarKind          constant.Kind
-	negativeZero        bool
-	nonFinite           float64
-	hasNonFinite        bool
-	nonFiniteComplex    complex128
-	hasNonFiniteComplex bool
-	channel             *bashPPChannel
-	channelOwner        *bashPPConcurrent
+	exactScalar      constant.Value
+	scalarKind       constant.Kind
+	nonFinite        float64
+	nonFiniteComplex complex128
+	channel          *bashPPChannel
+	channelOwner     *bashPPConcurrent
 	// object is shared by every alias of one structured value. Deep readonly
 	// is an attribute of this identity rather than of one variable spelling.
 	object *bashPPObjectIdentity
@@ -76,8 +73,6 @@ type bashPPCell struct {
 	// Pointer/nilPointer retain identity in-process; the visible shell value
 	// remains vr, so typed values never need a lossy JSON representation.
 	typeName       string
-	pointer        bool
-	nilPointer     bool
 	declType       syntax.BashPPTypeExpr
 	pointerValue   *bashPPPointer
 	interfaceValue *bashPPInterfaceValue
@@ -91,6 +86,12 @@ type bashPPCell struct {
 	// vr.ReadOnly drives, and the two answer to different owners: `declare -r`
 	// may set the latter, but only `const` sets this.
 	constant bool
+	// The one-byte flags sit together so they share a word.
+	negativeZero        bool
+	hasNonFinite        bool
+	hasNonFiniteComplex bool
+	pointer             bool
+	nilPointer          bool
 	// guard is non-nil once this cell has been aliased into an interpreted
 	// goroutine's snapshot, so that two host goroutines can reach its fields.
 	// It is a pointer, not an embedded mutex, because cells are copied by

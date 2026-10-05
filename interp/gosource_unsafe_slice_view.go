@@ -257,7 +257,7 @@ func (v *goSourceUnsafeSliceView) read(header any) (any, *bashPPCollectionMeta, 
 		return nil, nil, goSourceUnsafeViewErr("slice header data names storage with no element carrier")
 	}
 	seq = seq[:cap(seq)]
-	source := ptr.unsafeSource
+	source := ptr.unsafeSource()
 	if source == nil {
 		source = ptr.elem
 	}
@@ -640,7 +640,7 @@ func (v *goSourceUnsafeOverlayView) field(ptr *bashPPPointer, name string) (*bas
 		child := *v
 		child.target = field.layout
 		child.offset += field.offset
-		out.unsafeOverlay = &child
+		out.setUnsafeOverlay(&child)
 		out.elem = field.layout.typ
 		return out, nil
 	}
@@ -776,8 +776,8 @@ func (r *Runner) goSourceUnsafeEncode(layout *goSourceUnsafeLayout, value any, i
 		}
 		switch {
 		case ptr == nil:
-		case ptr.forged:
-			binary.LittleEndian.PutUint64(out, ptr.unsafeAddress)
+		case ptr.forged():
+			binary.LittleEndian.PutUint64(out, ptr.unsafeAddress())
 		default:
 			if image.pointers == nil {
 				image.pointers = make(map[int]*bashPPPointer)
@@ -863,7 +863,7 @@ func (r *Runner) goSourceUnsafeDecode(layout *goSourceUnsafeLayout, image *goSou
 		// Integer bytes read as a pointer are a forged address, as in
 		// unsafe.Pointer(uintptr(n)): it compares and converts, and every
 		// dereference refuses.
-		forged := &bashPPPointer{forged: true, unsafeAddress: address}
+		forged := bashPPForgedPointer(address)
 		if pointer, ok := r.bashPPPointerType(layout.typ); ok {
 			forged.elem = pointer.Element
 		}
@@ -902,22 +902,22 @@ func (r *Runner) goSourceUnsafeDecode(layout *goSourceUnsafeLayout, image *goSou
 func (r *Runner) goSourceUnsafeRetypePointer(ptr *bashPPPointer, typ syntax.BashPPTypeExpr) *bashPPPointer {
 	retyped := *ptr
 	retyped.path = append([]bashPPPointerStep(nil), ptr.path...)
-	if retyped.unsafeSource == nil {
-		retyped.unsafeSource = ptr.elem
+	if retyped.unsafeSource() == nil {
+		retyped.setUnsafeSource(ptr.elem)
 	}
 	pointer, ok := r.bashPPPointerType(typ)
 	if !ok || pointer.Element == nil {
 		// unsafe.Pointer: the storage type travels in unsafeSource.
 		return &retyped
 	}
-	retyped.unsafeView, retyped.unsafeRefusal, retyped.unsafeSlice, retyped.unsafeOverlay = nil, nil, nil, nil
-	if bashPPTypeText(retyped.unsafeSource) != bashPPTypeText(pointer.Element) {
-		if view := r.goSourceUnsafeSliceHeaderView(retyped.unsafeSource, pointer.Element); view != nil {
-			retyped.unsafeSlice = view
-		} else if overlay, overlayErr := r.goSourceUnsafeStructOverlay(retyped.unsafeSource, pointer.Element); overlayErr == nil {
-			retyped.unsafeOverlay = overlay
+	retyped.cold = nil
+	if bashPPTypeText(retyped.unsafeSource()) != bashPPTypeText(pointer.Element) {
+		if view := r.goSourceUnsafeSliceHeaderView(retyped.unsafeSource(), pointer.Element); view != nil {
+			retyped.setUnsafeSlice(view)
+		} else if overlay, overlayErr := r.goSourceUnsafeStructOverlay(retyped.unsafeSource(), pointer.Element); overlayErr == nil {
+			retyped.setUnsafeOverlay(overlay)
 		} else {
-			retyped.unsafeRefusal = overlayErr
+			retyped.setUnsafeRefusal(overlayErr)
 		}
 	}
 	retyped.elem = pointer.Element

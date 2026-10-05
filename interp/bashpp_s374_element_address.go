@@ -43,7 +43,7 @@ type bashPPBridgeWithinStep struct {
 // field of a struct that is no array element, anything reached by a
 // dereference inside the suffix, or an unsafe view.
 func (r *Runner) bashPPTransportWithin(session *bashPPNativeSession, ptr *bashPPPointer) *bashPPBridgeWithin {
-	if ptr == nil || len(ptr.path) == 0 || ptr.forged || ptr.unsafeOffset != 0 || ptr.unsafeSource != nil || ptr.unsafeView != nil {
+	if ptr == nil || len(ptr.path) == 0 || ptr.forged() || ptr.unsafeOffset() != 0 || ptr.unsafeSource() != nil || ptr.unsafeView() != nil {
 		return nil
 	}
 	// Walk the path from the pointee outwards. A field step is inlined in

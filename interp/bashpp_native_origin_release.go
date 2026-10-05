@@ -128,9 +128,9 @@ func (rec *bashPPOriginRecord) upgrade() (*bashPPPointer, bool) {
 // native code invisibly (notably via an escaped integer address), so its
 // origin is never proposed for release.
 func originNeedsPin(ptr *bashPPPointer) bool {
-	return ptr.forged || ptr.unsafeAddress != 0 || ptr.unsafeOffset != 0 ||
-		ptr.unsafeView != nil || ptr.unsafeOverlay != nil || ptr.unsafeSlice != nil ||
-		ptr.unsafeSource != nil || ptr.unsafeRefusal != nil
+	return ptr.forged() || ptr.unsafeAddress() != 0 || ptr.unsafeOffset() != 0 ||
+		ptr.unsafeView() != nil || ptr.unsafeOverlay() != nil || ptr.unsafeSlice() != nil ||
+		ptr.unsafeSource() != nil || ptr.unsafeRefusal() != nil
 }
 
 // originLookup resolves id to its live pointer. It answers false for both

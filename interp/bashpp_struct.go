@@ -439,8 +439,10 @@ func bashPPSetStructSelector(root map[string]any, meta *bashPPCollectionMeta, ed
 // the value and its metadata disagree about what the field holds.
 func bashPPSetInitialStructField(out map[string]any, meta *bashPPCollectionMeta, name string, value any, child *bashPPCollectionMeta) {
 	out[name] = value
-	// Every field keeps a layout entry, nil for a scalar: struct comparison
-	// and slicing tell a field with no runtime shape from an absent one.
+	if child == nil {
+		delete(meta.mapping, name)
+		return
+	}
 	if meta.mapping == nil {
 		meta.mapping = make(map[string]*bashPPCollectionMeta)
 	}
@@ -1253,8 +1255,8 @@ func (r *Runner) bashPPStructuredAssign(target, rhs syntax.BashPPExpr) {
 			r.exit = exitStatus{code: 2}
 			return
 		}
-		if ptr.unsafeOverlay != nil {
-			if err := ptr.unsafeOverlay.write(ptr, value, meta); err != nil {
+		if ptr.unsafeOverlay() != nil {
+			if err := ptr.unsafeOverlay().write(ptr, value, meta); err != nil {
 				r.errf("%v\n", err)
 				r.exit = exitStatus{code: 2}
 			}

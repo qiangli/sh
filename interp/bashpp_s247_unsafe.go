@@ -97,7 +97,7 @@ func (r *Runner) goSourceUnsafePointerExpr(expr syntax.BashPPExpr) (*bashPPPoint
 		if ptr := r.goSourceUnsafeRegisteredAddress(uint64(address)); ptr != nil {
 			return ptr, target, true, nil
 		}
-		return &bashPPPointer{forged: true, unsafeAddress: uint64(address)}, target, true, nil
+		return bashPPForgedPointer(uint64(address)), target, true, nil
 	}
 	if r.goSourceUnsafeReflectAddressOperand(conv.X) {
 		address, err := r.goSourceUnsafeInt(conv.X)
@@ -110,7 +110,7 @@ func (r *Runner) goSourceUnsafePointerExpr(expr syntax.BashPPExpr) (*bashPPPoint
 		if ptr := r.goSourceUnsafeRegisteredAddress(uint64(address)); ptr != nil {
 			return ptr, target, true, nil
 		}
-		return &bashPPPointer{forged: true, unsafeAddress: uint64(address)}, target, true, nil
+		return bashPPForgedPointer(uint64(address)), target, true, nil
 	}
 	ptr, err := r.bashPPPointerExprValue(conv.X)
 	if err != nil && strings.HasPrefix(err.Error(), "BASHPP-EPOINTER-TARGET:") {
@@ -122,8 +122,8 @@ func (r *Runner) goSourceUnsafePointerExpr(expr syntax.BashPPExpr) (*bashPPPoint
 		return nil, target, true, err
 	}
 	view := *ptr
-	if view.unsafeSource == nil && !view.forged {
-		view.unsafeSource = ptr.elem
+	if view.unsafeSource() == nil && !view.forged() {
+		view.setUnsafeSource(ptr.elem)
 	}
 	return &view, target, true, nil
 }
@@ -140,8 +140,8 @@ func (r *Runner) goSourceUnsafeRegisteredAddress(address uint64) *bashPPPointer 
 		return nil
 	}
 	view := *ptr
-	if view.unsafeSource == nil {
-		view.unsafeSource = ptr.elem
+	if view.unsafeSource() == nil {
+		view.setUnsafeSource(ptr.elem)
 	}
 	return &view
 }
@@ -258,8 +258,8 @@ func (r *Runner) goSourceUnsafeOpaqueAddress(ptr *bashPPPointer) uint64 {
 	if ptr == nil {
 		return 0
 	}
-	if ptr.forged {
-		return ptr.unsafeAddress
+	if ptr.forged() {
+		return ptr.unsafeAddress()
 	}
 	addr := r.goSourceUnsafeOpaqueCellID(ptr.target)
 	for _, step := range ptr.path {
@@ -273,8 +273,8 @@ func (r *Runner) goSourceUnsafeOpaqueAddress(ptr *bashPPPointer) uint64 {
 			addr = goSourceUnsafeOpaqueMix(addr, 1)
 		}
 	}
-	if ptr.unsafeOffset != 0 {
-		addr = goSourceUnsafeOpaqueMix(addr, uint64(ptr.unsafeOffset))
+	if ptr.unsafeOffset() != 0 {
+		addr = goSourceUnsafeOpaqueMix(addr, uint64(ptr.unsafeOffset()))
 	}
 	if addr == 0 {
 		return 1
@@ -313,7 +313,7 @@ func goSourceUnsafeOpaqueMix(base, part uint64) uint64 {
 // goSourceUnsafeElemSize is the gc size of the element type a span pointer
 // was derived from.
 func (r *Runner) goSourceUnsafeElemSize(ptr *bashPPPointer) (int64, bool) {
-	elem := ptr.unsafeSource
+	elem := ptr.unsafeSource()
 	if elem == nil {
 		elem = ptr.elem
 	}
@@ -333,16 +333,16 @@ func (r *Runner) goSourceUnsafeMove(ptr *bashPPPointer, delta int64) (*bashPPPoi
 		if delta == 0 {
 			return nil, nil
 		}
-		return &bashPPPointer{forged: true, unsafeAddress: uint64(delta)}, nil
+		return bashPPForgedPointer(uint64(delta)), nil
 	}
 	moved := *ptr
 	moved.path = append([]bashPPPointerStep(nil), ptr.path...)
-	if moved.forged {
-		moved.unsafeAddress += uint64(delta)
+	if moved.forged() {
+		moved.setUnsafeAddress(moved.unsafeAddress() + uint64(delta))
 		return &moved, nil
 	}
-	total := moved.unsafeOffset + delta
-	moved.unsafeOffset = total
+	total := moved.unsafeOffset() + delta
+	moved.setUnsafeOffset(total)
 	last := len(moved.path) - 1
 	if last < 0 || moved.path[last].deref || moved.path[last].field != "" || moved.target == nil {
 		return &moved, nil
@@ -364,7 +364,7 @@ func (r *Runner) goSourceUnsafeMove(ptr *bashPPPointer, delta int64) (*bashPPPoi
 		return &moved, nil
 	}
 	moved.path[last].index = int(index)
-	moved.unsafeOffset = 0
+	moved.setUnsafeOffset(0)
 	return &moved, nil
 }
 
@@ -374,13 +374,13 @@ func goSourceUnsafeDerefCheck(p *bashPPPointer) error {
 	if p == nil {
 		return nil
 	}
-	if p.forged {
+	if p.forged() {
 		return errGoSourceUnsafeForged
 	}
-	if p.unsafeRefusal != nil && p.unsafeOverlay == nil && p.unsafeSource != nil && bashPPTypeText(p.unsafeSource) != bashPPTypeText(p.elem) {
-		return p.unsafeRefusal
+	if p.unsafeRefusal() != nil && p.unsafeOverlay() == nil && p.unsafeSource() != nil && bashPPTypeText(p.unsafeSource()) != bashPPTypeText(p.elem) {
+		return p.unsafeRefusal()
 	}
-	if p.unsafeOffset != 0 {
+	if p.unsafeOffset() != 0 {
 		return errGoSourceUnsafeSpan
 	}
 	return nil
@@ -415,7 +415,7 @@ func (r *Runner) goSourceUnsafeLength(builtin string, ptr *bashPPPointer, length
 	if hi != 0 {
 		return 0, goSourceUnsafeRuntime(builtin, builtin+": len out of range")
 	}
-	if ptr.forged && mem > -ptr.unsafeAddress {
+	if ptr.forged() && mem > -ptr.unsafeAddress() {
 		return 0, goSourceUnsafeRuntime(builtin, builtin+": len out of range")
 	}
 	return n, nil
@@ -483,7 +483,7 @@ func (r *Runner) goSourceUnsafeSlice(call *syntax.BashPPCall, discard bool) (val
 		zero, zeroMeta := r.bashPPZeroValue(sliceType)
 		return zero, zeroMeta, true, nil
 	}
-	if discard && ptr.forged {
+	if discard && ptr.forged() {
 		return nil, nil, true, nil
 	}
 	seq, parentMeta, start, err := goSourceUnsafeSpan(ptr)
