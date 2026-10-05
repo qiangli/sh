@@ -58,6 +58,13 @@ var bashPPCellDirectReaders = []string{
 	// (Sprint 374); the direct reads moved with the code, unchanged.
 	"bashPPBindParams",
 	"bashPPSettleResultCells",
+	// These typed-int fast paths reject cell.guard != nil before reading
+	// any guarded field. They operate only on private cells and decline to
+	// the general evaluator for shared storage. The syntactic scan cannot
+	// infer that early-return condition; it is reviewed explicitly here.
+	"bashPPFastIntIndex",
+	"bashPPFastIntIndexAssign",
+	"bashPPFastIntSelector",
 }
 
 // markStore marks an assignment target and every selector it is reached
