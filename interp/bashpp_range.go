@@ -454,6 +454,22 @@ func (r *Runner) bashPPRangeScalarValue(ctx context.Context, rng *syntax.BashPPR
 			}
 			limit = math.MaxInt64
 		}
+		// An empty integer range with no bindings has no per-iteration
+		// language work. Keep its counter in Go and visit the ordinary
+		// command/cancellation path periodically rather than dispatching
+		// an empty AST block for every increment. Traced execution retains
+		// the original path and all nonempty bodies still run normally.
+		if !r.opts[optXTrace] && !bashPPRangeBindsNames(rng) && rng.Body != nil && len(rng.Body.Stmts) == 0 {
+			for i := int64(0); i < limit; i++ {
+				if i&1023 == 0 {
+					r.cmd(r.bashPPTaskContext(ctx), rng.Body)
+					if !r.bashPPRangeControl() {
+						return true
+					}
+				}
+			}
+			return true
+		}
 		iterationType := bashPPRangeNamedType("int")
 		if value.typ != "" {
 			iterationType = bashPPRangeNamedType(value.typ)
