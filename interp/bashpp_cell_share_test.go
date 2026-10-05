@@ -78,7 +78,7 @@ func TestBashPPCellFieldsCopied(t *testing.T) {
 		setUnexported(value.Field(i), cellFieldSentinel(t, name, typ.Field(i).Type))
 	}
 
-	guard := new(sync.Mutex)
+	guard := new(sync.RWMutex)
 	target := &bashPPCell{guard: guard}
 	target.storeFields(source)
 
