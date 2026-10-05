@@ -156,8 +156,10 @@ function Square {
     $n * $n
 }
 function Blob {
+    [OutputType([byte[]])]
     param([byte[]]$data)
-    $data + [byte[]]@(33)
+    # PowerShell enumerates arrays on the success stream unless wrapped.
+    return ,([byte[]]($data + [byte[]]@(33)))
 }
 function Flag {
     [OutputType([bool])]

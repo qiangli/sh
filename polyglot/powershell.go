@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 )
 
@@ -61,11 +62,30 @@ func (p PowerShell) loadRequest(plan Plan) map[string]any {
 }
 
 func (p PowerShell) configure(cmd *exec.Cmd) {
-	if p.Environment == nil {
-		return
+	if p.Environment != nil {
+		cmd.Dir = p.Environment.Dir
+		cmd.Env = append([]string(nil), p.Environment.Env...)
 	}
-	cmd.Dir = p.Environment.Dir
-	cmd.Env = append([]string(nil), p.Environment.Env...)
+	// Minimal Linux hosts and the FROM-scratch image can have no ICU. Keep the
+	// managed fence worker aligned with bashy's pwsh child environment; callers
+	// with ICU can explicitly opt into culture data by setting this variable.
+	if runtime.GOOS == "linux" {
+		env := cmd.Env
+		if env == nil {
+			env = os.Environ()
+		}
+		found := false
+		for _, item := range env {
+			name, _, ok := strings.Cut(item, "=")
+			if ok && strings.EqualFold(name, "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			cmd.Env = append(env, "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1")
+		}
+	}
 }
 
 // Analyze runs pwsh with the PowerShell AST parser over the source and returns
