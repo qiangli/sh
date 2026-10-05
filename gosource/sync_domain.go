@@ -186,6 +186,82 @@ func (c *converter) planLocalSync() {
 			return true
 		})
 	}
+	// A local variable is a statically known callee only when every binding
+	// is a function literal (the planner inspects that body) and every other
+	// use is as the callee of a call: never reassigned, address-taken, passed,
+	// stored or returned, so it cannot escape.
+	litVars, otherVars := map[*types.Var]bool{}, map[*types.Var]bool{}
+	defs, callees := map[*ast.Ident]bool{}, map[*ast.Ident]bool{}
+	bind := func(lhs, rhs ast.Expr) {
+		id, ok := ast.Unparen(lhs).(*ast.Ident)
+		if !ok {
+			return
+		}
+		v, ok := c.info.ObjectOf(id).(*types.Var)
+		if !ok {
+			return
+		}
+		defs[id] = true
+		if _, lit := ast.Unparen(rhs).(*ast.FuncLit); lit {
+			litVars[v] = true
+		} else {
+			otherVars[v] = true
+		}
+	}
+	for _, f := range c.files {
+		ast.Inspect(f, func(n ast.Node) bool {
+			switch x := n.(type) {
+			case *ast.AssignStmt:
+				for i, l := range x.Lhs {
+					if len(x.Lhs) == len(x.Rhs) {
+						bind(l, x.Rhs[i])
+					} else {
+						bind(l, nil)
+					}
+				}
+			case *ast.ValueSpec:
+				for i, id := range x.Names {
+					if len(x.Names) == len(x.Values) {
+						bind(id, x.Values[i])
+					} else {
+						bind(id, nil)
+					}
+				}
+			case *ast.RangeStmt:
+				if x.Key != nil {
+					bind(x.Key, nil)
+				}
+				if x.Value != nil {
+					bind(x.Value, nil)
+				}
+			case *ast.IncDecStmt:
+				bind(x.X, nil)
+			case *ast.CallExpr:
+				if id, ok := ast.Unparen(x.Fun).(*ast.Ident); ok {
+					callees[id] = true
+				}
+			}
+			return true
+		})
+	}
+	for _, f := range c.files {
+		ast.Inspect(f, func(n ast.Node) bool {
+			if id, ok := n.(*ast.Ident); ok && !defs[id] && !callees[id] {
+				if v, ok := c.info.Uses[id].(*types.Var); ok {
+					otherVars[v] = true
+				}
+			}
+			return true
+		})
+	}
+	localCallee := func(fun ast.Expr) bool {
+		id, ok := ast.Unparen(fun).(*ast.Ident)
+		if !ok {
+			return false
+		}
+		v, ok := c.info.ObjectOf(id).(*types.Var)
+		return ok && litVars[v] && !otherVars[v]
+	}
 	for _, f := range c.files {
 		ast.Inspect(f, func(n ast.Node) bool {
 			if e, ok := n.(ast.Expr); ok && channelOpaqueStorage(c.info.TypeOf(e), map[types.Type]bool{}) {
@@ -305,8 +381,10 @@ func (c *converter) planLocalSync() {
 							safe = false
 						}
 					}
-					// Only a statically resolved imported function/method is a
-					// known boundary. Indirect calls can expose captured globals.
+					// A statically resolved function/method is a known boundary,
+					// and so is a local variable proven to hold only inspected
+					// function literals. Other indirect calls can expose
+					// captured globals.
 					known := false
 					if sel, ok := ast.Unparen(x.Fun).(*ast.SelectorExpr); ok {
 						if selection := c.info.Selections[sel]; selection != nil {
@@ -315,7 +393,7 @@ func (c *converter) planLocalSync() {
 							_, known = c.info.ObjectOf(sel.Sel).(*types.Func)
 						}
 					}
-					if !known {
+					if !known && !localCallee(x.Fun) {
 						safe = false
 					}
 				}

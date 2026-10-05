@@ -8,8 +8,9 @@ Change: a certified statement-level `x.Go(f)` lowers to
 `func(wgr *T, wgf func()){ wgr.Add(1); go func(){ defer wgr.Done(); wgf() }() }(&x, f)`:
 receiver then `f` evaluated once as arguments, `Add` only after both evaluated,
 `Done` on the captured receiver even if the variable/field is reassigned.
-Also: calls to package functions / function-literal-only locals no longer decline
-the certificate; pointer cells holding resident sync objects are shared into `go`
+Also: a call through a local variable no longer declines the certificate when every
+binding of it is a function literal and every other use is as a call's callee (never
+reassigned, address-taken, passed, stored or returned); package functions likewise; pointer cells holding resident sync objects are shared into `go`
 tasks; `assignable` answers for `*sync.X` targets host-side.
 
 Tests (bounded, dev): `TestS376ResidentWaitGroupGo{Differential,Certificates}`
@@ -17,8 +18,12 @@ Tests (bounded, dev): `TestS376ResidentWaitGroupGo{Differential,Certificates}`
 and panic ordering, pointer params, embedded, field), plus S374/S376 resident-sync
 regressions and `./gosource`: all pass.
 
+Certificate tests include the exact production mutexes.bsh source (parse-only, certified)
+and escape/reassignment negatives. Receiver-before-argument is tested by an argument
+that reassigns the receiver pointer.
+
 Not measured here: the production mutexes input (3 x 10000) and the 20 s stage limit
-(unchanged). An earlier dev probe on the real file, before the callee rule, showed
-cert=0 and timed out at 120 s; it is retained as the raw failure. The post-rule
-real-file timing is NOT measured on dragon; the manager owns remote GBE/root runs.
+(unchanged). An earlier dev probe on the real file showed cert=0 and timed out at 120 s (raw
+failure retained; the callee rule did not exist then). No post-fix timing exists and
+no production performance pass is claimed; the manager owns remote GBE/root runs.
 ken/chan.go and issue79186.go exact IDs are not run here.

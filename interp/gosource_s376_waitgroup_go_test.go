@@ -26,7 +26,8 @@ func TestS376ResidentWaitGroupGoDifferential(t *testing.T) {
 		"pointer-param":             `package main;import("fmt";"sync");func run(wg *sync.WaitGroup,m *sync.Mutex,n *int){for i:=0;i<6;i++{wg.Go(func(){m.Lock();*n+=i;m.Unlock()})}};func main(){wg:=new(sync.WaitGroup);m:=new(sync.Mutex);n:=0;run(wg,m,&n);wg.Wait();fmt.Println(n)}`,
 		"receiver-reassigned":       `package main;import("fmt";"sync");func main(){a:=new(sync.WaitGroup);b:=new(sync.WaitGroup);p:=a;var m sync.Mutex;n:=0;p.Go(func(){m.Lock();n++;m.Unlock()});p=b;a.Wait();b.Wait();fmt.Println(n)}`,
 		"receiver-field-reassigned": `package main;import("fmt";"sync");type H struct{wg *sync.WaitGroup};func main(){a:=new(sync.WaitGroup);h:=&H{a};n:=0;var m sync.Mutex;h.wg.Go(func(){m.Lock();n++;m.Unlock()});h.wg=new(sync.WaitGroup);a.Wait();fmt.Println(n)}`,
-		"arg-order":                 `package main;import("fmt";"sync");var log []string;func note(s string)int{log=append(log,s);return 0};func recv(wg *sync.WaitGroup)*sync.WaitGroup{note("recv");return wg};func mk()func(){note("arg");return func(){}};func main(){wg:=new(sync.WaitGroup);wg.Go(mk());wg.Wait();fmt.Println(log)}`,
+		"receiver-before-arg":       `package main;import("fmt";"sync");func main(){a:=new(sync.WaitGroup);b:=new(sync.WaitGroup);p:=a;var m sync.Mutex;n:=0;p.Go(func()func(){p=b;return func(){m.Lock();n++;m.Unlock()}}());a.Wait();b.Wait();fmt.Println(n)}`,
+		"arg-order":                 `package main;import("fmt";"sync");var log []string;func note(s string)int{log=append(log,s);return 0};func mk()func(){note("arg");return func(){}};func main(){wg:=new(sync.WaitGroup);wg.Go(mk());wg.Wait();fmt.Println(log)}`,
 		"arg-panic":                 `package main;import("fmt";"sync");func mk()func(){panic("boom")};func main(){var wg sync.WaitGroup;func(){defer func(){fmt.Println("recovered",recover())}();wg.Go(mk())}();wg.Wait();fmt.Println("no leaked Add")}`,
 		"named-func-value":          `package main;import("fmt";"sync");func main(){var wg sync.WaitGroup;var m sync.Mutex;n:=0;f:=func(){m.Lock();n++;m.Unlock()};for range 4{wg.Go(f)};wg.Wait();fmt.Println(n)}`,
 	} {
@@ -42,6 +43,10 @@ func TestS376ResidentWaitGroupGoCertificates(t *testing.T) {
 		{"statement", `package main;import "sync";func main(){var wg sync.WaitGroup;wg.Go(func(){});wg.Wait()}`, true},
 		{"field-chain", `package main;import "sync";type P struct{wg sync.WaitGroup};func main(){p:=&P{};p.wg.Go(func(){});p.wg.Wait()}`, true},
 		{"production-shape", `package main;import "sync";type C struct{mu sync.Mutex;n map[string]int};func (c *C) inc(k string){c.mu.Lock();defer c.mu.Unlock();c.n[k]++};func main(){c:=C{n:map[string]int{}};var wg sync.WaitGroup;wg.Go(func(){for range 3{c.inc("a")}});wg.Wait()}`, true},
+		{"production-mutexes-exact", mutexesBsh, true},
+		{"local-closure-callee", `package main;import "sync";type C struct{mu sync.Mutex;n map[string]int};func (c *C) inc(k string){c.mu.Lock();defer c.mu.Unlock();c.n[k]++};func main(){c:=C{n:map[string]int{}};var wg sync.WaitGroup;do:=func(k string,n int){for range n{c.inc(k)}};wg.Go(func(){do("a",3)});wg.Wait()}`, true},
+		{"local-closure-escapes", `package main;import "sync";func main(){var wg sync.WaitGroup;do:=func(){};g:=do;g();wg.Go(func(){do()});wg.Wait()}`, false},
+		{"local-closure-reassigned", `package main;import "sync";func main(){var wg sync.WaitGroup;do:=func(){};do=nil;wg.Go(func(){do()});wg.Wait()}`, false},
 		{"go-statement", `package main;import "sync";func main(){var wg sync.WaitGroup;go wg.Go(func(){});wg.Wait()}`, false},
 		{"defer-statement", `package main;import "sync";func main(){var wg sync.WaitGroup;defer wg.Go(func(){});wg.Wait()}`, false},
 		{"method-value", `package main;import "sync";func main(){var wg sync.WaitGroup;g:=wg.Go;g(func(){});wg.Wait()}`, false},
@@ -66,3 +71,73 @@ func TestS376ResidentWaitGroupGoCertificates(t *testing.T) {
 		})
 	}
 }
+
+const mutexesBsh = `// In the previous example we saw how to manage simple
+// counter state using [atomic operations](atomic-counters).
+// For more complex state we can use a [_mutex_](https://en.wikipedia.org/wiki/Mutual_exclusion)
+// to safely access data across multiple goroutines.
+
+package main
+
+import (
+	"fmt"
+	"sync"
+)
+
+// Container holds a map of counters; since we want to
+// update it concurrently from multiple goroutines, we
+// add a ` + "`" + `Mutex` + "`" + ` to synchronize access.
+// Note that mutexes must not be copied, so if this
+// ` + "`" + `struct` + "`" + ` is passed around, it should be done by
+// pointer.
+type Container struct {
+	mu       sync.Mutex
+	counters map[string]int
+}
+
+func (c *Container) inc(name string) {
+	// Lock the mutex before accessing ` + "`" + `counters` + "`" + `; unlock
+	// it at the end of the function using a [defer](defer)
+	// statement.
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.counters[name]++
+}
+
+func main() {
+	c := Container{
+		// Note that the zero value of a mutex is usable as-is, so no
+		// initialization is required here.
+		counters: map[string]int{"a": 0, "b": 0},
+	}
+
+	var wg sync.WaitGroup
+
+	// This function increments a named counter
+	// in a loop.
+	doIncrement := func(name string, n int) {
+		for range n {
+			c.inc(name)
+		}
+	}
+
+	// Run several goroutines concurrently; note
+	// that they all access the same ` + "`" + `Container` + "`" + `,
+	// and two of them access the same counter.
+	wg.Go(func() {
+		doIncrement("a", 10000)
+	})
+
+	wg.Go(func() {
+		doIncrement("a", 10000)
+	})
+
+	wg.Go(func() {
+		doIncrement("b", 10000)
+	})
+
+	// Wait for the goroutines to finish
+	wg.Wait()
+	fmt.Println(c.counters)
+}
+`
