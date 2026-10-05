@@ -1201,6 +1201,7 @@ func (r *Runner) bashPPBridgeCollection(value any, meta *bashPPCollectionMeta, t
 				children = children[:viewCapacity]
 			}
 		}
+		result.Elements = make([]bashPPBridgeValue, 0, len(value))
 		for i, item := range value {
 			var child *bashPPCollectionMeta
 			if i < len(children) {
@@ -1271,25 +1272,25 @@ func (r *Runner) bashPPBridgeCollection(value any, meta *bashPPCollectionMeta, t
 			// Flattening includes embedded fields under their promoted names,
 			// which is where the interpreter keeps their storage; the worker's
 			// FieldByName and the generated codecs address the same names.
-			for _, field := range bashPPFlatFields(shape.Fields) {
+			for name, fieldType := range bashPPFieldSequence(shape.Fields) {
 				// Blank fields have layout but no addressable storage. The
 				// native declaration supplies their zero values.
-				if r.bashPPGoSource && field.name == "_" {
+				if r.bashPPGoSource && name == "_" {
 					continue
 				}
-				item, exists := bashPPStorageGet(value, field.name)
+				item, exists := bashPPStorageGet(value, name)
 				if !exists {
-					return result, fmt.Errorf("gosource: missing struct field %s", field.name)
+					return result, fmt.Errorf("gosource: missing struct field %s", name)
 				}
 				var child *bashPPCollectionMeta
 				if meta != nil {
-					child = bashPPLayoutGet(meta.mapping, field.name)
+					child = bashPPLayoutGet(meta.mapping, name)
 				}
-				converted, err := r.bashPPBridgeCollection(item, child, field.typ)
+				converted, err := r.bashPPBridgeCollection(item, child, fieldType)
 				if err != nil {
 					return result, err
 				}
-				result.Fields[field.name] = converted
+				result.Fields[name] = converted
 			}
 			return result, nil
 		default:

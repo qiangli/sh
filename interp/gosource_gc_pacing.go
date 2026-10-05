@@ -14,7 +14,9 @@ package interp
 // collector target is raised. This is the interpreter's own heap only: the
 // program's runtime (runtime.GC, MemStats, SetGCPercent, finalizers observed
 // through the dependency helper) is untouched, and an explicit GOGC in the
-// host environment is always honoured.
+// host environment is always honoured. A memory-aware soft limit bounds the
+// raised target independently of GOGC; explicit GOMEMLIMIT wins. Both knobs
+// are restored when the last overlapping run exits.
 
 import (
 	"os"
@@ -25,24 +27,32 @@ import (
 const goSourceInterpreterGCPercent = 400
 
 var goSourceGCPacing struct {
-	mu     sync.Mutex
-	active int
-	saved  int
+	mu                      sync.Mutex
+	active                  int
+	saved                   int
+	savedLimit              int64
+	changedGC, changedLimit bool
 }
 
 // goSourceRaiseGCPacing raises the host collector target for one Go-source
 // run and returns the matching release.
 func goSourceRaiseGCPacing() func() {
-	if _, set := os.LookupEnv("GOGC"); set {
-		return func() {}
-	}
 	p := &goSourceGCPacing
 	p.mu.Lock()
 	if p.active == 0 {
-		p.saved = debug.SetGCPercent(goSourceInterpreterGCPercent)
-		if p.saved < 0 || p.saved > goSourceInterpreterGCPercent {
-			// Collection was already off or laxer; keep the host's choice.
-			debug.SetGCPercent(p.saved)
+		_, explicitGC := os.LookupEnv("GOGC")
+		p.changedGC = !explicitGC
+		if p.changedGC {
+			p.saved = debug.SetGCPercent(goSourceInterpreterGCPercent)
+			if p.saved < 0 || p.saved > goSourceInterpreterGCPercent {
+				debug.SetGCPercent(p.saved)
+			}
+		}
+		_, explicitLimit := os.LookupEnv("GOMEMLIMIT")
+		p.changedLimit = !explicitLimit
+		if p.changedLimit {
+			p.savedLimit = debug.SetMemoryLimit(-1)
+			debug.SetMemoryLimit(min(p.savedLimit, goSourceMemoryBudget()))
 		}
 	}
 	p.active++
@@ -53,7 +63,12 @@ func goSourceRaiseGCPacing() func() {
 			p.mu.Lock()
 			p.active--
 			if p.active == 0 {
-				debug.SetGCPercent(p.saved)
+				if p.changedGC {
+					debug.SetGCPercent(p.saved)
+				}
+				if p.changedLimit {
+					debug.SetMemoryLimit(p.savedLimit)
+				}
 			}
 			p.mu.Unlock()
 		})

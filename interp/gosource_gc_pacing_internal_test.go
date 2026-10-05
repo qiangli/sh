@@ -42,3 +42,46 @@ func TestGoSourceGCPacingNestsAndRestores(t *testing.T) {
 		t.Fatalf("restored GC percent = %d, want 1000", got)
 	}
 }
+
+func TestGoSourceMemoryPacingRestoresAndHonorsHost(t *testing.T) {
+	// These runtime knobs are process-global; never run this test in parallel.
+	saved := debug.SetMemoryLimit(-1)
+	defer debug.SetMemoryLimit(saved)
+	old, present := os.LookupEnv("GOMEMLIMIT")
+	os.Unsetenv("GOMEMLIMIT")
+	defer func() {
+		if present {
+			os.Setenv("GOMEMLIMIT", old)
+		} else {
+			os.Unsetenv("GOMEMLIMIT")
+		}
+	}()
+	debug.SetMemoryLimit(1<<63 - 1)
+	outer := goSourceRaiseGCPacing()
+	inner := goSourceRaiseGCPacing()
+	if got := debug.SetMemoryLimit(-1); got != goSourceMemoryBudget() {
+		t.Fatalf("limit=%d", got)
+	}
+	inner()
+	inner()
+	if got := debug.SetMemoryLimit(-1); got != goSourceMemoryBudget() {
+		t.Fatalf("inner restored early: %d", got)
+	}
+	outer()
+	if got := debug.SetMemoryLimit(-1); got != 1<<63-1 {
+		t.Fatalf("not restored: %d", got)
+	}
+	debug.SetMemoryLimit(128 << 20)
+	release := goSourceRaiseGCPacing()
+	if got := debug.SetMemoryLimit(-1); got != 128<<20 {
+		t.Fatalf("relaxed host limit: %d", got)
+	}
+	release()
+	t.Setenv("GOMEMLIMIT", "off")
+	debug.SetMemoryLimit(1<<63 - 1)
+	release = goSourceRaiseGCPacing()
+	if got := debug.SetMemoryLimit(-1); got != 1<<63-1 {
+		t.Fatalf("overrode GOMEMLIMIT: %d", got)
+	}
+	release()
+}

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"go/constant"
+	"iter"
 	"strconv"
 	"strings"
 
@@ -195,6 +196,26 @@ func bashPPFieldType(fields []*syntax.BashPPField, name string) (syntax.BashPPTy
 		}
 	}
 	return nil, false
+}
+
+// bashPPFieldSequence walks the immutable declaration without allocating a
+// flattened schema for each value encoded at the bridge boundary.
+func bashPPFieldSequence(fields []*syntax.BashPPField) iter.Seq2[string, syntax.BashPPTypeExpr] {
+	return func(yield func(string, syntax.BashPPTypeExpr) bool) {
+		for _, field := range fields {
+			if name, ok := bashPPEmbeddedFieldName(field); ok {
+				if !yield(name, field.FieldTypeExpr) {
+					return
+				}
+				continue
+			}
+			for _, name := range field.Names {
+				if !yield(name.Value, field.FieldTypeExpr) {
+					return
+				}
+			}
+		}
+	}
 }
 
 func bashPPFlatFields(fields []*syntax.BashPPField) []struct {
