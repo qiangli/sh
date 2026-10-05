@@ -120,13 +120,13 @@ func bashPPCopyArrayValue(value any, meta *bashPPCollectionMeta) (any, *bashPPCo
 		mapping = bashPPStorageSnapshot(mapping)
 		layout := bashPPLayoutSnapshot(meta.mapping)
 		out := make(map[string]any, len(mapping))
-		metaCopy.mapping = make(map[string]*bashPPCollectionMeta, len(layout))
+		metaCopy.mapping = nil
 		for field, item := range mapping {
 			child := layout[field]
 			if bashPPValueMeta(child) || child != nil && child.interfaceValue != nil {
 				item, child = bashPPCopyArrayValue(item, child)
 			}
-			out[field], metaCopy.mapping[field] = item, child
+			bashPPSetInitialStructField(out, &metaCopy, field, item, child)
 		}
 		return out, &metaCopy
 	}
