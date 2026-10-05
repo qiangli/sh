@@ -206,4 +206,9 @@ func init() {
 	RegisterLanguage(Language{Canonical: "powershell", Aliases: []string{"pwsh", "ps1"}, NeedsEnvironment: true,
 		NewRuntime:     func(cfg RuntimeConfig) LanguageRuntime { return PowerShell{Environment: cfg.Environment, Cwd: cfg.Cwd} },
 		LoweredRuntime: loweredRuntime("PowerShell")})
+	// C# compiles through the same pinned PowerShell (Add-Type); same-language
+	// blocks carry #line directives so compiler diagnostics name the fence.
+	RegisterLanguage(Language{Canonical: "csharp", Aliases: []string{"cs"}, NeedsEnvironment: true, LineDirectives: true,
+		NewRuntime:     func(cfg RuntimeConfig) LanguageRuntime { return CSharp{Environment: cfg.Environment, Cwd: cfg.Cwd} },
+		LoweredRuntime: loweredRuntime("CSharp")})
 }

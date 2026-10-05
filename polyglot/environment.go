@@ -242,9 +242,9 @@ func DiscoverEnvironment(request EnvironmentRequest) (EnvironmentPlan, error) {
 		projectMetadata = nativeProjectMetadata
 	} else if lang == "go" {
 		projectMetadata = goProjectMetadata
-	} else if lang == "powershell" {
-		// A PowerShell fence has no project manifest: only the pwsh runtime is
-		// resolved, so nothing contributes to ResolutionFiles here.
+	} else if lang == "powershell" || lang == "csharp" {
+		// A PowerShell or C# fence has no project manifest: only the pwsh
+		// runtime is resolved, so nothing contributes to ResolutionFiles here.
 		projectMetadata = nil
 	}
 	for _, name := range projectMetadata {
@@ -264,7 +264,9 @@ func DiscoverEnvironment(request EnvironmentRequest) (EnvironmentPlan, error) {
 	if lang == "go" {
 		return discoverGoEnvironment(plan, selected, env)
 	}
-	if lang == "powershell" {
+	if lang == "powershell" || lang == "csharp" {
+		// C# compiles and runs through PowerShell's Add-Type in the same
+		// pinned archive, so both rows resolve the one pwsh runtime.
 		return discoverPowerShellEnvironment(plan, selected, env)
 	}
 	metadata, err := discoverPythonMetadata(root)
@@ -695,6 +697,9 @@ func discoverPowerShellEnvironment(plan EnvironmentPlan, selected *environmentOv
 		err = rerr
 	}
 	if err != nil {
+		if plan.Language == "csharp" {
+			return EnvironmentPlan{}, fmt.Errorf("polyglot: C# runtime (pinned PowerShell) unavailable: %w", err)
+		}
 		return EnvironmentPlan{}, fmt.Errorf("polyglot: PowerShell runtime unavailable: %w", err)
 	}
 	plan.Manager, plan.Runtime = "pwsh", "pwsh"

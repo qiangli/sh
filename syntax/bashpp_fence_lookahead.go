@@ -92,6 +92,23 @@ func init() {
 		}
 		return name + "("
 	}, "powershell", "pwsh", "ps1")
+	// A C# export is a `public static` method; `name(` follows its return type.
+	// The analyzer reflects over the compiled assembly and stays authoritative.
+	bashppRegisterFenceLookahead(func(line string) string {
+		declaration := strings.TrimSpace(line)
+		if !strings.HasPrefix(declaration, "public static ") {
+			return ""
+		}
+		before, after, ok := strings.Cut(declaration, "(")
+		if !ok {
+			return ""
+		}
+		fields := strings.Fields(before)
+		if len(fields) < 4 || strings.ContainsAny(before, "=;") {
+			return ""
+		}
+		return fields[len(fields)-1] + "(" + after
+	}, "csharp", "cs")
 	bashppRegisterFenceLookahead(func(line string) string {
 		before, _, ok := strings.Cut(strings.TrimSpace(line), "()")
 		if !ok {

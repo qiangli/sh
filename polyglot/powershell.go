@@ -255,7 +255,11 @@ foreach ($f in $funcs) {
 // bytes as {"$bytes": base64}, a list/array as a JSON array and a
 // hashtable/pscustomobject as a JSON object (both ways), and any other .NET
 // object as an opaque {"$handle": ...} the worker owns until release.
-const powershellWorker = `
+const powershellWorker = powershellWorkerPrelude + powershellWorkerLoop
+
+// powershellWorkerPrelude is the protocol, value-codec and capture helpers the
+// PowerShell worker loop and the C# worker loop share.
+const powershellWorkerPrelude = `
 $stdinReader = New-Object System.IO.StreamReader([Console]::OpenStandardInput(), (New-Object System.Text.UTF8Encoding($false)))
 if ($IsWindows) {
     $rawOut = [Console]::OpenStandardOutput()
@@ -267,6 +271,7 @@ $protocol = New-Object System.IO.StreamWriter($rawOut, (New-Object System.Text.U
 $protocol.AutoFlush = $true
 $script:handles = @{}
 $script:nextHandle = 0
+$script:fenceAssembly = $null
 
 function Write-Protocol($obj) {
     $json = ConvertTo-Json -InputObject $obj -Depth 64 -Compress
@@ -314,6 +319,15 @@ function Enc($v) {
         $a = @()
         foreach ($item in $v) { $a += ,(Enc $item) }
         return ,$a
+    }
+    # A C# fence's own types (a POCO or an enum declared in the fence) cross
+    # as data, like a pscustomobject: public properties and fields become a
+    # dict and an enum its name. Every other .NET object stays a handle.
+    if ($null -ne $script:fenceAssembly -and $v.GetType().Assembly -eq $script:fenceAssembly) {
+        if ($v -is [enum]) { return $v.ToString() }
+        $h = [ordered]@{}
+        foreach ($p in $v.PSObject.Properties) { $h[$p.Name] = Enc $p.Value }
+        return $h
     }
     $script:nextHandle++
     $id = $script:nextHandle
@@ -404,7 +418,9 @@ function Read-CommandStdin($cbid) {
     while ($true) { $ln = $sr.ReadLine(); if ($null -eq $ln) { break }; [void]$lines.Add($ln) }
     return ,$lines.ToArray()
 }
+`
 
+const powershellWorkerLoop = `
 while ($true) {
     $line = $stdinReader.ReadLine()
     if ($null -eq $line) { break }
