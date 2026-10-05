@@ -28,3 +28,34 @@ heap, peak RSS and elapsed time on the same candidate. The memory budget needs
 separate Linux stress validation; a small allocation benchmark cannot establish
 an RSS ceiling. Whole-package runs remain stress evidence, not interpreted
 acceptance roots. Keep time-limit outcomes and live-data work separate.
+
+## Reproducible Linux pressure probe
+
+Build a full-tag interp test binary for each exact source revision. Add the
+same `gosource_s376_encoding_test.go` and `gosource_s376_pressure_test.go` to
+the baseline; keep its production sources unchanged. Run serially, with no
+concurrent tutorial or corpus workload:
+
+```sh
+go test -tags full -c -o /tmp/collector.test ./interp
+cd interp
+python3 ../scripts/collector-pressure.py --output /tmp/collector-pressure \
+  --memory-mib 512 --timeout 30 -- /tmp/collector.test \
+  -test.v -test.run '^TestS376MemoryPressure$' -test.timeout=30s
+```
+
+The opt-in test retains 96 MiB and allocates 512 transient 8 MiB buffers,
+touching every page. It prints the actual runtime memory limit, intermediate
+heap/allocation counts and elapsed time, then post-GC live heap and allocations
+per iteration. It deliberately models garbage collection, not bridge encoding
+or interpreted live-value representation. In this 512 MiB cgroup the automatic
+candidate budget should be 128 MiB, with 96 MiB still live. A lower resident
+peak cannot count as a fix for issue80188.
+
+The Python runner needs Linux cgroup v2 delegation (root works on the gate
+host), GNU time and Python 3. It creates a fresh child cgroup, disables swap,
+clears GOGC/GOMEMLIMIT overrides, and records the hard allowance, cgroup peak,
+OOM events, process peak RSS, elapsed time and exit status. The 30-second
+watchdog kills the cgroup on expiry and records a time-limit result. It refuses
+to overwrite existing output. Preserve `.log`, `.time` and `.json` for every
+run, including OOMs; incomplete iterations are not completed-call metrics.
