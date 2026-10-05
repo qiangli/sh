@@ -186,6 +186,28 @@ foreach ($f in $funcs) {
             $params += $kind
         }
     }
+    # A function reads the command's stdin when it runs as a shell command if it
+    # has a process block, references $input, or takes a ValueFromPipeline
+    # parameter. The command adapter feeds the byte pipe only to such functions.
+    $pipeInput = $false
+    if ($f.Body.ProcessBlock) { $pipeInput = $true }
+    if (-not $pipeInput) {
+        $inputRefs = $f.Body.FindAll({ param($n) $n -is [System.Management.Automation.Language.VariableExpressionAst] -and $n.VariablePath.UserPath -eq 'input' }, $true)
+        if ($inputRefs -and $inputRefs.Count -gt 0) { $pipeInput = $true }
+    }
+    if (-not $pipeInput -and $pl) {
+        foreach ($p in $pl) {
+            foreach ($attr in $p.Attributes) {
+                if ($attr -is [System.Management.Automation.Language.AttributeAst] -and $attr.TypeName.Name -eq 'Parameter') {
+                    foreach ($na in $attr.NamedArguments) {
+                        if ($na.ArgumentName -eq 'ValueFromPipeline' -or $na.ArgumentName -eq 'ValueFromPipelineByPropertyName') {
+                            if ($na.ExpressionOmitted -or ($na.Argument.Extent.Text -match 'true')) { $pipeInput = $true }
+                        }
+                    }
+                }
+            }
+        }
+    }
     $ot = $null
     if ($f.Body.ParamBlock) {
         foreach ($attr in $f.Body.ParamBlock.Attributes) {
@@ -213,7 +235,9 @@ foreach ($f in $funcs) {
     $rstr = '[' + (($results | ForEach-Object { JStr $_ }) -join ',') + ']'
     $d = 'false'
     if ($dynamic) { $d = 'true' }
-    $parts += '{"name":' + (JStr $fname) + ',"signature":{"params":' + $pstr + ',"results":' + $rstr + ',"dynamic":' + $d + '}}'
+    $pi = ''
+    if ($pipeInput) { $pi = ',"pipe_input":true' }
+    $parts += '{"name":' + (JStr $fname) + ',"signature":{"params":' + $pstr + ',"results":' + $rstr + ',"dynamic":' + $d + $pi + '}}'
 }
 [Console]::Out.Write('[' + ($parts -join ',') + ']')
 `
@@ -326,6 +350,60 @@ function Read-CaptureText($path) {
     Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
     return $text
 }
+# Normalize-Newlines makes a command's stdout and stderr carry LF on every host,
+# so the same workflow emits the same bytes on Windows, Linux and macOS.
+function Normalize-Newlines($text) {
+    if ($null -eq $text) { return '' }
+    return (([string]$text) -replace "` + "`r`n" + `", "` + "`n" + `") -replace "` + "`r" + `", "` + "`n" + `"
+}
+# Render-CommandOutput turns a function's success stream into the command's
+# stdout bytes: a string is UTF-8 text with LF line endings, a byte array passes
+# through unchanged (no newline added, no re-encoding), an information record
+# (Write-Host) is its message, and any other object crosses as compact JSON —
+# the shell pipe stays bytes and no object pipeline is added.
+function Render-CommandOutput($value) {
+    $ms = New-Object System.IO.MemoryStream
+    $utf8 = New-Object System.Text.UTF8Encoding($false)
+    $items = @($value)
+    # A single byte-array output is one item: @() would enumerate it to integers.
+    if ($value -is [byte[]]) { $items = @(,$value) }
+    foreach ($item in $items) {
+        if ($null -eq $item) { continue }
+        if ($item -is [byte[]]) { $ms.Write($item, 0, $item.Length); continue }
+        if ($item -is [string]) { $text = $item }
+        elseif ($item -is [System.Management.Automation.InformationRecord]) { $text = [string]$item }
+        else { $text = ConvertTo-Json -InputObject $item -Depth 64 -Compress }
+        $chunk = $utf8.GetBytes((Normalize-Newlines $text) + "` + "`n" + `")
+        $ms.Write($chunk, 0, $chunk.Length)
+    }
+    return ,$ms.ToArray()
+}
+# Read-CommandStdin pulls the upstream byte pipe through the shell callback the
+# command request named, a chunk at a time until EOF, and returns it as the
+# lines a filter reads from $input. The bytes never touch the worker's own
+# protocol stdin; they ride the same callback frames the Python filter uses.
+function Read-CommandStdin($cbid) {
+    $buf = New-Object System.IO.MemoryStream
+    while ($true) {
+        Write-Protocol @{ id = 0; call = 'shell'; callback = $cbid }
+        $reply = $stdinReader.ReadLine()
+        if ($null -eq $reply) { break }
+        $r = ConvertFrom-Json -InputObject $reply -AsHashtable
+        if (-not $r['ok']) {
+            $msg = 'pipeline stdin read failed'
+            if ($r.ContainsKey('error') -and $r['error']) { $msg = [string]$r['error']['message'] }
+            throw $msg
+        }
+        $chunk = Dec $r['result']
+        if ($null -eq $chunk -or $chunk.Length -eq 0) { break }
+        $buf.Write($chunk, 0, $chunk.Length)
+    }
+    $text = (New-Object System.Text.UTF8Encoding($false)).GetString($buf.ToArray())
+    $lines = New-Object System.Collections.Generic.List[string]
+    $sr = New-Object System.IO.StringReader($text)
+    while ($true) { $ln = $sr.ReadLine(); if ($null -eq $ln) { break }; [void]$lines.Add($ln) }
+    return ,$lines.ToArray()
+}
 
 while ($true) {
     $line = $stdinReader.ReadLine()
@@ -383,6 +461,68 @@ while ($true) {
                     $res = @{ id = $rid; ok = $false; error = (Envelope-Error $failure); stdout = $o; stderr = $e }
                 } else {
                     $res = @{ id = $rid; ok = $true; result = (Enc $value); stdout = $o; stderr = $e }
+                }
+            }
+            'command' {
+                # The command adapter: argv words are positional strings, the
+                # function runs as a filter, and its return is a shell exit
+                # status. A missing function is the shell's command-not-found,
+                # not a PowerShell failure.
+                $fname = [string]$req['name']
+                $cmd = Get-Command -Name $fname -CommandType Function -ErrorAction SilentlyContinue
+                if ($null -eq $cmd) {
+                    $res = @{ id = $rid; ok = $false; error = @{ code = 'CommandNotFound'; message = ('no PowerShell function ' + $fname); help = '' }; stdout = ''; stderr = '' }
+                } else {
+                    $argv = @()
+                    if ($req.ContainsKey('args') -and $null -ne $req['args']) {
+                        foreach ($a in @($req['args'])) { $argv += ,[string]$a }
+                    }
+                    $stdinData = $null
+                    if ($req.ContainsKey('stdin') -and $null -ne $req['stdin']) {
+                        $stdinData = Read-CommandStdin ([int64]$req['stdin'])
+                    }
+                    $errFile = New-TemporaryFile
+                    $warnFile = New-TemporaryFile
+                    $value = $null
+                    $failure = $null
+                    # A native child's exit code is the status; reset it so a
+                    # code left by an earlier command never leaks into this one.
+                    $global:LASTEXITCODE = 0
+                    try {
+                        # Non-terminating errors and warnings (streams 2 and 3)
+                        # are captured as stderr; verbose and debug are dropped;
+                        # Write-Host (stream 6) merges into the success stream so
+                        # its text renders to stdout in order. A terminating
+                        # error is caught below.
+                        # Invoke the resolved function command, not the bare
+                        # name: a name like Echo or Sort resolves to a built-in
+                        # alias or cmdlet first, never the island's function.
+                        if ($null -ne $stdinData) {
+                            $value = $stdinData | & $cmd @argv 2> $errFile.FullName 3> $warnFile.FullName 4> $null 5> $null 6>&1
+                        } else {
+                            $value = & $cmd @argv 2> $errFile.FullName 3> $warnFile.FullName 4> $null 5> $null 6>&1
+                        }
+                    } catch {
+                        $failure = $_
+                    }
+                    $e = (Read-CaptureText $errFile.FullName) + (Read-CaptureText $warnFile.FullName)
+                    $status = 0
+                    $out = [byte[]]@()
+                    if ($failure) {
+                        # A terminating error ends the command: its message is
+                        # the command form of the error that binds to err in a
+                        # typed call, and the status is 1.
+                        $status = 1
+                        $env2 = Envelope-Error $failure
+                        $e += [string]$env2['message'] + "` + "`n" + `"
+                    } else {
+                        $out = Render-CommandOutput $value
+                        # A native child's exit code propagates; a clean run is 0.
+                        if ($null -ne $global:LASTEXITCODE) { $status = [int]$global:LASTEXITCODE }
+                    }
+                    # Stdout crosses as base64 bytes so a byte array survives exactly;
+                    # stderr is diagnostic text with LF line endings.
+                    $res = @{ id = $rid; ok = $true; result = @{ status = $status; stdout = (Enc $out) }; stdout = ''; stderr = (Normalize-Newlines $e) }
                 }
             }
             'getattr' {

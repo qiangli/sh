@@ -41,6 +41,12 @@ type Signature struct {
 	Variadic bool     `json:"variadic,omitempty"`
 	Iterator string   `json:"iterator,omitempty"`
 	Filter   bool     `json:"filter,omitempty"`
+	// PipeInput says the function reads the command's stdin when it runs as a
+	// shell command: a PowerShell function with a process block, a $input
+	// reference, or a ValueFromPipeline parameter. The command adapter feeds
+	// the upstream byte pipe to such a function and leaves the others alone, so
+	// a non-filter command never blocks reading a terminal.
+	PipeInput bool `json:"pipe_input,omitempty"`
 }
 
 type Export struct {
@@ -985,15 +991,29 @@ var (
 
 // Command runs the named island function as a command: argv words are passed
 // as positional strings, everything it writes to stdout and stderr is
-// returned as such, and its return value becomes the exit status by the
-// xonsh callable-alias convention — an int is the status, a str is written
-// to stdout, a (stdout, stderr, status) sequence is split, None reports 0.
-// SystemExit ends the command with its code, KeyboardInterrupt with 130, and
-// any other exception prints its traceback to stderr and reports 1; none of
-// these are errors to the caller. The error result is reserved for lookup
-// failures ([ErrCommandNotFound], [ErrCommandNotCallable]), cancellation, and
-// worker death ([WorkerExit]).
-func (m *Module) Command(ctx context.Context, name string, argv []string) (CommandResult, error) {
+// returned as such, and its return value becomes the exit status.
+//
+// Python follows the xonsh callable-alias convention — an int is the status, a
+// str is written to stdout, a (stdout, stderr, status) sequence is split, None
+// reports 0; SystemExit ends the command with its code, KeyboardInterrupt with
+// 130, and any other exception prints its traceback to stderr and reports 1.
+//
+// PowerShell runs the function as a filter: its success-stream output is
+// rendered to stdout (a string as text, a byte array as raw bytes, any other
+// object as compact JSON — the only boundary bytes bashy's pipes carry), its
+// non-terminating error and warning streams go to stderr, and a terminating
+// error ends the command with its message on stderr and status 1 (the command
+// form of the same error that binds to err in a typed call). Native exit codes
+// propagate through $LASTEXITCODE; a clean run reports 0. When the analyzed
+// function reads pipeline input and stdin is non-nil, the upstream byte pipe is
+// fed to it a chunk at a time through the existing shell-callback channel.
+//
+// Output line endings are normalised to LF on every OS so the same script
+// yields the same bytes. None of the per-language error conventions above are
+// errors to the caller; the error result is reserved for lookup failures
+// ([ErrCommandNotFound], [ErrCommandNotCallable]), cancellation, and worker
+// death ([WorkerExit]).
+func (m *Module) Command(ctx context.Context, name string, argv []string, stdin io.Reader) (CommandResult, error) {
 	if !publicPythonAttribute(name) {
 		return CommandResult{}, fmt.Errorf("%w: %s is private", ErrCommandNotFound, name)
 	}
@@ -1006,12 +1026,19 @@ func (m *Module) Command(ctx context.Context, name string, argv []string) (Comma
 		return CommandResult{}, err
 	}
 	m.nextID++
-	result, err := m.request(ctx, map[string]any{"id": m.nextID, "op": "command", "name": name, "args": StringsToAny(argv)}, nil)
+	request := map[string]any{"id": m.nextID, "op": "command", "name": name, "args": StringsToAny(argv)}
+	if _, ok := m.runtime.(PowerShell); ok && stdin != nil {
+		// The filter's stdin is a shell callback, never the worker's own
+		// protocol stdin; it is scoped to this one request.
+		request["stdin"] = m.registerCallback(FilterInput(stdin))
+		defer m.dropPendingCallbacks()()
+	}
+	result, err := m.request(ctx, request, nil)
 	out := CommandResult{Stdout: result.Stdout, Stderr: result.Stderr}
 	if err != nil {
 		if detail, ok := ForeignErrorDetail(err); ok {
 			switch detail.Code {
-			case "LookupError":
+			case "LookupError", "CommandNotFound":
 				return out, fmt.Errorf("%w: %s", ErrCommandNotFound, name)
 			case "TypeError":
 				return out, fmt.Errorf("%w: %s", ErrCommandNotCallable, name)
@@ -1024,13 +1051,24 @@ func (m *Module) Command(ctx context.Context, name string, argv []string) (Comma
 		}
 		return out, err
 	}
-	switch status := result.Value.(type) {
+	status := result.Value
+	if reply, ok := status.(map[string]any); ok {
+		// PowerShell returns {status, stdout}: stdout crosses as base64 so a
+		// byte array reaches the pipe byte for byte.
+		raw, ok := reply["stdout"].([]byte)
+		if !ok && reply["stdout"] != nil {
+			return out, fmt.Errorf("decode %s command stdout: %T is not bytes", m.runtime.name(), reply["stdout"])
+		}
+		out.Stdout += string(raw)
+		status = reply["status"]
+	}
+	switch status := status.(type) {
 	case int64:
 		out.Status = int(status)
 	case float64:
 		out.Status = int(status)
 	default:
-		return out, fmt.Errorf("decode %s command status: %T is not a status", m.runtime.name(), result.Value)
+		return out, fmt.Errorf("decode %s command status: %T is not a status", m.runtime.name(), status)
 	}
 	return out, nil
 }

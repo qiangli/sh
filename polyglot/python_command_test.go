@@ -85,7 +85,7 @@ func commandModule(t *testing.T) *Module {
 
 func runCommand(t *testing.T, m *Module, name string, argv ...string) CommandResult {
 	t.Helper()
-	result, err := m.Command(context.Background(), name, argv)
+	result, err := m.Command(context.Background(), name, argv, nil)
 	if err != nil {
 		t.Fatalf("%s: %v", name, err)
 	}
@@ -171,13 +171,13 @@ func TestPythonCommandExitAndExceptions(t *testing.T) {
 // Lookup failures are the shell's business (127/126), not Python failures.
 func TestPythonCommandLookupFailures(t *testing.T) {
 	m := commandModule(t)
-	if _, err := m.Command(context.Background(), "nope", nil); !errors.Is(err, ErrCommandNotFound) {
+	if _, err := m.Command(context.Background(), "nope", nil, nil); !errors.Is(err, ErrCommandNotFound) {
 		t.Fatalf("missing = %v", err)
 	}
-	if _, err := m.Command(context.Background(), "value", nil); !errors.Is(err, ErrCommandNotCallable) {
+	if _, err := m.Command(context.Background(), "value", nil, nil); !errors.Is(err, ErrCommandNotCallable) {
 		t.Fatalf("uncallable = %v", err)
 	}
-	if _, err := m.Command(context.Background(), "_private", nil); !errors.Is(err, ErrCommandNotFound) {
+	if _, err := m.Command(context.Background(), "_private", nil, nil); !errors.Is(err, ErrCommandNotFound) {
 		t.Fatalf("private = %v", err)
 	}
 }
@@ -216,7 +216,7 @@ func TestPythonCommandCancellation(t *testing.T) {
 	m := commandModule(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
-	_, err := m.Command(ctx, "slow", nil)
+	_, err := m.Command(ctx, "slow", nil, nil)
 	var exit *WorkerExit
 	if !errors.Is(err, context.DeadlineExceeded) || errors.As(err, &exit) {
 		t.Fatalf("slow error = %v", err)

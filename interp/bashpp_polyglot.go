@@ -596,7 +596,7 @@ func (r *Runner) bashPPForeignCommand(word string) (*polyglot.Module, string, bo
 		return module, name, true
 	}
 	if fn := r.bashPPForeignFuncs[word]; fn != nil && fn.foreign != nil && fn.foreign.module != nil && fn.foreign.receiver == nil {
-		if lang := fn.foreign.module.Plan().Language; lang == "python" {
+		if lang := fn.foreign.module.Plan().Language; lang == "python" || lang == "powershell" {
 			return fn.foreign.module, fn.foreign.export.Name, true
 		}
 	}
@@ -703,7 +703,21 @@ func (r *Runner) bashPPRunForeignCommand(ctx context.Context, pos syntax.Pos, mo
 		}
 		return
 	}
-	result, err := module.Command(ctx, name, argv)
+	// A function the analyzer marked as reading pipeline input runs as a filter
+	// over the command's stdin; every other function leaves stdin untouched so
+	// it never blocks on a terminal it does not read.
+	var stdin io.Reader
+	for _, export := range module.Plan().Exports {
+		if export.Name == name && export.Signature.PipeInput {
+			if r.stdin != nil {
+				stdin = r.stdin
+			} else {
+				stdin = strings.NewReader("")
+			}
+			break
+		}
+	}
+	result, err := module.Command(ctx, name, argv, stdin)
 	if result.Stdout != "" {
 		fmt.Fprint(stdout, result.Stdout)
 	}
@@ -719,7 +733,7 @@ func (r *Runner) bashPPRunForeignCommand(ctx context.Context, pos syntax.Pos, mo
 		r.errf("%s%s: command not found\n", r.bashErrPrefix(pos), word)
 		r.exit.code = 127
 	case errors.Is(err, polyglot.ErrCommandNotCallable):
-		r.errf("%s%s: cannot execute: not a Python callable\n", r.bashErrPrefix(pos), word)
+		r.errf("%s%s: cannot execute: not a callable island function\n", r.bashErrPrefix(pos), word)
 		r.exit.code = 126
 	default:
 		var death *polyglot.WorkerExit

@@ -35,7 +35,7 @@ func TestPythonCommandSignals(t *testing.T) {
 	if got := runCommand(t, m, "bump"); got.Stdout != "3\n" {
 		t.Fatalf("state after idle SIGINT: bump = %#v", got)
 	}
-	_, err := m.Command(context.Background(), "sigterm", nil)
+	_, err := m.Command(context.Background(), "sigterm", nil, nil)
 	var exit *WorkerExit
 	if !errors.As(err, &exit) || exit.Signal != int(syscall.SIGTERM) {
 		t.Fatalf("sigterm error = %v", err)
