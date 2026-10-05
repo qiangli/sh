@@ -2,7 +2,10 @@ package gosource
 
 import (
 	"go/ast"
+	"go/token"
 	"go/types"
+
+	s "mvdan.cc/sh/v3/syntax"
 )
 
 // The initial sync proof is package-wide: one uncertain boundary keeps every
@@ -83,6 +86,51 @@ func syncMethod(o types.Object) bool {
 	return false
 }
 
+// waitGroupGo reports sync.WaitGroup.Go, which the planner admits only as a
+// statement the converter can lower to Add + go + Done (see waitGroupGoStmt).
+func waitGroupGo(o types.Object) bool {
+	f, ok := o.(*types.Func)
+	if !ok || f.Name() != "Go" {
+		return false
+	}
+	sig := f.Type().(*types.Signature)
+	if sig.Recv() == nil {
+		return false
+	}
+	t := sig.Recv().Type()
+	if p, ok := t.(*types.Pointer); ok {
+		t = p.Elem()
+	}
+	return syncTypeName(t) == "sync.WaitGroup"
+}
+
+// waitGroupGoStmt matches `x.Go(f)` as a whole statement whose receiver is a
+// plain identifier/field chain: the lowering evaluates f at the call site but
+// reads the receiver chain inside the launched closure.
+func (c *converter) waitGroupGoStmt(call *ast.CallExpr) bool {
+	sel, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr)
+	if !ok || len(call.Args) != 1 || call.Ellipsis.IsValid() {
+		return false
+	}
+	s := c.info.Selections[sel]
+	if s == nil || s.Kind() != types.MethodVal || !waitGroupGo(s.Obj()) {
+		return false
+	}
+	var chain func(ast.Expr) bool
+	chain = func(e ast.Expr) bool {
+		switch x := e.(type) {
+		case *ast.Ident:
+			_, isVar := c.info.ObjectOf(x).(*types.Var)
+			return isVar
+		case *ast.SelectorExpr:
+			s := c.info.Selections[x]
+			return s != nil && s.Kind() == types.FieldVal && chain(x.X)
+		}
+		return false
+	}
+	return chain(sel.X)
+}
+
 func (c *converter) localSyncType(t types.Type) string {
 	name := syncTypeName(t)
 	if name == "" {
@@ -122,6 +170,11 @@ func (c *converter) planLocalSync() {
 	}
 	for _, f := range c.files {
 		ast.Inspect(f, func(n ast.Node) bool {
+			if st, ok := n.(*ast.ExprStmt); ok {
+				if call, ok := ast.Unparen(st.X).(*ast.CallExpr); ok && c.waitGroupGoStmt(call) {
+					direct[ast.Unparen(call.Fun).(*ast.SelectorExpr)] = true
+				}
+			}
 			call, ok := n.(*ast.CallExpr)
 			if ok {
 				if s, ok := ast.Unparen(call.Fun).(*ast.SelectorExpr); ok {
@@ -271,4 +324,73 @@ func (c *converter) planLocalSync() {
 		})
 	}
 	c.syncLocal = safe
+}
+
+func waitGroupGoRecv(sel *types.Selection) types.Type {
+	t := sel.Obj().(*types.Func).Type().(*types.Signature).Recv().Type()
+	if p, ok := t.(*types.Pointer); ok {
+		t = p.Elem()
+	}
+	return t
+}
+
+// lowerWaitGroupGo lowers a certified `wg.Go(f)` statement to Go's own
+// definition, with Go's evaluation order, as
+//
+//	func(wgr *T, wgf func()) { wgr.Add(1); go func(){ defer wgr.Done(); wgf() }() }(&wg, f)
+//
+// The receiver (its address, or the pointer itself) and f are evaluated once,
+// receiver first, as call arguments; Add runs only after both evaluated, and
+// Done uses the captured receiver even if the variable or field is reassigned
+// after the call. The goroutine runs in the interpreter against the resident
+// WaitGroup instead of calling back through the native bridge.
+func (c *converter) lowerWaitGroupGo(call *ast.CallExpr) []*s.Stmt {
+	base := c.call(call)
+	sel := ast.Unparen(call.Fun).(*ast.SelectorExpr)
+	at := call.Pos()
+	c.syntheticPos = at
+	defer func() { c.syntheticPos = token.NoPos }()
+	recvType := c.info.TypeOf(sel.X)
+	recvText := c.text(sel.X)
+	recvExpr := sel.X
+	if _, ok := recvType.Underlying().(*types.Pointer); !ok {
+		recvType = types.NewPointer(recvType)
+		address := &ast.UnaryExpr{OpPos: sel.X.Pos(), Op: token.AND, X: sel.X}
+		c.info.Types[address] = types.TypeAndValue{Type: recvType}
+		recvExpr = address
+		recvText = "&" + recvText
+	}
+	recvName, fname := c.prefix+"wgr", c.prefix+"wgf"
+	call0 := func(fun ...string) *s.BashPPCall {
+		var lits []*s.Lit
+		for _, f := range fun {
+			lits = append(lits, c.lit(at, f))
+		}
+		return &s.BashPPCall{GoRuntime: true, Fun: lits, Lparen: c.pos(at), Rparen: c.pos(at)}
+	}
+	add := call0(recvName, "Add")
+	add.Args = []*s.Word{{Parts: []s.WordPart{c.lit(at, "1")}}}
+	add.ArgExprs = []s.BashPPExpr{&s.BashPPBasicLit{Kind: token.INT.String(), Value: c.lit(at, "1")}}
+	inner := &s.BashPPFuncLit{Kw: c.lit(at, "func"), Lparen: c.pos(at), Rparen: c.pos(at),
+		Body: &s.Block{Lbrace: c.pos(at), Rbrace: c.pos(at), Stmts: []*s.Stmt{
+			c.stmt(&s.BashPPDefer{Kw: c.lit(at, "defer"), Call: call0(recvName, "Done")}),
+			c.stmt(call0(fname)),
+		}}}
+	goInner := &s.BashPPCall{GoRuntime: true, FuncLit: inner, Lparen: c.pos(at), Rparen: c.pos(at)}
+	fn := types.NewSignatureType(nil, nil, nil, nil, nil, false)
+	params := []*s.BashPPField{
+		{Names: []*s.Lit{c.lit(at, recvName)}, FieldType: c.lit(at, c.typeString(recvType)), FieldTypeExpr: c.checkedType(recvType, call, "WaitGroup.Go receiver type")},
+		{Names: []*s.Lit{c.lit(at, fname)}, FieldType: c.lit(at, "func()"), FieldTypeExpr: c.checkedType(fn, call, "WaitGroup.Go function type")},
+	}
+	outer := &s.BashPPFuncLit{Kw: c.lit(at, "func"), Params: params, Lparen: c.pos(at), Rparen: c.pos(at),
+		Body: &s.Block{Lbrace: c.pos(at), Rbrace: c.pos(at), Stmts: []*s.Stmt{
+			c.stmt(add),
+			c.stmt(&s.BashPPGo{Kw: c.lit(at, "go"), Call: goInner}),
+		}}}
+	recvWord := &s.Word{Parts: []s.WordPart{c.lit(at, recvText)}}
+	invoke := &s.BashPPCall{GoRuntime: true, FuncLit: outer, Lparen: base.Lparen, Rparen: base.Rparen,
+		Args:               append([]*s.Word{recvWord}, base.Args...),
+		ArgExprs:           append([]s.BashPPExpr{c.expr(recvExpr)}, base.ArgExprs...),
+		ExclusiveSliceArgs: nil}
+	return []*s.Stmt{c.stmt(invoke)}
 }

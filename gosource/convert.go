@@ -2068,6 +2068,9 @@ func (c *converter) statements(st ast.Stmt) []*s.Stmt {
 	case *ast.ExprStmt:
 		expr := ast.Unparen(x.X)
 		if call, ok := expr.(*ast.CallExpr); ok {
+			if c.waitGroupGoStmt(call) && c.localSyncType(waitGroupGoRecv(c.info.Selections[ast.Unparen(call.Fun).(*ast.SelectorExpr)])) != "" {
+				return c.lowerWaitGroupGo(call)
+			}
 			cmd = c.call(call)
 		} else if recv, ok := expr.(*ast.UnaryExpr); ok && recv.Op == token.ARROW {
 			cmd = &s.BashPPReceive{Arrow: c.pos(recv.OpPos), Chan: c.word(recv.X), ChanExpr: c.expr(recv.X)}
