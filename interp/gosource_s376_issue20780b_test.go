@@ -1,0 +1,365 @@
+//go:build full
+
+package interp_test
+
+import (
+	"fmt"
+	"runtime"
+	"strings"
+	"testing"
+	"time"
+
+	"mvdan.cc/sh/v3/gosource"
+	"mvdan.cc/sh/v3/interp"
+	"mvdan.cc/sh/v3/syntax"
+)
+
+// Sprint: #376; Story: #1551; Story-ID: b22ffea69b27
+//
+// Array value semantics and bulk-copy throughput for large arrays (testdir:fixedbugs/issue20780b.go).
+// When an array has scalar, pointer, channel, or slice elements, copying by-value
+// requires only a bulk payload copy; element metadata carries no value semantics and can
+// be safely shared without per-element traversal. When an array has value semantics
+// (structs, nested arrays, or interfaces), recursive deep-copy is preserved.
+
+// TestS376ArrayCopyValueSemantics tests that mutating a copied array does not mutate
+// the original array, for scalar arrays.
+func TestS376ArrayCopyValueSemantics(t *testing.T) {
+	const src = `package main
+import "fmt"
+
+func main() {
+	var a [5]int
+	a[0] = 10
+	b := a
+	b[0] = 99
+	b[1] = 42
+	fmt.Println(a[0], a[1], b[0], b[1])
+}
+`
+	differGoSource(t, src, nil, "")
+}
+
+// TestS376ArrayCopyStructDeepCopy verifies that an array of structs preserves Go's value
+// semantics (mutating a field in a copied struct does not mutate the original).
+func TestS376ArrayCopyStructDeepCopy(t *testing.T) {
+	const src = `package main
+import "fmt"
+
+type Point struct {
+	X, Y int
+}
+
+func main() {
+	var a [3]Point
+	a[0].X = 1
+	a[0].Y = 2
+	b := a
+	b[0].X = 99
+	b[1].Y = 42
+	fmt.Println(a[0].X, a[0].Y, a[1].Y, b[0].X, b[0].Y, b[1].Y)
+}
+`
+	differGoSource(t, src, nil, "")
+}
+
+// TestS376ArrayCopyNestedArrayDeepCopy verifies that nested arrays preserve value semantics.
+func TestS376ArrayCopyNestedArrayDeepCopy(t *testing.T) {
+	const src = `package main
+import "fmt"
+
+func main() {
+	var a [2][3]int
+	a[0][0] = 1
+	a[0][1] = 2
+	b := a
+	b[0][0] = 99
+	fmt.Println(a[0][0], a[0][1], b[0][0], b[0][1])
+}
+`
+	differGoSource(t, src, nil, "")
+}
+
+// TestS376ArrayCopyPointerAliasing verifies that an array of pointers preserves Go aliasing
+// semantics (modifying pointee through copied pointer modifies pointee in original).
+func TestS376ArrayCopyPointerAliasing(t *testing.T) {
+	const src = `package main
+import "fmt"
+
+func main() {
+	x, y := 10, 20
+	a := [2]*int{&x, &y}
+	b := a
+	*b[0] = 99
+	fmt.Println(*a[0], *b[0], x)
+}
+`
+	differGoSource(t, src, nil, "")
+}
+
+// TestS376ArrayCopySliceAliasing verifies that an array of slices preserves Go aliasing
+// semantics (elements view the same slice backing array).
+func TestS376ArrayCopySliceAliasing(t *testing.T) {
+	const src = `package main
+import "fmt"
+
+func main() {
+	s := []int{1, 2, 3}
+	a := [2][]int{s, s}
+	b := a
+	b[0][1] = 99
+	fmt.Println(a[0][1], a[1][1], b[0][1], s[1])
+}
+`
+	differGoSource(t, src, nil, "")
+}
+
+// TestS376ArrayCopyInterfaceValueSemantics verifies that arrays of interfaces with struct values
+// preserve value semantics.
+func TestS376ArrayCopyInterfaceValueSemantics(t *testing.T) {
+	const src = `package main
+import "fmt"
+
+type Box struct {
+	V int
+}
+
+func main() {
+	var a [2]any
+	a[0] = Box{V: 1}
+	b := a
+	b[0] = Box{V: 99}
+	fmt.Println(a[0].(Box).V, b[0].(Box).V)
+}
+`
+	differGoSource(t, src, nil, "")
+}
+
+// TestS376ArrayCopyFunctionPassByValue verifies that passing an array as argument to a function
+// passes it by value.
+func TestS376ArrayCopyFunctionPassByValue(t *testing.T) {
+	const src = `package main
+import "fmt"
+
+func modify(x [4]int) {
+	x[0] = 999
+}
+
+func main() {
+	var a [4]int
+	a[0] = 123
+	modify(a)
+	fmt.Println(a[0])
+}
+`
+	differGoSource(t, src, nil, "")
+}
+
+// TestS376ArrayCopyReturnByValue verifies that returning an array returns by value.
+func TestS376ArrayCopyReturnByValue(t *testing.T) {
+	const src = `package main
+import "fmt"
+
+func makeArray() [3]int {
+	var a [3]int
+	a[0] = 42
+	return a
+}
+
+func main() {
+	x := makeArray()
+	y := x
+	y[0] = 100
+	fmt.Println(x[0], y[0])
+}
+`
+	differGoSource(t, src, nil, "")
+}
+
+// TestS376ArrayCopyRangeSemantics verifies that range over an array ranges over a copy
+// of the array at loop start.
+func TestS376ArrayCopyRangeSemantics(t *testing.T) {
+	const src = `package main
+import "fmt"
+
+func main() {
+	a := [4]int{1, 2, 3, 4}
+	var seen []int
+	for i, v := range a {
+		a[0] = 999
+		seen = append(seen, v)
+		_ = i
+	}
+	fmt.Println(seen, a[0])
+}
+`
+	differGoSource(t, src, nil, "")
+}
+
+// issue20780bSource returns the exact issue20780b program with a scaled N.
+func issue20780bSource(n int) string {
+	return fmt.Sprintf(`package main
+
+import "fmt"
+
+const N = %d
+
+type Big = [N]int
+
+var sink interface{}
+
+func main() {
+	g(0, f(0))
+
+	x1 := f(1)
+	sink = &x1
+	g(1, x1)
+	g(7, f(7))
+	g(1, x1)
+
+	x3 := f(3)
+	sink = &x3
+	g(1, x1)
+	g(3, x3)
+
+	h(f(0), x1, f(2), x3, f(4))
+}
+
+func f(k int) (x Big) {
+	for i := range x {
+		x[i] = k*N + i
+	}
+	return
+}
+
+func g(k int, x Big) {
+	for i := range x {
+		if x[i] != k*N+i {
+			panic(fmt.Sprintf("x%%d[%%d] = %%d", k, i, x[i]))
+		}
+	}
+}
+
+func h(x0, x1, x2, x3, x4 Big) {
+	g(0, x0)
+	g(1, x1)
+	g(2, x2)
+	g(3, x3)
+	g(4, x4)
+}
+`, n)
+}
+
+func runScaledRepro(t *testing.T, n int) (time.Duration, uint64, uint64) {
+	t.Helper()
+	src := issue20780bSource(n)
+	p, err := gosource.Parse(strings.NewReader(src), "issue20780b.go", gosource.Options{RunMain: true})
+	if err != nil {
+		t.Fatalf("parse N=%d: %v", n, err)
+	}
+
+	runtime.GC()
+	var m1, m2 runtime.MemStats
+	runtime.ReadMemStats(&m1)
+
+	start := time.Now()
+	runner, err := interp.New(interp.Lang(syntax.LangBashPP))
+	if err != nil {
+		t.Fatalf("interp.New: %v", err)
+	}
+	if err := runner.Run(t.Context(), p.File); err != nil {
+		t.Fatalf("run N=%d: %v", n, err)
+	}
+	elapsed := time.Since(start)
+
+	runtime.ReadMemStats(&m2)
+	allocBytes := m2.TotalAlloc - m1.TotalAlloc
+	allocCount := m2.Mallocs - m1.Mallocs
+
+	return elapsed, allocBytes, allocCount
+}
+
+// TestS376ScaledReproMeasurements runs scaled repros of issue20780b and records
+// elapsed time, total memory allocated, allocation count, and per-element rates.
+func TestS376ScaledReproMeasurements(t *testing.T) {
+	scales := []int{100, 1000, 5000, 10000}
+	for _, n := range scales {
+		elapsed, allocBytes, allocCount := runScaledRepro(t, n)
+		bytesPerElem := float64(allocBytes) / float64(n)
+		timePerIter := float64(elapsed.Nanoseconds()) / float64(36*n) // 14n writes + 22n reads = 36n
+		t.Logf("N=%-6d elapsed=%-12v alloc=%-10d bytes (%8.1f B/elem) mallocs=%-8d (%.2f µs/iter)",
+			n, elapsed, allocBytes, bytesPerElem, allocCount, timePerIter/1000)
+	}
+}
+
+// TestS376Components breaks down copy cost vs loop cost for [N]int.
+func TestS376Components(t *testing.T) {
+	const n = 10000
+
+	// 1. Array copy only (20 copies)
+	copySrc := fmt.Sprintf(`package main
+const N = %d
+type Big = [N]int
+//go:noinline
+func pass(x Big) {}
+func main() {
+	var x Big
+	for i := 0; i < 20; i++ {
+		pass(x)
+	}
+}`, n)
+
+	// 2. Loop in f only: 14M total in root (here 14*n)
+	writeLoopSrc := fmt.Sprintf(`package main
+const N = %d
+type Big = [N]int
+func main() {
+	var x Big
+	for k := 0; k < 7; k++ {
+		for i := range x {
+			x[i] = k*N + i
+		}
+	}
+}`, n)
+
+	// 3. Loop in g only: 22M total in root (here 11*n)
+	readLoopSrc := fmt.Sprintf(`package main
+const N = %d
+type Big = [N]int
+func main() {
+	var x Big
+	for k := 0; k < 11; k++ {
+		for i := range x {
+			if x[i] != k*N+i {
+				// don't panic
+			}
+		}
+	}
+}`, n)
+
+	runPart := func(name, src string) {
+		p, err := gosource.Parse(strings.NewReader(src), name+".go", gosource.Options{RunMain: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		runtime.GC()
+		var m1, m2 runtime.MemStats
+		runtime.ReadMemStats(&m1)
+		start := time.Now()
+		runner, err := interp.New(interp.Lang(syntax.LangBashPP))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := runner.Run(t.Context(), p.File); err != nil {
+			t.Fatal(err)
+		}
+		elapsed := time.Since(start)
+		runtime.ReadMemStats(&m2)
+		t.Logf("%-15s: elapsed=%-10v totalAlloc=%-10d mallocs=%d",
+			name, elapsed, m2.TotalAlloc-m1.TotalAlloc, m2.Mallocs-m1.Mallocs)
+	}
+
+	runPart("copy_20x", copySrc)
+	runPart("write_7x", writeLoopSrc)
+	runPart("read_11x", readLoopSrc)
+}

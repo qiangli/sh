@@ -51,6 +51,10 @@ type bashPPCollectionMeta struct {
 	// channel needs no entry here: its handle IS the payload.
 	channel      *bashPPChannel
 	channelOwner *bashPPConcurrent
+	// hasValueElements reports whether any element of this collection or array
+	// has value semantics (structs, arrays, interfaces) requiring recursive deep-copy.
+	hasValueElements      bool
+	hasValueElementsKnown bool
 }
 
 func bashPPArrayMeta(meta *bashPPCollectionMeta) bool {
@@ -88,6 +92,72 @@ func bashPPSetSequenceShape(meta *bashPPCollectionMeta, length, capacity int) {
 
 func bashPPValueMeta(meta *bashPPCollectionMeta) bool {
 	return bashPPArrayMeta(meta) || meta != nil && meta.kind == "struct"
+}
+
+// bashPPElemHasValueSemantics reports whether array element type expr has value semantics.
+func bashPPElemHasValueSemantics(elem syntax.BashPPTypeExpr) bool {
+	if elem == nil {
+		return true
+	}
+	switch x := elem.(type) {
+	case *syntax.BashPPNamedType:
+		if x.Name == nil {
+			return true
+		}
+		switch x.Name.Value {
+		case "int", "int8", "int16", "int32", "int64",
+			"uint", "uint8", "uint16", "uint32", "uint64", "uintptr",
+			"float32", "float64", "complex64", "complex128",
+			"bool", "string", "byte", "rune":
+			return false
+		default:
+			return true
+		}
+	case *syntax.BashPPPointerType, *syntax.BashPPChanType, *syntax.BashPPFuncType:
+		return false
+	case *syntax.BashPPCollectionType:
+		if x.Kind == "slice" || x.Kind == "map" {
+			return false
+		}
+		return true
+	case *syntax.BashPPStructType, *syntax.BashPPInterfaceType:
+		return true
+	}
+	return true
+}
+
+func (r *Runner) bashPPTypeHasValueElements(typ syntax.BashPPTypeExpr) bool {
+	if typ == nil {
+		return true
+	}
+	underlying := r.bashPPUnderlyingType(typ)
+	return bashPPElemHasValueSemantics(underlying)
+}
+
+func (meta *bashPPCollectionMeta) arrayHasValueElements() bool {
+	if meta == nil {
+		return false
+	}
+	if meta.hasValueElementsKnown {
+		return meta.hasValueElements
+	}
+	if col, ok := meta.typ.(*syntax.BashPPCollectionType); ok && col.Kind == "array" && col.Element != nil {
+		if !bashPPElemHasValueSemantics(col.Element) {
+			meta.hasValueElements = false
+			meta.hasValueElementsKnown = true
+			return false
+		}
+	}
+	for _, child := range meta.sequence {
+		if bashPPValueMeta(child) || (child != nil && child.interfaceValue != nil) {
+			meta.hasValueElements = true
+			meta.hasValueElementsKnown = true
+			return true
+		}
+	}
+	meta.hasValueElements = false
+	meta.hasValueElementsKnown = true
+	return false
 }
 
 // bashPPCopyArrayValue applies Go's value semantics to arrays without
@@ -140,13 +210,22 @@ func bashPPCopyArrayValue(value any, meta *bashPPCollectionMeta) (any, *bashPPCo
 	// and a re-slice up to cap would then observe.
 	out := make([]any, len(sequence))
 	copy(out, sequence)
-	metaCopy.sequence = make([]*bashPPCollectionMeta, len(meta.sequence))
-	copy(metaCopy.sequence, meta.sequence)
+	if len(meta.sequence) > 0 {
+		metaCopy.sequence = make([]*bashPPCollectionMeta, len(meta.sequence))
+		copy(metaCopy.sequence, meta.sequence)
+	}
+	if !meta.arrayHasValueElements() {
+		metaCopy.hasValueElements = false
+		metaCopy.hasValueElementsKnown = true
+		return out, &metaCopy
+	}
 	for i, child := range metaCopy.sequence {
 		if bashPPValueMeta(child) || child != nil && child.interfaceValue != nil {
 			out[i], metaCopy.sequence[i] = bashPPCopyArrayValue(out[i], child)
 		}
 	}
+	metaCopy.hasValueElements = true
+	metaCopy.hasValueElementsKnown = true
 	return out, &metaCopy
 }
 
@@ -678,6 +757,10 @@ func (r *Runner) bashPPEvalCollection(lit *syntax.BashPPCompositeLit, expected s
 	for i, value := range values {
 		out[i], meta.sequence[i] = value, children[i]
 	}
+	if collection.Kind == "array" {
+		meta.hasValueElements = r.bashPPTypeHasValueElements(collection.Element)
+		meta.hasValueElementsKnown = true
+	}
 	return out, meta, nil
 }
 
@@ -692,6 +775,10 @@ func (r *Runner) bashPPCollectionZero(typ syntax.BashPPTypeExpr) (any, *bashPPCo
 			value, meta := r.bashPPCollectionZero(shape)
 			if meta != nil {
 				meta.typ = typ
+				if shape.Kind == "array" && shape.Element != nil {
+					meta.hasValueElements = r.bashPPTypeHasValueElements(shape.Element)
+					meta.hasValueElementsKnown = true
+				}
 			}
 			return value, meta
 		}
@@ -730,6 +817,8 @@ func (r *Runner) bashPPCollectionZero(typ syntax.BashPPTypeExpr) (any, *bashPPCo
 		values := make([]any, length)
 		meta.sequence = make([]*bashPPCollectionMeta, length)
 		if length == 0 {
+			meta.hasValueElements = false
+			meta.hasValueElementsKnown = true
 			return values, meta
 		}
 		// Resolve the element type once. An immutable scalar zero with no
@@ -740,7 +829,13 @@ func (r *Runner) bashPPCollectionZero(typ syntax.BashPPTypeExpr) (any, *bashPPCo
 			for i := 1; i < length; i++ {
 				values[i] = values[0]
 			}
+			meta.hasValueElements = false
+			meta.hasValueElementsKnown = true
 			return values, meta
+		}
+		if x.Kind == "array" {
+			meta.hasValueElements = r.bashPPTypeHasValueElements(x.Element)
+			meta.hasValueElementsKnown = true
 		}
 		for i := 1; i < length; i++ {
 			values[i], meta.sequence[i] = r.bashPPZeroValue(x.Element)
@@ -1655,4 +1750,8 @@ func (r *Runner) bashPPCollectionAssign(target *syntax.BashPPIndexExpr, rhs synt
 		return
 	}
 	sequence[index.value], meta.sequence[index.value] = value, child
+	if child != nil && (bashPPValueMeta(child) || child.interfaceValue != nil) {
+		meta.hasValueElements = true
+		meta.hasValueElementsKnown = true
+	}
 }

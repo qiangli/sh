@@ -1450,6 +1450,10 @@ func (r *Runner) bashPPStructuredAssign(target, rhs syntax.BashPPExpr) {
 				break
 			}
 			sequence[i], parentMeta.sequence[i] = value, child
+			if child != nil && (bashPPValueMeta(child) || child.interfaceValue != nil) {
+				parentMeta.hasValueElements = true
+				parentMeta.hasValueElementsKnown = true
+			}
 		}
 	}
 	if err != nil {
@@ -1564,6 +1568,10 @@ func (r *Runner) bashPPPointerElementAssign(target *syntax.BashPPIndexExpr, rhs 
 		return fmt.Errorf("BASHPP-ECOLLECTION-STORAGE: missing element metadata")
 	}
 	sequence[i], parentMeta.sequence[i] = value, child
+	if child != nil && (bashPPValueMeta(child) || child.interfaceValue != nil) {
+		parentMeta.hasValueElements = true
+		parentMeta.hasValueElementsKnown = true
+	}
 	return nil
 }
 
