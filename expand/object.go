@@ -240,35 +240,23 @@ func preflightObject(v reflect.Value, depth int, seen map[visit]bool, state *obj
 		if err := state.addBytes(2); err != nil { // braces
 			return err
 		}
-		t := v.Type()
-		fields := 0
-		for i := 0; i < v.NumField(); i++ {
-			field := t.Field(i)
-			fieldInfo, reachable := objectJSONFieldInfo(field)
-			if !reachable {
-				continue
+		for n, field := range objectStructPlan(v.Type()) {
+			if field.isZero != nil {
+				return fmt.Errorf("reachable type %v has caller-defined IsZero method used by omitzero", field.isZero)
 			}
-			if fieldInfo.omitZero && typeHasIsZeroMethod(field.Type) {
-				return fmt.Errorf("reachable type %v has caller-defined IsZero method used by omitzero", field.Type)
-			}
-			if fields > 0 {
+			if n > 0 {
 				if err := state.addBytes(1); err != nil { // comma
 					return err
 				}
 			}
-			fields++
-			nameBytes := jsonStringSize(fieldInfo.name)
-			if fallback := jsonStringSize(field.Name); fallback > nameBytes {
-				nameBytes = fallback
-			}
-			if err := state.addBytes(nameBytes + 1); err != nil { // field name and colon
+			if err := state.addBytes(field.nameBytes + 1); err != nil { // field name and colon
 				return err
 			}
-			if err := preflightObject(v.Field(i), depth+1, seen, state); err != nil {
+			if err := preflightObject(v.Field(field.index), depth+1, seen, state); err != nil {
 				return err
 			}
-			if fieldInfo.quoted {
-				if err := state.addBytes(quotedFieldExtra(v.Field(i))); err != nil {
+			if field.quoted {
+				if err := state.addBytes(quotedFieldExtra(v.Field(field.index))); err != nil {
 					return err
 				}
 			}
@@ -284,6 +272,48 @@ func collectionOverhead(length int) int64 {
 		return 2
 	}
 	return int64(length) + 1 // delimiters and length-1 commas
+}
+
+// objectStructField is what the preflight needs of one reachable struct
+// field: where it is, how many bytes its name can encode to, and whether its
+// tag quotes the value. isZero is the field's type when omitzero would call a
+// caller-defined IsZero method, which refuses the whole value.
+type objectStructField struct {
+	index     int
+	nameBytes int64
+	quoted    bool
+	isZero    reflect.Type
+}
+
+// objectStructPlans memoizes objectStructPlan per struct type. The plan is
+// read from the type's field tags alone, and the preflight walks it for every
+// struct of an object graph, so a value returned in a loop would otherwise
+// parse the same tags again on every iteration.
+var objectStructPlans sync.Map // reflect.Type -> []objectStructField
+
+func objectStructPlan(t reflect.Type) []objectStructField {
+	if plan, ok := objectStructPlans.Load(t); ok {
+		return plan.([]objectStructField)
+	}
+	var plan []objectStructField
+	for i := 0; i < t.NumField(); i++ {
+		field := t.Field(i)
+		fieldInfo, reachable := objectJSONFieldInfo(field)
+		if !reachable {
+			continue
+		}
+		planned := objectStructField{index: i, quoted: fieldInfo.quoted}
+		if fieldInfo.omitZero && typeHasIsZeroMethod(field.Type) {
+			planned.isZero = field.Type
+		}
+		planned.nameBytes = jsonStringSize(fieldInfo.name)
+		if fallback := jsonStringSize(field.Name); fallback > planned.nameBytes {
+			planned.nameBytes = fallback
+		}
+		plan = append(plan, planned)
+	}
+	objectStructPlans.Store(t, plan)
+	return plan
 }
 
 type objectJSONField struct {

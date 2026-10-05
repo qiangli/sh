@@ -172,6 +172,13 @@ func (s *bashPPNativeSession) answerMailboxCallback(mailbox *bashPPCallbackMailb
 		return
 	}
 	if mailbox.answer(slot, answer) {
+		// The waiter spins first, so a short body is answered with no
+		// socket write at all; only a parked waiter needs the wake.
+		if conn != nil && mailbox.workerParked(slot) {
+			s.write.Lock()
+			_ = json.NewEncoder(conn).Encode(bashPPBridgeRequest{ID: answer.ID, Op: "callback-mailbox-wake"})
+			s.write.Unlock()
+		}
 		return
 	}
 	// The original body has already run. Send its exact result once through

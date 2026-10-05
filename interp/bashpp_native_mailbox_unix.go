@@ -33,7 +33,7 @@ func newBashPPCallbackMailbox() (*bashPPCallbackMailbox, error) {
 		fail()
 		return nil, err
 	}
-	return &bashPPCallbackMailbox{data: data, path: path, cleanup: func() error {
+	return &bashPPCallbackMailbox{data: data, path: path, wake: make(chan struct{}, 1), cleanup: func() error {
 		err := syscall.Munmap(data)
 		if closeErr := f.Close(); err == nil {
 			err = closeErr

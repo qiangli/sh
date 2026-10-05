@@ -49,7 +49,7 @@ func newBashPPCallbackMailbox() (*bashPPCallbackMailbox, error) {
 	// addr is a view address outside the Go heap; read it through a pointer
 	// to the uintptr so vet's unsafeptr check does not flag the conversion.
 	data := unsafe.Slice((*byte)(*(*unsafe.Pointer)(unsafe.Pointer(&addr))), bashPPMailboxSize)
-	return &bashPPCallbackMailbox{data: data, path: path, cleanup: func() error {
+	return &bashPPCallbackMailbox{data: data, path: path, wake: make(chan struct{}, 1), cleanup: func() error {
 		err := syscall.UnmapViewOfFile(addr)
 		if closeErr := syscall.CloseHandle(mapping); err == nil {
 			err = closeErr
