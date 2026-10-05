@@ -1255,8 +1255,8 @@ func (r *Runner) bashPPStructuredAssign(target, rhs syntax.BashPPExpr) {
 			r.exit = exitStatus{code: 2}
 			return
 		}
-		if ptr.unsafeOverlay != nil {
-			if err := ptr.unsafeOverlay.write(ptr, value, meta); err != nil {
+		if ptr.unsafeOverlay() != nil {
+			if err := ptr.unsafeOverlay().write(ptr, value, meta); err != nil {
 				r.errf("%v\n", err)
 				r.exit = exitStatus{code: 2}
 			}

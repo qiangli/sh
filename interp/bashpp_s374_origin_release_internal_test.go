@@ -102,7 +102,7 @@ func TestS374OriginReleaseRoundTripsBounded(t *testing.T) {
 func TestS374OriginReleaseUnsafeStaysPinned(t *testing.T) {
 	s := &bashPPNativeSession{id: "origin-release-pinned"}
 	cell := &bashPPCell{}
-	id := bashPPTransportOrigin(s, &bashPPPointer{target: cell, forged: true})
+	id := bashPPTransportOrigin(s, &bashPPPointer{target: cell, cold: &bashPPPointerCold{forged: true}})
 	for i := 0; i < 3; i++ {
 		runtime.GC()
 	}

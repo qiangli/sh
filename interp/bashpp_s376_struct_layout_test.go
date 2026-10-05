@@ -2,6 +2,7 @@ package interp
 
 import (
 	"testing"
+	"unsafe"
 
 	"mvdan.cc/sh/v3/syntax"
 )
@@ -80,5 +81,64 @@ func TestS376ScalarStructAllocationBudget(t *testing.T) {
 	})
 	if allocs > 12 {
 		t.Fatalf("scalar struct creation and copy: %.0f allocations, budget 12", allocs)
+	}
+}
+
+// A retained *T is a pointer, a cell and a payload; the rarely used
+// unsafe-conversion state must stay out of line so that a slice of a million
+// pointers does not pay for it a million times.
+func TestS376PointerAndCellStayCompact(t *testing.T) {
+	if got := unsafe.Sizeof(bashPPPointer{}); got > 64 {
+		t.Fatalf("bashPPPointer is %d bytes; unsafe-conversion state must live in bashPPPointerCold", got)
+	}
+	if got := unsafe.Sizeof(bashPPCell{}); got > 256 {
+		t.Fatalf("bashPPCell is %d bytes; want at most 256 (the 256-byte allocator class)", got)
+	}
+	var p bashPPPointer
+	if p.unsafeSource() != nil || p.unsafeSlice() != nil || p.unsafeOffset() != 0 {
+		t.Fatal("zero pointer reports unsafe state")
+	}
+	retyped := p
+	retyped.setUnsafeOffset(8)
+	if p.cold != nil || retyped.unsafeOffset() != 8 {
+		t.Fatal("setting unsafe state on a copy wrote through to the original")
+	}
+	retyped.setUnsafeOffset(0)
+	if retyped.cold != nil {
+		t.Fatal("clearing the last unsafe field kept the cold record")
+	}
+}
+
+func TestS376PointerMetaIsSharedPerType(t *testing.T) {
+	typ := &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "T"}}
+	a, b := bashPPPointerMeta(typ), bashPPPointerMeta(typ)
+	if a != b {
+		t.Fatal("pointer layout records for one type are not shared")
+	}
+	other := &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "T"}}
+	if bashPPPointerMeta(other) == a {
+		t.Fatal("distinct type nodes share a pointer layout record")
+	}
+}
+
+func TestS376PureShortDeclSkipsBlockSnapshot(t *testing.T) {
+	lit := func(s string) *syntax.Lit { return &syntax.Lit{Value: s} }
+	ident := &syntax.BashPPIdent{Name: lit("x")}
+	decl := func(rhs ...syntax.BashPPExpr) *syntax.BashPPShortDecl {
+		return &syntax.BashPPShortDecl{Lhs: []*syntax.Lit{lit("y")}, RhsExprs: rhs}
+	}
+	if !bashPPPureShortDecl(decl(ident, &syntax.BashPPBasicLit{Value: lit("1"), Kind: "INT"})) {
+		t.Fatal("a read of names and literals was not classified as pure")
+	}
+	if bashPPPureShortDecl(decl(&syntax.BashPPSelectorExpr{X: ident, Sel: lit("M"), MethodValue: true})) {
+		t.Fatal("a method value was classified as pure")
+	}
+	call := decl(ident)
+	call.Call = &syntax.BashPPCall{}
+	if bashPPPureShortDecl(call) {
+		t.Fatal("a call was classified as pure")
+	}
+	if bashPPPureShortDecl(&syntax.BashPPShortDecl{Lhs: []*syntax.Lit{lit("y")}}) {
+		t.Fatal("a declaration without a parsed expression was classified as pure")
 	}
 }

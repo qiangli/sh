@@ -2017,10 +2017,10 @@ func bashPPPointerEqual(left, right any) bool {
 	if lp == nil || rp == nil {
 		return lp == nil && rp == nil
 	}
-	if lp.forged || rp.forged {
-		return lp.forged && rp.forged && lp.unsafeAddress == rp.unsafeAddress
+	if lp.forged() || rp.forged() {
+		return lp.forged() && rp.forged() && lp.unsafeAddress() == rp.unsafeAddress()
 	}
-	if lp.unsafeOffset != rp.unsafeOffset {
+	if lp.unsafeOffset() != rp.unsafeOffset() {
 		return false
 	}
 	if lp.storageAddress != nil || rp.storageAddress != nil {

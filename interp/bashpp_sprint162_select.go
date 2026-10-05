@@ -50,12 +50,12 @@ func (r *Runner) bashPPSelectReceiveAssign(assign *syntax.BashPPAssign, received
 		r.exit.code = 2
 		return
 	}
-	if ptr.unsafeView != nil {
+	if ptr.unsafeView() != nil {
 		r.errf("BASHPP-EUNSAFE-WRITE: writes through reinterpreted blank views are unsupported\n")
 		r.exit.code = 2
 		return
 	}
-	if ptr.unsafeSlice != nil {
+	if ptr.unsafeSlice() != nil {
 		r.errf("BASHPP-EUNSAFE-WRITE: writes through a reinterpreted slice header are unsupported\n")
 		r.exit.code = 2
 		return

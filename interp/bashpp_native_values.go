@@ -1015,13 +1015,13 @@ func (s *bashPPNativeSession) applyNativePointerUpdates(req bashPPEvalRequest, r
 }
 
 func (r *Runner) bashPPWriteBridgePointer(ptr *bashPPPointer, value bashPPBridgeValue) error {
-	if ptr != nil && ptr.unsafeView != nil {
+	if ptr != nil && ptr.unsafeView() != nil {
 		return fmt.Errorf("BASHPP-EUNSAFE-WRITE: writes through reinterpreted blank views are unsupported")
 	}
-	if ptr != nil && ptr.unsafeOverlay != nil && ptr.unsafeOverlay.target.blank {
+	if ptr != nil && ptr.unsafeOverlay() != nil && ptr.unsafeOverlay().target.blank {
 		return fmt.Errorf("BASHPP-EUNSAFE-WRITE: writes through reinterpreted blank views cannot preserve blank-field bytes")
 	}
-	if ptr != nil && ptr.unsafeSlice != nil {
+	if ptr != nil && ptr.unsafeSlice() != nil {
 		return fmt.Errorf("BASHPP-EUNSAFE-WRITE: writes through a reinterpreted slice header are unsupported")
 	}
 	if err := goSourceUnsafeDerefCheck(ptr); err != nil {
@@ -1675,7 +1675,7 @@ func (r *Runner) goSourceUnsafeString(call *syntax.BashPPCall, discard bool) (va
 	if ptr == nil {
 		return []bashPPBridgeValue{{Kind: "string", Type: "string", NativeType: "string"}}, true, nil
 	}
-	if discard && ptr.forged {
+	if discard && ptr.forged() {
 		return nil, true, nil
 	}
 	if err := goSourceUnsafeDerefCheck(ptr); err != nil {
