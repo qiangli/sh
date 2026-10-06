@@ -120,6 +120,16 @@ func parseBashyEnv(spec string) map[string]byte {
 // gives cmd /a/b/c; see the note above [parseBashyEnv] for why there is no
 // built-in list of path-valued names. The shell's own variables are
 // untouched either way. On every other host env is returned as is.
+// NativeExecEnv prepares a shell environment for a native child executable.
+// ExecHandler middleware that launches a process directly should use this
+// conversion after applying its environment overrides. On Windows it preserves
+// shell PATH spelling for this executable and converts native path variables
+// for other children, using the same policy as DefaultExecHandler.
+// The input slice is not modified.
+func NativeExecEnv(env []string, executable string) []string {
+	return nativeExecEnvForChild(env, executable)
+}
+
 func nativeExecEnv(env []string) []string {
 	return nativeExecEnvMode(env, runtime.GOOS == "windows")
 }
