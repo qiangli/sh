@@ -23,7 +23,7 @@ func ManifestFiles(blocks []Block) (map[string]string, error) {
 		if !ok {
 			continue
 		}
-		file, err := ManifestPath(block.Language, block.Alias, text.FileName, block.Source)
+		file, err := ManifestPath(block.Language, block.Alias, text.FileName, block.Source, block.Origin)
 		if err != nil {
 			return nil, err
 		}

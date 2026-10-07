@@ -455,6 +455,19 @@ func TestManifestFilesAndGoModule(t *testing.T) {
 	if filepath.Base(filepath.Dir(file)) != plans[0].ID {
 		t.Fatalf("manifest dir %s is not the plan id %s", filepath.Dir(file), plans[0].ID)
 	}
+	// Source origin is part of the same identity on both paths.
+	blocks[0].Origin = filepath.Join(t.TempDir(), "module.bpp")
+	files, err = ManifestFiles(blocks)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plans, err = Prepare(context.Background(), blocks[:1], map[string]Analyzer{"fakemod": Text{Type: "fakemod", Verbs: []Verb{{Name: "tidy"}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := filepath.Base(filepath.Dir(files["go"])); got != plans[0].ID {
+		t.Fatalf("manifest dir %s is not origin-aware plan id %s", got, plans[0].ID)
+	}
 	// A directory without go.mod is a module once a manifest fence provides one.
 	cwd := t.TempDir()
 	plan, err := DiscoverEnvironment(EnvironmentRequest{Source: filepath.Join(cwd, "t.bsh"), Language: "go", ModuleFile: file})

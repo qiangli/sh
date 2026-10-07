@@ -133,10 +133,14 @@ func Prepare(ctx context.Context, blocks []Block, analyzers map[string]Analyzer)
 			return nil, fmt.Errorf("polyglot %s: %w", lang, err)
 		}
 		origin := group.blocks[0].Origin
-		hash := sha256.Sum256([]byte(lang + "\x00" + group.alias + "\x00" + source + "\x00" + artifact + "\x00" + group.runner + "\x00" + origin))
-		plans = append(plans, Plan{ID: hex.EncodeToString(hash[:]), Language: lang, Alias: group.alias, Runner: group.runner, Source: source, Origin: origin, Artifact: artifact, Exports: exports})
+		plans = append(plans, Plan{ID: planID(lang, group.alias, source, artifact, group.runner, origin), Language: lang, Alias: group.alias, Runner: group.runner, Source: source, Origin: origin, Artifact: artifact, Exports: exports})
 	}
 	return plans, nil
+}
+
+func planID(language, alias, source, artifact, runner, origin string) string {
+	hash := sha256.Sum256([]byte(language + "\x00" + alias + "\x00" + source + "\x00" + artifact + "\x00" + runner + "\x00" + origin))
+	return hex.EncodeToString(hash[:])
 }
 
 func aggregateSource(language string, blocks []Block) string {

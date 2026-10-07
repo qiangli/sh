@@ -416,8 +416,11 @@ func (r *Runner) bashPPInvokeForeign(ctx context.Context, fn *bashPPForeignFunc,
 	// to handling both. The separate Go call-site opt-in below retains its
 	// worker-domain versus bridge-failure distinction.
 	if results := fn.export.Signature.Results; len(results) == 2 && results[0] == "string" && results[1] == "error" && !fn.export.Signature.Dynamic {
-		if ctx.Err() != nil {
-			r.exit.fatal(ctx.Err())
+		if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			if ctx.Err() != nil {
+				err = ctx.Err()
+			}
+			r.exit.fatal(err)
 			return nil
 		}
 		value, failure := foreignResult(result.Value), ""

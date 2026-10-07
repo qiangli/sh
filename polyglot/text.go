@@ -721,8 +721,11 @@ func writeOverlay(dir, cwd, file string, siblings []string) (string, error) {
 // and returns the file, for a unit that hands the manifest to another
 // fence's environment before any verb has run. The key is the plan id
 // [Prepare] will compute for the same block.
-func ManifestPath(language, alias, fileName, source string) (string, error) {
+func ManifestPath(language, alias, fileName, source string, origin ...string) (string, error) {
 	lang := canonicalLanguage(language)
-	hash := sha256.Sum256([]byte(lang + "\x00" + alias + "\x00" + source + "\x00" + "" + "\x00" + ""))
-	return materializeText(hex.EncodeToString(hash[:]), fileName, source)
+	blockOrigin := ""
+	if len(origin) > 0 {
+		blockOrigin = origin[0]
+	}
+	return materializeText(planID(lang, alias, source, "", "", blockOrigin), fileName, source)
 }

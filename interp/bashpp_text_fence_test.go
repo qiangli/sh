@@ -6,6 +6,7 @@ package interp
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -307,10 +308,38 @@ agentic func query() {
  answer, err = oracle.run("fail")
  if err != nil { message := err.Error(); echo "$answer:$message"; }
 }
+
 agentic { query(); }
 `)
 	if err != nil || out != "answer\npartial:raw failure\n" || diag != "" {
 		t.Fatalf("out=%q diag=%q err=%v", out, diag, err)
+	}
+}
+
+func TestBashPPForeignDeclaredStringErrorCancellationIsFatal(t *testing.T) {
+	const language = "typed_cancel_fixture"
+	polyglot.RegisterLanguage(polyglot.Language{Canonical: language, Text: true, NewRuntime: func(polyglot.RuntimeConfig) polyglot.LanguageRuntime {
+		return polyglot.Embedded{RuntimeName: language,
+			AnalyzeFunc: func(context.Context, string) ([]polyglot.Export, error) {
+				return []polyglot.Export{{Name: "run", Signature: polyglot.Signature{Params: []string{"string"}, Results: []string{"string", "error"}}}}, nil
+			},
+			CallFunc: func(_ context.Context, _ polyglot.Plan, _ string, args []any, _ map[string]any) (polyglot.CallResult, error) {
+				if args[0] == "deadline" {
+					return polyglot.CallResult{}, fmt.Errorf("worker: %w", context.DeadlineExceeded)
+				}
+				return polyglot.CallResult{}, fmt.Errorf("worker: %w", context.Canceled)
+			}}
+	}})
+	for _, tc := range []struct {
+		name string
+		want error
+	}{{"canceled", context.Canceled}, {"deadline", context.DeadlineExceeded}} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, _, err := runBashPPInDir(t, t.TempDir(), "~~~typed_cancel_fixture as f\nbinding\n~~~\nvalue, failure := f.run(\""+tc.name+"\")\necho unreachable\n")
+			if out != "" || !errors.Is(err, tc.want) {
+				t.Fatalf("out=%q err=%v, want fatal %v", out, err, tc.want)
+			}
+		})
 	}
 }
 
