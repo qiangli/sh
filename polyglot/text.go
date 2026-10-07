@@ -182,7 +182,11 @@ func (t Text) LoweredLiteral(prefix string) string {
 	var out strings.Builder
 	fmt.Fprintf(&out, "%spolyglot.Text{Type:%q,FileName:%q,Tool:%q,WorkDir:%q,Shadow:%#v,Overlay:%#v,Verbs:[]%spolyglot.Verb{", prefix, t.Type, t.FileName, t.Tool, t.WorkDir, t.Shadow, t.Overlay, prefix)
 	for _, verb := range t.Verbs {
-		fmt.Fprintf(&out, "{Name:%q,Args:%#v,Tool:%q,Env:%#v,Effects:%#v,Result:%q,Agentic:%t},", verb.Name, verb.Args, verb.Tool, verb.Env, verb.Effects, verb.Result, verb.Agentic)
+		fmt.Fprintf(&out, "{Name:%q,Args:%#v,Tool:%q,Env:%#v,Effects:%#v,Result:%q", verb.Name, verb.Args, verb.Tool, verb.Env, verb.Effects, verb.Result)
+		if verb.Agentic {
+			out.WriteString(",Agentic:true")
+		}
+		out.WriteString("},")
 	}
 	out.WriteString("}}")
 	return out.String()

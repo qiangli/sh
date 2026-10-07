@@ -1707,6 +1707,9 @@ func (r *Runner) bashPPBindInterfaceMethod(iv *bashPPInterfaceValue, method stri
 		r.exit.code = 2
 		return nil, false
 	}
+	if fn, ok := bashPPForeignErrorMethod(iv, method); ok {
+		return fn, true
+	}
 	if bashPPRuntimeErrorType(iv.dynamic) {
 		return r.bashPPRuntimeErrorMethod(iv, method)
 	}

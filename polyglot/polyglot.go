@@ -350,6 +350,9 @@ type Embedded struct {
 	RuntimeName string
 	AnalyzeFunc func(context.Context, string) ([]Export, error)
 	CallFunc    func(context.Context, Plan, string, []any, map[string]any) (CallResult, error)
+	// CloseFunc releases resources owned by this module, including on cancellation.
+	// It must be idempotent; Close may be called more than once.
+	CloseFunc func(Plan) error
 }
 
 func (e Embedded) Analyze(ctx context.Context, source string) ([]Export, error) {
@@ -1364,7 +1367,11 @@ func jsonObjectValue(value any) (any, error) {
 func (m *Module) Close() error {
 	unlock, _ := m.lock(context.Background())
 	defer unlock()
-	return m.kill()
+	err := m.kill()
+	if embedded, ok := m.runtime.(Embedded); ok && embedded.CloseFunc != nil {
+		err = errors.Join(err, embedded.CloseFunc(m.plan))
+	}
+	return err
 }
 
 func (m *Module) kill() error {

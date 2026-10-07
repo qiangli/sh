@@ -361,6 +361,25 @@ func (r *Runner) bashPPInvokeForeign(ctx context.Context, fn *bashPPForeignFunc,
 	if !ok {
 		return nil
 	}
+	// A host method may explicitly declare (string, error), rather than use
+	// the dynamic foreign-call convention. Preserve both the partial output
+	// and the typed error, including a nonzero governed processor status.
+	if results := fn.export.Signature.Results; len(results) == 2 && results[0] == "string" && results[1] == "error" && !fn.export.Signature.Dynamic {
+		if ctx.Err() != nil {
+			r.exit.fatal(ctx.Err())
+			return nil
+		}
+		value, failure := foreignResult(result.Value), ""
+		if err != nil {
+			failure = err.Error()
+		}
+		r.bashPPResultCells = []*bashPPCell{
+			{vr: expand.Variable{Set: true, Kind: expand.String, Str: value}},
+			bashPPForeignErrorCell(err),
+		}
+		r.exit = exitStatus{}
+		return []string{value, failure}
+	}
 	if err != nil {
 		if fn.export.Signature.Dynamic {
 			r.exit = exitStatus{}
@@ -461,11 +480,12 @@ func bashPPForeignErrorCell(err error) *bashPPCell {
 	if err == nil {
 		return &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String}, declType: errType, interfaceValue: &bashPPInterfaceValue{nilIface: true}}
 	}
-	payload := &bashPPCell{vr: expand.NewObject(err), declType: errType}
+	concrete := &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "polyglot.error"}}
+	payload := &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: err.Error()}, declType: concrete}
 	return &bashPPCell{
 		vr:             expand.Variable{Set: true, Kind: expand.String, Str: err.Error()},
 		declType:       errType,
-		interfaceValue: &bashPPInterfaceValue{cell: payload, dynamic: errType},
+		interfaceValue: &bashPPInterfaceValue{cell: payload, dynamic: concrete},
 	}
 }
 
@@ -744,4 +764,15 @@ func (r *Runner) bashPPRunForeignCommand(ctx context.Context, pos syntax.Pos, mo
 		r.errf("%s%s: %v\n", r.bashErrPrefix(pos), word, err)
 		r.exit.code = 1
 	}
+}
+
+// bashPPForeignErrorMethod exposes the Go error returned by a host runner
+// without pretending its dynamic type is itself an interface.
+func bashPPForeignErrorMethod(iv *bashPPInterfaceValue, method string) (*bashPPFunc, bool) {
+	if iv == nil || iv.cell == nil || method != "Error" || bashPPTypeText(iv.dynamic) != "polyglot.error" {
+		return nil, false
+	}
+	text := iv.cell.vr.String()
+	lit := &syntax.BashPPFuncLit{Kw: &syntax.Lit{Value: "func"}, Results: []*syntax.BashPPField{{FieldType: &syntax.Lit{Value: "string"}}}}
+	return &bashPPFunc{lit: lit, runtimeError: &bashPPRuntimeErrorCall{text: text, method: "Error"}}, true
 }

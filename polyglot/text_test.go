@@ -293,3 +293,25 @@ func TestParseMethodsAgentic(t *testing.T) {
 		t.Fatalf("legacy method changed: %+v %v", exports, err)
 	}
 }
+
+func TestEmbeddedModuleClose(t *testing.T) {
+	closed := 0
+	runtime := Embedded{RuntimeName: "lifecycle", CallFunc: func(ctx context.Context, _ Plan, _ string, _ []any, _ map[string]any) (CallResult, error) {
+		return CallResult{}, ctx.Err()
+	}, CloseFunc: func(plan Plan) error {
+		if plan.ID != "owned" {
+			t.Fatalf("wrong owner: %+v", plan)
+		}
+		closed++
+		return nil
+	}}
+	mod := Start(Plan{ID: "owned"}, runtime)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := mod.Call(ctx, "run"); err == nil {
+		t.Fatal("cancelled call succeeded")
+	}
+	if err := mod.Close(); err != nil || closed != 1 {
+		t.Fatalf("close count=%d err=%v", closed, err)
+	}
+}

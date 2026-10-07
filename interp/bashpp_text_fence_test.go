@@ -282,3 +282,34 @@ existing binding
 		})
 	}
 }
+
+func TestBashPPForeignDeclaredStringError(t *testing.T) {
+	const language = "typed_oracle_fixture"
+	polyglot.RegisterLanguage(polyglot.Language{Canonical: language, Text: true, NewRuntime: func(polyglot.RuntimeConfig) polyglot.LanguageRuntime {
+		return polyglot.Embedded{RuntimeName: language,
+			AnalyzeFunc: func(context.Context, string) ([]polyglot.Export, error) {
+				return []polyglot.Export{{Name: "run", Agentic: true, Signature: polyglot.Signature{Params: []string{"string"}, Results: []string{"string", "error"}}}}, nil
+			},
+			CallFunc: func(_ context.Context, _ polyglot.Plan, _ string, args []any, _ map[string]any) (polyglot.CallResult, error) {
+				if args[0] == "fail" {
+					return polyglot.CallResult{Value: "partial"}, fmt.Errorf("raw failure")
+				}
+				return polyglot.CallResult{Value: "answer"}, nil
+			}}
+	}})
+	out, diag, err := runBashPPInDir(t, t.TempDir(), `~~~typed_oracle_fixture as oracle
+binding
+~~~
+agentic func query() {
+ answer, err := oracle.run("success")
+ if err != nil { echo unexpected; }
+ echo "$answer"
+ answer, err = oracle.run("fail")
+ if err != nil { message := err.Error(); echo "$answer:$message"; }
+}
+agentic { query(); }
+`)
+	if err != nil || out != "answer\npartial:raw failure\n" || diag != "" {
+		t.Fatalf("out=%q diag=%q err=%v", out, diag, err)
+	}
+}

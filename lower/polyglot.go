@@ -333,6 +333,9 @@ func (e *emitter) prepareForeign(ctx context.Context, file *syntax.File) error {
 			reserved[plan.Alias] = "foreign module"
 		}
 		for _, export := range plan.Exports {
+			if export.Agentic {
+				return e.fail(first, CodeUnsupported, "agentic foreign method "+plan.Alias+"."+export.Name+": host-governed methods are interpreted-only; run with bashy --bashsharp")
+			}
 			if !token.IsIdentifier(export.Name) {
 				// A PowerShell Verb-Noun export is no Bash# call name (the
 				// hyphen is a minus there) and no Go identifier; the worker
