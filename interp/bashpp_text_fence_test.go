@@ -313,3 +313,24 @@ agentic { query(); }
 		t.Fatalf("out=%q diag=%q err=%v", out, diag, err)
 	}
 }
+
+func TestBashPPLegacyErrorBindingKeepsRawBridgeFailureFatal(t *testing.T) {
+	const language = "legacy_bridge_fixture"
+	polyglot.RegisterLanguage(polyglot.Language{Canonical: language, Text: true, NewRuntime: func(polyglot.RuntimeConfig) polyglot.LanguageRuntime {
+		return polyglot.Embedded{RuntimeName: language,
+			AnalyzeFunc: func(context.Context, string) ([]polyglot.Export, error) {
+				return []polyglot.Export{{Name: "run", Signature: polyglot.Signature{Results: []string{"string"}}}}, nil
+			},
+			CallFunc: func(context.Context, polyglot.Plan, string, []any, map[string]any) (polyglot.CallResult, error) {
+				return polyglot.CallResult{}, fmt.Errorf("raw bridge failure")
+			}}
+	}})
+	out, diag, err := runBashPPInDir(t, t.TempDir(), `~~~legacy_bridge_fixture as bridge
+binding
+~~~
+value, failure := bridge.run()
+`)
+	if out != "" || !strings.Contains(diag, "raw bridge failure") || err == nil {
+		t.Fatalf("out=%q diag=%q err=%v", out, diag, err)
+	}
+}

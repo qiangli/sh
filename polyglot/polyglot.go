@@ -28,8 +28,11 @@ type Block struct {
 	Alias    string
 	// Runner is the fence's runner override (`!name`), "" for the
 	// language's own adapter.
-	Runner   string
-	Source   string
+	Runner string
+	Source string
+	// Origin identifies the source artifact for this block, including when
+	// another block has identical bytes in a different directory.
+	Origin   string
 	Filename string
 	Line     int
 }
@@ -65,6 +68,7 @@ type Plan struct {
 	Alias    string
 	Runner   string
 	Source   string
+	Origin   string
 	Artifact string
 	Exports  []Export
 }
@@ -128,8 +132,9 @@ func Prepare(ctx context.Context, blocks []Block, analyzers map[string]Analyzer)
 		if err != nil {
 			return nil, fmt.Errorf("polyglot %s: %w", lang, err)
 		}
-		hash := sha256.Sum256([]byte(lang + "\x00" + group.alias + "\x00" + source + "\x00" + artifact + "\x00" + group.runner))
-		plans = append(plans, Plan{ID: hex.EncodeToString(hash[:]), Language: lang, Alias: group.alias, Runner: group.runner, Source: source, Artifact: artifact, Exports: exports})
+		origin := group.blocks[0].Origin
+		hash := sha256.Sum256([]byte(lang + "\x00" + group.alias + "\x00" + source + "\x00" + artifact + "\x00" + group.runner + "\x00" + origin))
+		plans = append(plans, Plan{ID: hex.EncodeToString(hash[:]), Language: lang, Alias: group.alias, Runner: group.runner, Source: source, Origin: origin, Artifact: artifact, Exports: exports})
 	}
 	return plans, nil
 }

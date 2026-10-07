@@ -63,7 +63,10 @@ func (r *Runner) bashPPPrepareSourceBlocks(ctx context.Context, file *syntax.Fil
 				runner = node.Runner.Value
 				runnerBlocks[polyglot.CanonicalLanguage(node.Language.Value)] = node
 			}
-			blocks = append(blocks, polyglot.Block{Language: node.Language.Value, Alias: alias, Runner: runner, Source: node.Body, Filename: file.Name, Line: int(node.BodyPos.Line())})
+			if artifact != "" && !filepath.IsAbs(artifact) {
+				artifact = filepath.Join(r.Dir, artifact)
+			}
+			blocks = append(blocks, polyglot.Block{Language: node.Language.Value, Alias: alias, Runner: runner, Source: node.Body, Origin: artifact, Filename: file.Name, Line: int(node.BodyPos.Line())})
 		case *syntax.BashPPImport:
 			if node.Language != nil {
 				imports = append(imports, node)
@@ -123,8 +126,15 @@ func (r *Runner) bashPPPrepareSourceBlocks(ctx context.Context, file *syntax.Fil
 	if err != nil {
 		return restore, fmt.Errorf("%s: %w", file.Name, err)
 	}
+	var agentBlocks []polyglot.Block
+	var groupedBlocks []polyglot.Block
 	for _, block := range blocks {
 		language := polyglot.CanonicalLanguage(block.Language)
+		if language == "agent" && block.Runner == "" {
+			agentBlocks = append(agentBlocks, block)
+			continue
+		}
+		groupedBlocks = append(groupedBlocks, block)
 		if _, done := runtimes[language]; done {
 			continue
 		}
@@ -168,9 +178,32 @@ func (r *Runner) bashPPPrepareSourceBlocks(ctx context.Context, file *syntax.Fil
 		runtimes[language] = runtime
 		analyzers[language] = runtime
 	}
-	plans, err := polyglot.Prepare(ctx, blocks, analyzers)
+	plans, err := polyglot.Prepare(ctx, groupedBlocks, analyzers)
 	if err != nil {
 		return restore, fmt.Errorf("%s: %w", file.Name, err)
+	}
+	// Agent definitions are independent sessions. Prepare each against its
+	// own origin so imports and policy roots cannot bleed across embeds.
+	agentRuntimes := map[string]polyglot.LanguageRuntime{}
+	for _, block := range agentBlocks {
+		if block.Alias == "" {
+			return restore, fmt.Errorf("%s: text fence agent needs an alias (as NAME)", file.Name)
+		}
+		row, ok := polyglot.LookupLanguage("agent")
+		if !ok {
+			return restore, fmt.Errorf("%s: unsupported language agent", file.Name)
+		}
+		origin := block.Origin
+		if origin == "" {
+			origin = source
+		}
+		runtime := row.NewRuntime(polyglot.RuntimeConfig{Source: origin, Dir: r.Dir, Cwd: func() string { return r.Dir }, Environ: execEnv(r.writeEnv), Env: func() []string { return execEnv(r.writeEnv) }})
+		individual, err := polyglot.Prepare(ctx, []polyglot.Block{block}, map[string]polyglot.Analyzer{"agent": runtime})
+		if err != nil {
+			return restore, fmt.Errorf("%s: %w", file.Name, err)
+		}
+		plans = append(plans, individual...)
+		agentRuntimes[individual[0].ID] = runtime
 	}
 
 	reserved := map[string]string{}
@@ -194,7 +227,11 @@ func (r *Runner) bashPPPrepareSourceBlocks(ctx context.Context, file *syntax.Fil
 	}
 	foreign := map[string]*bashPPFunc{}
 	for _, plan := range plans {
-		module := polyglot.Start(plan, runtimes[plan.Language])
+		runtime := runtimes[plan.Language]
+		if agentRuntime := agentRuntimes[plan.ID]; agentRuntime != nil {
+			runtime = agentRuntime
+		}
+		module := polyglot.Start(plan, runtime)
 		if row, _ := polyglot.LookupLanguage(plan.Language); row.Callbacks {
 			module.SetCallbacks(r.bashPPForeignCallbacks())
 		}
@@ -373,9 +410,11 @@ func (r *Runner) bashPPInvokeForeign(ctx context.Context, fn *bashPPForeignFunc,
 	if !ok {
 		return nil
 	}
-	// A host method may explicitly declare (string, error), rather than use
-	// the dynamic foreign-call convention. Preserve both the partial output
-	// and the typed error, including a nonzero governed processor status.
+	// A host-governed method explicitly declaring (string, error) returns
+	// every non-cancellation failure through its error result. This includes
+	// bridge failures and nonzero governed processor status; callers opted in
+	// to handling both. The separate Go call-site opt-in below retains its
+	// worker-domain versus bridge-failure distinction.
 	if results := fn.export.Signature.Results; len(results) == 2 && results[0] == "string" && results[1] == "error" && !fn.export.Signature.Dynamic {
 		if ctx.Err() != nil {
 			r.exit.fatal(ctx.Err())
