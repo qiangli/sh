@@ -473,6 +473,10 @@ func (t Text) discoveredVerb(name string) (Verb, bool) {
 }
 
 // callText runs one verb of a built-in text row (declared or discovered).
+// A discovered name must be a member of the plan's own Exports — the same
+// membership [callRunner] already enforces — so a target added to the
+// artifact after Discover ran (never audited, never gated) cannot be
+// reached just because DiscoveredVerb's template can spell its name.
 // Stdout is the result; a non-zero status is the call error, with stderr
 // passed through.
 func (m *Module) callText(ctx context.Context, text Text, name string, args []any, kwargs map[string]any) (CallResult, error) {
@@ -481,10 +485,25 @@ func (m *Module) callText(ctx context.Context, text Text, name string, args []an
 	}
 	verb, ok := text.verb(name)
 	if !ok {
+		export, declared := m.exportNamed(name)
+		if !declared {
+			return CallResult{}, fmt.Errorf("text fence %s has no method %s", text.Type, name)
+		}
 		verb, ok = text.discoveredVerb(name)
-	}
-	if !ok {
-		return CallResult{}, fmt.Errorf("text fence %s has no method %s", text.Type, name)
+		if !ok {
+			return CallResult{}, fmt.Errorf("text fence %s has no method %s", text.Type, name)
+		}
+		// The export's effects were audited once, when Discover ran to
+		// build the plan; the artifact behind {target} (a tasks.md, say)
+		// is a plain mutable file that may have changed since. A caller
+		// upstream of here (bashPPForeignEffectsAllowed) already gated the
+		// CALL against that stale declaration — recheck it again, right
+		// before running, so a target widened between discovery and this
+		// call (declared read, now also net) is denied on the declaration
+		// in force now, not waved through on the one audited earlier.
+		if err := text.recheckDiscovered(ctx, m.plan.Source, export); err != nil {
+			return CallResult{}, fmt.Errorf("text fence %s.%s: %w", text.Type, name, err)
+		}
 	}
 	stdout, stderr, err := text.run(ctx, m.plan.ID, m.plan.Source, verb, args)
 	result := CallResult{Value: stdout, Stderr: stderr}
@@ -492,6 +511,53 @@ func (m *Module) callText(ctx context.Context, text Text, name string, args []an
 		return result, fmt.Errorf("text fence %s.%s: %w", text.Type, name, err)
 	}
 	return result, nil
+}
+
+// exportNamed answers the plan's own recorded Export for name — the
+// declaration a discovered call must be checked against, never a looser
+// guess built from the call site alone.
+func (m *Module) exportNamed(name string) (Export, bool) {
+	for _, export := range m.plan.Exports {
+		if export.Name == name {
+			return export, true
+		}
+	}
+	return Export{}, false
+}
+
+// recheckDiscovered re-runs Discover and compares the target's current
+// effects against approved — the ones the plan recorded for it when
+// Discover first ran. An atom present now but absent from approved denies
+// the call: approved is what every upstream gate audited, and anything
+// beyond it was never audited at all.
+func (t Text) recheckDiscovered(ctx context.Context, source string, approved Export) error {
+	if t.Discover == nil {
+		return fmt.Errorf("%s: no discover verb to recheck against", approved.Name)
+	}
+	discovered, err := t.runDiscover(ctx, source)
+	if err != nil {
+		return fmt.Errorf("%s: recheck: %w", approved.Name, err)
+	}
+	var current *Export
+	for i := range discovered {
+		if discovered[i].Name == approved.Name {
+			current = &discovered[i]
+			break
+		}
+	}
+	if current == nil {
+		return fmt.Errorf("%s is no longer discoverable (recheck before execution)", approved.Name)
+	}
+	allowed := make(map[string]bool, len(approved.Effects))
+	for _, effect := range approved.Effects {
+		allowed[effect] = true
+	}
+	for _, effect := range current.Effects {
+		if !allowed[effect] {
+			return fmt.Errorf("%s now declares effect %q, absent from the %v audited at discovery: refusing a changed declaration", approved.Name, effect, approved.Effects)
+		}
+	}
+	return nil
 }
 
 // callRunner runs one declared method through the fence's runner.

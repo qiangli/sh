@@ -3,6 +3,7 @@ package polyglot
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -277,6 +278,85 @@ fi
 	}
 	if _, err := module.Call(ctx, "send"); err == nil {
 		t.Fatal("expected the processor's own refusal")
+	}
+}
+
+// TestTextDiscoveredCallDeniesWidenedEffects: a target's effects grow
+// between Discover (plan-build time) and the call (run time) — the recheck
+// immediately before execution must deny it, because the only approval on
+// record (the plan's Export) audited the narrower, stale declaration.
+func TestTextDiscoveredCallDeniesWidenedEffects(t *testing.T) {
+	saved := ToolResolver
+	t.Cleanup(func() { ToolResolver = saved })
+	list := func(effects string) func(string) ([]string, string, error) {
+		return func(string) ([]string, string, error) {
+			return []string{"/bin/sh", "-c", fmt.Sprintf(`
+if [ "$1" = "list" ]; then
+	printf '{"name":"send","effects":[%s]}\n'
+else
+	printf 'ran %%s\n' "$2"
+fi
+`, effects), "fake"}, "fake", nil
+		}
+	}
+	ToolResolver = list(`"read"`)
+	text := Text{Type: "widened", FileName: "task.md", Tool: "fake-tool", Verbs: []Verb{
+		{Name: "run", Args: []string{"run"}},
+	},
+		Discover:       &Verb{Args: []string{"list"}},
+		DiscoveredVerb: &Verb{Args: []string{"target", "{target}"}},
+	}
+	ctx := context.Background()
+	plans, err := Prepare(ctx, []Block{{Language: "widened", Alias: "w", Source: "x\n"}}, map[string]Analyzer{"widened": text})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := plans[0]
+	if len(plan.Exports) != 2 || plan.Exports[1].Name != "send" || strings.Join(plan.Exports[1].Effects, ",") != "read" {
+		t.Fatalf("exports = %+v", plan.Exports)
+	}
+
+	// The artifact widens (read -> read+net) after Discover ran.
+	ToolResolver = list(`"read","net"`)
+	module := Start(plan, text)
+	if _, err := module.Call(ctx, "send"); err == nil {
+		t.Fatal("expected denial of a target whose effects widened since discovery")
+	}
+}
+
+// TestTextDiscoveredCallRefusesUndeclaredMethod: a name DiscoveredVerb's
+// template can spell, but that Discover never actually answered, must be
+// refused — membership in the plan's Exports table gates the call, not
+// mere syntactic shape.
+func TestTextDiscoveredCallRefusesUndeclaredMethod(t *testing.T) {
+	saved := ToolResolver
+	t.Cleanup(func() { ToolResolver = saved })
+	ToolResolver = func(string) ([]string, string, error) {
+		return []string{"/bin/sh", "-c", `
+if [ "$1" = "list" ]; then
+	printf '{"name":"send","effects":["net"]}\n'
+else
+	printf 'ran %s\n' "$2"
+fi
+`, "fake"}, "fake", nil
+	}
+	text := Text{Type: "undeclared", FileName: "task.md", Tool: "fake-tool", Verbs: []Verb{
+		{Name: "run", Args: []string{"run"}},
+	},
+		Discover:       &Verb{Args: []string{"list"}},
+		DiscoveredVerb: &Verb{Args: []string{"target", "{target}"}},
+	}
+	ctx := context.Background()
+	plans, err := Prepare(ctx, []Block{{Language: "undeclared", Alias: "u", Source: "x\n"}}, map[string]Analyzer{"undeclared": text})
+	if err != nil {
+		t.Fatal(err)
+	}
+	module := Start(plans[0], text)
+	// "destroy" was added to the artifact only after Discover ran (or was
+	// simply never there): it is not a member of plan.Exports, so it must
+	// stay unreachable even though DiscoveredVerb could spell its call.
+	if _, err := module.Call(ctx, "destroy"); err == nil {
+		t.Fatal("expected refusal of a method name Discover never answered")
 	}
 }
 
