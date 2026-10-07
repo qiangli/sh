@@ -3,6 +3,8 @@ package grammar
 import (
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -49,8 +51,9 @@ func TestAgreementWithPublishedCorpora(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	roots := []string{"../../bashsharp-tour", "../../bashsharp-tests/tools/bashsharp"}
-	count := 0
+	roots := []string{"../../bashsharp-tour", "../../bashsharp-tests/tools"}
+	count, embedded := 0, 0
+	embeddedByScript := map[string]int{}
 	covered := map[string]int{}
 	for _, root := range roots {
 		err := filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
@@ -61,31 +64,43 @@ func TestAgreementWithPublishedCorpora(t *testing.T) {
 				return nil
 			}
 			ext := filepath.Ext(path)
-			if root == roots[0] && ext != ".bsh" && ext != ".sh" {
+			if root == roots[0] && ext != ".bsh" {
 				return nil
 			}
 			if root == roots[1] && ext != ".sh" {
 				return nil
 			}
-			count++
 			data, err := os.ReadFile(path)
 			if err != nil {
 				return err
 			}
-			grammarErr := g.CheckDelta(string(data))
-			recognized, inspectErr := g.Inspect(string(data))
-			if inspectErr != nil && grammarErr == nil {
-				t.Errorf("%s: inspect error: %v", path, inspectErr)
+			fixtures := map[string]string{}
+			if ext == ".bsh" {
+				fixtures[path] = string(data)
+			} else {
+				fixtures = embeddedBPP(path, string(data))
+				embedded += len(fixtures)
+				if len(fixtures) > 0 {
+					embeddedByScript[filepath.Base(path)] += len(fixtures)
+				}
 			}
-			for rule, n := range recognized {
-				covered[rule] += n
-			}
-			file, parserErr := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(string(data)), path)
-			if parserErr == nil {
-				checkSites(t, g, path, string(data), file)
-			}
-			if (grammarErr == nil) != (parserErr == nil) {
-				t.Errorf("%s: grammar: %v; parser: %v", path, grammarErr, parserErr)
+			for fixture, src := range fixtures {
+				count++
+				grammarErr := g.CheckDelta(src)
+				recognized, inspectErr := g.Inspect(src)
+				if inspectErr != nil && grammarErr == nil {
+					t.Errorf("%s: inspect error: %v", fixture, inspectErr)
+				}
+				for rule, n := range recognized {
+					covered[rule] += n
+				}
+				file, parserErr := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(src), fixture)
+				if parserErr == nil {
+					checkSites(t, g, fixture, src, file)
+				}
+				if (grammarErr == nil) != (parserErr == nil) {
+					t.Errorf("%s: grammar: %v; parser: %v", fixture, grammarErr, parserErr)
+				}
 			}
 			return nil
 		})
@@ -93,15 +108,35 @@ func TestAgreementWithPublishedCorpora(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if count < 44 {
-		t.Fatalf("corpus missing: checked %d files", count)
+	if count < 55 || embedded < 15 {
+		t.Fatalf("corpus missing: checked %d fixtures, including %d embedded", count, embedded)
+	}
+	if embeddedByScript["polyglot-gate.sh"] != 18 || len(embeddedByScript) != 1 {
+		t.Fatalf("unexpected embedded fixture inventory: %v", embeddedByScript)
 	}
 	for _, rule := range []string{"fence-open", "decorator", "agentic-block", "agentic-shell-func", "agentic-typed-func", "agentic-typed-method", "typed-func"} {
 		if covered[rule] == 0 {
 			t.Errorf("published %s production was never exercised", rule)
 		}
 	}
-	t.Logf("checked %d Tour and bashsharp tool fixtures; recognized %v", count, covered)
+	t.Logf("checked %d fixtures (%d Tour files, %d embedded .bpp heredocs); recognized %v", count, count-embedded, embedded, covered)
+}
+
+var bppHeredoc = regexp.MustCompile(`(?m)^cat\s+>[^\n]*\.bpp["']?\s+<<'([A-Za-z_][A-Za-z_0-9]*)'\s*$`)
+
+func embeddedBPP(path, script string) map[string]string {
+	out := map[string]string{}
+	for _, m := range bppHeredoc.FindAllStringSubmatchIndex(script, -1) {
+		marker := script[m[2]:m[3]]
+		body := script[m[1]:]
+		end := strings.Index(body, "\n"+marker+"\n")
+		if end < 0 {
+			continue
+		}
+		line := strings.Count(script[:m[0]], "\n") + 1
+		out[filepath.Base(path)+":"+strconv.Itoa(line)] = body[:end] + "\n"
+	}
+	return out
 }
 
 func TestUnclosedFenceVerdict(t *testing.T) {
@@ -115,6 +150,107 @@ func TestUnclosedFenceVerdict(t *testing.T) {
 		if grammarErr == nil || parserErr == nil {
 			t.Errorf("expected both to reject %q: grammar=%v parser=%v", src, grammarErr, parserErr)
 		}
+	}
+}
+
+func TestCommittedMalformedHeadersAgreeOnRejection(t *testing.T) {
+	g, err := Load("delta.gbnf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, src := range []string{"agentic {\n", "func f( {\n", "agentic function f( {\n", "func (r Report) F( {\n"} {
+		if err := g.CheckDelta(src); err == nil {
+			t.Errorf("delta accepted %q", src)
+		}
+		if _, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(src), "bad.bsh"); err == nil {
+			t.Errorf("engine accepted %q", src)
+		}
+	}
+}
+
+func TestDeltaRejects(t *testing.T) {
+	g, err := Load("delta.gbnf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := map[string]string{
+		"fence":                   "~~~python as\npass\n~~~\n",
+		"embed":                   "embed python \"/absolute.py\" as py\n",
+		"decorator":               "@guard(read\nfunc f() {}\n",
+		"go.error":                "@go.error(1)\nfunc f() {}\n",
+		"agentic block":           "agentic {\necho open\n",
+		"agentic shell function":  "agentic function f( { echo bad; }\n",
+		"agentic typed function":  "agentic func f( { return 1 }\n",
+		"agentic typed method":    "agentic func (r Report) F( { return 1 }\n",
+		"typed function":          "func f( { return 1 }\n",
+		"typed method":            "func (r Report) F( { return 1 }\n",
+		"typed suffix":            "func f() ??? { return 1 }\n",
+		"typed unclosed body":     "func f() int {\nreturn 1\n",
+		"dangling decorator":      "@guard(\"read\")\necho done\n",
+		"go.error shell function": "@go.error()\nfunction f() { :; }\n",
+	}
+	for name, src := range cases {
+		t.Run(name, func(t *testing.T) {
+			if err := g.CheckDelta(src); err == nil {
+				t.Fatalf("accepted malformed delta %q", src)
+			}
+		})
+	}
+	for name, src := range map[string]string{
+		"embed":                  "embed python \"./calc.py\" as py\n",
+		"decorator":              "@guard(effects: \"read\")\nfunc f() {}\n",
+		"go.error":               "@go.error()\nfunc f() {}\n",
+		"agentic block":          "agentic { echo yes; }\n",
+		"agentic shell function": "agentic function f() { echo yes; }\n",
+		"agentic typed function": "agentic func f(x int) int { return x }\n",
+		"agentic typed method":   "agentic func (r Report) F() int { return 1 }\n",
+		"typed function":         "func f(x int) int { return x }\n",
+		"typed method":           "func (r Report) F() int { return 1 }\n",
+	} {
+		t.Run(name+" valid", func(t *testing.T) {
+			if err := g.CheckDelta(src); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+// EBNF remains a compositional specification with opaque Bash/Go productions.
+// Exercise its production graph: every claimed extension must be reachable from
+// extension_statement, and every executable header must have an EBNF peer.
+func TestEBNFProductionInventory(t *testing.T) {
+	data, err := os.ReadFile("delta.ebnf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	definitions := regexp.MustCompile(`(?m)^([a-z_]+)\s*=`).FindAllStringSubmatchIndex(string(data), -1)
+	if len(definitions) == 0 {
+		t.Fatal("no EBNF productions")
+	}
+	rules := map[string]string{}
+	for i, m := range definitions {
+		name := string(data[m[2]:m[3]])
+		end := len(data)
+		if i+1 < len(definitions) {
+			end = definitions[i+1][0]
+		}
+		if _, duplicate := rules[name]; duplicate {
+			t.Fatalf("duplicate EBNF %s", name)
+		}
+		rules[name] = string(data[m[1]:end])
+	}
+	for _, name := range []string{"extension_statement", "decorator", "go_error", "agentic_block", "agentic_function", "typed_function", "typed_method", "fence", "embed", "fence_open", "fence_close"} {
+		if _, ok := rules[name]; !ok {
+			t.Errorf("missing EBNF production %s", name)
+		}
+	}
+	for _, name := range []string{"decorator_stack", "fence", "embed", "agentic_block", "agentic_function", "typed_function", "typed_method"} {
+		if !strings.Contains(rules["extension_statement"], name) {
+			t.Errorf("%s is unreachable from extension_statement", name)
+		}
+	}
+	if !strings.Contains(rules["decorator"], "selector") || !strings.Contains(rules["decorator"], "go_error") || !strings.Contains(rules["fence"], "fence_close") || !strings.Contains(rules["typed_function"], "parameters") {
+		t.Error("EBNF extension lost a required component")
 	}
 }
 

@@ -4,7 +4,7 @@ extension_statement = decorator_stack, function_decl
                     | fence | embed | agentic_block | agentic_function
                     | typed_function | typed_method ;
 decorator_stack    = decorator, { separator, decorator }, separator ;
-decorator          = "@", selector, "(", argument_text, ")" ;
+decorator          = go_error | "@", selector, "(", argument_text, ")" ;
 go_error           = "@go.error()" ;
 function_decl      = bash_function | typed_function | typed_method
                     | agentic_function ;

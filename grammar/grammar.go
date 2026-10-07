@@ -220,6 +220,7 @@ func (g *Grammar) Inspect(src string) (map[string]int, error) {
 		lines = lines[:len(lines)-1]
 	}
 	fence := ""
+	pendingDecorator, pendingGoError := false, false
 	for i, raw := range lines {
 		line := strings.TrimSuffix(strings.TrimSuffix(raw, "\n"), "\r")
 		if fence != "" {
@@ -228,39 +229,67 @@ func (g *Grammar) Inspect(src string) (map[string]int, error) {
 			}
 			continue
 		}
+		if pendingDecorator && strings.TrimSpace(line) != "" && !strings.HasPrefix(strings.TrimSpace(line), "#") && !strings.HasPrefix(line, "@") {
+			if !validFunctionStart(line) || (pendingGoError && !strings.HasPrefix(line, "func ") && !strings.HasPrefix(line, "agentic func ")) {
+				return counts, fmt.Errorf("line %d: decorator stack requires a function declaration", i+1)
+			}
+			pendingDecorator, pendingGoError = false, false
+		}
 		if !strings.HasPrefix(line, "~~~") {
 			switch {
 			case strings.HasPrefix(line, "@"):
+				if !strings.Contains(line, "(") && !strings.HasPrefix(line, "@go.error") {
+					continue // uncommitted near miss remains ordinary shell text
+				}
+				if strings.HasPrefix(line, "@go.error") && !g.Match("go-error", line) {
+					return counts, fmt.Errorf("line %d: malformed @go.error marker", i+1)
+				}
+				if !g.Match("decorator", line) || !balancedCall(line) {
+					return counts, fmt.Errorf("line %d: malformed decorator", i+1)
+				}
 				if g.Match("go-error", line) {
 					counts["go-error"]++
+					pendingGoError = true
 				}
 				if g.Match("decorator", line) {
 					counts["decorator"]++
+					pendingDecorator = true
 				}
 			case strings.HasPrefix(line, "embed "):
-				if g.Match("embed", line) {
-					counts["embed"]++
+				if !g.Match("embed", line) {
+					return counts, fmt.Errorf("line %d: malformed embed", i+1)
 				}
+				counts["embed"]++
 			case strings.HasPrefix(line, "agentic "):
+				matched := false
 				for _, rule := range []string{"agentic-block", "agentic-shell-func", "agentic-typed-func", "agentic-typed-method"} {
-					if g.Match(rule, line) {
+					if g.Match(rule, line) && validBlockHeader(line) {
 						counts[rule]++
+						matched = true
 						break
 					}
+				}
+				if !matched || !closedBlock(lines, i) {
+					return counts, fmt.Errorf("line %d: malformed agentic declaration or block", i+1)
 				}
 			case strings.HasPrefix(line, "func "):
+				matched := false
 				for _, rule := range []string{"typed-func", "typed-method"} {
-					if g.Match(rule, line) {
+					if g.Match(rule, line) && validBlockHeader(line) {
 						counts[rule]++
+						matched = true
 						break
 					}
+				}
+				if !matched || !closedBlock(lines, i) {
+					return counts, fmt.Errorf("line %d: malformed typed function or method", i+1)
 				}
 			}
 			continue
 		}
 		if !g.Match("fence-open", line) {
-			continue
-		} // Class E near miss: Bash command.
+			return counts, fmt.Errorf("line %d: malformed fence opener", i+1)
+		}
 		counts["fence-open"]++
 		n := 0
 		for n < len(line) && line[n] == '~' {
@@ -274,5 +303,122 @@ func (g *Grammar) Inspect(src string) (map[string]int, error) {
 	if fence != "" {
 		return counts, fmt.Errorf("unclosed fence %s", fence)
 	}
+	if pendingDecorator {
+		return counts, fmt.Errorf("decorator stack without function declaration")
+	}
 	return counts, nil
+}
+
+var shellFunctionStart = regexp.MustCompile(`^(?:function[ \t]+[A-Za-z_][A-Za-z_0-9]*[ \t]*\(|[A-Za-z_][A-Za-z_0-9]*[ \t]*\(\))`)
+
+func validFunctionStart(line string) bool {
+	return strings.HasPrefix(line, "func ") || strings.HasPrefix(line, "agentic func ") ||
+		strings.HasPrefix(line, "agentic function ") || shellFunctionStart.MatchString(line)
+}
+
+// balancedCall checks the decorator's actual closing parenthesis, ignoring
+// parentheses within quoted arguments. Argument expressions remain opaque.
+func balancedCall(s string) bool {
+	return balancedUntil(s, '(', ')', false)
+}
+
+func validBlockHeader(s string) bool {
+	// The first body brace must follow all closed signature parentheses. Reject
+	// an apparent body brace inside an unfinished argument or receiver list.
+	return balancedUntil(s, '(', ')', true)
+}
+
+func balancedUntil(s string, open, close byte, body bool) bool {
+	depth, quote := 0, byte(0)
+	escaped, seen, ended := false, false, false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if escaped {
+			escaped = false
+			continue
+		}
+		if c == '\\' {
+			escaped = true
+			continue
+		}
+		if quote != 0 {
+			if c == quote {
+				quote = 0
+			}
+			continue
+		}
+		if c == '\'' || c == '"' || c == '`' {
+			quote = c
+			continue
+		}
+		if c == '#' && (i == 0 || s[i-1] == ' ' || s[i-1] == '\t') {
+			break
+		}
+		if c == open {
+			depth++
+			seen = true
+			continue
+		}
+		if c == close {
+			depth--
+			if depth < 0 {
+				return false
+			}
+			if depth == 0 {
+				ended = true
+			}
+			continue
+		}
+		if c == '{' && body {
+			return depth == 0 && (ended || !seen)
+		}
+	}
+	return !body && seen && ended && depth == 0 && quote == 0
+}
+
+func closedBlock(lines []string, start int) bool {
+	depth, quote := 0, byte(0)
+	escaped, opened := false, false
+	for _, raw := range lines[start:] {
+		line := strings.TrimSuffix(raw, "\n")
+		for i := 0; i < len(line); i++ {
+			c := line[i]
+			if escaped {
+				escaped = false
+				continue
+			}
+			if c == '\\' {
+				escaped = true
+				continue
+			}
+			if quote != 0 {
+				if c == quote {
+					quote = 0
+				}
+				continue
+			}
+			if c == '\'' || c == '"' || c == '`' {
+				quote = c
+				continue
+			}
+			if c == '#' && (i == 0 || line[i-1] == ' ' || line[i-1] == '\t') {
+				break
+			}
+			if c == '{' {
+				depth++
+				opened = true
+			}
+			if c == '}' {
+				depth--
+				if depth == 0 && opened {
+					return true
+				}
+				if depth < 0 {
+					return false
+				}
+			}
+		}
+		escaped = false
+	}
+	return false
 }
