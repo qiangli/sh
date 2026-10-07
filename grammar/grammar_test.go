@@ -52,6 +52,7 @@ func TestPublishedProductions(t *testing.T) {
 		{"embed-line", "embed python \"/tmp/calc.py\" as py\n", false},
 		{"decorator", "@go.error()", true},
 		{"decorator", "@guard(effects: \"read\")", true},
+		{"decorator", "@ensure('test \"$RESULT\" = \"valid: true\napplicable: true\"')", true},
 		{"decorator", "@guard(read", false},
 		{"decorated-decl", "@guard(x) # why\nfunc f() {}", true},
 		{"decorated-decl", "@guard(x); func f() {}", true},
@@ -162,12 +163,12 @@ func TestAgreementWithPublishedCorpora(t *testing.T) {
 	if embeddedByScript["polyglot-gate.sh"] != 18 || len(embeddedByScript) != 1 {
 		t.Fatalf("unexpected embedded fixture inventory: %v", embeddedByScript)
 	}
-	for _, rule := range []string{"fence", "decorator", "agentic-block", "agentic-shell-func", "agentic-typed-func", "agentic-typed-method", "typed-func"} {
+	for _, rule := range []string{"fence", "embed-line", "decorator", "agentic-block", "agentic-shell-func", "agentic-typed-func", "agentic-typed-method", "typed-func"} {
 		if covered[rule] == 0 {
 			t.Errorf("published %s production was never exercised by the corpus", rule)
 		}
 	}
-	for _, rule := range []string{"embed-line", "typed-method", "at-function"} {
+	for _, rule := range []string{"typed-method", "at-function"} {
 		if covered[rule] != 0 {
 			t.Errorf("corpus now exercises %s; move it out of the testdata-only inventory", rule)
 		}

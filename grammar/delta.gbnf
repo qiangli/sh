@@ -31,7 +31,9 @@ comment ::= "#" any-but-newline*
 skip-line ::= maybe-space comment? "\n"
 header-end ::= maybe-space comment? ("\n" skip-line*)? maybe-space
 dq-string ::= "\"" ([^"\\\n] | "\\" any-but-newline)* "\""
-sq-string ::= "'" [^'\n]* "'"
+# Bash permits a single-quoted shell argument to span physical lines. This is
+# needed in decorators such as @ensure('test "$RESULT" = "a\nb"').
+sq-string ::= "'" [^']* "'"
 paren-text ::= ([^()\n"'] | "(" paren-text ")" | dq-string | sq-string)*
 bracket-text ::= ([^\[\]\n] | "[" bracket-text "]")*
 plain-word ::= ([^ \t\n(){}"'] | dq-string | sq-string)+

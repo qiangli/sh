@@ -28,7 +28,8 @@ comment            = "#", { any_but_newline } ;
 skip_line          = maybe_space, [ comment ], "\n" ;
 header_end         = maybe_space, [ comment ], [ "\n", { skip_line } ], maybe_space ;
 dq_string          = '"', { ? any byte except '"', backslash or newline ? | "\", any_but_newline }, '"' ;
-sq_string          = "'", { ? any byte except "'" or newline ? }, "'" ;
+(* Bash permits a single-quoted shell argument to span physical lines. *)
+sq_string          = "'", { ? any byte except "'" ? }, "'" ;
 paren_text         = { ? any byte except parentheses, newline or a quote ? | "(", paren_text, ")" | dq_string | sq_string } ;
 bracket_text       = { ? any byte except square brackets or newline ? | "[", bracket_text, "]" } ;
 plain_word         = ( ? any byte except whitespace, parentheses, braces or a quote ? | dq_string | sq_string ), { ? same ? | dq_string | sq_string } ;
