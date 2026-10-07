@@ -1,0 +1,29 @@
+(* Bash# delta over GNU Bash 5.3; Bash productions remain external. *)
+script             = { bash_statement | extension_statement } ;
+extension_statement = decorator_stack, function_decl
+                    | fence | embed | agentic_block | agentic_function
+                    | typed_function | typed_method ;
+decorator_stack    = decorator, { separator, decorator }, separator ;
+decorator          = "@", selector, "(", argument_text, ")" ;
+go_error           = "@go.error()" ;
+function_decl      = bash_function | typed_function | typed_method
+                    | agentic_function ;
+agentic_block      = "agentic", space, "{", bash_statement_list, "}" ;
+agentic_function   = "agentic", space, (bash_function | typed_function | typed_method) ;
+typed_function     = "func", space, identifier, [type_parameters], "(", parameters,
+                     ")", [results], "{", mixed_statement_list, "}" ;
+typed_method       = "func", space, "(", receiver, ")", space, identifier,
+                     "(", parameters, ")", [results], "{", mixed_statement_list, "}" ;
+fence              = fence_open, newline, uninterpreted_body, newline, fence_close ;
+fence_open         = fence_mark, format_name, [fence_tail] ;
+fence_close        = fence_mark ;  (* same count of tildes as opener *)
+fence_mark         = "~~~", {"~"} ;
+fence_tail         = space, "as", space, alias, [space, "!", runner]
+                   | space, "as", space, "!", runner
+                   | space, "!", runner ;
+embed              = "embed", space, format_name, space, quoted_relative_path,
+                     [fence_tail] ;
+selector           = identifier, {".", identifier} ;
+separator          = newline | ";" ;
+(* argument_text, parameters, results, bash_statement and bodies are supplied
+   by the respective Bash or Go expression grammar, not redefined here. *)

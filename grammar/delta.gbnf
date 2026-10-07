@@ -1,0 +1,23 @@
+# Bash# additions to GNU Bash 5.3. Each rule is a complete source-line header.
+# The base Bash grammar is deliberately opaque; see README.md.
+root ::= fence-open | embed | decorator | agentic-block | agentic-shell-func | agentic-typed-func | agentic-typed-method | typed-func | typed-method
+fence-mark ::= "~~~" "~"*
+name ::= [A-Za-z_] [A-Za-z_0-9]*
+selector ::= name ("." name)*
+format-name ::= [A-Za-z_] [A-Za-z_0-9+\-]*
+runner-name ::= [A-Za-z_0-9] ([A-Za-z_0-9\-]* [A-Za-z_0-9])?
+space ::= [ \t]+
+maybe-space ::= [ \t]*
+fence-tail ::= (space "as" space name (space "!" runner-name)? | space "as" space "!" runner-name | space "!" runner-name)?
+fence-open ::= fence-mark format-name fence-tail maybe-space
+embed-path ::= "\"./" [^\"\n]* "\"" | "\"../" [^\"\n]* "\""
+embed ::= "embed" space format-name space embed-path fence-tail maybe-space
+decorator-args ::= [^\n]*
+decorator ::= "@" selector "(" decorator-args ")" maybe-space ";"?
+go-error ::= "@go.error()" maybe-space ";"?
+agentic-block ::= "agentic" space "{" [^\n]*
+agentic-shell-func ::= "agentic" space "function" space name "(" [^\n]*
+agentic-typed-func ::= "agentic" space typed-func
+typed-func ::= "func" space name ("[" [^\n]* "]")? "(" [^\n]*
+typed-method ::= "func" space "(" [^\n]* ")" space name "(" [^\n]*
+agentic-typed-method ::= "agentic" space typed-method
