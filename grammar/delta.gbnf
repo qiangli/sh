@@ -43,15 +43,13 @@ fence-mark ::= "~~~" "~"*
 fence-tail ::= (space "as" space name (space "!" runner-name)? | space "as" space "!" runner-name | space "!" runner-name)?
 fence-head ::= format-name fence-tail maybe-space
 fence-open ::= fence-mark fence-head "\n"
-# Each recursive layer consumes one opener and one closer tilde. The base
-# production contributes the required three, so this admits every count >= 3
-# without a capture extension or a Go-side delimiter comparison.
-fence ::= fence-pair "\n"
-fence-pair ::= "~" fence-pair "~" | "~~~" fence-head "\n" fence-lines "~~~"
-# The empty alternative comes first so a closer binds at the first matching
-# line; recognizer backtracking still permits the paired outer layers to reject
-# a shorter run and continue through the body.
-fence-lines ::= "" | any-but-newline* "\n" fence-lines
+# Standard GBNF cannot bind fence-mark and compare later input to that exact,
+# unbounded byte string. fence-lexeme is therefore an explicit lexical
+# primitive: it validates fence-open, carries its tilde width, and consumes up
+# to the *first* later line equal to that delimiter. It is not a recursive CFG
+# approximation and it never treats that first closer as body text.
+fence ::= fence-lexeme
+fence-lexeme ::= [^\n]*
 
 # ---- embed: a fence whose body is a relative file ----
 embed-path ::= "\"" ("./" | "../") [^"\\\n]* "\""

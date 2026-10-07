@@ -13,10 +13,11 @@ import (
 )
 
 // OpaqueRules names the nonterminals the interpreter binds to Go code instead
-// of their published (approximate) right-hand side. They stand for grammars the
-// delta deliberately does not own: a run of ordinary Bash text with its
-// comment, quote and heredoc boundaries.
-var OpaqueRules = []string{"bash-fragment"}
+// of their published (approximate) right-hand side. bash-fragment is ordinary
+// Bash text with its comment, quote and heredoc boundaries. fence-lexeme is a
+// lexical primitive: standard GBNF cannot retain an arbitrary opener width and
+// require the first line with that exact width to be its closer.
+var OpaqueRules = []string{"bash-fragment", "fence-lexeme"}
 
 // ReportedRules are the delta-owned sites the interpreter records on success.
 var ReportedRules = []string{
@@ -625,6 +626,36 @@ var reported = func() map[string]bool {
 
 var hooks = map[string]func(m *matcher, pos int) (int, bool){
 	"bash-fragment": bashFragment,
+	"fence-lexeme":  fenceLexeme,
+}
+
+// fenceLexeme consumes a whole fence using the first exact-width closing line.
+// Its header is still the published fence-open rule; this hook only carries the
+// opener width into the body scan, a comparison that ordinary GBNF cannot
+// express for an unbounded delimiter. A closer is exactly the delimiter plus a
+// newline: spaces or a longer/shorter tilde run remain body bytes.
+func fenceLexeme(m *matcher, pos int) (int, bool) {
+	openEnd, ok := m.g.matchAt("fence-open", m.src, pos)
+	if !ok {
+		return pos, false
+	}
+	delimEnd := pos
+	for delimEnd < len(m.src) && m.src[delimEnd] == '~' {
+		delimEnd++
+	}
+	delim := m.src[pos:delimEnd]
+	for i := openEnd; i < len(m.src); {
+		end := strings.IndexByte(m.src[i:], '\n')
+		if end < 0 {
+			return pos, false
+		}
+		end += i
+		if m.src[i:end] == delim {
+			return end + 1, true
+		}
+		i = end + 1
+	}
+	return pos, false
 }
 
 // ---- opaque base-Bash fragment ----

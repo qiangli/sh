@@ -39,15 +39,12 @@ fence_mark         = "~~~", { "~" } ;
 fence_tail         = [ space, "as", space, name, [ space, "!", runner_name ] | space, "as", space, "!", runner_name | space, "!", runner_name ] ;
 fence_head         = format_name, fence_tail, maybe_space ;
 fence_open         = fence_mark, fence_head, "\n" ;
-(* Each recursive layer consumes one opener and one closer tilde. The base
-   production contributes the required three, so every count >= 3 is spelled
-   without a capture extension or an implementation-side comparison. *)
-fence              = fence_pair, "\n" ;
-fence_pair         = "~", fence_pair, "~" | "~~~", fence_head, "\n", fence_lines, "~~~" ;
-(* The empty alternative comes first so a closer binds at the first matching
-   line; recognizer backtracking still permits paired outer layers to reject
-   a shorter run and continue through the body. *)
-fence_lines        = "" | { any_but_newline }, "\n", fence_lines ;
+(* Standard EBNF cannot bind fence_mark and compare later input to that exact,
+   unbounded byte string. fence_lexeme is therefore an explicit lexical
+   primitive: it validates fence_open, carries its tilde width, and consumes up
+   to the first later line equal to that delimiter. *)
+fence              = fence_lexeme ;
+fence_lexeme       = ? a valid fence_open followed by arbitrary complete lines up to and including the first later line that is exactly its fence_mark ? ;
 
 (* ---- embed: a fence whose body is a relative file ---- *)
 embed_path         = '"', ( "./" | "../" ), { ? any byte except '"', backslash or newline ? }, '"' ;

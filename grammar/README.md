@@ -12,8 +12,7 @@ Editing a rule changes verdicts; the tests pin the published shape.
 ## What the delta owns and what stays opaque
 
 The delta owns structure, not Bash: same-count tilde fences with opaque
-bodies (any count of three or more; `fence-pair` recursively pairs each
-additional opener tilde with its closer), the
+bodies (any count of three or more), the
 `embed` line with its quoted `./` or `../` path and the fence alias/runner
 tail, decorator lines committed at `@name(` and ending at a newline or `;`,
 the `@name()` + compound-body spelling that Bash already owns as a function
@@ -22,9 +21,9 @@ Go-shaped typed signatures (balanced receiver, parameter and type-parameter
 text, a result type or parenthesized result list), and blocks as balanced
 bare braces around nested items.
 
-Exactly one nonterminal is bound to Go code: `bash-fragment`, listed in
-`OpaqueRules` and declared as an external `? ... ?` production in the EBNF.
-It consumes ordinary Bash text up to the next delta-owned boundary and
+Two nonterminals are bound to Go code, listed in `OpaqueRules` and declared
+as external `? ... ?` productions in the EBNF. `bash-fragment` consumes
+ordinary Bash text up to the next delta-owned boundary and
 supplies the boundaries the base grammar defines: `#` comments at word
 start, single and double quotes across lines, backslash-newline
 continuation, heredoc bodies (`<<`, `<<-`, quoted delimiters), and bare
@@ -35,6 +34,17 @@ command is a plain word. Command substitutions are deliberately not
 tracked: the engine recognizes a column-one fence inside `$( )`, and so does
 the fragment. The EBNF's other externals are the byte alphabet (`letter`,
 `digit`, `space`, `any_but_newline`, ...).
+
+`fence-lexeme` is the other external, and is deliberately lexical rather than
+a claim that standard GBNF can compare an unbounded captured delimiter. It
+first recognizes `fence-open`, retains its exact tilde width, then consumes
+through the first later line that is exactly that delimiter. Thus a three-,
+seven-, or 64-tilde opener all close at their first exact closer; later invalid
+Bash# text cannot be absorbed as fence body. Lines with a different width or
+trailing bytes remain body text. The GBNF and EBNF name this primitive
+explicitly, and `fenceLexeme` is its validator implementation.
+`if then` is still ordinary, opaque Bash text here; agreement on arbitrary
+base-Bash syntax belongs to the composed Bash grammar, not this delta.
 
 Near misses stay Bash, as in the engine (Class E): a fence header with a
 trailing comment or a bad tail, an unquoted or absolute embed path, `func f`
