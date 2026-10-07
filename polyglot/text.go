@@ -44,6 +44,8 @@ type Verb struct {
 	// Effects are the effect atoms a world-changing verb carries, read by
 	// the contract layer; nil for a read-only verb.
 	Effects []string
+	// Agentic requires an explicitly agentic caller.
+	Agentic bool
 	// Result is the export's result type; "" means one string (the
 	// processor's stdout).
 	Result string
@@ -185,7 +187,7 @@ func (t Text) Analyze(ctx context.Context, source string) ([]Export, error) {
 		if verb.Result != "" {
 			sig.Results = []string{verb.Result}
 		}
-		exports = append(exports, Export{Name: verb.Name, Signature: sig, Effects: verb.Effects})
+		exports = append(exports, Export{Name: verb.Name, Signature: sig, Effects: verb.Effects, Agentic: verb.Agentic})
 	}
 	if t.Discover != nil {
 		discovered, err := t.runDiscover(ctx, source)
@@ -235,7 +237,11 @@ func (t Text) LoweredLiteral(prefix string) string {
 	var out strings.Builder
 	fmt.Fprintf(&out, "%spolyglot.Text{Type:%q,FileName:%q,Tool:%q,WorkDir:%q,Shadow:%#v,Overlay:%#v,Verbs:[]%spolyglot.Verb{", prefix, t.Type, t.FileName, t.Tool, t.WorkDir, t.Shadow, t.Overlay, prefix)
 	for _, verb := range t.Verbs {
-		fmt.Fprintf(&out, "{Name:%q,Args:%#v,Tool:%q,Env:%#v,Effects:%#v,Result:%q},", verb.Name, verb.Args, verb.Tool, verb.Env, verb.Effects, verb.Result)
+		fmt.Fprintf(&out, "{Name:%q,Args:%#v,Tool:%q,Env:%#v,Effects:%#v,Result:%q", verb.Name, verb.Args, verb.Tool, verb.Env, verb.Effects, verb.Result)
+		if verb.Agentic {
+			out.WriteString(",Agentic:true")
+		}
+		out.WriteString("},")
 	}
 	out.WriteString("}}")
 	return out.String()
@@ -291,6 +297,7 @@ func ParseMethods(runner, answer string) ([]Export, error) {
 			Signature *Signature `json:"signature"`
 			Effect    string     `json:"effect"`
 			Effects   []string   `json:"effects"`
+			Agentic   bool       `json:"agentic"`
 		}
 		if err := json.Unmarshal([]byte(text), &raw); err != nil {
 			return nil, fmt.Errorf("runner %s: %s line %d is not a method object: %v", runner, MethodsVerb, line, err)
@@ -316,7 +323,7 @@ func ParseMethods(runner, answer string) ([]Export, error) {
 		for i, effect := range effects {
 			effects[i] = strings.TrimSpace(effect)
 		}
-		exports = append(exports, Export{Name: raw.Name, Signature: sig, Effects: effects})
+		exports = append(exports, Export{Name: raw.Name, Signature: sig, Effects: effects, Agentic: raw.Agentic})
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("runner %s: %s: %v", runner, MethodsVerb, err)
@@ -526,7 +533,7 @@ func (m *Module) exportNamed(name string) (Export, bool) {
 }
 
 // recheckDiscovered re-runs Discover and compares the target's current
-// effects against approved — the ones the plan recorded for it when
+// effects and agentic requirement against approved — what the plan recorded when
 // Discover first ran. An atom present now but absent from approved denies
 // the call: approved is what every upstream gate audited, and anything
 // beyond it was never audited at all.
@@ -547,6 +554,9 @@ func (t Text) recheckDiscovered(ctx context.Context, source string, approved Exp
 	}
 	if current == nil {
 		return fmt.Errorf("%s is no longer discoverable (recheck before execution)", approved.Name)
+	}
+	if current.Agentic && !approved.Agentic {
+		return fmt.Errorf("%s now requires agentic authority absent at discovery: refusing a changed declaration", approved.Name)
 	}
 	allowed := make(map[string]bool, len(approved.Effects))
 	for _, effect := range approved.Effects {

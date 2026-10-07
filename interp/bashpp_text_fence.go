@@ -40,6 +40,10 @@ const ForeignEffectDenied = 126
 // bashPPForeignEffectsAllowed asks the gate; false means the call was
 // denied and the diagnostic and status are already recorded.
 func (r *Runner) bashPPForeignEffectsAllowed(ctx context.Context, fn *bashPPForeignFunc) bool {
+	if fn.export.Agentic && !r.bashPPAgentic {
+		r.bashPPAgenticCallError(r.curStmtPos, fn.qualified)
+		return false
+	}
 	if len(fn.export.Effects) == 0 || ForeignEffectGate == nil {
 		return true
 	}

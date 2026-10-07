@@ -324,6 +324,45 @@ fi
 	}
 }
 
+func TestTextDiscoveredCallDeniesNewAgenticRequirement(t *testing.T) {
+	saved := ToolResolver
+	t.Cleanup(func() { ToolResolver = saved })
+	list := func(agentic string) func(string) ([]string, string, error) {
+		return func(string) ([]string, string, error) {
+			return []string{"/bin/sh", "-c", fmt.Sprintf(`
+if [ "$1" = "list" ]; then
+	printf '{"name":"send","effects":["read"],"agentic":%s}\n'
+else
+	printf 'ran %%s\n' "$2"
+fi
+`, agentic), "fake"}, "fake", nil
+		}
+	}
+	ToolResolver = list(`false`)
+	text := Text{Type: "widened", FileName: "task.md", Tool: "fake-tool", Verbs: []Verb{
+		{Name: "run", Args: []string{"run"}},
+	},
+		Discover:       &Verb{Args: []string{"list"}},
+		DiscoveredVerb: &Verb{Args: []string{"target", "{target}"}},
+	}
+	ctx := context.Background()
+	plans, err := Prepare(ctx, []Block{{Language: "widened", Alias: "w", Source: "x\n"}}, map[string]Analyzer{"widened": text})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := plans[0]
+	if len(plan.Exports) != 2 || plan.Exports[1].Name != "send" || strings.Join(plan.Exports[1].Effects, ",") != "read" {
+		t.Fatalf("exports = %+v", plan.Exports)
+	}
+
+	// Effects stay identical while the agentic requirement appears.
+	ToolResolver = list(`true`)
+	module := Start(plan, text)
+	if _, err := module.Call(ctx, "send"); err == nil {
+		t.Fatal("expected denial of a newly agentic target")
+	}
+}
+
 // TestTextDiscoveredCallRefusesUndeclaredMethod: a name DiscoveredVerb's
 // template can spell, but that Discover never actually answered, must be
 // refused — membership in the plan's Exports table gates the call, not
@@ -427,5 +466,44 @@ func TestManifestFilesAndGoModule(t *testing.T) {
 	}
 	if _, err := DiscoverEnvironment(EnvironmentRequest{Source: filepath.Join(cwd, "t.bsh"), Language: "go"}); err == nil || !strings.Contains(err.Error(), "gomod fence") {
 		t.Fatalf("without a module: %v", err)
+	}
+}
+
+func TestParseMethodsAgentic(t *testing.T) {
+	exports, err := ParseMethods("agent", `{"name":"run","agentic":true,"effect":"exec, net, spend"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !exports[0].Agentic || strings.Join(exports[0].Effects, ",") != "exec,net,spend" {
+		t.Fatalf("lost governance: %+v", exports[0])
+	}
+	if _, err := ParseMethods("agent", `{"name":"run","agentic":"true"}`); err == nil {
+		t.Fatal("accepted malformed agentic flag")
+	}
+	exports, err = ParseMethods("old", `{"name":"run"}`)
+	if err != nil || exports[0].Agentic {
+		t.Fatalf("legacy method changed: %+v %v", exports, err)
+	}
+}
+
+func TestEmbeddedModuleClose(t *testing.T) {
+	closed := 0
+	runtime := Embedded{RuntimeName: "lifecycle", CallFunc: func(ctx context.Context, _ Plan, _ string, _ []any, _ map[string]any) (CallResult, error) {
+		return CallResult{}, ctx.Err()
+	}, CloseFunc: func(plan Plan) error {
+		if plan.ID != "owned" {
+			t.Fatalf("wrong owner: %+v", plan)
+		}
+		closed++
+		return nil
+	}}
+	mod := Start(Plan{ID: "owned"}, runtime)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := mod.Call(ctx, "run"); err == nil {
+		t.Fatal("cancelled call succeeded")
+	}
+	if err := mod.Close(); err != nil || closed != 1 {
+		t.Fatalf("close count=%d err=%v", closed, err)
 	}
 }

@@ -22,6 +22,9 @@ type LanguageRuntime interface {
 // caller's directory at call time (an interpreter whose script may `cd`
 // before a fence call).
 type RuntimeConfig struct {
+	// Source is the original artifact path (the embedded file for embed).
+	// Text adapters use it for source-relative imports and policy roots.
+	Source      string
 	Environment *EnvironmentPlan
 	Dir         string
 	Cwd         func() string

@@ -245,3 +245,92 @@ echo "count=$c"
 		t.Fatalf("stdout = %q (stderr %q)", stdout.String(), stderr.String())
 	}
 }
+
+func TestBashPPRunnerFenceAgentic(t *testing.T) {
+	const fence = `
+runner() {
+ case "$1" in
+ methods) echo '{"name":"run","agentic":true,"effect":"exec,net,spend"}' ;;
+ run) echo CALLED ;;
+ esac
+}
+~~~oracle as searcher !runner
+existing binding
+~~~
+`
+	for _, tc := range []struct {
+		name, call string
+		allowed    bool
+	}{
+		{"expression denied", "v := searcher.run()\necho \"$v\"", false},
+		{"command denied", "searcher.run()", false},
+		{"region", "agentic { v := searcher.run(); echo \"$v\"; }", true},
+		{"marked function", "agentic func query() { v := searcher.run(); echo \"$v\"; }\nagentic { query(); }", true},
+		{"unmarked function", "func query() { v := searcher.run(); echo \"$v\"; }\nagentic { query(); }", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, diagnostic, err := runBashPPInDir(t, t.TempDir(), fence+tc.call+"\n")
+			if tc.allowed {
+				if err != nil || out != "CALLED\n" {
+					t.Fatalf("out=%q diagnostic=%q err=%v", out, diagnostic, err)
+				}
+				return
+			}
+			if strings.Contains(out, "CALLED") || !strings.Contains(diagnostic, "agentic action requires") {
+				t.Fatalf("out=%q diagnostic=%q err=%v", out, diagnostic, err)
+			}
+		})
+	}
+}
+
+func TestBashPPForeignDeclaredStringError(t *testing.T) {
+	const language = "typed_oracle_fixture"
+	polyglot.RegisterLanguage(polyglot.Language{Canonical: language, Text: true, NewRuntime: func(polyglot.RuntimeConfig) polyglot.LanguageRuntime {
+		return polyglot.Embedded{RuntimeName: language,
+			AnalyzeFunc: func(context.Context, string) ([]polyglot.Export, error) {
+				return []polyglot.Export{{Name: "run", Agentic: true, Signature: polyglot.Signature{Params: []string{"string"}, Results: []string{"string", "error"}}}}, nil
+			},
+			CallFunc: func(_ context.Context, _ polyglot.Plan, _ string, args []any, _ map[string]any) (polyglot.CallResult, error) {
+				if args[0] == "fail" {
+					return polyglot.CallResult{Value: "partial"}, fmt.Errorf("raw failure")
+				}
+				return polyglot.CallResult{Value: "answer"}, nil
+			}}
+	}})
+	out, diag, err := runBashPPInDir(t, t.TempDir(), `~~~typed_oracle_fixture as oracle
+binding
+~~~
+agentic func query() {
+ answer, err := oracle.run("success")
+ if err != nil { echo unexpected; }
+ echo "$answer"
+ answer, err = oracle.run("fail")
+ if err != nil { message := err.Error(); echo "$answer:$message"; }
+}
+agentic { query(); }
+`)
+	if err != nil || out != "answer\npartial:raw failure\n" || diag != "" {
+		t.Fatalf("out=%q diag=%q err=%v", out, diag, err)
+	}
+}
+
+func TestBashPPLegacyErrorBindingKeepsRawBridgeFailureFatal(t *testing.T) {
+	const language = "legacy_bridge_fixture"
+	polyglot.RegisterLanguage(polyglot.Language{Canonical: language, Text: true, NewRuntime: func(polyglot.RuntimeConfig) polyglot.LanguageRuntime {
+		return polyglot.Embedded{RuntimeName: language,
+			AnalyzeFunc: func(context.Context, string) ([]polyglot.Export, error) {
+				return []polyglot.Export{{Name: "run", Signature: polyglot.Signature{Results: []string{"string"}}}}, nil
+			},
+			CallFunc: func(context.Context, polyglot.Plan, string, []any, map[string]any) (polyglot.CallResult, error) {
+				return polyglot.CallResult{}, fmt.Errorf("raw bridge failure")
+			}}
+	}})
+	out, diag, err := runBashPPInDir(t, t.TempDir(), `~~~legacy_bridge_fixture as bridge
+binding
+~~~
+value, failure := bridge.run()
+`)
+	if out != "" || !strings.Contains(diag, "raw bridge failure") || err == nil {
+		t.Fatalf("out=%q diag=%q err=%v", out, diag, err)
+	}
+}

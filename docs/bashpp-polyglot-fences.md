@@ -334,10 +334,19 @@ has its stdout as the result the same way; a non-zero status is the call
 error. The alias
 exposes exactly the methods the runner declares when invoked as
 `runner methods <file>` (one export JSON object per line — `name`, optional
-`signature`, optional `effect` atom that the contract layer reads); an empty
+`signature`, optional `effects` array (or comma-separated `effect`), and an
+optional boolean `agentic`); an empty
 or malformed declaration is a refusal, an undeclared method is an unknown
 callable. The runner's own top-level declaration is evaluated when the unit
 is prepared, so the fence may name a function declared anywhere in the unit.
+A method declaring `"agentic": true` requires an explicit `agentic { }`
+caller or an agentic function, independently of its effect cap. The interpreter
+checks this before dispatching the host method; it never calls a model itself.
+Agentic foreign methods currently refuse lowering by name with the interpreted
+route. A host method may declare `params: ["string"]` and
+`results: ["string", "error"]`: both partial output and the typed error are
+retained, and the error supports `.Error()`.
+
 Every text fence, row or runner, needs an alias: its methods are known only
 after preparation, too late for the parser's bare-call look-ahead. The body
 is materialized under the cache directory, keyed by the plan id, never into
