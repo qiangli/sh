@@ -46,9 +46,15 @@ func (r *Runner) bashPPPrepareSourceBlocks(ctx context.Context, file *syntax.Fil
 	var blocks []polyglot.Block
 	var imports []*syntax.BashPPImport
 	runnerBlocks := map[string]*syntax.SourceBlock{}
+	artifactSources := map[string]string{}
 	for _, stmt := range file.Stmts {
 		switch node := stmt.Cmd.(type) {
 		case *syntax.SourceBlock:
+			artifact := file.Name
+			if node.Src != nil {
+				artifact = filepath.Join(filepath.Dir(file.Name), node.Src.Value)
+			}
+			artifactSources[polyglot.CanonicalLanguage(node.Language.Value)] = artifact
 			alias, runner := "", ""
 			if node.Alias != nil {
 				alias = node.Alias.Value
@@ -138,7 +144,13 @@ func (r *Runner) bashPPPrepareSourceBlocks(ctx context.Context, file *syntax.Fil
 		if !ok {
 			continue
 		}
-		config := polyglot.RuntimeConfig{Dir: r.Dir, Cwd: func() string { return r.Dir },
+		artifact := artifactSources[language]
+		if artifact == "" {
+			artifact = source
+		} else if !filepath.IsAbs(artifact) {
+			artifact = filepath.Join(r.Dir, artifact)
+		}
+		config := polyglot.RuntimeConfig{Source: artifact, Dir: r.Dir, Cwd: func() string { return r.Dir },
 			Environ: execEnv(r.writeEnv), Env: func() []string { return execEnv(r.writeEnv) }}
 		if row.NeedsEnvironment {
 			environment, err := polyglot.DiscoverEnvironment(polyglot.EnvironmentRequest{
