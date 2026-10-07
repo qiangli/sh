@@ -12,7 +12,8 @@ Editing a rule changes verdicts; the tests pin the published shape.
 ## What the delta owns and what stays opaque
 
 The delta owns structure, not Bash: same-count tilde fences with opaque
-bodies (three to six tildes enumerated; the engine accepts any count), the
+bodies (any count of three or more; `fence-pair` recursively pairs each
+additional opener tilde with its closer), the
 `embed` line with its quoted `./` or `../` path and the fence alias/runner
 tail, decorator lines committed at `@name(` and ending at a newline or `;`,
 the `@name()` + compound-body spelling that Bash already owns as a function
@@ -50,7 +51,7 @@ receiverless target), and a missing embed target is reported by
 - `TestAgreementWithPublishedCorpora` runs 40 Tour `.bsh` files and the 18 `.bpp` heredocs in `bashsharp-tests/tools/polyglot-gate.sh` through the grammar and the engine, requires the same verdict, and compares the recorded sites with the engine's AST extension nodes line by line. It reports the accept/reject split; the published corpus is all engine-accepted and exercises fences, decorators, all four `agentic` forms and typed functions, but no embed, typed method or `@name()` function.
 - `TestFixtureAgreement` covers `testdata/accept` and `testdata/reject`: embed, typed method, `@name()` function, and boundary cases on the accept side; unclosed fence, dangling and indented decorators, missing embed target, unclosed and malformed `agentic` and typed forms on the reject side. The directory is a third voice: the engine and the grammar must both agree with it.
 - `TestSpellingAgreement` is the inline table of committed and near-miss spellings for every production, each compared with the engine.
-- `TestKnownDivergences` asserts the forms where the opaque fragment is coarser than the engine: a standalone `}` or `{ x }` word after an ordinary command, a brace group after `;` on the same line, fences of seven or more tildes, and a multi-line backtick body.
+- `TestKnownDivergences` asserts the forms where the opaque fragment is coarser than the engine: a standalone `}` or `{ x }` word after an ordinary command, a brace group after `;` on the same line, and a multi-line backtick body.
 - `TestEBNFMirrorsGBNF` parses the EBNF into a production graph and requires the same production set, the same referenced nonterminals per production, and no undefined nonterminal; the opaque rule must be declared external.
 
 Full delta-over-Bash/Go constrained decoding remains **OPEN**: a decoder

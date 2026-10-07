@@ -38,15 +38,15 @@ fence_mark         = "~~~", { "~" } ;
 fence_tail         = [ space, "as", space, name, [ space, "!", runner_name ] | space, "as", space, "!", runner_name | space, "!", runner_name ] ;
 fence_head         = format_name, fence_tail, maybe_space ;
 fence_open         = fence_mark, fence_head, "\n" ;
-fence              = fence_3 | fence_4 | fence_5 | fence_6 ;
-fence_3            = "~~~", fence_head, "\n", { body_line_3, "\n" }, "~~~", "\n" ;
-fence_4            = "~~~~", fence_head, "\n", { body_line_4, "\n" }, "~~~~", "\n" ;
-fence_5            = "~~~~~", fence_head, "\n", { body_line_5, "\n" }, "~~~~~", "\n" ;
-fence_6            = "~~~~~~", fence_head, "\n", { body_line_6, "\n" }, "~~~~~~", "\n" ;
-body_line_3        = "~~~", any_but_newline, { any_but_newline } | "~~", not_tilde_line | "~", not_tilde_line | not_tilde_line ;
-body_line_4        = "~~~~", any_but_newline, { any_but_newline } | "~~~", not_tilde_line | "~~", not_tilde_line | "~", not_tilde_line | not_tilde_line ;
-body_line_5        = "~~~~~", any_but_newline, { any_but_newline } | "~~~~", not_tilde_line | "~~~", not_tilde_line | "~~", not_tilde_line | "~", not_tilde_line | not_tilde_line ;
-body_line_6        = "~~~~~~", any_but_newline, { any_but_newline } | "~~~~~", not_tilde_line | "~~~~", not_tilde_line | "~~~", not_tilde_line | "~~", not_tilde_line | "~", not_tilde_line | not_tilde_line ;
+(* Each recursive layer consumes one opener and one closer tilde. The base
+   production contributes the required three, so every count >= 3 is spelled
+   without a capture extension or an implementation-side comparison. *)
+fence              = fence_pair, "\n" ;
+fence_pair         = "~", fence_pair, "~" | "~~~", fence_head, "\n", fence_lines, "~~~" ;
+(* The empty alternative comes first so a closer binds at the first matching
+   line; recognizer backtracking still permits paired outer layers to reject
+   a shorter run and continue through the body. *)
+fence_lines        = "" | { any_but_newline }, "\n", fence_lines ;
 
 (* ---- embed: a fence whose body is a relative file ---- *)
 embed_path         = '"', ( "./" | "../" ), { ? any byte except '"', backslash or newline ? }, '"' ;

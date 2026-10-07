@@ -40,8 +40,13 @@ func TestPublishedProductions(t *testing.T) {
 		{"fence-open", "~~~python as py # note\n", false},
 		{"fence", "~~~python as py\nprint(1)\n~~~~\n~~~\n", true},
 		{"fence", "~~~~python\n~~~\n~~~~\n", true},
+		{"fence", "~~~~~~~python\n~~~~~~\n~~~~~~~\n", true},
+		{"fence", "~~~~~~~~python\n~~~~~~~\n~~~~~~~~\n", true},
+		{"fence", strings.Repeat("~", 64) + "python\nbody\n" + strings.Repeat("~", 64) + "\n", true},
 		{"fence", "~~~python\nx\n~~~~\n", false},
 		{"fence", "~~~python\nx\n~~~ \n", false},
+		{"fence", "~~~~~~~python\nx\n~~~~~~\n", false},
+		{"fence", "~~~~~~~~python\nx\n~~~~~~~~~\n", false},
 		{"embed-line", "embed python \"./calc.py\" as py\n", true},
 		{"embed-line", "embed python \"./calc.py\" as py # note\n", true},
 		{"embed-line", "embed python \"/tmp/calc.py\" as py\n", false},
@@ -261,6 +266,13 @@ func TestSpellingAgreement(t *testing.T) {
 		{"~~~python as !run\nx\n~~~\n", true},
 		{"~~~python !run\nx\n~~~\n", true},
 		{"~~~python as py\n~~~~\n~~~\n", true},
+		// The parser and the published grammar must agree for arbitrary fence
+		// widths, not only the historical 3–6 enumeration.
+		{"~~~~~~~python\nbody\n~~~~~~~\n", true},
+		{"~~~~~~~~python\nbody\n~~~~~~~~\n", true},
+		{strings.Repeat("~", 64) + "python\nbody\n" + strings.Repeat("~", 64) + "\n", true},
+		{"~~~~~~~python\nbody\n~~~~~~\n", false},
+		{"~~~~~~~~python\nbody\n~~~~~~~~~\n", false},
 		{"function f() {\n  ~~~python\n  x\n  ~~~\n}\n", true},
 		{"cat <<EOF\n~~~python\nEOF\n", true},
 		{"cat <<-EOF\n\t~~~python\n\tEOF\n", true},
@@ -366,8 +378,6 @@ func TestKnownDivergences(t *testing.T) {
 		{"echo { x }\n", true, false},
 		// A brace group after `;` on the same line: the line head is `echo`, so `{` is a word.
 		{"echo a; { echo; }\n", true, false},
-		// The published fence productions enumerate three to six tildes.
-		{"~~~~~~~python\nx\n~~~~~~~\n", true, false},
 		// Backticks are not tracked across lines, so a `}` inside one closes nothing.
 		{"s=`echo\n}`\n", false, true},
 	}

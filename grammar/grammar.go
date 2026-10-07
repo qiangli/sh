@@ -126,9 +126,12 @@ func (g *Grammar) Match(rule, source string) bool {
 	if !ok {
 		return false
 	}
-	m := &matcher{g: g, src: source}
-	end, ok := n.match(m, 0)
-	return ok && end == len(source)
+	for _, state := range matchAll(n, matcher{g: g, src: source}, 0) {
+		if state.pos == len(source) {
+			return true
+		}
+	}
+	return false
 }
 
 // matchAt reports the end offset of rule matched as a prefix of src[pos:].
@@ -157,8 +160,15 @@ func (g *Grammar) Inspect(name, src string) ([]Site, error) {
 	if src != "" && !strings.HasSuffix(src, "\n") {
 		src += "\n"
 	}
-	m := &matcher{g: g, src: src}
-	end, ok := g.rules["root"].match(m, 0)
+	states := matchAll(g.rules["root"], matcher{g: g, src: src}, 0)
+	var m matcher
+	end, ok := 0, false
+	for _, state := range states {
+		if state.pos == len(src) {
+			m, end, ok = state.matcher, state.pos, true
+			break
+		}
+	}
 	sites := make([]Site, 0, len(m.trail))
 	for _, t := range m.trail {
 		if nestedSite(m.trail, t) {
@@ -407,6 +417,90 @@ type span struct {
 
 type node interface {
 	match(m *matcher, pos int) (int, bool)
+}
+
+type matchState struct {
+	matcher matcher
+	pos     int
+}
+
+// matchAll preserves the published PEG alternative order while retaining every
+// successful repetition/recursive path. The caller can therefore backtrack a
+// recursive production when a later token rejects an otherwise valid prefix.
+// This is needed by fence-pair: a shorter tilde run can be body text when an
+// outer pair still needs its matching closer. No grammar rule is interpreted
+// specially here.
+func matchAll(n node, m matcher, pos int) []matchState {
+	clone := func(m matcher) matcher { m.trail = append([]span(nil), m.trail...); return m }
+	switch n := n.(type) {
+	case lit, *class:
+		m = clone(m)
+		if end, ok := n.match(&m, pos); ok {
+			return []matchState{{m, end}}
+		}
+	case ref:
+		name := string(n)
+		m = clone(m)
+		if hook := hooks[name]; hook != nil {
+			if end, ok := hook(&m, pos); ok {
+				return []matchState{{m, end}}
+			}
+			return nil
+		}
+		if m.depth >= 20000 {
+			return nil
+		}
+		m.depth++
+		out := matchAll(m.g.rules[name], m, pos)
+		for i := range out {
+			out[i].matcher.depth--
+			if reported[name] {
+				out[i].matcher.trail = append(out[i].matcher.trail, span{rule: name, pos: pos, end: out[i].pos})
+			}
+		}
+		return out
+	case seq:
+		states := []matchState{{clone(m), pos}}
+		for _, child := range n {
+			var next []matchState
+			for _, state := range states {
+				next = append(next, matchAll(child, state.matcher, state.pos)...)
+			}
+			states = next
+			if len(states) == 0 {
+				return nil
+			}
+		}
+		return states
+	case alt:
+		var out []matchState
+		for _, child := range n {
+			out = append(out, matchAll(child, m, pos)...)
+		}
+		return out
+	case *rep:
+		levels := [][]matchState{{{clone(m), pos}}}
+		for count := 0; n.max < 0 || count < n.max; count++ {
+			var next []matchState
+			for _, state := range levels[len(levels)-1] {
+				for _, candidate := range matchAll(n.n, state.matcher, state.pos) {
+					if candidate.pos != state.pos {
+						next = append(next, candidate)
+					}
+				}
+			}
+			if len(next) == 0 {
+				break
+			}
+			levels = append(levels, next)
+		}
+		var out []matchState
+		for count := len(levels) - 1; count >= n.min; count-- {
+			out = append(out, levels[count]...)
+		}
+		return out
+	}
+	return nil
 }
 
 type lit string
