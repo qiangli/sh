@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -11,33 +12,79 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
-func TestPublishedProductions(t *testing.T) {
+func load(t *testing.T) *Grammar {
+	t.Helper()
 	g, err := Load("delta.gbnf")
 	if err != nil {
 		t.Fatal(err)
 	}
+	return g
+}
+
+func parse(name, src string) error {
+	_, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(src), name)
+	return err
+}
+
+func TestPublishedProductions(t *testing.T) {
+	g := load(t)
 	cases := []struct {
 		rule, src string
 		want      bool
 	}{
-		{"fence-open", "~~~python as py", true},
-		{"fence-open", "~~~~c++ as lib !builder", true},
-		{"fence-open", "~~~skill as !runner", true},
-		{"root", "~~~python as py", true},
-		{"fence-open", "~~~tf !bad-", false},
-		{"fence-open", " ~~~python", false},
-		{"fence-open", "~~~python nope", false},
-		{"embed", "embed python \"./calc.py\" as py", true},
-		{"embed", "embed python \"/tmp/calc.py\" as py", false},
+		{"fence-open", "~~~python as py\n", true},
+		{"fence-open", "~~~~c++ as lib !builder\n", true},
+		{"fence-open", "~~~skill as !runner\n", true},
+		{"fence-open", "~~~tf !bad-\n", false},
+		{"fence-open", "~~~python nope\n", false},
+		{"fence-open", "~~~python as py # note\n", false},
+		{"fence", "~~~python as py\nprint(1)\n~~~~\n~~~\n", true},
+		{"fence", "~~~~python\n~~~\n~~~~\n", true},
+		{"fence", "~~~python\nx\n~~~~\n", false},
+		{"fence", "~~~python\nx\n~~~ \n", false},
+		{"embed-line", "embed python \"./calc.py\" as py\n", true},
+		{"embed-line", "embed python \"./calc.py\" as py # note\n", true},
+		{"embed-line", "embed python \"/tmp/calc.py\" as py\n", false},
 		{"decorator", "@go.error()", true},
 		{"decorator", "@guard(effects: \"read\")", true},
-		{"go-error", "@go.error()", true},
-		{"go-error", "@go.error(1)", false},
-		{"agentic-block", "agentic {", true},
-		{"agentic-shell-func", "agentic function helper() {", true},
-		{"agentic-typed-func", "agentic func helper(x int) int {", true},
-		{"typed-func", "func helper(x int) int {", true},
-		{"typed-method", "func (r Report) Name() string {", true},
+		{"decorator", "@guard(read", false},
+		{"decorated-decl", "@guard(x) # why\nfunc f() {}", true},
+		{"decorated-decl", "@guard(x); func f() {}", true},
+		{"decorated-decl", "@guard(x)\n\n# c\nfunction f() { :; }", true},
+		{"decorated-decl", "@guard(x)\necho done\n", false},
+		{"decorated-decl", "@guard(x) func f() {}", false},
+		{"decorated-decl", "@x() func f() {}", false},
+		{"at-function", "@a()\n{\n echo\n}", true},
+		{"agentic-block", "agentic { echo yes; }", true},
+		{"agentic-shell-func", "agentic function helper() {\n:\n}", true},
+		{"agentic-shell-func", "agentic function helper() # c\n{\n:\n}", true},
+		{"agentic-typed-func", "agentic func helper(x int) int { return x }", true},
+		{"agentic-typed-method", "agentic func (r Report) Name() string { return \"\" }", true},
+		{"agentic-decl", "agentic function f { :; }\n", false},
+		{"agentic-command", "agentic echo hi\n", true},
+		{"typed-func", "func helper(x int) int { return x }", true},
+		{"typed-func", "func greet(name string, retries int = 3) {\n}", true},
+		{"typed-func", "func f[T any](x T) T { return x }", true},
+		{"typed-func", "func f() (int, error) { return 1, nil }", true},
+		{"typed-func", "func f(x int)\n{\nreturn\n}", true},
+		{"typed-func", "func f() ??? (x) {}", false},
+		{"typed-func", "func f( {", false},
+		{"typed-method", "func (r Report) Name() string { return \"\" }", true},
+		{"typed-method", "func (r Report) F( { return 1 }", false},
+		{"func-decl", "func () { :; }", true},
+		{"func-decl", "func f\n", true},
+		{"func-decl", "func f()\n", false},
+		{"block", "{ x := T{\n a: 1,\n}\n}", true},
+		{"block", "{\n\tcat <<EOF\n}\nEOF\n}", true},
+		{"root", "echo \"\n~~~python\n\"\n", true},
+		{"root", "x='\n~~~python\n'\n", true},
+		{"root", "cat <<-EOF\n\t~~~python\n\tEOF\n", true},
+		{"root", "echo $(\n~~~python\n)\n", false},
+		{"root", "}\n", false},
+		{"root", "echo {\n", true},
+		{"root", "func f() {\n\t// TODO {\n}\n", true},
+		{"root", "if true; then\n  @guard(x)\n  func f() {}\nfi\n", false},
+		{"root", "if true; then\n  @a()\n  {\n  :\n  }\nfi\n", true},
 	}
 	for _, c := range cases {
 		if got := g.Match(c.rule, c.src); got != c.want {
@@ -46,13 +93,13 @@ func TestPublishedProductions(t *testing.T) {
 	}
 }
 
+// Every corpus fixture gets the same verdict from the grammar and the engine,
+// and the delta sites the grammar records are exactly the extension nodes the
+// engine's AST places on those lines.
 func TestAgreementWithPublishedCorpora(t *testing.T) {
-	g, err := Load("delta.gbnf")
-	if err != nil {
-		t.Fatal(err)
-	}
+	g := load(t)
 	roots := []string{"../../bashsharp-tour", "../../bashsharp-tests/tools"}
-	count, embedded := 0, 0
+	count, embedded, accepted, rejected := 0, 0, 0, 0
 	embeddedByScript := map[string]int{}
 	covered := map[string]int{}
 	for _, root := range roots {
@@ -64,10 +111,7 @@ func TestAgreementWithPublishedCorpora(t *testing.T) {
 				return nil
 			}
 			ext := filepath.Ext(path)
-			if root == roots[0] && ext != ".bsh" {
-				return nil
-			}
-			if root == roots[1] && ext != ".sh" {
+			if root == roots[0] && ext != ".bsh" || root == roots[1] && ext != ".sh" {
 				return nil
 			}
 			data, err := os.ReadFile(path)
@@ -86,20 +130,19 @@ func TestAgreementWithPublishedCorpora(t *testing.T) {
 			}
 			for fixture, src := range fixtures {
 				count++
-				grammarErr := g.CheckDelta(src)
-				recognized, inspectErr := g.Inspect(src)
-				if inspectErr != nil && grammarErr == nil {
-					t.Errorf("%s: inspect error: %v", fixture, inspectErr)
-				}
-				for rule, n := range recognized {
-					covered[rule] += n
-				}
+				sites, grammarErr := g.Inspect(fixture, src)
 				file, parserErr := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(src), fixture)
-				if parserErr == nil {
-					checkSites(t, g, fixture, src, file)
-				}
 				if (grammarErr == nil) != (parserErr == nil) {
 					t.Errorf("%s: grammar: %v; parser: %v", fixture, grammarErr, parserErr)
+				}
+				if parserErr == nil {
+					accepted++
+					for rule, n := range Counts(sites) {
+						covered[rule] += n
+					}
+					compareSites(t, fixture, sites, file)
+				} else {
+					rejected++
 				}
 			}
 			return nil
@@ -114,12 +157,20 @@ func TestAgreementWithPublishedCorpora(t *testing.T) {
 	if embeddedByScript["polyglot-gate.sh"] != 18 || len(embeddedByScript) != 1 {
 		t.Fatalf("unexpected embedded fixture inventory: %v", embeddedByScript)
 	}
-	for _, rule := range []string{"fence-open", "decorator", "agentic-block", "agentic-shell-func", "agentic-typed-func", "agentic-typed-method", "typed-func"} {
+	for _, rule := range []string{"fence", "decorator", "agentic-block", "agentic-shell-func", "agentic-typed-func", "agentic-typed-method", "typed-func"} {
 		if covered[rule] == 0 {
-			t.Errorf("published %s production was never exercised", rule)
+			t.Errorf("published %s production was never exercised by the corpus", rule)
 		}
 	}
-	t.Logf("checked %d fixtures (%d Tour files, %d embedded .bpp heredocs); recognized %v", count, count-embedded, embedded, covered)
+	for _, rule := range []string{"embed-line", "typed-method", "at-function"} {
+		if covered[rule] != 0 {
+			t.Errorf("corpus now exercises %s; move it out of the testdata-only inventory", rule)
+		}
+	}
+	if rejected != 0 {
+		t.Errorf("the published corpus is expected to be all engine-accepted; %d fixtures rejected", rejected)
+	}
+	t.Logf("checked %d fixtures (%d Tour files, %d embedded .bpp heredocs): %d accepted, %d rejected; recognized %v", count, count-embedded, embedded, accepted, rejected, covered)
 }
 
 var bppHeredoc = regexp.MustCompile(`(?m)^cat\s+>[^\n]*\.bpp["']?\s+<<'([A-Za-z_][A-Za-z_0-9]*)'\s*$`)
@@ -139,167 +190,345 @@ func embeddedBPP(path, script string) map[string]string {
 	return out
 }
 
-func TestUnclosedFenceVerdict(t *testing.T) {
-	g, err := Load("delta.gbnf")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, src := range []string{"~~~python\nprint(1)\n", "~~~~skill as s\nTask: x\n~~~\n"} {
-		grammarErr := g.CheckDelta(src)
-		_, parserErr := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(src), "bad.bsh")
-		if grammarErr == nil || parserErr == nil {
-			t.Errorf("expected both to reject %q: grammar=%v parser=%v", src, grammarErr, parserErr)
+// Negative and positive agreement on the local fixture set. The directory
+// name states the expected verdict; both recognizers must produce it.
+func TestFixtureAgreement(t *testing.T) {
+	g := load(t)
+	seen := map[string]int{}
+	for _, want := range []string{"accept", "reject"} {
+		paths, err := filepath.Glob(filepath.Join("testdata", want, "*.bsh"))
+		if err != nil || len(paths) == 0 {
+			t.Fatalf("no testdata/%s fixtures: %v", want, err)
 		}
-	}
-}
-
-func TestCommittedMalformedHeadersAgreeOnRejection(t *testing.T) {
-	g, err := Load("delta.gbnf")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, src := range []string{"agentic {\n", "func f( {\n", "agentic function f( {\n", "func (r Report) F( {\n"} {
-		if err := g.CheckDelta(src); err == nil {
-			t.Errorf("delta accepted %q", src)
-		}
-		if _, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(src), "bad.bsh"); err == nil {
-			t.Errorf("engine accepted %q", src)
-		}
-	}
-}
-
-func TestDeltaRejects(t *testing.T) {
-	g, err := Load("delta.gbnf")
-	if err != nil {
-		t.Fatal(err)
-	}
-	cases := map[string]string{
-		"fence":                   "~~~python as\npass\n~~~\n",
-		"embed":                   "embed python \"/absolute.py\" as py\n",
-		"decorator":               "@guard(read\nfunc f() {}\n",
-		"go.error":                "@go.error(1)\nfunc f() {}\n",
-		"agentic block":           "agentic {\necho open\n",
-		"agentic shell function":  "agentic function f( { echo bad; }\n",
-		"agentic typed function":  "agentic func f( { return 1 }\n",
-		"agentic typed method":    "agentic func (r Report) F( { return 1 }\n",
-		"typed function":          "func f( { return 1 }\n",
-		"typed method":            "func (r Report) F( { return 1 }\n",
-		"typed suffix":            "func f() ??? { return 1 }\n",
-		"typed unclosed body":     "func f() int {\nreturn 1\n",
-		"dangling decorator":      "@guard(\"read\")\necho done\n",
-		"go.error shell function": "@go.error()\nfunction f() { :; }\n",
-	}
-	for name, src := range cases {
-		t.Run(name, func(t *testing.T) {
-			if err := g.CheckDelta(src); err == nil {
-				t.Fatalf("accepted malformed delta %q", src)
-			}
-		})
-	}
-	for name, src := range map[string]string{
-		"embed":                  "embed python \"./calc.py\" as py\n",
-		"decorator":              "@guard(effects: \"read\")\nfunc f() {}\n",
-		"go.error":               "@go.error()\nfunc f() {}\n",
-		"agentic block":          "agentic { echo yes; }\n",
-		"agentic shell function": "agentic function f() { echo yes; }\n",
-		"agentic typed function": "agentic func f(x int) int { return x }\n",
-		"agentic typed method":   "agentic func (r Report) F() int { return 1 }\n",
-		"typed function":         "func f(x int) int { return x }\n",
-		"typed method":           "func (r Report) F() int { return 1 }\n",
-	} {
-		t.Run(name+" valid", func(t *testing.T) {
-			if err := g.CheckDelta(src); err != nil {
+		for _, path := range paths {
+			data, err := os.ReadFile(path)
+			if err != nil {
 				t.Fatal(err)
 			}
-		})
+			src := string(data)
+			sites, grammarErr := g.Inspect(path, src)
+			file, parserErr := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(src), path)
+			if (parserErr == nil) != (want == "accept") {
+				t.Errorf("%s: engine verdict %v contradicts the fixture's expected %s", path, parserErr, want)
+			}
+			if (grammarErr == nil) != (want == "accept") {
+				t.Errorf("%s: grammar verdict %v contradicts the fixture's expected %s", path, grammarErr, want)
+			}
+			if parserErr == nil && grammarErr == nil {
+				compareSites(t, path, sites, file)
+			}
+			for rule, n := range Counts(sites) {
+				seen[want+":"+rule] += n
+			}
+		}
+	}
+	for _, key := range []string{"accept:embed-line", "accept:typed-method", "accept:at-function", "accept:decorator", "accept:fence"} {
+		if seen[key] == 0 {
+			t.Errorf("testdata never exercises %s", key)
+		}
+	}
+	t.Logf("testdata sites: %v", seen)
+}
+
+// Inline agreement table: committed and near-miss spellings for every delta
+// production, each compared with the engine. The expectation column is a
+// third voice so a silent change in either recognizer is visible.
+func TestSpellingAgreement(t *testing.T) {
+	g := load(t)
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "calc.py"), []byte("def add(a, b): return a + b\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	name := filepath.Join(dir, "x.bsh")
+	cases := []struct {
+		src    string
+		accept bool
+	}{
+		{"~~~python as py # note\nx\n~~~\n", true}, // near miss: ordinary command lines
+		{"~~~python as py \nx\n~~~\n", true},
+		{"~~~python\nx\n~~~ \n", false},
+		{"~~~python\nx\n~~~~\n", false},
+		{" ~~~python\nx\n~~~\n", true},
+		{"~~~python as\nx\n~~~\n", true},
+		{"~~~python as py!run\nx\n~~~\n", true},
+		{"~~~python as py extra\nx\n~~~\n", true},
+		{"~~~python\n", false},
+		{"~~~python\nx", false},
+		{"~~~python\nx\n~~~", true},
+		{"~~~\nx\n~~~\n", true},
+		{"~~~Python\nx\n~~~\n", true},
+		{"~~~c++ as lib !builder\nx\n~~~\n", true},
+		{"~~~python as !run\nx\n~~~\n", true},
+		{"~~~python !run\nx\n~~~\n", true},
+		{"~~~python as py\n~~~~\n~~~\n", true},
+		{"function f() {\n  ~~~python\n  x\n  ~~~\n}\n", true},
+		{"cat <<EOF\n~~~python\nEOF\n", true},
+		{"cat <<-EOF\n\t~~~python\n\tEOF\n", true},
+		{"x='\n~~~python\n'\n", true},
+		{"echo \"\n~~~python\n\"\n", true},
+		{"echo \\\n~~~python\n", true},
+		{"echo `\n~~~python\n`\n", false},
+		{"echo $(\n~~~python\n)\n", false},
+		{"embed python \"./calc.py\" as py\n", true},
+		{"embed python \"./calc.py\" as py # note\n", true},
+		{"embed python \"./calc.py\"\n", true},
+		{"embed python \"./calc.py\" as !run\n", true},
+		{"embed python \"./calc.py\" !run\n", true},
+		{"embed python \"./missing.py\" as py\n", false},
+		{"embed python ./calc.py as py\n", true},
+		{"embed python \"./calc.py\" as py extra\n", true},
+		{"embed python\n", true},
+		{"@guard(x) # why\nfunc f() {}\n", true},
+		{"@guard(x); func f() {}\n", true},
+		{"@guard(x)\n\nfunc f() {}\n", true},
+		{"@guard(x)\n# c\nfunc f() {}\n", true},
+		{"@guard(x)\n@log()\nfunc f() {}\n", true},
+		{"@guard(x)\n@go.error()\nfunc f() error {}\n", true},
+		{"@go.error()\nfunc f() {}\n", true},
+		{"@go.error()\nfunction f() { :; }\n", true}, // syntactically a decorator; the evaluator enforces go.error semantics
+		{"@go.error(1)\nfunc f() {}\n", true},
+		{"@go.errors()\nfunc f() {}\n", true},
+		{"@go.error_x(1)\nfunc f() {}\n", true},
+		{"@guard(\"read\")\necho done\n", false},
+		{"@guard(read\nfunc f() {}\n", false},
+		{"@guard(\n\"read\"\n)\nfunc f() {}\n", false},
+		{"  @guard(x)\n  func f() {}\n", false},
+		{"@x\n", true},
+		{"@x()\n", false},
+		{"@x(1)\n", false},
+		{"@x() func f() {}\n", false},
+		{"@a()\n{\n echo\n}\n", true},
+		{"agentic { echo yes; }\n", true},
+		{"agentic {\necho open\n", false},
+		{"agentic {\n", false},
+		{"agentic f() { :; }\n", false},
+		{"agentic function f { :; }\n", false},
+		{"agentic function f()\n{\n:\n}\n", true},
+		{"agentic function f() # c\n{\n:\n}\n", true},
+		{"agentic function f()  {\n:\n}\n", true},
+		{"agentic function f( { echo bad; }\n", false},
+		{"agentic func f(x int) int {\nreturn x\n}\n", true},
+		{"agentic func f( { return 1 }\n", false},
+		{"agentic\n", true},
+		{"agentic echo hi\n", true},
+		{"agentic function\n", true},
+		{"if true; then\n  agentic { echo; }\nfi\n", true},
+		{"agentic {\n  ~~~python as py\n }\n  ~~~\n}\n", false},
+		{"func f(x int) int { return x }\n", true},
+		{"func f[T any](x T) T { return x }\n", true},
+		{"func f() (int, error) { return 1, nil }\n", true},
+		{"func f(x int)\n{\nreturn\n}\n", true},
+		{"func f() { :; }\n", true},
+		{"func () { :; }\n", true},
+		{"func (r Report) F() int { return 1 }\n", true},
+		{"func (r Report) F( { return 1 }\n", false},
+		{"func f( {\n", false},
+		{"func f() ??? (x) {}\n", false},
+		{"func f() ??? { return 1 }\n", false},
+		{"func f() int {\nreturn 1\n", false},
+		{"func f()\n", false},
+		{"func f\n", true},
+		{"func\n", true},
+		{"typeset -f func\n", true},
+		{"func f() int {\n// TODO {\nreturn 1\n}\n", true},
+		{"func f() int {\n# TODO {\nreturn 1\n}\n", true},
+		{"func f() string {\nreturn \"}\"\n}\n", true},
+		{"func f() int {\n\tr := '}'\n\treturn 1\n}\n", true},
+		{"func f() int {\n\techo \"a\" # }\n\treturn 1\n}\n", true},
+		{"func f() int {\n\tcat <<EOF\n}\nEOF\n\treturn 1\n}\n", true},
+		{"func f() int {\n\t/* } */\n\treturn 1\n}\n", false},
+		{"func f() {\n}\necho after\n", true},
+		{"if true; then\n  func f() {}\nfi\n", true},
+	}
+	for _, c := range cases {
+		parserErr := parse(name, c.src)
+		grammarErr := g.CheckDeltaFile(name, c.src)
+		if (parserErr == nil) != c.accept {
+			t.Errorf("engine verdict for %q changed: %v (expected accept=%t)", c.src, parserErr, c.accept)
+		}
+		if (grammarErr == nil) != c.accept {
+			t.Errorf("grammar verdict for %q: %v (expected accept=%t)", c.src, grammarErr, c.accept)
+		}
 	}
 }
 
-// EBNF remains a compositional specification with opaque Bash/Go productions.
-// Exercise its production graph: every claimed extension must be reachable from
-// extension_statement, and every executable header must have an EBNF peer.
-func TestEBNFProductionInventory(t *testing.T) {
+// Known divergences: spellings where the opaque base-Bash fragment is coarser
+// than the engine. Each is asserted so a fix or a regression is visible, and
+// README.md lists the same set.
+func TestKnownDivergences(t *testing.T) {
+	g := load(t)
+	cases := []struct {
+		src             string
+		engine, grammar bool
+	}{
+		// A standalone `}` word in argument position closes a block to the fragment scanner.
+		{"echo }\n", true, false},
+		{"echo { x }\n", true, false},
+		// A brace group after `;` on the same line: the line head is `echo`, so `{` is a word.
+		{"echo a; { echo; }\n", true, false},
+		// The published fence productions enumerate three to six tildes.
+		{"~~~~~~~python\nx\n~~~~~~~\n", true, false},
+		// Backticks are not tracked across lines, so a `}` inside one closes nothing.
+		{"s=`echo\n}`\n", false, true},
+	}
+	for _, c := range cases {
+		if got := parse("x.bsh", c.src) == nil; got != c.engine {
+			t.Errorf("engine verdict for %q changed: accept=%t", c.src, got)
+		}
+		if got := g.CheckDelta(c.src) == nil; got != c.grammar {
+			t.Errorf("grammar verdict for %q changed: accept=%t", c.src, got)
+		}
+	}
+}
+
+// The EBNF is the specification twin of the executable GBNF: the same set of
+// productions, each referencing the same nonterminals, and every referenced
+// nonterminal defined or declared external. Names map `_` to `-`.
+func TestEBNFMirrorsGBNF(t *testing.T) {
+	g := load(t)
 	data, err := os.ReadFile("delta.ebnf")
 	if err != nil {
 		t.Fatal(err)
 	}
-	definitions := regexp.MustCompile(`(?m)^([a-z_]+)\s*=`).FindAllStringSubmatchIndex(string(data), -1)
-	if len(definitions) == 0 {
-		t.Fatal("no EBNF productions")
+	ebnf, externals, err := parseEBNF(string(data))
+	if err != nil {
+		t.Fatal(err)
 	}
-	rules := map[string]string{}
-	for i, m := range definitions {
-		name := string(data[m[2]:m[3]])
-		end := len(data)
-		if i+1 < len(definitions) {
-			end = definitions[i+1][0]
-		}
-		if _, duplicate := rules[name]; duplicate {
-			t.Fatalf("duplicate EBNF %s", name)
-		}
-		rules[name] = string(data[m[1]:end])
+	gbnfRules := map[string]bool{}
+	for _, r := range g.Rules() {
+		gbnfRules[r] = true
 	}
-	for _, name := range []string{"extension_statement", "decorator", "go_error", "agentic_block", "agentic_function", "typed_function", "typed_method", "fence", "embed", "fence_open", "fence_close"} {
-		if _, ok := rules[name]; !ok {
-			t.Errorf("missing EBNF production %s", name)
+	for name, refs := range ebnf {
+		if !gbnfRules[name] && !externals[name] {
+			t.Errorf("EBNF production %s has no GBNF rule", name)
+			continue
+		}
+		for _, r := range refs {
+			if _, ok := ebnf[r]; !ok && !externals[r] {
+				t.Errorf("EBNF %s references undefined %s", name, r)
+			}
+		}
+		if externals[name] {
+			continue
+		}
+		want := uniqueSorted(g.References(name))
+		got := uniqueSorted(refs)
+		if strings.Join(want, " ") != strings.Join(got, " ") {
+			t.Errorf("EBNF %s references %v; GBNF references %v", name, got, want)
 		}
 	}
-	for _, name := range []string{"decorator_stack", "fence", "embed", "agentic_block", "agentic_function", "typed_function", "typed_method"} {
-		if !strings.Contains(rules["extension_statement"], name) {
-			t.Errorf("%s is unreachable from extension_statement", name)
+	for name := range gbnfRules {
+		if _, ok := ebnf[name]; !ok {
+			t.Errorf("GBNF rule %s has no EBNF production", name)
 		}
 	}
-	if !strings.Contains(rules["decorator"], "selector") || !strings.Contains(rules["decorator"], "go_error") || !strings.Contains(rules["fence"], "fence_close") || !strings.Contains(rules["typed_function"], "parameters") {
-		t.Error("EBNF extension lost a required component")
+	for _, opaque := range OpaqueRules {
+		if !externals[opaque] {
+			t.Errorf("opaque %s must be declared external in the EBNF", opaque)
+		}
+	}
+	for name := range externals {
+		if _, ok := ebnf[name]; !ok {
+			t.Errorf("external %s declared but never produced", name)
+		}
 	}
 }
 
-// The GBNF interpreter identifies each extension site independently from the
-// parser's AST. The AST supplies only locations, so a parser-recognized site
-// absent from the published grammar fails this coverage check.
-func checkSites(t *testing.T, g *Grammar, path, src string, file *syntax.File) {
-	t.Helper()
-	lines := strings.Split(src, "\n")
-	matchAt := func(pos syntax.Pos, rules ...string) {
-		t.Helper()
-		n := int(pos.Line())
-		if n < 1 || n > len(lines) {
-			t.Errorf("%s: invalid extension line %d", path, n)
-			return
+var ebnfProduction = regexp.MustCompile(`(?s)([a-z][a-z0-9_]*)\s*=\s*(.*?)\s*;`)
+
+// parseEBNF splits ISO-style productions. A production whose body is a single
+// special sequence `? ... ?` is an external. Terminals and comments are
+// removed before nonterminal references are collected.
+func parseEBNF(src string) (map[string][]string, map[string]bool, error) {
+	src = regexp.MustCompile(`(?s)\(\*.*?\*\)`).ReplaceAllString(src, "")
+	rules := map[string][]string{}
+	externals := map[string]bool{}
+	for _, m := range ebnfProduction.FindAllStringSubmatch(src, -1) {
+		name, body := strings.ReplaceAll(m[1], "_", "-"), m[2]
+		if _, dup := rules[name]; dup {
+			return nil, nil, os.ErrExist
 		}
-		line := strings.TrimSuffix(lines[n-1], "\r")
-		for _, rule := range rules {
-			if g.Match(rule, line) {
-				return
-			}
+		if strings.HasPrefix(body, "?") && strings.HasSuffix(body, "?") && strings.Count(body, "?") == 2 {
+			externals[name] = true
+			rules[name] = nil
+			continue
 		}
-		t.Errorf("%s:%d: no published production %v accepts %q", path, n, rules, line)
+		body = regexp.MustCompile(`"[^"]*"|'[^']*'|\?[^?]*\?`).ReplaceAllString(body, " ")
+		var refs []string
+		for _, id := range regexp.MustCompile(`[a-z][a-z0-9_]*`).FindAllString(body, -1) {
+			refs = append(refs, strings.ReplaceAll(id, "_", "-"))
+		}
+		rules[name] = refs
 	}
+	return rules, externals, nil
+}
+
+func uniqueSorted(in []string) []string {
+	set := map[string]bool{}
+	for _, s := range in {
+		set[s] = true
+	}
+	out := make([]string, 0, len(set))
+	for s := range set {
+		out = append(out, s)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// compareSites requires the grammar's recorded sites and the engine's AST
+// extension nodes to agree line by line.
+func compareSites(t *testing.T, path string, sites []Site, file *syntax.File) {
+	t.Helper()
+	got := map[string]bool{}
+	for _, s := range sites {
+		if s.Rule == "shell-function" {
+			continue // Bash owns these; recorded only as decorator targets
+		}
+		got[s.Rule+"@"+strconv.Itoa(s.Line)] = true
+	}
+	want := map[string]bool{}
+	add := func(pos syntax.Pos, rule string) { want[rule+"@"+strconv.Itoa(int(pos.Line()))] = true }
 	syntax.Walk(file, func(node syntax.Node) bool {
 		switch n := node.(type) {
 		case *syntax.SourceBlock:
 			if n.Src != nil {
-				matchAt(n.Pos(), "embed")
+				add(n.Pos(), "embed-line")
 			} else {
-				matchAt(n.Pos(), "fence-open")
+				add(n.Pos(), "fence")
 			}
 		case *syntax.BashPPDecorator:
-			matchAt(n.Pos(), "decorator")
+			add(n.Pos(), "decorator")
 		case *syntax.BashPPAgenticBlock:
-			matchAt(n.Pos(), "agentic-block")
+			add(n.Pos(), "agentic-block")
 		case *syntax.BashPPFuncDecl:
-			if n.Agentic != nil {
-				matchAt(n.Agentic.Pos(), "agentic-typed-func", "agentic-typed-method")
-			} else if n.Receiver != nil {
-				matchAt(n.Kw.Pos(), "typed-method")
-			} else {
-				matchAt(n.Kw.Pos(), "typed-func")
+			switch {
+			case n.Agentic != nil && n.Receiver != nil:
+				add(n.Agentic.Pos(), "agentic-typed-method")
+			case n.Agentic != nil:
+				add(n.Agentic.Pos(), "agentic-typed-func")
+			case n.Receiver != nil:
+				add(n.Kw.Pos(), "typed-method")
+			default:
+				add(n.Kw.Pos(), "typed-func")
 			}
 		case *syntax.FuncDecl:
 			if n.Agentic != nil {
-				matchAt(n.Agentic.Pos(), "agentic-shell-func")
+				add(n.Agentic.Pos(), "agentic-shell-func")
+			} else if strings.HasPrefix(n.Name.Value, "@") {
+				add(n.Pos(), "at-function")
 			}
 		}
 		return true
 	})
+	for k := range want {
+		if !got[k] {
+			t.Errorf("%s: engine site %s has no grammar site", path, k)
+		}
+	}
+	for k := range got {
+		if !want[k] {
+			t.Errorf("%s: grammar site %s has no engine site", path, k)
+		}
+	}
 }

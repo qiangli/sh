@@ -1,41 +1,59 @@
 # Bash# delta grammar
 
-`delta.ebnf` describes only the Bash# productions added to GNU Bash 5.3.
-`delta.gbnf` gives machine-readable recognition rules for their line headers.
-The ordinary Bash grammar, word expansion, heredocs, loops, shell functions,
-Go type and expression grammar, and foreign fence bodies are outside this delta.
-A decoder must compose this delta with Bash and Go grammars. `root` selects
-one Bash# header; it is **not** a complete constrained-decoding grammar.
-In particular the content following an opening `{` and argument expressions
-are opaque here. The EBNF specifies their composition but is not an executable
-whole-program recognizer. Sprint 384 owns the combined grammar.
+`delta.gbnf` is the executable grammar for the Bash# productions added to GNU
+Bash 5.3; `delta.ebnf` is its specification twin. `grammar.go` interprets the
+GBNF as a parsing expression grammar (ordered alternatives, greedy repetition)
+over a whole newline-terminated program: `root ::= item*`, where an item is a
+fence, an embed line, a decorator stack with its declaration, an `agentic`
+form, a typed function or method, a bare-brace block, or the opaque base-Bash
+fragment. Every accept or reject verdict follows from those productions.
+Editing a rule changes verdicts; the tests pin the published shape.
 
-A recognized fence starts in column one with at least three tildes, followed
-by a format name and an optional alias and runner. Its closing line consists
-of exactly the same number of tildes. The body is uninterpreted bytes.
-`embed` uses a quoted `./` or `../` path and the same alias/runner tail;
-relative paths are checked for existence by the engine, beyond grammar.
+## What the delta owns and what stays opaque
 
-A decorator stack ends at a function declaration. `@go.error()` is a
-special decorator marker whose semantic restrictions (single use, typed
-receiverless nongeneric function, no existing trailing `error`) are checked
-by the evaluator. `agentic` introduces a block or modifies a shell or typed
-function. Typed signatures and bodies belong to Go and mixed Bash# grammar.
-Near misses in the Bash-accepted Class E forms remain ordinary shell text.
-The parser's Class R forms may produce diagnostics after a committed prefix.
+The delta owns structure, not Bash: same-count tilde fences with opaque
+bodies (three to six tildes enumerated; the engine accepts any count), the
+`embed` line with its quoted `./` or `../` path and the fence alias/runner
+tail, decorator lines committed at `@name(` and ending at a newline or `;`,
+the `@name()` + compound-body spelling that Bash already owns as a function
+named `@name`, the four `agentic` forms plus the near-miss `agentic` command,
+Go-shaped typed signatures (balanced receiver, parameter and type-parameter
+text, a result type or parenthesized result list), and blocks as balanced
+bare braces around nested items.
 
-`CheckDelta` independently interprets the GBNF headers, checks balanced
-signature parentheses and body braces, and rejects malformed committed
-extension forms. It does not call the engine parser. Its opaque Bash/Go body
-checks are deliberately shallow: accepted text is not a promise that a full
-Bash# program parses or runs. The EBNF test checks the published production
-graph and its coverage, rather than interpreting the opaque base grammars.
+Exactly one nonterminal is bound to Go code: `bash-fragment`, listed in
+`OpaqueRules` and declared as an external `? ... ?` production in the EBNF.
+It consumes ordinary Bash text up to the next delta-owned boundary and
+supplies the boundaries the base grammar defines: `#` comments at word
+start, single and double quotes across lines, backslash-newline
+continuation, heredoc bodies (`<<`, `<<-`, quoted delimiters), and bare
+`{` / `}` words. A `{` is bare at command position or after a Bash# block
+head (`if`, `for`, `switch`, `func() `, `} else`, ...); an attached `{` as
+in `T{` is a literal with a partner; a standalone `{` after an ordinary
+command is a plain word. Command substitutions are deliberately not
+tracked: the engine recognizes a column-one fence inside `$( )`, and so does
+the fragment. The EBNF's other externals are the byte alphabet (`letter`,
+`digit`, `space`, `any_but_newline`, ...).
 
-The agreement test compares these delta checks with the engine parser on 40
-Tour `.bsh` files and 18 actual `.bpp` heredocs extracted from
-`bashsharp-tests/tools/polyglot-gate.sh`. Harness `.sh` wrappers are not
-counted as Bash# fixtures. In that corpus the executable inventory covers
-fences, decorators, all four agentic forms, and typed functions. It contains
-no embed, typed-method-without-agentic, or `@go.error()` fixture; focused
-positive and negative checks cover those spellings without claiming corpus
-agreement. Full delta-over-Bash/Go constrained decoding remains **OPEN**.
+Near misses stay Bash, as in the engine (Class E): a fence header with a
+trailing comment or a bad tail, an unquoted or absolute embed path, `func f`
+without parentheses, `agentic echo`. Committed prefixes (Class R) must
+complete: `@name(` at a line start, `func f(`, `agentic {`, a valid fence
+header. The engine's semantic checks are not grammar: `@go.error()` is
+syntactically a decorator (the evaluator enforces single use and a typed
+receiverless target), and a missing embed target is reported by
+`CheckDeltaFile` after recognition, exactly as the engine does.
+
+## Tests (`go test -tags full ./grammar`)
+
+- `TestPublishedProductions` pins each production on positive and negative spellings, including the fence closer, decorator endings and the result-type rule.
+- `TestAgreementWithPublishedCorpora` runs 40 Tour `.bsh` files and the 18 `.bpp` heredocs in `bashsharp-tests/tools/polyglot-gate.sh` through the grammar and the engine, requires the same verdict, and compares the recorded sites with the engine's AST extension nodes line by line. It reports the accept/reject split; the published corpus is all engine-accepted and exercises fences, decorators, all four `agentic` forms and typed functions, but no embed, typed method or `@name()` function.
+- `TestFixtureAgreement` covers `testdata/accept` and `testdata/reject`: embed, typed method, `@name()` function, and boundary cases on the accept side; unclosed fence, dangling and indented decorators, missing embed target, unclosed and malformed `agentic` and typed forms on the reject side. The directory is a third voice: the engine and the grammar must both agree with it.
+- `TestSpellingAgreement` is the inline table of committed and near-miss spellings for every production, each compared with the engine.
+- `TestKnownDivergences` asserts the forms where the opaque fragment is coarser than the engine: a standalone `}` or `{ x }` word after an ordinary command, a brace group after `;` on the same line, fences of seven or more tildes, and a multi-line backtick body.
+- `TestEBNFMirrorsGBNF` parses the EBNF into a production graph and requires the same production set, the same referenced nonterminals per production, and no undefined nonterminal; the opaque rule must be declared external.
+
+Full delta-over-Bash/Go constrained decoding remains **OPEN**: a decoder
+composes this delta with Bash and Go grammars (Sprint 384 owns the combined
+grammar). The published `bash-fragment` shape is the loose upper bound for
+that composition, not a Bash grammar.

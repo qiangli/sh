@@ -1,34 +1,69 @@
-// Package grammar interprets the published Bash# delta GBNF. It recognizes
-// extension headers and fence boundaries; ordinary Bash remains opaque.
+// Package grammar interprets the published Bash# delta GBNF as a parsing
+// expression grammar. Every verdict comes from the productions in delta.gbnf;
+// the only Go-coded nonterminal is the explicitly opaque base-Bash fragment.
 package grammar
 
 import (
 	"bufio"
 	"fmt"
 	"os"
-	"regexp"
-	"strconv"
+	"path/filepath"
+	"sort"
 	"strings"
 )
 
-type Grammar struct {
-	rules    map[string]string
-	patterns map[string]*regexp.Regexp
+// OpaqueRules names the nonterminals the interpreter binds to Go code instead
+// of their published (approximate) right-hand side. They stand for grammars the
+// delta deliberately does not own: a run of ordinary Bash text with its
+// comment, quote and heredoc boundaries.
+var OpaqueRules = []string{"bash-fragment"}
+
+// ReportedRules are the delta-owned sites the interpreter records on success.
+var ReportedRules = []string{
+	"fence", "embed-line", "decorator", "at-function",
+	"agentic-block", "agentic-shell-func", "agentic-typed-func", "agentic-typed-method",
+	"typed-func", "typed-method", "shell-function",
 }
 
+type Grammar struct {
+	rules map[string]node
+	order []string
+	refs  map[string][]string
+}
+
+// Site is one recognized delta-owned production.
+type Site struct {
+	Rule string
+	Line int
+}
+
+// Load parses a GBNF file. A line starting with whitespace continues the
+// previous rule.
 func Load(path string) (*Grammar, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	defer f.Close()
-	g := &Grammar{rules: map[string]string{}, patterns: map[string]*regexp.Regexp{}}
+	g := &Grammar{rules: map[string]node{}, refs: map[string][]string{}}
+	var logical []string
 	scan := bufio.NewScanner(f)
+	scan.Buffer(make([]byte, 1<<20), 1<<20)
 	for scan.Scan() {
-		line := strings.TrimSpace(scan.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
+		raw := scan.Text()
+		if strings.TrimSpace(raw) == "" || strings.HasPrefix(strings.TrimSpace(raw), "#") {
 			continue
 		}
+		if (strings.HasPrefix(raw, " ") || strings.HasPrefix(raw, "\t")) && len(logical) > 0 {
+			logical[len(logical)-1] += " " + strings.TrimSpace(raw)
+			continue
+		}
+		logical = append(logical, strings.TrimSpace(raw))
+	}
+	if err := scan.Err(); err != nil {
+		return nil, err
+	}
+	for _, line := range logical {
 		name, rhs, ok := strings.Cut(line, "::=")
 		if !ok {
 			return nil, fmt.Errorf("invalid GBNF rule: %s", line)
@@ -40,73 +75,186 @@ func Load(path string) (*Grammar, error) {
 		if _, exists := g.rules[name]; exists {
 			return nil, fmt.Errorf("duplicate GBNF rule %s", name)
 		}
-		g.rules[name] = strings.TrimSpace(rhs)
+		p := &gbnfParser{src: strings.TrimSpace(rhs)}
+		n, err := p.choice()
+		if err == nil {
+			p.skip()
+			if p.i != len(p.src) {
+				err = fmt.Errorf("unexpected %q", p.src[p.i:])
+			}
+		}
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", name, err)
+		}
+		g.rules[name] = n
+		g.order = append(g.order, name)
+		g.refs[name] = p.refs
 	}
-	if err := scan.Err(); err != nil {
-		return nil, err
+	for name, refs := range g.refs {
+		for _, r := range refs {
+			if _, ok := g.rules[r]; !ok {
+				return nil, fmt.Errorf("%s: undefined GBNF rule %s", name, r)
+			}
+		}
 	}
-	for name := range g.rules {
-		if _, err := g.pattern(name, map[string]bool{}); err != nil {
-			return nil, err
+	for _, name := range []string{"root"} {
+		if _, ok := g.rules[name]; !ok {
+			return nil, fmt.Errorf("missing GBNF rule %s", name)
+		}
+	}
+	for _, name := range OpaqueRules {
+		if _, ok := g.rules[name]; !ok {
+			return nil, fmt.Errorf("opaque rule %s is not published", name)
 		}
 	}
 	return g, nil
 }
 
+// Rules lists the published rule names in file order.
+func (g *Grammar) Rules() []string { return append([]string(nil), g.order...) }
+
+// References lists the nonterminals a rule's right-hand side mentions.
+func (g *Grammar) References(rule string) []string {
+	out := append([]string(nil), g.refs[rule]...)
+	sort.Strings(out)
+	return out
+}
+
+// Match reports whether rule matches the entire source.
 func (g *Grammar) Match(rule, source string) bool {
-	re := g.patterns[rule]
-	return re != nil && re.MatchString(source)
-}
-
-func (g *Grammar) pattern(name string, active map[string]bool) (string, error) {
-	if re := g.patterns[name]; re != nil {
-		return strings.TrimSuffix(strings.TrimPrefix(re.String(), "^(?:"), ")$"), nil
-	}
-	rhs, ok := g.rules[name]
+	n, ok := g.rules[rule]
 	if !ok {
-		return "", fmt.Errorf("undefined GBNF rule %s", name)
+		return false
 	}
-	if active[name] {
-		return "", fmt.Errorf("recursive GBNF rule %s", name)
-	}
-	active[name] = true
-	p := &expression{src: rhs, g: g, active: active}
-	body, err := p.choice()
-	p.skip()
-	if err == nil && p.i != len(rhs) {
-		err = fmt.Errorf("unexpected GBNF in %s at %q", name, rhs[p.i:])
-	}
-	delete(active, name)
-	if err != nil {
-		return "", fmt.Errorf("%s: %w", name, err)
-	}
-	re, err := regexp.Compile("^(?:" + body + ")$")
-	if err != nil {
-		return "", fmt.Errorf("%s: %w", name, err)
-	}
-	g.patterns[name] = re
-	return body, nil
+	m := &matcher{g: g, src: source}
+	end, ok := n.match(m, 0)
+	return ok && end == len(source)
 }
 
-type expression struct {
-	src    string
-	i      int
-	g      *Grammar
-	active map[string]bool
+// matchAt reports the end offset of rule matched as a prefix of src[pos:].
+func (g *Grammar) matchAt(rule, src string, pos int) (int, bool) {
+	m := &matcher{g: g, src: src}
+	return g.rules[rule].match(m, pos)
 }
 
-func (p *expression) skip() bool {
+// CheckDelta interprets root over a whole program.
+func (g *Grammar) CheckDelta(src string) error {
+	_, err := g.Inspect("", src)
+	return err
+}
+
+// CheckDeltaFile is CheckDelta with the program's path, so an embed path is
+// resolved the way the engine resolves it.
+func (g *Grammar) CheckDeltaFile(name, src string) error {
+	_, err := g.Inspect(name, src)
+	return err
+}
+
+// Inspect runs root over a newline-terminated copy of src and returns the
+// delta-owned sites it recognized. A missing embed target is reported after
+// recognition, exactly as the engine does.
+func (g *Grammar) Inspect(name, src string) ([]Site, error) {
+	if src != "" && !strings.HasSuffix(src, "\n") {
+		src += "\n"
+	}
+	m := &matcher{g: g, src: src}
+	end, ok := g.rules["root"].match(m, 0)
+	sites := make([]Site, 0, len(m.trail))
+	for _, t := range m.trail {
+		if nestedSite(m.trail, t) {
+			continue
+		}
+		sites = append(sites, Site{Rule: t.rule, Line: lineOf(src, t.pos)})
+	}
+	if !ok || end != len(src) {
+		far := max(m.farthest, end)
+		return sites, fmt.Errorf("line %d: no delta production accepts %q", lineOf(src, far), lineAt(src, far))
+	}
+	for _, t := range m.trail {
+		if t.rule != "embed-line" {
+			continue
+		}
+		rel := embedPath(src[t.pos:t.end])
+		path := rel
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(filepath.Dir(name), path)
+		}
+		if _, err := os.Stat(path); err != nil {
+			return sites, fmt.Errorf("line %d: embed: %v", lineOf(src, t.pos), err)
+		}
+	}
+	return sites, nil
+}
+
+// nestedSite reports a typed declaration that is the body of an agentic
+// modifier production; the modifier form is the site the engine reports.
+func nestedSite(trail []span, t span) bool {
+	if t.rule != "typed-func" && t.rule != "typed-method" {
+		return false
+	}
+	for _, o := range trail {
+		if o.rule == "agentic-"+t.rule && o.end == t.end && o.pos < t.pos {
+			return true
+		}
+	}
+	return false
+}
+
+// Counts folds sites into per-rule totals.
+func Counts(sites []Site) map[string]int {
+	out := map[string]int{}
+	for _, s := range sites {
+		out[s.Rule]++
+	}
+	return out
+}
+
+func embedPath(line string) string {
+	i := strings.IndexByte(line, '"')
+	j := strings.IndexByte(line[i+1:], '"')
+	return line[i+1 : i+1+j]
+}
+
+func lineOf(src string, pos int) int {
+	if pos > len(src) {
+		pos = len(src)
+	}
+	return strings.Count(src[:pos], "\n") + 1
+}
+
+func lineAt(src string, pos int) string {
+	if pos > len(src) {
+		pos = len(src)
+	}
+	start := strings.LastIndexByte(src[:pos], '\n') + 1
+	end := strings.IndexByte(src[start:], '\n')
+	if end < 0 {
+		return src[start:]
+	}
+	return src[start : start+end]
+}
+
+// ---- GBNF syntax ----
+
+type gbnfParser struct {
+	src  string
+	i    int
+	refs []string
+}
+
+func (p *gbnfParser) skip() bool {
 	for p.i < len(p.src) && (p.src[p.i] == ' ' || p.src[p.i] == '\t') {
 		p.i++
 	}
 	return p.i < len(p.src)
 }
-func (p *expression) choice() (string, error) {
-	var parts []string
+
+func (p *gbnfParser) choice() (node, error) {
+	var parts []node
 	for {
 		s, err := p.sequence()
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 		parts = append(parts, s)
 		if !p.skip() || p.src[p.i] != '|' {
@@ -117,76 +265,89 @@ func (p *expression) choice() (string, error) {
 	if len(parts) == 1 {
 		return parts[0], nil
 	}
-	return "(?:" + strings.Join(parts, "|") + ")", nil
+	return alt(parts), nil
 }
-func (p *expression) sequence() (string, error) {
-	var out strings.Builder
+
+func (p *gbnfParser) sequence() (node, error) {
+	var items []node
 	for p.skip() && p.src[p.i] != ')' && p.src[p.i] != '|' {
 		atom, err := p.atom()
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 		if p.skip() && strings.ContainsRune("*+?", rune(p.src[p.i])) {
-			atom = "(?:" + atom + ")" + string(p.src[p.i])
+			switch p.src[p.i] {
+			case '*':
+				atom = &rep{n: atom, min: 0, max: -1}
+			case '+':
+				atom = &rep{n: atom, min: 1, max: -1}
+			case '?':
+				atom = &rep{n: atom, min: 0, max: 1}
+			}
 			p.i++
 		}
-		out.WriteString(atom)
+		items = append(items, atom)
 	}
-	return out.String(), nil
+	if len(items) == 1 {
+		return items[0], nil
+	}
+	return seq(items), nil
 }
-func (p *expression) atom() (string, error) {
+
+func (p *gbnfParser) atom() (node, error) {
 	switch p.src[p.i] {
 	case '(':
 		p.i++
 		s, err := p.choice()
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 		if !p.skip() || p.src[p.i] != ')' {
-			return "", fmt.Errorf("unclosed group")
+			return nil, fmt.Errorf("unclosed group")
 		}
 		p.i++
-		return "(?:" + s + ")", nil
+		return s, nil
 	case '"':
-		start := p.i
 		p.i++
-		for p.i < len(p.src) {
-			if p.src[p.i] == '\\' {
-				p.i += 2
-				continue
+		var b strings.Builder
+		for p.i < len(p.src) && p.src[p.i] != '"' {
+			c, err := p.escaped()
+			if err != nil {
+				return nil, err
 			}
-			if p.src[p.i] == '"' {
-				p.i++
-				break
-			}
-			p.i++
+			b.WriteByte(c)
 		}
-		if p.i > len(p.src) || p.src[p.i-1] != '"' {
-			return "", fmt.Errorf("unclosed string")
+		if p.i >= len(p.src) {
+			return nil, fmt.Errorf("unclosed string")
 		}
-		lit, err := strconv.Unquote(p.src[start:p.i])
-		if err != nil {
-			return "", err
-		}
-		return regexp.QuoteMeta(lit), nil
+		p.i++
+		return lit(b.String()), nil
 	case '[':
-		start := p.i
 		p.i++
-		for p.i < len(p.src) {
-			if p.src[p.i] == '\\' {
-				p.i += 2
-				continue
-			}
-			if p.src[p.i] == ']' {
-				p.i++
-				break
-			}
+		c := &class{}
+		if p.i < len(p.src) && p.src[p.i] == '^' {
+			c.neg = true
 			p.i++
 		}
-		if p.i > len(p.src) || p.src[p.i-1] != ']' {
-			return "", fmt.Errorf("unclosed character class")
+		for p.i < len(p.src) && p.src[p.i] != ']' {
+			lo, err := p.escaped()
+			if err != nil {
+				return nil, err
+			}
+			hi := lo
+			if p.i+1 < len(p.src) && p.src[p.i] == '-' && p.src[p.i+1] != ']' {
+				p.i++
+				if hi, err = p.escaped(); err != nil {
+					return nil, err
+				}
+			}
+			c.ranges = append(c.ranges, [2]byte{lo, hi})
 		}
-		return p.src[start:p.i], nil
+		if p.i >= len(p.src) {
+			return nil, fmt.Errorf("unclosed character class")
+		}
+		p.i++
+		return c, nil
 	default:
 		start := p.i
 		for p.i < len(p.src) {
@@ -198,227 +359,410 @@ func (p *expression) atom() (string, error) {
 			}
 		}
 		if start == p.i {
-			return "", fmt.Errorf("unexpected %q", p.src[p.i:])
+			return nil, fmt.Errorf("unexpected %q", p.src[p.i:])
 		}
-		return p.g.pattern(p.src[start:p.i], p.active)
+		name := p.src[start:p.i]
+		p.refs = append(p.refs, name)
+		return ref(name), nil
 	}
 }
 
-// CheckDelta checks the productions whose complete shape is specified here.
-// Bash lines and the contents of foreign fences are intentionally opaque.
-func (g *Grammar) CheckDelta(src string) error {
-	_, err := g.Inspect(src)
-	return err
+func (p *gbnfParser) escaped() (byte, error) {
+	c := p.src[p.i]
+	p.i++
+	if c != '\\' {
+		return c, nil
+	}
+	if p.i >= len(p.src) {
+		return 0, fmt.Errorf("dangling escape")
+	}
+	e := p.src[p.i]
+	p.i++
+	switch e {
+	case 'n':
+		return '\n', nil
+	case 't':
+		return '\t', nil
+	case 'r':
+		return '\r', nil
+	default:
+		return e, nil
+	}
 }
 
-// Inspect interprets the published extension headers and reports which rules
-// accepted them. Unclaimed lines are delegated to the opaque Bash base.
-func (g *Grammar) Inspect(src string) (map[string]int, error) {
-	counts := make(map[string]int)
-	lines := strings.SplitAfter(src, "\n")
-	if len(lines) > 0 && lines[len(lines)-1] == "" {
-		lines = lines[:len(lines)-1]
+// ---- PEG interpreter ----
+
+type matcher struct {
+	g        *Grammar
+	src      string
+	trail    []span
+	farthest int
+	depth    int
+}
+
+type span struct {
+	rule     string
+	pos, end int
+}
+
+type node interface {
+	match(m *matcher, pos int) (int, bool)
+}
+
+type lit string
+
+func (l lit) match(m *matcher, pos int) (int, bool) {
+	if strings.HasPrefix(m.src[pos:], string(l)) {
+		return pos + len(l), true
 	}
-	fence := ""
-	pendingDecorator, pendingGoError := false, false
-	for i, raw := range lines {
-		line := strings.TrimSuffix(strings.TrimSuffix(raw, "\n"), "\r")
-		if fence != "" {
-			if line == fence {
-				fence = ""
+	return pos, false
+}
+
+type class struct {
+	neg    bool
+	ranges [][2]byte
+}
+
+func (c *class) match(m *matcher, pos int) (int, bool) {
+	if pos >= len(m.src) {
+		return pos, false
+	}
+	b := m.src[pos]
+	in := false
+	for _, r := range c.ranges {
+		if b >= r[0] && b <= r[1] {
+			in = true
+			break
+		}
+	}
+	if in != c.neg {
+		return pos + 1, true
+	}
+	return pos, false
+}
+
+type ref string
+
+func (r ref) match(m *matcher, pos int) (int, bool) {
+	name := string(r)
+	if hook := hooks[name]; hook != nil {
+		return hook(m, pos)
+	}
+	m.depth++
+	if m.depth > 20000 {
+		m.depth--
+		return pos, false
+	}
+	mark := len(m.trail)
+	end, ok := m.g.rules[name].match(m, pos)
+	m.depth--
+	if !ok {
+		m.trail = m.trail[:mark]
+		return pos, false
+	}
+	if reported[name] {
+		m.trail = append(m.trail, span{rule: name, pos: pos, end: end})
+	}
+	return end, true
+}
+
+type seq []node
+
+func (s seq) match(m *matcher, pos int) (int, bool) {
+	mark := len(m.trail)
+	cur := pos
+	for _, n := range s {
+		end, ok := n.match(m, cur)
+		if !ok {
+			m.trail = m.trail[:mark]
+			if cur > m.farthest {
+				m.farthest = cur
+			}
+			return pos, false
+		}
+		cur = end
+	}
+	return cur, true
+}
+
+type alt []node
+
+func (a alt) match(m *matcher, pos int) (int, bool) {
+	for _, n := range a {
+		mark := len(m.trail)
+		if end, ok := n.match(m, pos); ok {
+			return end, true
+		}
+		m.trail = m.trail[:mark]
+	}
+	return pos, false
+}
+
+type rep struct {
+	n        node
+	min, max int
+}
+
+func (r *rep) match(m *matcher, pos int) (int, bool) {
+	cur, count := pos, 0
+	for r.max < 0 || count < r.max {
+		mark := len(m.trail)
+		end, ok := r.n.match(m, cur)
+		if !ok || end == cur {
+			m.trail = m.trail[:mark]
+			break
+		}
+		cur = end
+		count++
+	}
+	if count < r.min {
+		return pos, false
+	}
+	return cur, true
+}
+
+var reported = func() map[string]bool {
+	out := map[string]bool{}
+	for _, r := range ReportedRules {
+		out[r] = true
+	}
+	return out
+}()
+
+var hooks = map[string]func(m *matcher, pos int) (int, bool){
+	"bash-fragment": bashFragment,
+}
+
+// ---- opaque base-Bash fragment ----
+
+// bashFragment consumes ordinary Bash text up to the next point the delta
+// grammar owns: a bare `{` or `}` word, a column-one fence header or embed
+// line, a line-leading decorator-shaped word, or a line-leading `func` or
+// `agentic` word. It honors comments, single and double quotes, backslash
+// continuation and heredoc bodies, so none of those boundaries open a delta
+// production. Command substitutions are not tracked: the engine recognizes a
+// column-one fence inside `$( )` and backticks, and so does this scanner.
+func bashFragment(m *matcher, pos int) (int, bool) {
+	src := m.src
+	i := pos
+	litDepth := 0
+	continued := -2
+	var heredocs []heredoc
+	for i < len(src) {
+		atLineStart := (i == 0 || src[i-1] == '\n') && i-1 != continued
+		if atLineStart {
+			if _, ok := m.g.matchAt("fence-open", src, i); ok {
+				return i, true
+			}
+			if _, ok := m.g.matchAt("embed-line", src, i); ok {
+				return i, true
+			}
+			j := i
+			for j < len(src) && (src[j] == ' ' || src[j] == '\t') {
+				j++
+			}
+			if _, ok := m.g.matchAt("decorator-head", src, j); ok {
+				return i, true
+			}
+			if leadingKeyword(src, j) {
+				return j, true
+			}
+		}
+		c := src[i]
+		switch {
+		case c == '\\':
+			if i+1 < len(src) && src[i+1] == '\n' {
+				continued = i + 1
+			}
+			i += 2
+			continue
+		case c == '\'':
+			end := strings.IndexByte(src[i+1:], '\'')
+			if end < 0 {
+				return len(src), true
+			}
+			i += end + 2
+			continue
+		case c == '"':
+			i++
+			for i < len(src) && src[i] != '"' {
+				if src[i] == '\\' {
+					i++
+				}
+				i++
+			}
+			i++
+			continue
+		case c == '#' && wordStart(src, i):
+			for i < len(src) && src[i] != '\n' {
+				i++
 			}
 			continue
-		}
-		if pendingDecorator && strings.TrimSpace(line) != "" && !strings.HasPrefix(strings.TrimSpace(line), "#") && !strings.HasPrefix(line, "@") {
-			if !validFunctionStart(line) || (pendingGoError && !strings.HasPrefix(line, "func ") && !strings.HasPrefix(line, "agentic func ")) {
-				return counts, fmt.Errorf("line %d: decorator stack requires a function declaration", i+1)
+		case c == '<' && strings.HasPrefix(src[i:], "<<") && !strings.HasPrefix(src[i:], "<<<") && !(i > 0 && src[i-1] == '<'):
+			if h, next, ok := heredocWord(src, i+2); ok {
+				heredocs = append(heredocs, h)
+				i = next
+				continue
 			}
-			pendingDecorator, pendingGoError = false, false
-		}
-		if !strings.HasPrefix(line, "~~~") {
+			i += 2
+			continue
+		case c == '\n':
+			i++
+			for _, h := range heredocs {
+				i = skipHeredoc(src, i, h)
+			}
+			heredocs = nil
+			continue
+		case c == '{':
 			switch {
-			case strings.HasPrefix(line, "@"):
-				if !strings.Contains(line, "(") && !strings.HasPrefix(line, "@go.error") {
-					continue // uncommitted near miss remains ordinary shell text
-				}
-				if strings.HasPrefix(line, "@go.error") && !g.Match("go-error", line) {
-					return counts, fmt.Errorf("line %d: malformed @go.error marker", i+1)
-				}
-				if !g.Match("decorator", line) || !balancedCall(line) {
-					return counts, fmt.Errorf("line %d: malformed decorator", i+1)
-				}
-				if g.Match("go-error", line) {
-					counts["go-error"]++
-					pendingGoError = true
-				}
-				if g.Match("decorator", line) {
-					counts["decorator"]++
-					pendingDecorator = true
-				}
-			case strings.HasPrefix(line, "embed "):
-				if !g.Match("embed", line) {
-					return counts, fmt.Errorf("line %d: malformed embed", i+1)
-				}
-				counts["embed"]++
-			case strings.HasPrefix(line, "agentic "):
-				matched := false
-				for _, rule := range []string{"agentic-block", "agentic-shell-func", "agentic-typed-func", "agentic-typed-method"} {
-					if g.Match(rule, line) && validBlockHeader(line) {
-						counts[rule]++
-						matched = true
-						break
-					}
-				}
-				if !matched || !closedBlock(lines, i) {
-					return counts, fmt.Errorf("line %d: malformed agentic declaration or block", i+1)
-				}
-			case strings.HasPrefix(line, "func "):
-				matched := false
-				for _, rule := range []string{"typed-func", "typed-method"} {
-					if g.Match(rule, line) && validBlockHeader(line) {
-						counts[rule]++
-						matched = true
-						break
-					}
-				}
-				if !matched || !closedBlock(lines, i) {
-					return counts, fmt.Errorf("line %d: malformed typed function or method", i+1)
-				}
+			case !standaloneWord(src, i):
+				litDepth++ // attached, as in `T{` or `[]int{`: a literal with a partner
+			case litDepth == 0 && bareOpen(src, i):
+				return i, true
 			}
-			continue
+			// A standalone `{` in argument position is a plain word.
+		case c == '}':
+			if litDepth > 0 {
+				litDepth--
+			} else if bareClose(src, i) {
+				return i, true
+			}
 		}
-		if !g.Match("fence-open", line) {
-			return counts, fmt.Errorf("line %d: malformed fence opener", i+1)
-		}
-		counts["fence-open"]++
-		n := 0
-		for n < len(line) && line[n] == '~' {
-			n++
-		}
-		fence = line[:n]
-		if i == len(lines)-1 {
-			return counts, fmt.Errorf("line %d: unclosed fence %s", i+1, fence)
-		}
+		i++
 	}
-	if fence != "" {
-		return counts, fmt.Errorf("unclosed fence %s", fence)
+	return len(src), true
+}
+
+type heredoc struct {
+	delim     string
+	stripTabs bool
+}
+
+func heredocWord(src string, i int) (heredoc, int, bool) {
+	h := heredoc{}
+	if i < len(src) && src[i] == '-' {
+		h.stripTabs = true
+		i++
 	}
-	if pendingDecorator {
-		return counts, fmt.Errorf("decorator stack without function declaration")
+	for i < len(src) && (src[i] == ' ' || src[i] == '\t') {
+		i++
 	}
-	return counts, nil
-}
-
-var shellFunctionStart = regexp.MustCompile(`^(?:function[ \t]+[A-Za-z_][A-Za-z_0-9]*[ \t]*\(|[A-Za-z_][A-Za-z_0-9]*[ \t]*\(\))`)
-
-func validFunctionStart(line string) bool {
-	return strings.HasPrefix(line, "func ") || strings.HasPrefix(line, "agentic func ") ||
-		strings.HasPrefix(line, "agentic function ") || shellFunctionStart.MatchString(line)
-}
-
-// balancedCall checks the decorator's actual closing parenthesis, ignoring
-// parentheses within quoted arguments. Argument expressions remain opaque.
-func balancedCall(s string) bool {
-	return balancedUntil(s, '(', ')', false)
-}
-
-func validBlockHeader(s string) bool {
-	// The first body brace must follow all closed signature parentheses. Reject
-	// an apparent body brace inside an unfinished argument or receiver list.
-	return balancedUntil(s, '(', ')', true)
-}
-
-func balancedUntil(s string, open, close byte, body bool) bool {
-	depth, quote := 0, byte(0)
-	escaped, seen, ended := false, false, false
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if escaped {
-			escaped = false
-			continue
-		}
-		if c == '\\' {
-			escaped = true
-			continue
-		}
+	var b strings.Builder
+	quote := byte(0)
+	for i < len(src) {
+		c := src[i]
 		if quote != 0 {
 			if c == quote {
 				quote = 0
+			} else {
+				b.WriteByte(c)
 			}
+			i++
 			continue
 		}
-		if c == '\'' || c == '"' || c == '`' {
+		if c == '\'' || c == '"' {
 			quote = c
+			i++
 			continue
 		}
-		if c == '#' && (i == 0 || s[i-1] == ' ' || s[i-1] == '\t') {
+		if c == '\\' && i+1 < len(src) {
+			b.WriteByte(src[i+1])
+			i += 2
+			continue
+		}
+		if strings.IndexByte(" \t\n;|&<>()", c) >= 0 {
 			break
 		}
-		if c == open {
-			depth++
-			seen = true
-			continue
-		}
-		if c == close {
-			depth--
-			if depth < 0 {
-				return false
-			}
-			if depth == 0 {
-				ended = true
-			}
-			continue
-		}
-		if c == '{' && body {
-			return depth == 0 && (ended || !seen)
-		}
+		b.WriteByte(c)
+		i++
 	}
-	return !body && seen && ended && depth == 0 && quote == 0
+	h.delim = b.String()
+	return h, i, h.delim != ""
 }
 
-func closedBlock(lines []string, start int) bool {
-	depth, quote := 0, byte(0)
-	escaped, opened := false, false
-	for _, raw := range lines[start:] {
-		line := strings.TrimSuffix(raw, "\n")
-		for i := 0; i < len(line); i++ {
-			c := line[i]
-			if escaped {
-				escaped = false
-				continue
-			}
-			if c == '\\' {
-				escaped = true
-				continue
-			}
-			if quote != 0 {
-				if c == quote {
-					quote = 0
-				}
-				continue
-			}
-			if c == '\'' || c == '"' || c == '`' {
-				quote = c
-				continue
-			}
-			if c == '#' && (i == 0 || line[i-1] == ' ' || line[i-1] == '\t') {
-				break
-			}
-			if c == '{' {
-				depth++
-				opened = true
-			}
-			if c == '}' {
-				depth--
-				if depth == 0 && opened {
-					return true
-				}
-				if depth < 0 {
-					return false
-				}
+func skipHeredoc(src string, i int, h heredoc) int {
+	for i < len(src) {
+		end := strings.IndexByte(src[i:], '\n')
+		line := src[i:]
+		next := len(src)
+		if end >= 0 {
+			line = src[i : i+end]
+			next = i + end + 1
+		}
+		if h.stripTabs {
+			line = strings.TrimLeft(line, "\t")
+		}
+		i = next
+		if line == h.delim {
+			return i
+		}
+	}
+	return i
+}
+
+func wordStart(src string, i int) bool {
+	return i == 0 || strings.IndexByte(" \t\n;(&|", src[i-1]) >= 0
+}
+
+// blockKeywords are the Bash# statement heads after which a trailing bare
+// `{` opens a block rather than being an argument word.
+var blockKeywords = map[string]bool{
+	"if": true, "else": true, "elif": true, "for": true, "switch": true, "select": true,
+	"type": true, "var": true, "const": true, "go": true, "defer": true,
+	"func": true, "function": true, "while": true, "until": true, "then": true, "do": true,
+}
+
+// commandHead returns the first word of the command containing offset i and
+// whether i itself is at command position.
+func commandHead(src string, i int) (string, bool) {
+	j := i
+	for j > 0 && (src[j-1] == ' ' || src[j-1] == '\t') {
+		j--
+	}
+	if j > 0 && src[j-1] == ')' { // `func() {`, `f() {`, `for (...) {`
+		return "func", false
+	}
+	// Go-style headers carry `;` (`for i := 0; i < n; i++ {`), so the head
+	// is the first word of the line or of the enclosing brace or paren.
+	start := j
+	for start > 0 && strings.IndexByte("\n({}", src[start-1]) < 0 {
+		start--
+	}
+	fields := strings.Fields(src[start:j])
+	if len(fields) == 0 {
+		return "", true
+	}
+	return fields[0], false
+}
+
+func standaloneWord(src string, i int) bool {
+	before := i == 0 || strings.IndexByte(" \t\n;(&|", src[i-1]) >= 0
+	after := i+1 >= len(src) || strings.IndexByte(" \t\n;}", src[i+1]) >= 0
+	return before && after
+}
+
+func bareOpen(src string, i int) bool {
+	head, atCommand := commandHead(src, i)
+	return atCommand || blockKeywords[head] || strings.HasSuffix(head, ")")
+}
+
+// bareClose accepts a `}` word wherever Bash# does: after whitespace, a
+// separator or an opening brace, and before whitespace, a separator or the
+// end of input. Bash# bodies close blocks without a preceding `;`.
+func bareClose(src string, i int) bool {
+	before := i == 0 || strings.IndexByte(" \t\n;{", src[i-1]) >= 0
+	after := i+1 >= len(src) || strings.IndexByte(" \t\n;)&|", src[i+1]) >= 0
+	return before && after
+}
+
+func leadingKeyword(src string, j int) bool {
+	for _, kw := range []string{"func", "agentic"} {
+		if strings.HasPrefix(src[j:], kw) {
+			k := j + len(kw)
+			if k >= len(src) || strings.IndexByte(" \t\n;", src[k]) >= 0 {
+				return true
 			}
 		}
-		escaped = false
 	}
 	return false
 }
