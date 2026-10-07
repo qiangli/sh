@@ -232,6 +232,79 @@ func TestTextShadowAndOverlay(t *testing.T) {
 	}
 }
 
+// TestTextDiscoveredMethods covers the skill row's shape: a row with a
+// fixed verb table (`run`) plus Discover, whose answer adds methods for
+// targets a tasks.md-style file declares, each running through
+// DiscoveredVerb's template. A discovered method's own call must agree
+// with the declared verb's exec/error shape, and an empty Discover answer
+// must add nothing (the untasked-skill case).
+func TestTextDiscoveredMethods(t *testing.T) {
+	saved := ToolResolver
+	t.Cleanup(func() { ToolResolver = saved })
+	ToolResolver = func(string) ([]string, string, error) {
+		return []string{"/bin/sh", "-c", `
+if [ "$1" = "list" ]; then
+	printf '{"name":"send","effects":["net"]}\n\n'
+else
+	printf 'ran %s\n' "$2"
+fi
+`, "fake"}, "fake", nil
+	}
+	text := Text{Type: "tasked", FileName: "task.md", Tool: "fake-tool", Verbs: []Verb{
+		{Name: "run", Args: []string{"run"}},
+	},
+		Discover:       &Verb{Args: []string{"list"}},
+		DiscoveredVerb: &Verb{Args: []string{"target", "{target}"}},
+	}
+	ctx := context.Background()
+	plans, err := Prepare(ctx, []Block{{Language: "tasked", Alias: "t", Source: "x\n"}}, map[string]Analyzer{"tasked": text})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := plans[0]
+	if len(plan.Exports) != 2 || plan.Exports[0].Name != "run" || plan.Exports[1].Name != "send" || strings.Join(plan.Exports[1].Effects, ",") != "net" {
+		t.Fatalf("exports = %+v", plan.Exports)
+	}
+	module := Start(plan, text)
+	result, err := module.Call(ctx, "send")
+	if err != nil || result.Value != "ran send" {
+		t.Fatalf("send = %+v, %v", result, err)
+	}
+	// Denial still reaches the processor, not a stub: an unknown discovered
+	// name is the tool's own refusal, carried as the call's error.
+	ToolResolver = func(string) ([]string, string, error) {
+		return []string{"/bin/sh", "-c", `echo "no target" >&2; exit 1`}, "fake", nil
+	}
+	if _, err := module.Call(ctx, "send"); err == nil {
+		t.Fatal("expected the processor's own refusal")
+	}
+}
+
+// TestTextDiscoverEmptyKeepsDeclaredVerbsOnly is the skill-without-tasks.md
+// case: Discover is set but answers nothing, so Analyze adds no methods —
+// not a refusal.
+func TestTextDiscoverEmptyKeepsDeclaredVerbsOnly(t *testing.T) {
+	saved := ToolResolver
+	t.Cleanup(func() { ToolResolver = saved })
+	ToolResolver = func(string) ([]string, string, error) {
+		return []string{"/bin/sh", "-c", `true`}, "fake", nil
+	}
+	text := Text{Type: "untasked", FileName: "task.md", Tool: "fake-tool", Verbs: []Verb{
+		{Name: "run", Args: []string{"run"}},
+	},
+		Discover:       &Verb{Args: []string{"list"}},
+		DiscoveredVerb: &Verb{Args: []string{"target", "{target}"}},
+	}
+	ctx := context.Background()
+	plans, err := Prepare(ctx, []Block{{Language: "untasked", Alias: "u", Source: "x\n"}}, map[string]Analyzer{"untasked": text})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plans[0].Exports) != 1 || plans[0].Exports[0].Name != "run" {
+		t.Fatalf("exports = %+v", plans[0].Exports)
+	}
+}
+
 func TestManifestFilesAndGoModule(t *testing.T) {
 	RegisterLanguage(func() Language {
 		row := TextRow("fakemod", nil, Text{Type: "fakemod", FileName: "go.mod", Tool: "go", Verbs: []Verb{{Name: "tidy"}}})

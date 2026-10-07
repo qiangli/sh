@@ -84,6 +84,19 @@ type Text struct {
 	// EnvFunc, when set, answers the caller's environment at call time and
 	// wins over Environ; a host binding like CwdFunc.
 	EnvFunc func() []string
+	// Discover, when set, is this row's extra verb for Analyze: run once per
+	// plan in WorkDir with the same {file}/{dir}/{root}/{cwd} placeholders
+	// as any Verb's Args/Env. Non-empty stdout is the [ParseMethods] shape
+	// (one exported method per line); empty stdout is not a refusal, it
+	// means no additional methods — a skill without tasks.md keeps exactly
+	// its declared Verbs, because its processor has nothing more to say.
+	Discover *Verb
+	// DiscoveredVerb, when set beside Discover, is the template a
+	// discovered method's own call runs: its Args' literal `{target}`
+	// becomes the method's name. A discovery answer carries a name and
+	// effects, not an invocation — the processor needs only the name to
+	// run one.
+	DiscoveredVerb *Verb
 }
 
 func (t Text) environ() []string {
@@ -93,6 +106,18 @@ func (t Text) environ() []string {
 		}
 	}
 	return t.Environ
+}
+
+// callerDir answers the caller's directory this row's processor addresses:
+// CwdFunc at call time, else the fixed Dir a non-interactive construction
+// carries.
+func (t Text) callerDir() string {
+	if t.CwdFunc != nil {
+		if dir := t.CwdFunc(); dir != "" {
+			return dir
+		}
+	}
+	return t.Dir
 }
 
 // RunnerFence is the runtime of a fence whose opener named a runner
@@ -162,7 +187,37 @@ func (t Text) Analyze(ctx context.Context, source string) ([]Export, error) {
 		}
 		exports = append(exports, Export{Name: verb.Name, Signature: sig, Effects: verb.Effects})
 	}
+	if t.Discover != nil {
+		discovered, err := t.runDiscover(ctx, source)
+		if err != nil {
+			return nil, fmt.Errorf("text fence %s: discover: %w", t.Type, err)
+		}
+		for _, export := range discovered {
+			if _, ok := t.verb(export.Name); ok {
+				return nil, fmt.Errorf("text fence %s: discovered method %s shadows a declared verb", t.Type, export.Name)
+			}
+			exports = append(exports, export)
+		}
+	}
 	return exports, nil
+}
+
+// runDiscover executes the Discover verb and parses its answer, tolerating
+// empty output as "no additional methods" instead of [ParseMethods]'s
+// refusal: a row that declares Discover but a processor that simply has
+// nothing more to say (an untasked skill) is not a contract violation.
+func (t Text) runDiscover(ctx context.Context, source string) ([]Export, error) {
+	stdout, stderr, err := t.run(ctx, textKey(t.Type, "discover", source), source, *t.Discover, nil)
+	if err != nil {
+		if stderr != "" {
+			return nil, fmt.Errorf("%w: %s", err, stderr)
+		}
+		return nil, err
+	}
+	if strings.TrimSpace(stdout) == "" {
+		return nil, nil
+	}
+	return ParseMethods(t.Type, stdout)
 }
 
 func (t Text) verb(name string) (Verb, bool) {
@@ -310,34 +365,25 @@ func materializeText(key, fileName, source string) (string, error) {
 	return file, nil
 }
 
-// callText runs one verb of a built-in text row: materialize the body,
-// resolve the tool, exec `tool <verb args with {file}/{dir}> <call args>`
-// in the artifact's directory. Stdout is the result; a non-zero status is
-// the call error, with stderr passed through.
-func (m *Module) callText(ctx context.Context, text Text, name string, args []any, kwargs map[string]any) (CallResult, error) {
-	if len(kwargs) != 0 {
-		return CallResult{}, fmt.Errorf("text fence %s: %s does not accept named arguments", text.Type, name)
-	}
-	verb, ok := text.verb(name)
-	if !ok {
-		return CallResult{}, fmt.Errorf("text fence %s has no method %s", text.Type, name)
-	}
-	fileName := text.FileName
+// run executes one verb of a built-in text row against a body materialized
+// under key: resolve the tool, exec `tool <verb args with
+// {file}/{dir}/{root}/{cwd}> <call args>` in WorkDir (the artifact's
+// directory by default). Stdout and stderr come back raw and trimmed; a
+// non-zero exit is reported in err with the exit code in its text — a
+// caller adds its own context (the fence/method names, or nothing for a
+// discovery run that is not itself a call).
+func (t Text) run(ctx context.Context, key, source string, verb Verb, args []any) (stdout, stderr string, err error) {
+	fileName := t.FileName
 	if fileName == "" {
-		fileName = TextFileName(text.Type)
+		fileName = TextFileName(t.Type)
 	}
-	file, err := materializeText(m.plan.ID, fileName, m.plan.Source)
+	file, err := materializeText(key, fileName, source)
 	if err != nil {
-		return CallResult{}, err
+		return "", "", err
 	}
 	dir := filepath.Dir(file)
-	root := filepath.Join(textRoot(), m.plan.ID)
-	cwd := text.Dir
-	if text.CwdFunc != nil {
-		if dir := text.CwdFunc(); dir != "" {
-			cwd = dir
-		}
-	}
+	root := filepath.Join(textRoot(), key)
+	cwd := t.callerDir()
 	if cwd == "" {
 		cwd, _ = os.Getwd()
 	}
@@ -346,13 +392,14 @@ func (m *Module) callText(ctx context.Context, text Text, name string, args []an
 	// cleaned spelling serves as the placeholder, the process directory and
 	// its PWD.
 	cwd = filepath.Clean(cwd)
-	if err := shadowEntries(dir, cwd, text.Shadow); err != nil {
-		return CallResult{}, fmt.Errorf("text fence %s: %w", text.Type, err)
+	if err := shadowEntries(dir, cwd, t.Shadow); err != nil {
+		return "", "", err
 	}
 	overlay := ""
+	var overlayErr error
 	expand := func(arg string) string {
 		if strings.Contains(arg, "{overlay}") && overlay == "" {
-			overlay, err = writeOverlay(dir, cwd, file, text.Overlay)
+			overlay, overlayErr = writeOverlay(dir, cwd, file, t.Overlay)
 		}
 		arg = strings.ReplaceAll(arg, "{file}", file)
 		arg = strings.ReplaceAll(arg, "{dir}", dir)
@@ -360,48 +407,88 @@ func (m *Module) callText(ctx context.Context, text Text, name string, args []an
 		arg = strings.ReplaceAll(arg, "{overlay}", overlay)
 		return strings.ReplaceAll(arg, "{cwd}", cwd)
 	}
-	toolName := text.Tool
+	toolName := t.Tool
 	if verb.Tool != "" {
 		toolName = verb.Tool
 	}
-	environ := text.environ()
+	environ := t.environ()
 	env := envMap(environ)
 	tool, _, err := resolveTool(env, toolName)
 	if err != nil {
-		return CallResult{}, fmt.Errorf("text fence %s: %s: %w", text.Type, toolName, err)
+		return "", "", fmt.Errorf("%s: %w", toolName, err)
 	}
 	argv := append([]string(nil), tool...)
 	for _, arg := range verb.Args {
 		argv = append(argv, expand(arg))
 	}
-	if err != nil {
-		return CallResult{}, fmt.Errorf("text fence %s: overlay: %w", text.Type, err)
+	if overlayErr != nil {
+		return "", "", fmt.Errorf("overlay: %w", overlayErr)
 	}
 	for _, arg := range args {
 		argv = append(argv, foreignText(arg))
 	}
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = dir
-	if text.WorkDir != "" {
-		cmd.Dir = expand(text.WorkDir)
+	if t.WorkDir != "" {
+		cmd.Dir = expand(t.WorkDir)
 	}
-	cmd.Env = append(environOf(environ), "BASHPP_FENCE_TYPE="+text.Type, "BASHPP_FENCE_FILE="+file, "PWD="+cmd.Dir)
+	cmd.Env = append(environOf(environ), "BASHPP_FENCE_TYPE="+t.Type, "BASHPP_FENCE_FILE="+file, "PWD="+cmd.Dir)
 	for _, entry := range verb.Env {
 		cmd.Env = append(cmd.Env, expand(entry))
 	}
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	err = cmd.Run()
+	var out, errBuf bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &errBuf
+	runErr := cmd.Run()
 	// A text-fence verb returns text, so CRLF from Windows processors is
 	// normalized before removing trailing newlines. Preserve lone CR bytes
 	// and the raw stderr stream; only the text value has this contract.
-	value := strings.ReplaceAll(stdout.String(), "\r\n", "\n")
-	result := CallResult{Value: strings.TrimRight(value, "\n"), Stderr: stderr.String()}
-	if err != nil {
+	value := strings.ReplaceAll(out.String(), "\r\n", "\n")
+	stdout, stderr = strings.TrimRight(value, "\n"), errBuf.String()
+	if runErr != nil {
 		var exit *exec.ExitError
-		if errors.As(err, &exit) {
-			return result, fmt.Errorf("text fence %s.%s: %s exited %d", text.Type, name, toolName, exit.ExitCode())
+		if errors.As(runErr, &exit) {
+			return stdout, stderr, fmt.Errorf("%s exited %d", toolName, exit.ExitCode())
 		}
+		return stdout, stderr, runErr
+	}
+	return stdout, stderr, nil
+}
+
+// discoveredVerb builds the Verb a discovered method's own call runs:
+// DiscoveredVerb's Args template with the literal `{target}` replaced by
+// the method's name. There is no need to re-run Discover first to validate
+// the name — the processor itself refuses an unknown one when the call
+// runs, exactly as it would for a hand-written Verb.
+func (t Text) discoveredVerb(name string) (Verb, bool) {
+	if t.DiscoveredVerb == nil {
+		return Verb{}, false
+	}
+	verb := *t.DiscoveredVerb
+	args := make([]string, len(verb.Args))
+	for i, arg := range verb.Args {
+		args[i] = strings.ReplaceAll(arg, "{target}", name)
+	}
+	verb.Name, verb.Args = name, args
+	return verb, true
+}
+
+// callText runs one verb of a built-in text row (declared or discovered).
+// Stdout is the result; a non-zero status is the call error, with stderr
+// passed through.
+func (m *Module) callText(ctx context.Context, text Text, name string, args []any, kwargs map[string]any) (CallResult, error) {
+	if len(kwargs) != 0 {
+		return CallResult{}, fmt.Errorf("text fence %s: %s does not accept named arguments", text.Type, name)
+	}
+	verb, ok := text.verb(name)
+	if !ok {
+		verb, ok = text.discoveredVerb(name)
+	}
+	if !ok {
+		return CallResult{}, fmt.Errorf("text fence %s has no method %s", text.Type, name)
+	}
+	stdout, stderr, err := text.run(ctx, m.plan.ID, m.plan.Source, verb, args)
+	result := CallResult{Value: stdout, Stderr: stderr}
+	if err != nil {
 		return result, fmt.Errorf("text fence %s.%s: %w", text.Type, name, err)
 	}
 	return result, nil
