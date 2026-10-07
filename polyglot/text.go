@@ -44,6 +44,8 @@ type Verb struct {
 	// Effects are the effect atoms a world-changing verb carries, read by
 	// the contract layer; nil for a read-only verb.
 	Effects []string
+	// Agentic requires an explicitly agentic caller.
+	Agentic bool
 	// Result is the export's result type; "" means one string (the
 	// processor's stdout).
 	Result string
@@ -160,7 +162,7 @@ func (t Text) Analyze(ctx context.Context, source string) ([]Export, error) {
 		if verb.Result != "" {
 			sig.Results = []string{verb.Result}
 		}
-		exports = append(exports, Export{Name: verb.Name, Signature: sig, Effects: verb.Effects})
+		exports = append(exports, Export{Name: verb.Name, Signature: sig, Effects: verb.Effects, Agentic: verb.Agentic})
 	}
 	return exports, nil
 }
@@ -180,7 +182,7 @@ func (t Text) LoweredLiteral(prefix string) string {
 	var out strings.Builder
 	fmt.Fprintf(&out, "%spolyglot.Text{Type:%q,FileName:%q,Tool:%q,WorkDir:%q,Shadow:%#v,Overlay:%#v,Verbs:[]%spolyglot.Verb{", prefix, t.Type, t.FileName, t.Tool, t.WorkDir, t.Shadow, t.Overlay, prefix)
 	for _, verb := range t.Verbs {
-		fmt.Fprintf(&out, "{Name:%q,Args:%#v,Tool:%q,Env:%#v,Effects:%#v,Result:%q},", verb.Name, verb.Args, verb.Tool, verb.Env, verb.Effects, verb.Result)
+		fmt.Fprintf(&out, "{Name:%q,Args:%#v,Tool:%q,Env:%#v,Effects:%#v,Result:%q,Agentic:%t},", verb.Name, verb.Args, verb.Tool, verb.Env, verb.Effects, verb.Result, verb.Agentic)
 	}
 	out.WriteString("}}")
 	return out.String()
@@ -236,6 +238,7 @@ func ParseMethods(runner, answer string) ([]Export, error) {
 			Signature *Signature `json:"signature"`
 			Effect    string     `json:"effect"`
 			Effects   []string   `json:"effects"`
+			Agentic   bool       `json:"agentic"`
 		}
 		if err := json.Unmarshal([]byte(text), &raw); err != nil {
 			return nil, fmt.Errorf("runner %s: %s line %d is not a method object: %v", runner, MethodsVerb, line, err)
@@ -261,7 +264,7 @@ func ParseMethods(runner, answer string) ([]Export, error) {
 		for i, effect := range effects {
 			effects[i] = strings.TrimSpace(effect)
 		}
-		exports = append(exports, Export{Name: raw.Name, Signature: sig, Effects: effects})
+		exports = append(exports, Export{Name: raw.Name, Signature: sig, Effects: effects, Agentic: raw.Agentic})
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("runner %s: %s: %v", runner, MethodsVerb, err)

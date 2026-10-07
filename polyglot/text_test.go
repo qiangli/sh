@@ -276,3 +276,20 @@ func TestManifestFilesAndGoModule(t *testing.T) {
 		t.Fatalf("without a module: %v", err)
 	}
 }
+
+func TestParseMethodsAgentic(t *testing.T) {
+	exports, err := ParseMethods("agent", `{"name":"run","agentic":true,"effect":"exec, net, spend"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !exports[0].Agentic || strings.Join(exports[0].Effects, ",") != "exec,net,spend" {
+		t.Fatalf("lost governance: %+v", exports[0])
+	}
+	if _, err := ParseMethods("agent", `{"name":"run","agentic":"true"}`); err == nil {
+		t.Fatal("accepted malformed agentic flag")
+	}
+	exports, err = ParseMethods("old", `{"name":"run"}`)
+	if err != nil || exports[0].Agentic {
+		t.Fatalf("legacy method changed: %+v %v", exports, err)
+	}
+}

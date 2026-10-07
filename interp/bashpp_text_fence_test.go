@@ -245,3 +245,40 @@ echo "count=$c"
 		t.Fatalf("stdout = %q (stderr %q)", stdout.String(), stderr.String())
 	}
 }
+
+func TestBashPPRunnerFenceAgentic(t *testing.T) {
+	const fence = `
+runner() {
+ case "$1" in
+ methods) echo '{"name":"run","agentic":true,"effect":"exec,net,spend"}' ;;
+ run) echo CALLED ;;
+ esac
+}
+~~~oracle as searcher !runner
+existing binding
+~~~
+`
+	for _, tc := range []struct {
+		name, call string
+		allowed    bool
+	}{
+		{"expression denied", "v := searcher.run()\necho \"$v\"", false},
+		{"command denied", "searcher.run()", false},
+		{"region", "agentic { v := searcher.run(); echo \"$v\"; }", true},
+		{"marked function", "agentic func query() { v := searcher.run(); echo \"$v\"; }\nagentic { query(); }", true},
+		{"unmarked function", "func query() { v := searcher.run(); echo \"$v\"; }\nagentic { query(); }", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			out, diagnostic, err := runBashPPInDir(t, t.TempDir(), fence+tc.call+"\n")
+			if tc.allowed {
+				if err != nil || out != "CALLED\n" {
+					t.Fatalf("out=%q diagnostic=%q err=%v", out, diagnostic, err)
+				}
+				return
+			}
+			if strings.Contains(out, "CALLED") || !strings.Contains(diagnostic, "agentic action requires") {
+				t.Fatalf("out=%q diagnostic=%q err=%v", out, diagnostic, err)
+			}
+		})
+	}
+}

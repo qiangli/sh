@@ -55,6 +55,8 @@ type Export struct {
 	// Effects are the effect atoms a world-changing text verb carries; nil
 	// for a source function or a read-only verb.
 	Effects []string `json:"effects,omitempty"`
+	// Agentic requires an explicitly agentic caller before dispatch.
+	Agentic bool `json:"agentic,omitempty"`
 }
 
 type Plan struct {
