@@ -2,12 +2,16 @@ package interp
 
 import (
 	"fmt"
+	"go/parser"
+	"go/token"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 )
+
+var runCompiledGoCommand = exec.Command
 
 // RunCompiledGoFile runs a whole Go program with the toolchain selected for
 // Bash# Go fences. Building first preserves the program's exit status (go run
@@ -24,6 +28,9 @@ func RunCompiledGoFile(path string, args []string, stdin io.Reader, stdout, stde
 	defer os.RemoveAll(root)
 	source, err := filepath.Abs(path)
 	if err != nil {
+		return 2, err
+	}
+	if err := requireCompiledGoMain(source); err != nil {
 		return 2, err
 	}
 	if strings.ToLower(filepath.Ext(source)) != ".go" {
@@ -46,17 +53,31 @@ func RunCompiledGoFile(path string, args []string, stdin io.Reader, stdout, stde
 		}
 	}
 	program := filepath.Join(root, "program")
-	build := exec.Command(identity.Binary, "build", "-o", program, source)
-	build.Stdin, build.Stdout, build.Stderr = stdin, stdout, stderr
+	build := runCompiledGoCommand(identity.Binary, "build", "-o", program, source)
+	build.Stdout, build.Stderr = stdout, stderr
 	if err = build.Run(); err != nil {
 		return processStatus(err)
 	}
-	run := exec.Command(program, args...)
+	run := runCompiledGoCommand(program, args...)
 	run.Stdin, run.Stdout, run.Stderr = stdin, stdout, stderr
 	if err = run.Run(); err != nil {
 		return processStatus(err)
 	}
 	return 0, nil
+}
+
+func requireCompiledGoMain(path string) error {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, path, nil, parser.PackageClauseOnly)
+	if err != nil {
+		// Keep syntax/type diagnostics owned by the selected Go toolchain.
+		return nil
+	}
+	if file.Name.Name == "main" {
+		return nil
+	}
+	pos := fset.Position(file.Package)
+	return fmt.Errorf("%s: Go source package %s cannot run as a program; expose its exported functions from a ~~~go fence in a .bsh script", pos, file.Name.Name)
 }
 
 func processStatus(err error) (int, error) {
