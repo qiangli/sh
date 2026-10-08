@@ -123,6 +123,20 @@ func TestBashPPTypeScriptSourceBlockRegistersDirectCalls(t *testing.T) {
 	}
 }
 
+func TestBashPPJavaScriptSourceBlockRegistersDirectCalls(t *testing.T) {
+	for _, language := range []string{"javascript", "js"} {
+		src := "~~~" + language + "\nimport path from \"node:path\"\nexport function answer() { return 42 }\nfunction greet(name) { return name }\n~~~\nx := answer()\ny := greet(hello)\n"
+		f, err := NewParser(Variant(LangBashPP)).Parse(strings.NewReader(src), "javascript.bpp")
+		if err != nil {
+			t.Fatalf("%s: %v", language, err)
+		}
+		block, ok := f.Stmts[0].Cmd.(*SourceBlock)
+		if !ok || block.Language.Value != language || len(f.Stmts) != 3 {
+			t.Fatalf("%s: block=%#v statements=%d", language, f.Stmts[0].Cmd, len(f.Stmts))
+		}
+	}
+}
+
 func TestBashPPRustSourceBlockRegistersDirectCalls(t *testing.T) {
 	for _, language := range []string{"rust", "rs"} {
 		src := "~~~" + language + "\npub fn add(a: i64, b: i64) -> i64 { a + b }\n~~~\nx := add(1, 2)\n"

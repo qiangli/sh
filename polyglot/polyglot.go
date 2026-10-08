@@ -1653,8 +1653,22 @@ def annotation_type(node):
         return 'object'
     return None
 out=[]
+def literal_constant(node):
+    # Module-level data a function can rely on: a plain name (optionally
+    # annotated) bound to a literal. Anything computed would run code at load.
+    if isinstance(node,ast.Assign):
+        targets,value=node.targets,node.value
+    elif isinstance(node,ast.AnnAssign) and node.value is not None:
+        targets,value=[node.target],node.value
+    else: return False
+    if not all(isinstance(t,ast.Name) for t in targets): return False
+    try: ast.literal_eval(value)
+    except Exception: raise SyntaxError('module-level name '+', '.join(t.id for t in targets)+' must be bound to a literal constant')
+    return True
 for node in nodes:
-    if not isinstance(node, ast.FunctionDef): raise SyntaxError('only module docstrings and synchronous function declarations are allowed')
+    if isinstance(node,(ast.Import,ast.ImportFrom)): continue
+    if literal_constant(node): continue
+    if not isinstance(node, ast.FunctionDef): raise SyntaxError('only module docstrings, imports, literal constants and synchronous function declarations are allowed')
     if node.decorator_list: raise SyntaxError('decorated functions are not allowed')
     if node.args.posonlyargs or node.args.kwonlyargs or node.args.vararg or node.args.kwarg: dynamic=True
     else: dynamic=False
@@ -1675,7 +1689,7 @@ print(json.dumps(out,separators=(',',':')))
 `
 
 const pythonWorker = pythonPathBootstrap + `
-import ast, base64, codecs, importlib, importlib.util, importlib.machinery, io, json, os, signal, sys, tempfile, traceback
+import __future__, ast, base64, codecs, importlib, importlib.util, importlib.machinery, io, json, os, signal, sys, tempfile, traceback
 try:
     protocol=os.fdopen(3,'w',buffering=1,newline='\n')
 except OSError:
@@ -1862,8 +1876,7 @@ for line in sys.stdin:
             else: value=os.getpid()
         elif op=='load':
             def action():
-                source='from __future__ import annotations\n'+req['source']
-                exec(compile(source,'<bash++ python>','exec'),ns,ns)
+                exec(compile(req['source'],'<bash++ python>','exec',flags=__future__.annotations.compiler_flag,dont_inherit=True),ns,ns)
             value,captured_out,captured_err=capture(action)
         elif op=='import':
             def action():

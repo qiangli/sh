@@ -20,6 +20,9 @@ type TypeScript struct {
 	Runtime        string
 	CompilerModule string
 	Environment    *EnvironmentPlan
+	// JavaScript parses the fence as JavaScript: syntax is checked, types are
+	// not, and an export is typed only where JSDoc says so.
+	JavaScript bool
 }
 
 func (t TypeScript) executable() string {
@@ -77,7 +80,19 @@ func (t TypeScript) compilerModule() string {
 	return "typescript"
 }
 
-func (t TypeScript) name() string { return "TypeScript" }
+func (t TypeScript) name() string {
+	if t.JavaScript {
+		return "JavaScript"
+	}
+	return "TypeScript"
+}
+
+func (t TypeScript) analyzeKind() string {
+	if t.JavaScript {
+		return "js"
+	}
+	return "ts"
+}
 func (t TypeScript) arguments(Plan) []string {
 	return append(leadingArgs(t.Environment), "-e", typeScriptWorker)
 }
@@ -107,14 +122,17 @@ func (t TypeScript) Analyze(ctx context.Context, source string) ([]Export, error
 
 func (t TypeScript) AnalyzeArtifact(ctx context.Context, source string) ([]Export, string, error) {
 	input := "<bash++ typescript>.ts"
+	if t.JavaScript {
+		input = "<bash++ javascript>.js"
+	}
 	if t.Environment != nil && t.Environment.Dir != "" {
 		dir := t.Environment.SourceDir
 		if dir == "" {
 			dir = t.Environment.Dir
 		}
-		input = filepath.Join(dir, ".bashpp-fence.ts")
+		input = filepath.Join(dir, ".bashpp-fence."+t.analyzeKind())
 	}
-	cmd := exec.CommandContext(ctx, t.executable(), append(leadingArgs(t.Environment), "-e", typeScriptAnalyze, t.compilerModule(), input)...)
+	cmd := exec.CommandContext(ctx, t.executable(), append(leadingArgs(t.Environment), "-e", typeScriptAnalyze, t.compilerModule(), input, t.analyzeKind())...)
 	t.configure(cmd)
 	cmd.Stdin = strings.NewReader(source)
 	var stdout, stderr bytes.Buffer
@@ -144,7 +162,7 @@ func (t TypeScript) AnalyzeArtifact(ctx context.Context, source string) ([]Expor
 		return nil, "", fmt.Errorf("invalid TypeScript analyzer response: %w", err)
 	}
 	if response.V7 {
-		args := []string{"--input-type=module", "-e", typeScriptAnalyze7, response.Root, filepath.Dir(input)}
+		args := []string{"--input-type=module", "-e", typeScriptAnalyze7, response.Root, filepath.Dir(input), t.analyzeKind()}
 		if t.runtimeName() == "bun" {
 			args = args[1:]
 		}
@@ -171,12 +189,27 @@ func (t TypeScript) AnalyzeArtifact(ctx context.Context, source string) ([]Expor
 	return response.Exports, response.Artifact, nil
 }
 
-const typeScriptAnalyze = `
+// typeScriptNodeAmbient builds loose ambient declarations for the Node
+// built-in modules and the globals a fence reaches for first. It is used only
+// when no @types/node is visible, so a fence importing node:fs or path checks
+// without a project; a project that has the real types keeps them.
+const typeScriptNodeAmbient = `
+function nodeAmbient(builtins) {
+  const names = new Set(['node:*']);
+  for (const name of builtins) if (!name.startsWith('_') && !name.startsWith('internal/')) names.add(name);
+  return [...names].map(n => 'declare module ' + JSON.stringify(n) + ';').join('\n') +
+    '\ndeclare var process: any;\ndeclare var Buffer: any;\n';
+}
+`
+
+const typeScriptAnalyze = typeScriptNodeAmbient + `
 const fs = require('fs');
 const cp = require('child_process');
 const path = require('path');
 const requested = process.argv[1] || 'typescript';
 const input = process.argv[2] || '<bash++ typescript>.ts';
+const js = process.argv[3] === 'js';
+const label = js ? '<bash++ javascript>' : '<bash++ typescript>';
 function loadCompiler(name) {
   try {
     let entry, packageFile;
@@ -213,7 +246,7 @@ function diagnostic(ts, d) {
   const message = ts.flattenDiagnosticMessageText(d.messageText, '\n');
   if (!d.file || d.start == null) return message;
   const p = d.file.getLineAndCharacterOfPosition(d.start);
-  return '<bash++ typescript>:' + (p.line + 1) + ':' + (p.character + 1) + ': ' + message;
+  return label + ':' + (p.line + 1) + ':' + (p.character + 1) + ': ' + message;
 }
 try {
   const loaded = loadCompiler(requested), ts = loaded.compiler;
@@ -221,7 +254,8 @@ try {
     process.stdout.write(JSON.stringify({v7:true,root:loaded.root})); process.exit(0);
   }
   const original = fs.readFileSync(0, 'utf8');
-  const parsed = ts.createSourceFile(input, original, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const scriptKind = js ? ts.ScriptKind.JS : ts.ScriptKind.TS;
+  const parsed = ts.createSourceFile(input, original, ts.ScriptTarget.Latest, true, scriptKind);
   const names = [], namesToExport = [];
   for (const node of parsed.statements) {
     if (ts.isFunctionDeclaration(node) && node.name && node.body) {
@@ -247,29 +281,40 @@ try {
   // Node's native type stripping requires for a relative source import, and
   // one project tsconfigs enable with allowImportingTsExtensions.
   if (modern) { options.noEmit = true; options.allowImportingTsExtensions = true; }
+  if (js) { options.noEmit = true; options.allowJs = true; options.checkJs = false; }
   const host = ts.createCompilerHost(options);
+  const ambientName = path.join(path.dirname(input), '.bashpp-node-ambient.d.ts');
+  const hasNodeTypes = typeof ts.getAutomaticTypeDirectiveNames === 'function' &&
+    ts.getAutomaticTypeDirectiveNames(options, host).includes('node');
+  const ambient = hasNodeTypes ? '' : nodeAmbient(require('module').builtinModules);
   // The compiler hands the host NORMALIZED names (forward slashes; on
   // Windows the drive letter's case is not guaranteed), while input is the
   // OS spelling it was given: compare through the same normalization.
   const norm = f => { f = String(f).replace(/\\/g, '/'); return process.platform === 'win32' ? f.toLowerCase() : f; };
   const inputKey = norm(input);
   const isInput = file => norm(file) === inputKey;
+  const isAmbient = file => ambient !== '' && norm(file) === norm(ambientName);
   const baseGet = host.getSourceFile.bind(host);
   host.getSourceFile = (file, version, onError, fresh) =>
-    isInput(file) ? ts.createSourceFile(input, source, version, true, ts.ScriptKind.TS) : baseGet(file, version, onError, fresh);
-  host.fileExists = ((base) => file => isInput(file) || base(file))(host.fileExists.bind(host));
-  host.readFile = ((base) => file => isInput(file) ? source : base(file))(host.readFile.bind(host));
+    isInput(file) ? ts.createSourceFile(input, source, version, true, scriptKind) :
+    isAmbient(file) ? ts.createSourceFile(ambientName, ambient, version, true, ts.ScriptKind.TS) : baseGet(file, version, onError, fresh);
+  host.fileExists = ((base) => file => isInput(file) || isAmbient(file) || base(file))(host.fileExists.bind(host));
+  host.readFile = ((base) => file => isInput(file) ? source : isAmbient(file) ? ambient : base(file))(host.readFile.bind(host));
   let artifact = '';
   host.writeFile = (file, text) => {
 	    const output = path.basename(input).replace(/\.[cm]?tsx?$/, '.js');
 	    if (path.basename(file) === output) artifact = text;
   };
-  const program = ts.createProgram([input], options, host);
+  const program = ts.createProgram(ambient ? [input, ambientName] : [input], options, host);
   const sourceFile = program.getSourceFile(input);
   const checker = program.getTypeChecker();
 	  const diagnostics = ts.getPreEmitDiagnostics(program).filter(d => !d.file || isInput(d.file.fileName));
   if (diagnostics.length) fail(diagnostics.map(d => diagnostic(ts, d)).join('\n'));
   const exports = [];
+  // A JavaScript export is typed only where JSDoc says so; a type inferred
+  // from the body or a default value is a guess the caller never wrote.
+  const documentedParam = d => !js || (!!d && (ts.getJSDocParameterTags(d).some(t => t.typeExpression) || !!ts.getJSDocType(d)));
+  const documentedResult = n => !js || !!ts.getJSDocReturnType(n);
   const mapType = type => {
     if (type.flags & ts.TypeFlags.StringLike) return 'string';
     if (type.flags & ts.TypeFlags.NumberLike) return 'float64';
@@ -286,20 +331,20 @@ try {
     let dynamic = !sig;
     const params = [];
     if (sig) for (const symbol of sig.parameters) {
-      const mapped = mapType(checker.getTypeOfSymbolAtLocation(symbol, node));
+      const mapped = documentedParam(symbol.valueDeclaration) ? mapType(checker.getTypeOfSymbolAtLocation(symbol, node)) : '';
       params.push(mapped || 'any'); dynamic ||= !mapped || mapped === 'any';
     }
     let results = [];
     if (sig) {
       const returned = checker.getReturnTypeOfSignature(sig);
       const awaited = checker.getPromisedTypeOfPromise ? checker.getPromisedTypeOfPromise(returned) : undefined;
-      const mapped = mapType(awaited || returned);
+      const mapped = documentedResult(node) ? mapType(awaited || returned) : 'any';
       if (!mapped) dynamic = true;
       else if (mapped !== 'nil') results = [mapped];
     }
     exports.push({name:node.name.text,signature:{params,results,dynamic}});
   }
-	  if (modern) artifact = ts.transpileModule(source, {compilerOptions:{
+	  if (modern || js) artifact = ts.transpileModule(source, {compilerOptions:{
 	    target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext,sourceMap:false,declaration:false
 	  },fileName:input}).outputText;
 	  else {
@@ -313,11 +358,12 @@ try {
 }
 `
 
-const typeScriptAnalyze7 = `
+const typeScriptAnalyze7 = typeScriptNodeAmbient + `
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import cp from 'node:child_process';
+import {builtinModules} from 'node:module';
 import {pathToFileURL} from 'node:url';
 const root = process.argv[1];
 const projectDir = process.argv[2] || process.cwd();
@@ -325,12 +371,15 @@ const apiModule = await import(pathToFileURL(path.join(root, 'dist/api/sync/api.
 const ast = await import(pathToFileURL(path.join(root, 'dist/ast/is.js')));
 const original = fs.readFileSync(0, 'utf8');
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bashpp-typescript-'));
-const input = path.join(dir, 'module.ts');
+const js = process.argv[3] === 'js';
+const ext = js ? 'js' : 'ts';
+const label = js ? '<bash++ javascript>' : '<bash++ typescript>';
+const input = path.join(dir, 'module.' + ext);
 let api;
 function fail(message) { process.stdout.write(JSON.stringify({ok:false,error:message})); process.exit(0); }
 function location(sourceFile, node) {
   const p = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
-  return '<bash++ typescript>:' + (p.line + 1) + ':' + (p.character + 1);
+  return label + ':' + (p.line + 1) + ':' + (p.character + 1);
 }
 try {
 	let packageDir = projectDir, modulesDir = projectDir;
@@ -342,9 +391,11 @@ try {
 	  if (fs.existsSync(sourceDir)) fs.symlinkSync(sourceDir, path.join(dir, 'src'), 'junction');
 	}
 	if (fs.existsSync(path.join(modulesDir, 'node_modules'))) fs.symlinkSync(path.join(modulesDir, 'node_modules'), path.join(dir, 'node_modules'), 'junction');
+	  const nodeTypes = fs.existsSync(path.join(modulesDir, 'node_modules', '@types', 'node'));
+	  if (!nodeTypes) fs.writeFileSync(path.join(dir, 'node-ambient.d.ts'), nodeAmbient(builtinModules));
 	  fs.writeFileSync(path.join(dir, 'tsconfig.json'), JSON.stringify({compilerOptions:{
 	    target:'es2022',module:'esnext',moduleResolution:'bundler',outDir:'dist',strict:false,skipLibCheck:true,
-    noEmitOnError:true,sourceMap:false,declaration:false},include:['module.ts']}));
+    noEmitOnError:true,sourceMap:false,declaration:false,allowJs:js,checkJs:false,types:nodeTypes ? ['node'] : []},include:nodeTypes ? ['module.' + ext] : ['module.' + ext,'node-ambient.d.ts']}));
   fs.writeFileSync(input, original);
   api = new apiModule.API({cwd:dir});
   let snapshot = api.updateSnapshot({openFiles:[input]});
@@ -356,7 +407,7 @@ try {
     if (ast.isFunctionDeclaration(node) && node.name && node.body) {
       if (!node.name.text.startsWith('_')) {
         names.push(node.name.text);
-        const exported = node.modifiers && node.modifiers.some(m => sourceFile.text.slice(m.pos,m.end).trim() === 'export');
+        const exported = node.modifiers && node.modifiers.some(m => sourceFile.text.slice(m.pos,m.end).replace(/\/\*[\s\S]*?\*\/|\/\/[^\n]*/g,'').trim() === 'export');
         if (!exported) namesToExport.push(node.name.text);
       }
       continue;
@@ -376,7 +427,7 @@ try {
       if (!d.fileName || d.pos == null) return d.text;
       const file = project.program.getSourceFile(d.fileName);
       const p = file && file.getLineAndCharacterOfPosition(d.pos);
-      return p ? '<bash++ typescript>:' + (p.line+1) + ':' + (p.character+1) + ': ' + d.text : d.text;
+      return p ? label + ':' + (p.line+1) + ':' + (p.character+1) + ': ' + d.text : d.text;
     }).join('\n'));
   }
   const checker = project.checker, exports = [];
@@ -395,6 +446,11 @@ try {
     const type = checker.getTypeAtLocation(node.name);
     const sig = checker.getSignaturesOfType(type, apiModule.SignatureKind.Call)[0];
     let dynamic = !sig, params = [], results = [];
+    if (js) {
+      // The TypeScript 7 API exposes no JSDoc reader: every JavaScript export is dynamic.
+      exports.push({name:node.name.text,signature:{params:sig ? sig.getParameters().map(() => 'any') : [],results:['any'],dynamic:true}});
+      continue;
+    }
     if (sig) for (const symbol of sig.getParameters()) {
       const mapped = mapType(checker.getTypeOfSymbolAtLocation(symbol,node));
       params.push(mapped || 'any'); dynamic ||= !mapped || mapped === 'any';

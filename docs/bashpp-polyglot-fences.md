@@ -19,12 +19,15 @@ parser, CRLF input is normalized to LF. Backtick and quote runs retain their
 Classic shell meanings.
 
 A fence is a declaration unit, not an implicit command. Python, TypeScript,
-Rust, C, C++, Go, PowerShell, C#, Bash, and POSIX sh are implemented adapters. Python blocks
-may contain one module docstring followed by ordinary synchronous,
-undecorated function declarations. Imports, classes,
-async declarations, decorators, executable top-level statements, and
+Rust, C, C++, Go, PowerShell, C#, Bash, POSIX sh, and JavaScript are implemented adapters. Python blocks
+may contain one module docstring, module-level `import` / `from ... import`
+statements, literal constant assignments (`NAME = 42`, strings, numbers,
+booleans, `None`, and tuples/lists/dicts of those), and ordinary synchronous,
+undecorated function declarations. Classes,
+async declarations, decorators, other executable top-level statements, and
 non-literal defaults are rejected during preparation without executing the
-module.
+module. Imports execute when the worker first loads the module, so an import
+failure surfaces as a call error rather than at preparation.
 
 Public functions in an unaliased block are promoted into the Bash++ callable
 namespace. A named block instead exposes qualified calls and promotes nothing:
@@ -76,11 +79,20 @@ is stored in the immutable private-module plan and executed on first call by
 one persistent Node worker.
 
 Function declarations and declaration-safe forms such as interfaces and type
-aliases are accepted. Imports and arbitrary executable top-level statements
-remain errors until Bash++ publishes module resolution and initialization
-semantics. Function bodies may use any TypeScript feature supported by the
+aliases are accepted. Imports of Node built-ins (`node:fs`, `path`, ...) type-check
+without `@types/node` (an ambient shorthand declaration is supplied when none is
+reachable). Arbitrary executable top-level statements remain errors until
+Bash++ publishes initialization semantics. Function bodies may use any TypeScript feature supported by the
 selected compiler and ES target. Types representable by Bash++ receive typed
 wrappers; other valid signatures receive the dynamic `(any, error)` wrapper.
+
+JavaScript uses `~~~javascript` (or `~~~js`) and reuses the TypeScript
+runner: the same compiler is run with `allowJs` and no type checking, so the
+fence is parsed, imports are accepted as above, and JSDoc (`@param`,
+`@returns`) supplies types. A function without complete JSDoc gets the dynamic
+`(any, error)` wrapper. The `javascript`/`js` fence spellings do not collide
+with shell syntax: like every fence language they are recognised only at the
+`~~~` opener. Under TypeScript 7.x, JavaScript exports are always dynamic.
 
 Node and the compiler are discovered lazily. `BASHPP_NODE` overrides the Node
 executable and `BASHPP_TYPESCRIPT_MODULE` overrides the module name or absolute

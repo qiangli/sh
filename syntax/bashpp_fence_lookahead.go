@@ -29,7 +29,7 @@ func init() {
 			return ""
 		}
 		return strings.TrimPrefix(declaration, "function ")
-	}, "typescript", "ts")
+	}, "typescript", "ts", "javascript", "js")
 	bashppRegisterFenceLookahead(func(line string) string {
 		declaration := strings.TrimSpace(line)
 		if !strings.HasPrefix(declaration, "pub fn ") {

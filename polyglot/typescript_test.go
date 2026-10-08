@@ -6,6 +6,7 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -301,5 +302,86 @@ func TestTypeScriptToolchainErrorsAndCanonicalName(t *testing.T) {
 	}, map[string]Analyzer{"typescript": available})
 	if err != nil || len(plans) != 1 || len(plans[0].Exports) != 2 {
 		t.Fatalf("canonical plan = %+v, %v", plans, err)
+	}
+}
+
+// A first-contact fence imports Node built-ins with no project and no
+// @types/node on disk; the check must not refuse them.
+func TestTypeScriptNodeBuiltinImportsWithoutNodeTypes(t *testing.T) {
+	ts := testTypeScript(t)
+	root := t.TempDir()
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node unavailable")
+	}
+	ts.Environment = &EnvironmentPlan{Language: "typescript", Runtime: "node", Executable: node, CompilerModule: ts.CompilerModule, Dir: root, Env: os.Environ()}
+	source := `
+import * as path from "node:path"
+import { basename } from "path"
+import fs from "fs"
+import { readFileSync } from "node:fs"
+const sep = process.platform === "win32" ? "\\" : "/"
+export function join(a: string, b: string): string { return path.join(a, b) }
+export function base(a: string): string { return basename(a) }
+export function exists(a: string): boolean { return fs.existsSync(a) }
+export function read(a: string): string { return String(readFileSync(a)) }
+export function sepOf(): string { return sep }
+`
+	exports, artifact, err := ts.AnalyzeArtifact(context.Background(), source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(exports) != 5 {
+		t.Fatalf("exports = %#v", exports)
+	}
+	writeEnvironmentFile(t, filepath.Join(root, "data.txt"), "payload")
+	module := Start(Plan{Language: "typescript", Artifact: artifact, Exports: exports}, ts)
+	defer module.Close()
+	for call, want := range map[string]any{"join": path.Join("a", "b"), "base": "b.txt", "exists": true, "read": "payload"} {
+		var args []any
+		switch call {
+		case "join":
+			args = []any{"a", "b"}
+		case "base":
+			args = []any{"a/b.txt"}
+		case "exists", "read":
+			args = []any{filepath.Join(root, "data.txt")}
+		}
+		result, err := module.Call(context.Background(), call, args...)
+		if err != nil || result.Value != want {
+			t.Fatalf("%s = %#v, %v (want %v)", call, result, err, want)
+		}
+	}
+}
+
+// Real @types/node keeps working: the loose fallback declarations must not
+// collide with it.
+func TestTypeScriptNodeBuiltinImportsWithNodeTypes(t *testing.T) {
+	ts := testTypeScript(t)
+	types := os.Getenv("BASHPP_NODE_TYPES")
+	if types == "" {
+		t.Skip("set BASHPP_NODE_TYPES to a @types/node package directory")
+	}
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node unavailable")
+	}
+	root := t.TempDir()
+	writeEnvironmentFile(t, filepath.Join(root, "package.json"), `{}`)
+	if err := os.MkdirAll(filepath.Join(root, "node_modules", "@types"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(types, filepath.Join(root, "node_modules", "@types", "node")); err != nil {
+		t.Skip("symlink unavailable: " + err.Error())
+	}
+	ts.Environment = &EnvironmentPlan{Language: "typescript", Runtime: "node", Executable: node, CompilerModule: ts.CompilerModule, Dir: root, Env: os.Environ()}
+	if _, _, err := ts.AnalyzeArtifact(context.Background(), `import { basename } from "node:path"
+export function base(a: string): string { return basename(a) }`); err != nil {
+		t.Fatal(err)
+	}
+	// With the real types present, a genuine type error is still reported.
+	if _, _, err := ts.AnalyzeArtifact(context.Background(), `import { basename } from "node:path"
+export function base(a: string): number { return basename(a) }`); err == nil || !strings.Contains(err.Error(), "not assignable") {
+		t.Fatalf("type error not reported: %v", err)
 	}
 }

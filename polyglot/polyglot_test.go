@@ -117,10 +117,72 @@ def _private():
 	if !plan.Exports[1].Signature.Dynamic {
 		t.Fatalf("dynamic export = %#v", plan.Exports[1])
 	}
-	for _, source := range []string{"x = 1\n", "import os\n", "class X: pass\n", "async def f(): pass\n", "@staticmethod\ndef f(): pass\n"} {
+	for _, source := range []string{
+		"class X: pass\n", "async def f(): pass\n", "@staticmethod\ndef f(): pass\n",
+		"print('side effect')\n", "import os\nx = os.sep\n", "x = [i for i in range(3)]\n",
+		"x: int\n", "a, b = 1, 2\n", "x = y = len\n", "for i in range(2): pass\n",
+	} {
 		if _, err := Prepare(context.Background(), []Block{{Language: "python", Source: source}}, map[string]Analyzer{"python": Python{}}); err == nil {
 			t.Fatalf("accepted %q", source)
 		}
+	}
+}
+
+func TestPythonModuleLevelImportsAndLiteralConstants(t *testing.T) {
+	source := `"""module docs"""
+from __future__ import annotations
+import os.path as osp
+import json, math
+from collections import OrderedDict as OD
+from typing import Any
+
+SCALE = 3
+NAME: str = "fence"
+LIMITS = {"lo": -1, "hi": [1, 2.5, None, True]}
+A = B = 7
+
+def scaled(n: int) -> int:
+    return n * SCALE + A + B
+
+def describe(value: Any) -> str:
+    return json.dumps({"name": NAME, "limits": LIMITS, "sqrt": math.sqrt(16), "sep": osp.basename("a/b.txt"), "od": list(OD(x=1))}, sort_keys=True)
+`
+	plan := pythonPlan(t, source)
+	if len(plan.Exports) != 2 || plan.Exports[0].Name != "scaled" || plan.Exports[1].Name != "describe" {
+		t.Fatalf("exports = %#v", plan.Exports)
+	}
+	module := Start(plan, Python{})
+	defer module.Close()
+	result, err := module.Call(context.Background(), "scaled", int64(2))
+	if err != nil || result.Value != int64(20) {
+		t.Fatalf("scaled = %#v, %v", result, err)
+	}
+	result, err = module.Call(context.Background(), "describe", nil)
+	want := `{"limits": {"hi": [1, 2.5, null, true], "lo": -1}, "name": "fence", "od": ["x"], "sep": "b.txt", "sqrt": 4.0}`
+	if err != nil || result.Value != want {
+		t.Fatalf("describe = %#v, %v", result, err)
+	}
+}
+
+func TestPythonModuleImportFailureNamesPackageAndNeverInstalls(t *testing.T) {
+	plan := pythonPlan(t, "import bashpp_definitely_missing_package\n\ndef f() -> int:\n    return 1\n")
+	module := Start(plan, Python{})
+	defer module.Close()
+	_, err := module.Call(context.Background(), "f")
+	if err == nil || !strings.Contains(err.Error(), "bashpp_definitely_missing_package") {
+		t.Fatalf("import failure = %v", err)
+	}
+	detail, ok := ForeignErrorDetail(err)
+	if !ok || detail.Code != "ModuleNotFoundError" {
+		t.Fatalf("detail = %#v, %v", detail, ok)
+	}
+}
+
+func TestPythonPlanIDChangesWithImportLine(t *testing.T) {
+	a := pythonPlan(t, "import json\n\ndef f() -> int:\n    return 1\n")
+	b := pythonPlan(t, "import math\n\ndef f() -> int:\n    return 1\n")
+	if a.ID == "" || a.ID == b.ID {
+		t.Fatalf("fingerprints %q %q", a.ID, b.ID)
 	}
 }
 

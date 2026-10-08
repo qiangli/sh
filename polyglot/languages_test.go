@@ -9,6 +9,7 @@ func TestLanguageTable(t *testing.T) {
 	for spelling, canonical := range map[string]string{
 		"python": "python", "py": "python", "PY": "python",
 		"typescript": "typescript", "ts": "typescript",
+		"javascript": "javascript", "js": "javascript", "JS": "javascript",
 		"rust": "rust", "rs": "rust",
 		"c": "c", "cpp": "cpp", "cxx": "cpp",
 		"go":         "go",

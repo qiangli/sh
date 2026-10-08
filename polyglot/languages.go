@@ -194,6 +194,15 @@ func init() {
 	RegisterLanguage(Language{Canonical: "typescript", Aliases: []string{"ts"}, NeedsEnvironment: true,
 		NewRuntime:     func(cfg RuntimeConfig) LanguageRuntime { return TypeScript{Environment: cfg.Environment} },
 		LoweredRuntime: loweredRuntime("TypeScript")})
+	// JavaScript runs on the TypeScript worker: the same compiler parses the
+	// fence (no type check), so one provisioned toolchain serves both rows.
+	RegisterLanguage(Language{Canonical: "javascript", Aliases: []string{"js"}, NeedsEnvironment: true,
+		NewRuntime: func(cfg RuntimeConfig) LanguageRuntime {
+			return TypeScript{Environment: cfg.Environment, JavaScript: true}
+		},
+		LoweredRuntime: func(prefix, environment string) string {
+			return fmt.Sprintf("%spolyglot.TypeScript{JavaScript:true,Environment:%s}", prefix, environment)
+		}})
 	RegisterLanguage(Language{Canonical: "rust", Aliases: []string{"rs"}, NeedsEnvironment: true, Callbacks: true,
 		NewRuntime:     func(cfg RuntimeConfig) LanguageRuntime { return Rust{Environment: cfg.Environment} },
 		LoweredRuntime: loweredRuntime("Rust")})

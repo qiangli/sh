@@ -543,3 +543,62 @@ echo "$x:$y:$z"
 		t.Fatalf("out=%q diagnostic=%q err=%v", out, diagnostic, err)
 	}
 }
+
+func TestBashPPPythonModuleLevelImportsAndConstants(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 unavailable")
+	}
+	source := `~~~python
+import json
+from math import sqrt
+SCALE = 3
+NAME: str = "fence"
+def scaled(n: int) -> int:
+    return n * SCALE
+def describe(value: int) -> str:
+    return json.dumps({"name": NAME, "root": sqrt(value)}, sort_keys=True)
+~~~
+x := scaled(14)
+y := describe(16)
+echo "$x"
+echo "$y"
+`
+	out, diagnostic, err := runPolyglot(t, source)
+	if err != nil || out != "42\n{\"name\": \"fence\", \"root\": 4.0}\n" || diagnostic != "" {
+		t.Fatalf("out=%q diagnostic=%q err=%v", out, diagnostic, err)
+	}
+	_, diagnostic, err = runPolyglot(t, "~~~python\nimport bashpp_missing_package\ndef f() -> int:\n    return 1\n~~~\nx := f()\n")
+	if err == nil || !strings.Contains(diagnostic, "bashpp_missing_package") {
+		t.Fatalf("missing package: diagnostic=%q err=%v", diagnostic, err)
+	}
+}
+
+func TestBashPPTypeScriptAndJavaScriptNodeImports(t *testing.T) {
+	if os.Getenv("BASHPP_TYPESCRIPT_MODULE") == "" {
+		t.Skip("set BASHPP_TYPESCRIPT_MODULE to an official TypeScript compiler module")
+	}
+	source := `~~~typescript as ts
+import { basename } from "node:path"
+import os from "os"
+const suffix = "!"
+export function base(path: string): string { return basename(path) + suffix }
+export function platform(): boolean { return typeof os.platform() === "string" }
+~~~
+~~~js as js
+import { join } from "node:path"
+/** @param {string} a @param {string} b @returns {string} */
+export function joined(a, b) { return join(a, b) }
+function loose(value) { return Number(value) + 1 }
+~~~
+x := ts.base("a/b.txt")
+p := ts.platform()
+y := js.joined("a", "b")
+z, zErr := js.loose(41)
+echo "$x:$p:$y:$z:${zErr:+failed}"
+`
+	out, diagnostic, err := runPolyglot(t, source)
+	want := "b.txt!:true:" + filepath.Join("a", "b") + ":42:\n"
+	if err != nil || out != want || diagnostic != "" {
+		t.Fatalf("out=%q want=%q diagnostic=%q err=%v", out, want, diagnostic, err)
+	}
+}

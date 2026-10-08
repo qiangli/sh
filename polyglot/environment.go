@@ -140,6 +140,10 @@ func (p EnvironmentPlan) Clone() EnvironmentPlan {
 	return p
 }
 
+// nodeFamily reports the fence languages that run on the Node/Bun worker and
+// share one project reader: JavaScript is TypeScript without the type check.
+func nodeFamily(language string) bool { return language == "typescript" || language == "javascript" }
+
 // DiscoverEnvironment performs source-relative, read-only environment
 // discovery. It never executes a runtime, imports a module, invokes a package
 // manager, or writes a file.
@@ -197,7 +201,7 @@ func DiscoverEnvironment(request EnvironmentRequest) (EnvironmentPlan, error) {
 	}
 	matching := make([]environmentOverlay, 0, len(overlays))
 	for _, o := range overlays {
-		if o.Language == "" || o.Language == lang {
+		if o.Language == "" || o.Language == lang || (nodeFamily(lang) && nodeFamily(o.Language)) {
 			matching = append(matching, o)
 		}
 	}
@@ -234,7 +238,7 @@ func DiscoverEnvironment(request EnvironmentRequest) (EnvironmentPlan, error) {
 		}
 	}
 	projectMetadata := pythonProjectMetadata
-	if lang == "typescript" {
+	if nodeFamily(lang) {
 		projectMetadata = typeScriptProjectMetadata
 	} else if lang == "rust" {
 		projectMetadata = rustProjectMetadata
@@ -252,7 +256,7 @@ func DiscoverEnvironment(request EnvironmentRequest) (EnvironmentPlan, error) {
 			plan.ResolutionFiles = append(plan.ResolutionFiles, file)
 		}
 	}
-	if lang == "typescript" {
+	if nodeFamily(lang) {
 		return discoverTypeScriptEnvironment(plan, dirs, selected, env)
 	}
 	if lang == "rust" {
@@ -355,7 +359,7 @@ func environmentDirs(start, language string) (string, []string, error) {
 				project = d
 				projectIndex = len(dirs) - 1
 			}
-			if language == "typescript" {
+			if nodeFamily(language) {
 				if typeScriptWorkspaceBoundary(d) {
 					project = d
 					projectIndex = len(dirs) - 1
@@ -366,7 +370,7 @@ func environmentDirs(start, language string) (string, []string, error) {
 			}
 		}
 		if exists(filepath.Join(d, ".git")) {
-			if project == "" || language == "typescript" {
+			if project == "" || nodeFamily(language) {
 				project = d
 				projectIndex = len(dirs) - 1
 			}
@@ -432,7 +436,7 @@ func recognizedProject(dir, language string) bool {
 		return exists(filepath.Join(dir, "go.mod"))
 	}
 	metadata := pythonProjectMetadata
-	if language == "typescript" {
+	if nodeFamily(language) {
 		metadata = typeScriptProjectMetadata
 	} else if language == "rust" {
 		metadata = rustProjectMetadata

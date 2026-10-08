@@ -84,6 +84,17 @@ def record() -> dict[str, list[int]]:
 value := py.record()
 echo "$value"
 `,
+		"module imports and constants": `~~~python as py
+import math
+from os import path
+LIMIT = 40
+NAME = "n"
+def total(a: int) -> int:
+    return a + LIMIT + int(math.floor(2.5)) + len(path.join("a", "b"))
+~~~
+x := py.total(0)
+echo "x=$x"
+`,
 	}
 	for name, source := range tests {
 		t.Run(name, func(t *testing.T) { testPythonFenceInterpretedNativeParity(t, source) })
@@ -99,6 +110,20 @@ type Numeric = number
 export function add(a: Numeric, b: Numeric): number { console.log("typescript"); return a + b }
 ~~~
 x := ts.add(20, 22)
+echo "x=$x"
+`)
+}
+
+func TestJavaScriptFenceInterpretedNativeParity(t *testing.T) {
+	if os.Getenv("BASHPP_TYPESCRIPT_MODULE") == "" {
+		t.Skip("set BASHPP_TYPESCRIPT_MODULE to an official TypeScript compiler module")
+	}
+	testPythonFenceInterpretedNativeParity(t, `~~~javascript as js
+import path from "node:path"
+/** @param {number} a @param {number} b @returns {number} */
+export function add(a, b) { return a + b + path.join("a", "b").length - 3 }
+~~~
+x := js.add(20, 22)
 echo "x=$x"
 `)
 }
