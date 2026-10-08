@@ -913,7 +913,7 @@ func bashPPReviewedGoIdentity() (bashPPGoIdentityInfo, error) {
 	}
 	root, goos, goarch := fields[0], fields[1], fields[2]
 	path := filepath.Join(root, "bin", name)
-	real, err := filepath.EvalSymlinks(path)
+	real, err := bashPPGoBinaryPath(path)
 	if err != nil {
 		return bashPPGoIdentityInfo{}, err
 	}
@@ -962,7 +962,7 @@ func bashPPInjectedGoIdentity(injected string) (bashPPGoIdentityInfo, error) {
 	if err != nil {
 		return bashPPGoIdentityInfo{}, err
 	}
-	binary, err = filepath.EvalSymlinks(binary)
+	binary, err = bashPPGoBinaryPath(binary)
 	if err != nil {
 		return bashPPGoIdentityInfo{}, fmt.Errorf("BASHPP_GO: %w", err)
 	}
@@ -1074,7 +1074,7 @@ func bashPPGoModuleIdentity() (bashPPGoIdentityInfo, error) {
 	if runtime.GOOS == "windows" {
 		name += ".exe"
 	}
-	binary, err := filepath.EvalSymlinks(filepath.Join(root, "bin", name))
+	binary, err := bashPPGoBinaryPath(filepath.Join(root, "bin", name))
 	if err != nil {
 		return bashPPGoIdentityInfo{}, err
 	}
@@ -1116,7 +1116,7 @@ func validateBashPPGoIdentity(got bashPPGoIdentityInfo, reviews []bashPPGoReview
 	if got.GOOS == "windows" {
 		wantBinary += ".exe"
 	}
-	wantBinary, err := filepath.EvalSymlinks(wantBinary)
+	wantBinary, err := bashPPGoBinaryPath(wantBinary)
 	if err != nil {
 		return err
 	}

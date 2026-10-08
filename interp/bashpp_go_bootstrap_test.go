@@ -1,7 +1,10 @@
 package interp
 
 import (
+	"errors"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -19,5 +22,21 @@ func TestBashPPGoBootstrapIgnoresMissingBuildGOROOT(t *testing.T) {
 	root, binary, err := bashPPGoBootstrap("go")
 	if err == nil && (strings.HasPrefix(root, missing) || strings.HasPrefix(binary, missing)) {
 		t.Fatalf("bootstrap returned the missing build GOROOT: root=%q binary=%q", root, binary)
+	}
+}
+
+func TestBashPPGoIdentityPathDiagnostic(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "missing-sdk")
+	name := "go"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	binary := filepath.Join(root, "bin", name)
+	err := validateBashPPGoIdentity(bashPPGoIdentityInfo{Root: root, GOOS: runtime.GOOS}, nil)
+	if err == nil || !strings.Contains(err.Error(), "resolve Go binary") || !strings.Contains(err.Error(), binary) {
+		t.Fatalf("error = %v; want resolution operation and binary path %q", err, binary)
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("error = %v; want preserved not-exist cause", err)
 	}
 }
