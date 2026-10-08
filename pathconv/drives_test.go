@@ -5,6 +5,15 @@ package pathconv
 
 import "testing"
 
+// Tests of the portable Windows-mode conversion rules must not depend on the
+// letters installed on the Windows machine running them.
+func pinAllDrives(t *testing.T) {
+	t.Helper()
+	previous := LogicalDrives
+	LogicalDrives = func() DriveSet { return AllDrives }
+	t.Cleanup(func() { LogicalDrives = previous })
+}
+
 func TestDriveSet(t *testing.T) {
 	t.Parallel()
 

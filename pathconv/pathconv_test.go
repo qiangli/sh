@@ -30,6 +30,7 @@ func TestIsAbsModeWindows(t *testing.T) {
 }
 
 func TestToOSModeWindows(t *testing.T) {
+	pinAllDrives(t)
 	// Not parallel: pins the TempDir hook.
 	oldTempDir := TempDir
 	TempDir = func() string { return `C:\Users\me\AppData\Local\Temp` }
@@ -77,7 +78,7 @@ func TestToOSModeWindows(t *testing.T) {
 }
 
 func TestToSlashModeWindows(t *testing.T) {
-	t.Parallel()
+	pinAllDrives(t)
 
 	tests := []struct {
 		dir  string
@@ -100,7 +101,7 @@ func TestToSlashModeWindows(t *testing.T) {
 }
 
 func TestDrivePath(t *testing.T) {
-	t.Parallel()
+	pinAllDrives(t)
 
 	tests := []struct {
 		path      string
@@ -146,7 +147,7 @@ func TestDriveOf(t *testing.T) {
 }
 
 func TestNativePath(t *testing.T) {
-	t.Parallel()
+	pinAllDrives(t)
 
 	tests := []struct {
 		value string
@@ -169,7 +170,7 @@ func TestNativePath(t *testing.T) {
 }
 
 func TestNativePathList(t *testing.T) {
-	t.Parallel()
+	pinAllDrives(t)
 
 	tests := []struct {
 		value string
@@ -217,6 +218,7 @@ func TestFromOSModeWindows(t *testing.T) {
 }
 
 func TestJoinAbsModeWindows(t *testing.T) {
+	pinAllDrives(t)
 	// Not parallel: pins the TempDir hook.
 	oldTempDir := TempDir
 	TempDir = func() string { return `C:\Temp` }

@@ -1576,6 +1576,33 @@ func (r *Runner) fields(words ...*syntax.Word) []string {
 	return strs
 }
 
+func commandDeclarationPrefix(words []*syntax.Word) int {
+	i := 0
+	for i < len(words) && words[i].Lit() == "command" {
+		i++
+	}
+	if i == 0 || i == len(words) {
+		return -1
+	}
+	switch words[i].Lit() {
+	case "export", "readonly":
+		return i
+	}
+	return -1
+}
+
+func assignmentWord(word *syntax.Word) bool {
+	if len(word.Parts) == 0 {
+		return false
+	}
+	lit, ok := word.Parts[0].(*syntax.Lit)
+	if !ok {
+		return false
+	}
+	name, _, found := strings.Cut(lit.Value, "=")
+	return found && syntax.ValidName(strings.TrimSuffix(name, "+"))
+}
+
 func (r *Runner) literal(word *syntax.Word) string {
 	str, err := expand.Literal(r.ecfg, word)
 	r.expandErr(err)
@@ -6178,7 +6205,31 @@ func (r *Runner) cmdGeneral(ctx context.Context, cm syntax.Command) {
 		r.lastExpandExit = exitStatus{}
 		r.lastExpandCmdSubst = false
 		args = r.bashPPRewriteCommandArgs(args)
-		fields, expandErr := expand.Fields(r.ecfg, args...)
+		var fields []string
+		var expandErr error
+		if prefix := commandDeclarationPrefix(args); r.opts[optPosix] && prefix >= 0 {
+			// A declaration utility remains a declaration when reached through
+			// one or more command builtins. Its assignment operands must use
+			// assignment expansion, without field splitting or pathname expansion.
+			// Re-expand from the syntax words so an operand stays one argument.
+			for i, arg := range args {
+				if i > prefix && assignmentWord(arg) {
+					field, err := expand.LiteralForAssign(r.ecfg, arg)
+					if expandErr == nil {
+						expandErr = err
+					}
+					fields = append(fields, field)
+				} else {
+					part, err := expand.Fields(r.ecfg, arg)
+					if expandErr == nil {
+						expandErr = err
+					}
+					fields = append(fields, part...)
+				}
+			}
+		} else {
+			fields, expandErr = expand.Fields(r.ecfg, args...)
+		}
 		r.expandErr(expandErr)
 		if expandErr != nil && r.bashCompatErrors && !r.interactiveShell {
 			var arithErr *expand.ArithmError

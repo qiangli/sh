@@ -106,6 +106,7 @@ func TestMountsFromOSNativeSpelling(t *testing.T) {
 }
 
 func TestToOSMountsModePrecedence(t *testing.T) {
+	pinAllDrives(t)
 	m := testMounts(t, Mount{Posix: "/opt", Native: `E:\opt`}, Mount{Posix: "/opt/deep/", Native: `E:\deep`})
 
 	tests := []struct {
@@ -377,6 +378,7 @@ func TestShellRelativeBackslashIsFilenameCharacter(t *testing.T) {
 }
 
 func TestToOSModeEncodesSpecialChars(t *testing.T) {
+	pinAllDrives(t)
 	// Not parallel: pins the TempDir hook.
 	oldTempDir := TempDir
 	TempDir = func() string { return `C:\Temp` }

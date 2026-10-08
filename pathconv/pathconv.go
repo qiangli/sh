@@ -372,7 +372,18 @@ func NativePathList(value string) string {
 
 func clean(path string) string {
 	if runtime.GOOS == "windows" {
-		return filepath.Clean(filepath.FromSlash(path))
+		// filepath.Clean discards both a bare drive's spelling (C: becomes
+		// C:.) and the trailing directory separator. The shell boundary
+		// preserves both, just as Windows-mode conversion does off-host.
+		if len(path) == 2 && isNativeDrivePath(path) {
+			return path
+		}
+		trailing := len(path) > 0 && isSlash(path[len(path)-1])
+		path = filepath.Clean(filepath.FromSlash(path))
+		if trailing && !isSlash(path[len(path)-1]) {
+			path += `\`
+		}
+		return path
 	}
 	return strings.ReplaceAll(path, "/", `\`)
 }
