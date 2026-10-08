@@ -1017,14 +1017,22 @@ func bashPPInjectedGoSupported(goVersion string) bool {
 // A -trimpath binary has no linker-recorded GOROOT, so in that case use the
 // downloaded Go 1.27 toolchain module and authenticate its reviewed payload
 // before executing it.
+// bashPPRuntimeGOROOT is runtime.GOROOT, a seam for the stale-build-root test.
+var bashPPRuntimeGOROOT = runtime.GOROOT
+
 func bashPPGoBootstrap(name string) (root, binary string, err error) {
-	if root = runtime.GOROOT(); root != "" {
-		root, err = filepath.Abs(root)
-		if err != nil {
-			return "", "", err
+	// runtime.GOROOT is the GOROOT baked in at build time. A distributed
+	// binary runs on hosts that never had that directory (a Windows binary
+	// built on another user's machine looked for C:\Users\<builder>\sdk\...),
+	// so trust it only when its go binary actually exists here.
+	if root = bashPPRuntimeGOROOT(); root != "" {
+		if root, err = filepath.Abs(root); err == nil {
+			if binary, err = filepath.Abs(filepath.Join(root, "bin", name)); err == nil {
+				if fi, statErr := os.Stat(binary); statErr == nil && !fi.IsDir() {
+					return root, binary, nil
+				}
+			}
 		}
-		binary, err = filepath.Abs(filepath.Join(root, "bin", name))
-		return root, binary, err
 	}
 
 	identity, err := bashPPGoModuleIdentity()
