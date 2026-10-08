@@ -130,6 +130,28 @@ func (r *Runner) bashPPPrepareSourceBlocks(ctx context.Context, file *syntax.Fil
 	var groupedBlocks []polyglot.Block
 	for _, block := range blocks {
 		language := polyglot.CanonicalLanguage(block.Language)
+		if language == "go" {
+			if packageName, ok := polyglot.GoPackageName(block.Source); ok && packageName == "main" {
+				if block.Alias != "" {
+					return restore, fmt.Errorf("%s: package main Go fence runs as a program and cannot have alias %s", file.Name, block.Alias)
+				}
+				environment, err := polyglot.DiscoverEnvironment(polyglot.EnvironmentRequest{
+					Source: source, Language: language, Environ: nativeExecEnv(execEnv(r.writeEnv)), ModuleFile: manifests[language],
+				})
+				if err != nil {
+					return restore, fmt.Errorf("%s: %w", file.Name, err)
+				}
+				program := polyglot.Go{Environment: &environment, Cwd: func() string { return r.Dir }, Env: func() []string { return execEnv(r.writeEnv) }}
+				status, err := program.RunProgram(ctx, block.Source, r.Params, r.stdin, r.stdout, r.stderr)
+				if err != nil {
+					return restore, fmt.Errorf("%s: Go program fence: %w", file.Name, err)
+				}
+				if status != 0 {
+					return restore, ExitStatus(status)
+				}
+				continue
+			}
+		}
 		if language == "agent" && block.Runner == "" {
 			agentBlocks = append(agentBlocks, block)
 			continue

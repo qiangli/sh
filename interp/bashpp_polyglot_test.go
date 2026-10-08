@@ -237,6 +237,60 @@ echo "$value"
 	}
 }
 
+func TestBashPPGoLibraryPackageExposesExports(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go unavailable")
+	}
+	source := `~~~go as library
+package library
+
+func Exported(value string) string { return "exported:" + value }
+~~~
+value := library.Exported(ok)
+echo "$value"
+`
+	out, diagnostic, err := runPolyglot(t, source)
+	if err != nil || out != "exported:ok\n" || diagnostic != "" {
+		t.Fatalf("out=%q diagnostic=%q err=%v", out, diagnostic, err)
+	}
+}
+
+func TestBashPPGoMainFenceRunsProgramContract(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go unavailable")
+	}
+	source := `~~~go
+package main
+import (
+	"bufio"
+	"fmt"
+	"os"
+)
+func main() {
+	in, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+	fmt.Fprintf(os.Stdout, "stdout:%s:%s", os.Args[1], in)
+	fmt.Fprintln(os.Stderr, "stderr")
+	os.Exit(23)
+}
+~~~
+echo unreachable
+`
+	file, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(source), "polyglot.bpp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr strings.Builder
+	runner, err := interp.New(interp.Lang(syntax.LangBashPP), interp.Params("--", "arg"), interp.StdIO(strings.NewReader("input\n"), &stdout, &stderr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = runner.Run(t.Context(), file)
+	status, ok := interp.IsExitStatus(err)
+	if !ok || status != 23 || stdout.String() != "stdout:arg:input\n" || stderr.String() != "stderr\n" {
+		t.Fatalf("status=%d ok=%v stdout=%q stderr=%q err=%v", status, ok, stdout.String(), stderr.String(), err)
+	}
+}
+
 func TestBashPPShellDialectIslands(t *testing.T) {
 	bashSource := `~~~bash as island
 var() { printf '%s:%s:%s' "$1" "$2" "$3"; }

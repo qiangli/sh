@@ -204,7 +204,9 @@ func init() {
 		NewRuntime:     func(cfg RuntimeConfig) LanguageRuntime { return CPP{Environment: cfg.Environment} },
 		LoweredRuntime: loweredRuntime("CPP")})
 	RegisterLanguage(Language{Canonical: "go", NeedsEnvironment: true,
-		NewRuntime:     func(cfg RuntimeConfig) LanguageRuntime { return Go{Environment: cfg.Environment} },
+		NewRuntime: func(cfg RuntimeConfig) LanguageRuntime {
+			return Go{Environment: cfg.Environment, Cwd: cfg.Cwd, Env: cfg.Env}
+		},
 		LoweredRuntime: loweredRuntime("Go")})
 	RegisterLanguage(Language{Canonical: "powershell", Aliases: []string{"pwsh", "ps1"}, NeedsEnvironment: true,
 		NewRuntime:     func(cfg RuntimeConfig) LanguageRuntime { return PowerShell{Environment: cfg.Environment, Cwd: cfg.Cwd} },

@@ -10,6 +10,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,6 +24,8 @@ import (
 type Go struct {
 	Command     string
 	Environment *EnvironmentPlan
+	Cwd         func() string
+	Env         func() []string
 }
 
 func (g Go) executable() string {
@@ -44,6 +47,100 @@ func (g Go) configure(cmd *exec.Cmd) {
 	}
 }
 
+// GoPackageName reports the package clause of unchanged Go source.
+func GoPackageName(source string) (string, bool) {
+	file, err := parser.ParseFile(token.NewFileSet(), "fence.go", source, parser.PackageClauseOnly)
+	if err != nil {
+		return "", false
+	}
+	return file.Name.Name, true
+}
+
+// RunProgram compiles and runs an unchanged package-main fence. The build has
+// no stdin; the resulting program receives the caller's arguments and streams.
+func (g Go) RunProgram(ctx context.Context, source string, args []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+	if name, ok := GoPackageName(source); !ok || name != "main" {
+		return 2, errors.New("Go program fence requires package main")
+	}
+	dir, err := os.MkdirTemp("", "bashpp-go-program-")
+	if err != nil {
+		return 2, err
+	}
+	defer os.RemoveAll(dir)
+	backing := filepath.Join(dir, "main.go")
+	overlayFile := filepath.Join(dir, "overlay.json")
+	output := filepath.Join(dir, "program")
+	if runtime.GOOS == "windows" {
+		output += ".exe"
+	}
+	root := ""
+	if g.Environment != nil {
+		root = g.Environment.Root
+	}
+	if root == "" {
+		root, err = os.Getwd()
+		if err != nil {
+			return 2, err
+		}
+	}
+	root = filepath.Clean(root)
+	virtual := filepath.Join(root, ".bashpp-overlay-program", "main.go")
+	if err := os.WriteFile(backing, []byte(source), 0o600); err != nil {
+		return 2, err
+	}
+	replace := map[string]string{virtual: backing}
+	buildArgs := []string{"build", "-overlay=" + overlayFile, "-o", output, virtual}
+	if g.Environment != nil && g.Environment.ModuleFile != "" {
+		modFile := g.Environment.ModuleFile
+		sumFile := strings.TrimSuffix(modFile, ".mod") + ".sum"
+		if _, err := os.Stat(sumFile); err != nil {
+			if err := os.WriteFile(sumFile, nil, 0o644); err != nil {
+				return 2, err
+			}
+		}
+		replace[filepath.Join(root, "go.mod")] = modFile
+		replace[filepath.Join(root, "go.sum")] = sumFile
+		buildArgs = []string{"build", "-overlay=" + overlayFile, "-modfile=" + modFile, "-o", output, virtual}
+	}
+	overlay, err := json.Marshal(map[string]any{"Replace": replace})
+	if err != nil {
+		return 2, err
+	}
+	if err := os.WriteFile(overlayFile, overlay, 0o600); err != nil {
+		return 2, err
+	}
+	if g.Environment != nil && g.Environment.Manager == "bashy" {
+		buildArgs = append([]string{"go"}, buildArgs...)
+	}
+	buildArgs = append(leadingArgs(g.Environment), buildArgs...)
+	build := exec.CommandContext(ctx, g.executable(), buildArgs...)
+	g.configure(build)
+	build.Stderr = stderr
+	if err := build.Run(); err != nil {
+		return goProcessStatus(err)
+	}
+	run := exec.CommandContext(ctx, output, args...)
+	if g.Cwd != nil {
+		run.Dir = g.Cwd()
+	}
+	if g.Env != nil {
+		run.Env = g.Env()
+	}
+	run.Stdin, run.Stdout, run.Stderr = stdin, stdout, stderr
+	if err := run.Run(); err != nil {
+		return goProcessStatus(err)
+	}
+	return 0, nil
+}
+
+func goProcessStatus(err error) (int, error) {
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		return exit.ExitCode(), nil
+	}
+	return 2, err
+}
+
 type goExport struct {
 	Export
 	params      []string
@@ -57,14 +154,13 @@ func (g Go) Analyze(ctx context.Context, source string) ([]Export, error) {
 }
 
 func (g Go) AnalyzeArtifact(ctx context.Context, source string) ([]Export, string, error) {
-	parsed, err := analyzeGoExports(source)
+	moduleSource, parsed, err := analyzeGoModule(source)
 	if err != nil {
 		return nil, "", err
 	}
 	if len(parsed) == 0 {
 		return nil, "", errors.New("no supported exported Go functions")
 	}
-	moduleSource := "package main\n\n" + source
 	workerSource := goWorkerSource(parsed)
 	dir, err := os.MkdirTemp("", "bashpp-go-build-")
 	if err != nil {
@@ -164,10 +260,25 @@ func (g Go) AnalyzeArtifact(ctx context.Context, source string) ([]Export, strin
 }
 
 func analyzeGoExports(source string) ([]goExport, error) {
+	_, exports, err := analyzeGoModule(source)
+	return exports, err
+}
+
+func analyzeGoModule(source string) (string, []goExport, error) {
 	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, "fence.go", "package main\n"+source, parser.AllErrors)
+	moduleSource := "package main\n" + source
+	// An unchanged library file may enter through an inline fence or embed.
+	// Compile it into the worker's package main while retaining its declarations
+	// and source-line shape; package main remains reserved for program entry.
+	if original, err := parser.ParseFile(fset, "fence.go", source, parser.PackageClauseOnly); err == nil && original.Name.Name != "main" {
+		start := fset.Position(original.Name.Pos()).Offset
+		end := fset.Position(original.Name.End()).Offset
+		moduleSource = source[:start] + "main" + source[end:]
+	}
+	fset = token.NewFileSet()
+	file, err := parser.ParseFile(fset, "fence.go", moduleSource, parser.AllErrors)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
 	var out []goExport
 	seen := map[string]bool{}
@@ -175,30 +286,30 @@ func analyzeGoExports(source string) ([]goExport, error) {
 		switch decl := decl.(type) {
 		case *ast.GenDecl:
 			if decl.Tok != token.IMPORT {
-				return nil, fmt.Errorf("Go source fences allow only imports and function declarations")
+				return "", nil, fmt.Errorf("Go source fences allow only imports and function declarations")
 			}
 		case *ast.FuncDecl:
 			if decl.Recv != nil {
-				return nil, fmt.Errorf("Go source fences do not export methods")
+				return "", nil, fmt.Errorf("Go source fences do not export methods")
 			}
 			if decl.Name.Name == "main" || strings.HasPrefix(decl.Name.Name, "__bpp") {
-				return nil, fmt.Errorf("Go function name %s is reserved by the fence worker", decl.Name.Name)
+				return "", nil, fmt.Errorf("Go function name %s is reserved by the fence worker", decl.Name.Name)
 			}
 			if !ast.IsExported(decl.Name.Name) {
 				continue
 			}
 			if seen[decl.Name.Name] {
-				return nil, fmt.Errorf("Go function %s is exported more than once", decl.Name.Name)
+				return "", nil, fmt.Errorf("Go function %s is exported more than once", decl.Name.Name)
 			}
 			seen[decl.Name.Name] = true
 			export := goExport{Export: Export{Name: decl.Name.Name}}
 			for _, field := range decl.Type.Params.List {
 				if _, ok := field.Type.(*ast.Ellipsis); ok {
-					return nil, fmt.Errorf("Go function %s is variadic", decl.Name.Name)
+					return "", nil, fmt.Errorf("Go function %s is variadic", decl.Name.Name)
 				}
 				typ, bridge, ok := goBridgeType(field.Type)
 				if !ok {
-					return nil, fmt.Errorf("Go function %s has an unsupported parameter type", decl.Name.Name)
+					return "", nil, fmt.Errorf("Go function %s has an unsupported parameter type", decl.Name.Name)
 				}
 				count := len(field.Names)
 				if count == 0 {
@@ -220,19 +331,19 @@ func analyzeGoExports(source string) ([]goExport, error) {
 				}
 			}
 			if len(results) > 2 {
-				return nil, fmt.Errorf("Go function %s has too many results", decl.Name.Name)
+				return "", nil, fmt.Errorf("Go function %s has too many results", decl.Name.Name)
 			}
 			if len(results) > 0 && isGoIdent(results[len(results)-1], "error") {
 				export.resultError = true
 				results = results[:len(results)-1]
 			}
 			if len(results) > 1 {
-				return nil, fmt.Errorf("Go function %s must return at most one value plus error", decl.Name.Name)
+				return "", nil, fmt.Errorf("Go function %s must return at most one value plus error", decl.Name.Name)
 			}
 			if len(results) == 1 {
 				typ, bridge, ok := goBridgeType(results[0])
 				if !ok || bridge == "nil" {
-					return nil, fmt.Errorf("Go function %s has an unsupported result type", decl.Name.Name)
+					return "", nil, fmt.Errorf("Go function %s has an unsupported result type", decl.Name.Name)
 				}
 				export.result = typ
 				export.Signature.Results = []string{bridge}
@@ -240,7 +351,7 @@ func analyzeGoExports(source string) ([]goExport, error) {
 			out = append(out, export)
 		}
 	}
-	return out, nil
+	return moduleSource, out, nil
 }
 
 func goBridgeType(expr ast.Expr) (string, string, bool) {
