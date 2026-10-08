@@ -867,10 +867,30 @@ func canonicalExecutableFor(name, goos, pathExt string) (string, error) {
 		}
 		info = linfo
 	}
+	if pythonStoreAlias(name, info.Size(), goos) {
+		return "", fmt.Errorf("polyglot: runtime %s is a Microsoft Store Python execution alias, not an installed interpreter", name)
+	}
 	if !executableFileMode(name, info.Mode(), goos, pathExt) {
 		return "", fmt.Errorf("polyglot: runtime %s is not an executable file", name)
 	}
 	return name, nil
+}
+
+// Store's Python placeholders are zero-byte reparse points, not interpreters.
+// Normalize Windows spelling independently of the host so this selection rule
+// can be tested on every OS. Other app aliases and installed Python binaries
+// retain the existing executable checks.
+func pythonStoreAlias(name string, size int64, goos string) bool {
+	if goos != "windows" || size != 0 {
+		return false
+	}
+	name = strings.ToLower(strings.ReplaceAll(name, `\`, "/"))
+	for _, base := range []string{"python.exe", "python3.exe"} {
+		if strings.HasSuffix(name, "/appdata/local/microsoft/windowsapps/"+base) {
+			return true
+		}
+	}
+	return false
 }
 
 func executableFileMode(name string, mode os.FileMode, goos, pathExt string) bool {
@@ -880,9 +900,8 @@ func executableFileMode(name string, mode os.FileMode, goos, pathExt string) boo
 		}
 		return mode.Perm()&0o111 != 0
 	}
-	// An App Execution Alias (python3.exe on a stock runner) is a reparse
-	// point reported as irregular; it is runnable, just not by os/exec — the
-	// launch path routes it through cmd.exe.
+	// Runnable App Execution Aliases are reported as irregular and launched
+	// through cmd.exe. canonicalExecutableFor rejects Python Store placeholders.
 	if !mode.IsRegular() && mode&os.ModeIrregular == 0 {
 		return false
 	}
