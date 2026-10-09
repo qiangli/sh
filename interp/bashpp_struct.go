@@ -514,6 +514,30 @@ func (r *Runner) bashPPEvalTypedValue(expr syntax.BashPPExpr, expected syntax.Ba
 		}
 		return assigned, meta, nil
 	}
+	if r.bashPPGoSource && r.bashPPNativeType(expected) {
+		// A locally-held value can be assigned to an imported interface too.
+		// Let the dependency authenticate that assignment so its static
+		// interface wrapper survives the aggregate field. In particular, a
+		// nil *strings.Reader stored in an io.Reader is a non-nil interface;
+		// treating the imported destination as an ordinary native value loses
+		// that distinction at a later comparison with nil.
+		cell, err := r.goSourceValueCell(expr)
+		if err != nil {
+			return nil, nil, err
+		}
+		bridge, err := r.bashPPBridgeCell(cell)
+		if err != nil {
+			return nil, nil, err
+		}
+		assigned, meta, err := r.goSourceNativeAssignedValue(bridge, expected)
+		if err != nil {
+			return nil, nil, err
+		}
+		if scalar, scalarMeta, ok, err := r.goSourceNativeAssignedScalar(bridge, expected); ok {
+			return scalar, scalarMeta, err
+		}
+		return assigned, meta, nil
+	}
 	if _, ok := r.bashPPInterfaceType(expected); ok {
 		iv, vr, err := r.bashPPMakeInterfaceValue(expr, expected)
 		if err != nil {

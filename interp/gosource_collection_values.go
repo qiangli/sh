@@ -543,7 +543,15 @@ func (r *Runner) goSourceNativeAssignedValue(native bashPPBridgeValue, expected 
 	if assignable.Interface != "" {
 		native.Interface = assignable.Interface
 	}
-	return &native, &bashPPCollectionMeta{typ: expected, interfaceValue: goSourceNativeValueCell(native).interfaceValue}, nil
+	meta := &bashPPCollectionMeta{typ: expected, interfaceValue: goSourceNativeValueCell(native).interfaceValue}
+	if meta.interfaceValue != nil {
+		// Native interface destinations carry their dynamic value in the same
+		// wrapper as local interfaces. Mark the metadata accordingly so field
+		// reads and comparisons keep that wrapper instead of comparing a typed
+		// nil payload as though it were a nil interface.
+		meta.kind = "interface"
+	}
+	return &native, meta, nil
 }
 
 // goSourceNativeAssignedScalar materializes a dependency-owned basic value in

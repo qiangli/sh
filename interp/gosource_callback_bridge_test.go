@@ -58,9 +58,9 @@ func main(){
 	}
 }
 
-// A callback parameter carrying a reference the caller still shares cannot be
-// copied faithfully, so it is refused before the callback or the surrounding
-// call has any effect.
+// A struct parameter is copied at the call boundary, while its slice field
+// remains an alias of the backing array. The callback bridge must preserve both
+// parts of that Go value semantics.
 func TestGoSourceCallbackSignatureBoundary(t *testing.T) {
 	const source = `package main
 import ("fmt";"slices")
@@ -70,13 +70,7 @@ func main(){
 	slices.SortFunc(bags,func(a,b bag)int{a.items[0]=0;return len(a.items)-len(b.items)})
 	fmt.Println(bags)
 }`
-	got := runGoSourceRunnerError(t, source)
-	if !strings.Contains(got, "requires value-semantics parameters") {
-		t.Fatalf("missing signature boundary: %q", got)
-	}
-	if strings.Contains(got, "[{[0]}") {
-		t.Fatalf("the refused callback still ran: %q", got)
-	}
+	differGoSource(t, source, nil, "")
 }
 
 // A struct is copied at a Go call boundary, but slices in that copy keep

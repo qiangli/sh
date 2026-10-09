@@ -194,9 +194,6 @@ func TestGoSourceTourCallbackReferenceBoundaries(t *testing.T) {
 		"aggregate_parameter": {`package main
 import ("bufio";"strings")
 func main(){s:=bufio.NewScanner(strings.NewReader(""));s.Split(func(b []byte,e bool)(int,[]byte,error){println("callback-ran");return 0,nil,nil});println("after")}`, "signature requires value-semantics parameters"},
-		"unreviewed_consumer": {`package main
-import "sync"
-func main(){sync.OnceValue(func()map[string]int{println("callback-ran");return nil});println("after")}`, "retained original function callbacks are unsupported"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -226,4 +223,13 @@ func main(){sync.OnceValue(func()map[string]int{println("callback-ran");return n
 			}
 		})
 	}
+}
+
+// Constructing the closure returned by OnceValue retains its callback, but
+// does not invoke it. With no observable invocation, this is ordinary Go
+// execution rather than a callback boundary the interpreter must reject.
+func TestGoSourceTourCallbackNonInvokingConsumer(t *testing.T) {
+	callbackTourThreeModes(t, `package main
+import "sync"
+func main(){sync.OnceValue(func()map[string]int{println("callback-ran");return nil});println("after")}`)
 }

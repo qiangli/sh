@@ -642,9 +642,12 @@ func applyNativeSliceBuffers(runner *Runner, q bashPPBridgeRequest, reply bashPP
 		mutating := i < len(q.sliceMutating) && q.sliceMutating[i]
 		want := cap(target.view)
 		if mutating {
-			want = len(target.view)
+			// The registered buffer is the operation's visible slice header.
+			// A refreshed target may expose more of the same backing store, but
+			// a sort must neither require nor overwrite that tail.
+			want = q.SliceBuffers[i].Length
 		}
-		if wire.Index != q.SliceBuffers[i].Index || wire.Length != len(target.view) || wire.Value.Kind != "slice" || len(wire.Value.Elements) != want {
+		if wire.Index != q.SliceBuffers[i].Index || wire.Length != q.SliceBuffers[i].Length || wire.Value.Kind != "slice" || len(wire.Value.Elements) != want {
 			return fmt.Errorf("gosource: invalid native slice writeback shape")
 		}
 		// A reconciled buffer's class is decided here by what the call actually
@@ -766,7 +769,16 @@ func (r *Runner) nativeSliceGenericHelper(ctx context.Context, req bashPPEvalReq
 		if len(q.SliceBuffers) != 1 {
 			return nil, false, fmt.Errorf("gosource: slices.Sort requires a direct original slice")
 		}
-		sorted, err := nativeSliceSorted(q.SliceBuffers[0].Value.Elements)
+		// slices.Sort always writes its visible elements back in place. Keep
+		// that classification with the interpreter-side generic helper: unlike
+		// the reflect-dispatched concrete sorters, it never reaches a worker
+		// reply that would otherwise establish it.
+		q.sliceMutating = []bool{true}
+		elements := q.SliceBuffers[0].Value.Elements
+		if len(elements) < q.SliceBuffers[0].Length {
+			return nil, false, fmt.Errorf("gosource: slices.Sort buffer is shorter than its visible length")
+		}
+		sorted, err := nativeSliceSorted(elements[:q.SliceBuffers[0].Length])
 		if err != nil {
 			return nil, false, err
 		}
