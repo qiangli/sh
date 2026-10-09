@@ -103,8 +103,18 @@ func TestPublishedProductions(t *testing.T) {
 // and the delta sites the grammar records are exactly the extension nodes the
 // engine's AST places on those lines.
 func TestAgreementWithPublishedCorpora(t *testing.T) {
-	g := load(t)
 	roots := []string{"../../bashsharp-tour", "../../bashsharp-tests/tools"}
+	for _, root := range roots {
+		if fi, err := os.Stat(root); err != nil {
+			if os.IsNotExist(err) {
+				t.Skipf("sibling corpus directory %s is absent", root)
+			}
+			t.Skipf("sibling corpus directory %s: %v", root, err)
+		} else if !fi.IsDir() {
+			t.Skipf("sibling corpus directory %s is not a directory", root)
+		}
+	}
+	g := load(t)
 	count, embedded, accepted, rejected := 0, 0, 0, 0
 	embeddedByScript := map[string]int{}
 	covered := map[string]int{}
