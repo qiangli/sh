@@ -109,6 +109,9 @@ func runDirectGoProgram(t *testing.T, dir, src string) (string, string, error) {
 	t.Helper()
 	writeBashPPFile(t, filepath.Join(dir, "direct.go"), src)
 	bin := filepath.Join(dir, "direct-bin")
+	if runtime.GOOS == "windows" {
+		bin += ".exe"
+	}
 	goBin := filepath.Join(runtime.GOROOT(), "bin", "go")
 	build := exec.Command(goBin, "build", "-o", bin, "direct.go")
 	build.Dir = dir

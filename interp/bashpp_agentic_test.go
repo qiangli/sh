@@ -115,7 +115,7 @@ func TestBashPPAgenticSourceAndSerialization(t *testing.T) {
 	if err := os.WriteFile(path, []byte("scope sourced\nagentic { scope opted; }\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := runAgentic(t, r, "agentic { source "+path+"; scope caller; }\nscope end"); err != nil {
+	if err := runAgentic(t, r, "agentic { source "+shellQuote(path)+"; scope caller; }\nscope end"); err != nil {
 		t.Fatal(err)
 	}
 	if got, want := out.String(), "scope/sourced:false\nscope/opted:true\nscope/caller:true\nscope/end:false\n"; got != want {

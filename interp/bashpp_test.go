@@ -8,7 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"testing"
 	"testing/iotest"
@@ -23,10 +25,19 @@ import (
 // bashPPRunner builds a runner in the given dialect, capturing its output.
 func bashPPRunner(tb testing.TB, out *strings.Builder, opts ...interp.RunnerOption) *interp.Runner {
 	tb.Helper()
+	environ := []string{"PATH=/usr/bin:/bin"}
+	if runtime.GOOS == "windows" {
+		// Native Go subprocesses need the Windows SDK/cache and temp environment.
+		for _, key := range []string{"PATH", "SystemRoot", "USERPROFILE", "LOCALAPPDATA", "TEMP", "TMP"} {
+			if value, ok := os.LookupEnv(key); ok {
+				environ = append(environ, key+"="+value)
+			}
+		}
+	}
 	all := append([]interp.RunnerOption{
 		interp.StdIO(nil, out, out),
 		// A real PATH, so the OS-boundary test can find `env`.
-		interp.Env(expand.ListEnviron("PATH=/usr/bin:/bin")),
+		interp.Env(expand.ListEnviron(environ...)),
 	}, opts...)
 	r, err := interp.New(all...)
 	qt.Assert(tb, qt.IsNil(err))

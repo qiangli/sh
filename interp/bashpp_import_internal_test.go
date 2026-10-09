@@ -260,7 +260,11 @@ func TestBashPPGoIdentityIgnoresPATH(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want, err := filepath.EvalSymlinks(filepath.Join(got.Root, "bin", "go"))
+	goName := "go"
+	if runtime.GOOS == "windows" {
+		goName += ".exe"
+	}
+	want, err := filepath.EvalSymlinks(filepath.Join(got.Root, "bin", goName))
 	if err != nil {
 		t.Fatal(err)
 	}

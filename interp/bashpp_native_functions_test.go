@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -78,6 +79,9 @@ func main(){ch:=make(chan string,2);go func(){v:=strings.Map(func(r rune)rune{re
 				t.Fatal(err)
 			}
 			generated, binary := filepath.Join(dir, "generated.go"), filepath.Join(dir, "compiled")
+			if runtime.GOOS == "windows" {
+				binary += ".exe"
+			}
 			if err := os.WriteFile(generated, result.Source, 0600); err != nil {
 				t.Fatal(err)
 			}

@@ -385,13 +385,18 @@ func testForeignParityArtifactAt(t *testing.T, source, filename, nativePostlude 
 	}
 	buildArgs := append([]string{"build", "-mod=mod"}, buildFlags...)
 	buildArgs = append(buildArgs, "-o", binary, "generated.go")
-	cmd := exec.CommandContext(ctx, filepath.Join(runtime.GOROOT(), "bin", "go"), buildArgs...)
+	// Compilation must not consume the interpreted or native execution deadline.
+	buildCtx, cancelBuild := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancelBuild()
+	cmd := exec.CommandContext(buildCtx, filepath.Join(runtime.GOROOT(), "bin", "go"), buildArgs...)
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "GOWORK=off", "GOTOOLCHAIN=local")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s\n%s", err, output, result.Source)
 	}
-	cmd = exec.CommandContext(ctx, binary)
+	nativeCtx, cancelNative := context.WithTimeout(context.Background(), 40*time.Second)
+	defer cancelNative()
+	cmd = exec.CommandContext(nativeCtx, binary)
 	if filepath.IsAbs(targetDir) {
 		cmd.Dir = targetDir
 	} else {

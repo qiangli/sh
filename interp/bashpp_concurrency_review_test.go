@@ -47,7 +47,7 @@ func TestBashPPLiteralHandlePrefixCrossesExec(t *testing.T) {
 	out, err := runBashPPConcurrencyReview(t, `
 func main() {
  ch := make(chan string, 1)
- /bin/echo chan@bashpp:not-a-handle
+ `+concurrencyEchoCommand(t)+` chan@bashpp:not-a-handle
  close(ch)
 }
 main()

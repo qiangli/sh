@@ -3,6 +3,7 @@ package interp
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -14,6 +15,27 @@ import (
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
 )
+
+// concurrencyEchoCommand exercises a real external process on every OS.
+func concurrencyEchoCommand(t *testing.T) string {
+	t.Helper()
+	t.Setenv("GOSH_PROG", "")
+	t.Setenv("GOSH_CMD", "")
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return shellQuote(exe) + " -test.run=^TestConcurrencyEchoHelper$ --"
+}
+
+func TestConcurrencyEchoHelper(t *testing.T) {
+	for i, arg := range os.Args {
+		if arg == "--" {
+			fmt.Fprintln(os.Stdout, strings.Join(os.Args[i+1:], " "))
+			os.Exit(0)
+		}
+	}
+}
 
 func runBashPPConcurrency(t *testing.T, src string) (string, error) {
 	t.Helper()
@@ -474,7 +496,7 @@ func TestBashPPTaskDescriptorCloseIsPrivateAndOffsetShared(t *testing.T) {
 		t.Fatal(err)
 	}
 	src := `
-exec 8<` + path + `
+exec 8<` + shellQuote(path) + `
 func first(ch) { read -u 8 value; ch <- "$value"; exec 8<&-; }
 func main() {
  ch := make(chan string)
@@ -812,11 +834,11 @@ main()
 		!strings.Contains(later.String(), "not a channel in this task group") {
 		t.Fatalf("stale capability gained authority: out=%q err=%v", later.String(), err)
 	}
-	if err := r.Run(context.Background(), parse(`/bin/echo "prefix-${SAVED}-suffix"`)); err == nil ||
+	if err := r.Run(context.Background(), parse(concurrencyEchoCommand(t)+` "prefix-${SAVED}-suffix"`)); err == nil ||
 		!strings.Contains(later.String(), "channel handles cannot cross an exec boundary") {
 		t.Fatalf("stale capability crossed exec: out=%q err=%v", later.String(), err)
 	}
-	innocent, err := runBashPPConcurrency(t, `/bin/echo chan@bashpp:not-issued`)
+	innocent, err := runBashPPConcurrency(t, concurrencyEchoCommand(t)+` chan@bashpp:not-issued`)
 	if err != nil || innocent != "chan@bashpp:not-issued\n" {
 		t.Fatalf("innocent prefix rejected: out=%q err=%v", innocent, err)
 	}
@@ -1085,7 +1107,7 @@ main()
 	if receiver.channel != nil || receiver.channelOwner != nil || len(r.bashPPIssuedHandles.handles) != 1 {
 		t.Fatalf("persistent receiver root was not revoked and retained: receiver=%#v handles=%#v", receiver, r.bashPPIssuedHandles.handles)
 	}
-	if err := run(`/usr/bin/true`); err != nil {
+	if err := run(`GOSH_CMD=exit_0 "$GOSH_PROG"`); err != nil {
 		t.Fatalf("later Run failed before retained invocation: out=%q err=%v", out.String(), err)
 	}
 	r.bashPPInvoke(context.Background(), r.bashPPClosures[closureIndex], nil)
@@ -1216,7 +1238,7 @@ func TestBashPPTaskZeroReadOptionsDoNotConsume(t *testing.T) {
 	for _, option := range []string{"-t 0", "-n 0", "-N 0"} {
 		t.Run(option, func(t *testing.T) {
 			out, err := runBashPPConcurrency(t, `
-exec 8<`+path+`
+exec 8<`+shellQuote(path)+`
 func first() {
  read `+option+` -u 8 ignored
 }
@@ -1303,7 +1325,7 @@ func TestBashPPFileRunPrunesClearedPersistentHandle(t *testing.T) {
 	if len(r.bashPPIssuedHandles.handles) != 0 {
 		t.Fatalf("cleared handle history retained: %#v", r.bashPPIssuedHandles.handles)
 	}
-	if err := run(`/usr/bin/true`); err != nil {
+	if err := run(`GOSH_CMD=exit_0 "$GOSH_PROG"`); err != nil {
 		t.Fatalf("stale history falsely refused later exec: %v output=%q", err, out.String())
 	}
 }
