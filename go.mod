@@ -1,6 +1,6 @@
 module mvdan.cc/sh/v3
 
-go 1.26.5
+go 1.27
 
 toolchain go1.27.1
 
@@ -15,6 +15,7 @@ require (
 	golang.org/x/sys v0.42.0
 	golang.org/x/term v0.41.0
 	golang.org/x/text v0.9.0
+	golang.org/x/tools v0.38.0
 	mvdan.cc/editorconfig v0.3.0
 )
 
@@ -22,7 +23,6 @@ require (
 	github.com/kr/pretty v0.3.1 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	golang.org/x/sync v0.17.0 // indirect
-	golang.org/x/tools v0.38.0 // indirect
 )
 
 tool golang.org/x/tools/cmd/stringer
