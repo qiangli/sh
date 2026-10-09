@@ -274,6 +274,22 @@ func TestPythonFenceUsesSourceEnvironmentPlan(t *testing.T) {
 	}
 }
 
+func TestPythonFenceAbsoluteArtifactCwdParity(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 unavailable")
+	}
+	dir := t.TempDir()
+	canonicalDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := "~~~python\ndef cwd() -> str:\n    import os\n    return os.getcwd()\n~~~\nvalue := cwd()\necho \"$value\"\n"
+	got := testPythonFenceInterpretedNativeParityAt(t, source, filepath.Join(dir, "entry.bpp"))
+	if got != canonicalDir+"\n" {
+		t.Fatalf("output = %q, want %q", got, canonicalDir+"\n")
+	}
+}
+
 func TestLowerNonPythonDoesNotDiscoverEnvironment(t *testing.T) {
 	t.Setenv("BASHPP_PYTHON", filepath.Join(t.TempDir(), "missing-python"))
 	file := parse(t, "echo ok\n", filepath.Join(t.TempDir(), "missing", "input.bpp"))
@@ -336,7 +352,13 @@ func testForeignParityArtifactAt(t *testing.T, source, filename, nativePostlude 
 	}
 
 	var interpreted, interpretedErr bytes.Buffer
-	runner, err := interp.New(interp.Lang(syntax.LangBashPP), interp.StdIO(nil, &interpreted, &interpretedErr))
+	targetDir := filepath.Dir(filename)
+	var runnerOpts []interp.RunnerOption
+	runnerOpts = append(runnerOpts, interp.Lang(syntax.LangBashPP), interp.StdIO(nil, &interpreted, &interpretedErr))
+	if filepath.IsAbs(targetDir) {
+		runnerOpts = append(runnerOpts, interp.Dir(targetDir))
+	}
+	runner, err := interp.New(runnerOpts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -370,7 +392,11 @@ func testForeignParityArtifactAt(t *testing.T, source, filename, nativePostlude 
 		t.Fatalf("build: %v\n%s\n%s", err, output, result.Source)
 	}
 	cmd = exec.CommandContext(ctx, binary)
-	cmd.Dir = t.TempDir()
+	if filepath.IsAbs(targetDir) {
+		cmd.Dir = targetDir
+	} else {
+		cmd.Dir = t.TempDir()
+	}
 	var native, nativeErr bytes.Buffer
 	cmd.Stdout = &native
 	cmd.Stderr = &nativeErr
