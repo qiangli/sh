@@ -151,9 +151,18 @@ func bashPPImportTempSource(dir, pattern string, env []string, policy bashPPScra
 		return nil, err
 	}
 	root := os.TempDir()
+	// A TMPDIR named by the request is the caller's deliberate choice; the
+	// default OS temp directory is not. On Windows the default temp lives under
+	// the user profile (%LOCALAPPDATA%\Temp), so a shell whose working directory
+	// is the home directory — or any ancestor of that temp directory — would
+	// otherwise see the default temp as "inside the source" and be refused. The
+	// isolation contract below is about an explicit TMPDIR pointed back into a
+	// read-only module, so only an explicit TMPDIR arms it.
+	explicitTMPDIR := false
 	for _, entry := range env {
 		if value, ok := strings.CutPrefix(entry, "TMPDIR="); ok && value != "" {
 			root = value
+			explicitTMPDIR = true
 		}
 	}
 	if !filepath.IsAbs(root) {
@@ -163,7 +172,7 @@ func bashPPImportTempSource(dir, pattern string, env []string, policy bashPPScra
 	if err != nil {
 		return nil, err
 	}
-	inSource := pathWithin(contextDir, root)
+	inSource := explicitTMPDIR && pathWithin(contextDir, root)
 	if inSource && policy != bashPPScratchSourceTree {
 		return nil, fmt.Errorf("bash++: private helper TMPDIR is inside the source directory")
 	}

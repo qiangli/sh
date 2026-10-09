@@ -85,6 +85,42 @@ func TestBashPPImportScratchOverlay(t *testing.T) {
 	}
 }
 
+// On Windows the default OS temp directory lives under the user profile
+// (%LOCALAPPDATA%\Temp), so a shell run from the home directory — or any
+// ancestor of that temp directory — sees the default temp nested inside its
+// own working ("source") directory. That is not an explicit TMPDIR pointed
+// into a read-only module, so an imported-package helper must still build
+// instead of being refused. Without this an `import "net/url"` worker failed
+// on Windows and a readonly mutation surfaced the wrong diagnostic. Reproduced
+// portably by pointing the process temp at a subdirectory of the source root
+// while leaving the request env's TMPDIR unset — exactly the default-temp shape.
+func TestBashPPImportScratchToleratesDefaultTempUnderSource(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmp := filepath.Join(root, "nested-temp")
+	if err := os.MkdirAll(tmp, 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMPDIR", tmp) // unix: os.TempDir reads $TMPDIR
+	t.Setenv("TMP", tmp)    // windows: GetTempPath reads %TMP%/%TEMP%
+	t.Setenv("TEMP", tmp)
+	resolved, err := filepath.EvalSymlinks(os.TempDir())
+	if err != nil || !pathWithin(root, resolved) {
+		t.Skipf("default temp %q not under source %q: %v", os.TempDir(), root, err)
+	}
+	// The request env carries no TMPDIR, so the default OS temp is in force; a
+	// default temp nested under the source dir must not arm the isolation guard.
+	env := bashPPEnvWithout(os.Environ(), "TMPDIR", "TMP", "TEMP")
+	f, err := bashPPImportTempSource(root, "helper-*.go", env, bashPPScratchIsolated)
+	if err != nil {
+		t.Fatalf("default temp under source rejected: %v", err)
+	}
+	f.Close()
+	f.cleanup()
+}
+
 func TestBashPPImportScratchRejectsSourceTMPDIR(t *testing.T) {
 	root := t.TempDir()
 	for _, tmp := range []string{root, filepath.Join(root, "missing")} {
