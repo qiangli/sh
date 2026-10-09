@@ -10,7 +10,7 @@ root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 # selection and the per-process timeout are fixed so an invocation cannot
 # quietly run a smaller or more permissive test tier.
 for override in FULL_TEST_ROOT_PACKAGES FULL_TEST_MOREINTERP_PACKAGES FULL_TEST_SKIP_MOREINTERP TEST_FULL_TIMEOUT; do
-	if [[ -v $override ]]; then
+	if declare -p "$override" >/dev/null 2>&1; then
 		echo "ERROR: $override is not permitted by the full release test runner" >&2
 		exit 2
 	fi
