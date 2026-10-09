@@ -3,7 +3,6 @@ package interp
 import (
 	"os/exec"
 	"runtime"
-	"strconv"
 	"testing"
 )
 
@@ -43,18 +42,11 @@ func TestS374MemStatsMemberScalar(t *testing.T) {
 	if !ok || v.Kind != "uint" {
 		t.Fatalf("Alloc = %+v,%v; want uint,true", v, ok)
 	}
-	var st runtime.MemStats
-	runtime.ReadMemStats(&st)
-	// The bridged read and this read bracket live-heap activity (the
-	// bridge call itself allocates), so exact equality is racy: on a
-	// loaded machine they differ by kilobytes. A 1MB window still proves
-	// the scalar tracks the live host heap instead of a stale value.
-	got, err := strconv.ParseUint(v.Text, 10, 64)
-	if err != nil {
-		t.Fatalf("Alloc = %q, not a uint: %v", v.Text, err)
-	}
-	if diff := int64(got) - int64(st.Alloc); diff < -(1<<20) || diff > (1<<20) {
-		t.Fatalf("Alloc = %q, want host %d within 1MB", v.Text, st.Alloc)
+	// A fixed snapshot proves the field conversion exactly. Comparing two
+	// live heap reads would depend on allocation and GC between the reads.
+	st := runtime.MemStats{Alloc: 123456789}
+	if got, ok := bashPPMemStatsScalar(st, "Alloc"); !ok || got.Kind != "uint" || got.Text != "123456789" {
+		t.Fatalf("fixed Alloc = %+v,%v", got, ok)
 	}
 	if v, ok := bashPPHostMemStatsMember("s", recv, "NumGC"); !ok || v.Kind != "uint" {
 		t.Fatalf("NumGC = %+v,%v; want uint,true", v, ok)

@@ -94,6 +94,11 @@ func bashPPHostMemStatsMember(sessionID string, recv bashPPBridgeValue, field st
 	}
 	var st runtime.MemStats
 	runtime.ReadMemStats(&st)
+	return bashPPMemStatsScalar(st, field)
+}
+
+// bashPPMemStatsScalar converts one field from a single heap snapshot.
+func bashPPMemStatsScalar(st runtime.MemStats, field string) (bashPPBridgeValue, bool) {
 	fv := reflect.ValueOf(st).FieldByName(field)
 	if !fv.IsValid() {
 		return bashPPBridgeValue{}, false

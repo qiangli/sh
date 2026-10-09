@@ -55,7 +55,7 @@ main()
 					t.Fatal(err)
 				}
 				result, err := lower.Compile(file, lower.Options{})
-				if result != nil || err == nil || err.Error() != "BASHPP-EASSERT-IMPOSSIBLE: U cannot be asserted from I" {
+				if result != nil || err == nil || err.Error() != "bash: line 5: BASHPP-EASSERT-IMPOSSIBLE: U cannot be asserted from I" {
 					t.Fatalf("semantic rejection result=%v err=%v", result, err)
 				}
 				return

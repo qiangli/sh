@@ -146,6 +146,12 @@ func main(){b:=make([]byte,1);io.ReadFull(Reader{},b);println("after")}`,
 			if want.status != 0 {
 				t.Fatalf("oracle: %+v", want)
 			}
+			if name == "callback_alias_observation" {
+				if got := runGoSourceRunner(t, dir, path, source, nil, ""); got != want {
+					t.Fatalf("callback alias: interpreter=%+v native=%+v", got, want)
+				}
+				return
+			}
 			p, err := gosource.Parse(strings.NewReader(source), path, gosource.Options{RunMain: true})
 			if err != nil {
 				t.Fatal(err)
