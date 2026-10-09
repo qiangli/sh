@@ -24,6 +24,7 @@ func (r *Runner) bashPPBridgeFunction(fn *bashPPFunc) (bashPPBridgeValue, error)
 	iteratorYield, _ := r.goSourceIteratorYield(fn)
 	makeFunc := r.bashPPReflectMakeFuncShape(fn)
 	copiedResults := false
+	copiedHandleResults := false
 	callRefusal := ""
 	reflecting := r.goSourceReflectingFunction
 	r.goSourceReflectingFunction = false
@@ -68,6 +69,7 @@ func (r *Runner) bashPPBridgeFunction(fn *bashPPFunc) (bashPPBridgeValue, error)
 			// slice may observe (checked at the request, where it is known).
 			if r.bashPPNativeHandleSlice(field.FieldTypeExpr) {
 				copiedResults = copiedResults || group == 1
+				copiedHandleResults = copiedHandleResults || group == 1
 				continue
 			}
 			// A result-only counterpart of the rule above: a slice built from
@@ -142,14 +144,14 @@ func (r *Runner) bashPPBridgeFunction(fn *bashPPFunc) (bashPPBridgeValue, error)
 			if registered.template != nil {
 				registered.template.closeDirFile()
 			}
-			return bashPPBridgeValue{Kind: "callback", Handle: id, Session: s.id, Callbacks: true, copiedResults: copiedResults, callRefusal: callRefusal, localRefusal: localRefusal}, nil
+			return bashPPBridgeValue{Kind: "callback", Handle: id, Session: s.id, Callbacks: true, copiedResults: copiedResults, copiedHandleResults: copiedHandleResults, callRefusal: callRefusal, localRefusal: localRefusal}, nil
 		}
 	}
 	s.functionNext++
 	id := s.functionNext
 	s.functions[id] = fn
 	s.functionOwners[id] = registered
-	return bashPPBridgeValue{Kind: "callback", Handle: id, Session: s.id, Callbacks: true, copiedResults: copiedResults, callRefusal: callRefusal, localRefusal: localRefusal, newCallback: true}, nil
+	return bashPPBridgeValue{Kind: "callback", Handle: id, Session: s.id, Callbacks: true, copiedResults: copiedResults, copiedHandleResults: copiedHandleResults, callRefusal: callRefusal, localRefusal: localRefusal, newCallback: true}, nil
 }
 
 func (r *Runner) bashPPCallbackFunctionTemplate(fn *bashPPFunc) (*bashPPCallbackFunction, error) {
@@ -785,4 +787,18 @@ func callbackInertRequest(req bashPPEvalRequest, q bashPPBridgeRequest) bool {
 // results are consumed without retention (see resultOwnedFunctionCallback).
 func copiedResultsConsumer(req bashPPEvalRequest, q bashPPBridgeRequest) bool {
 	return resultOwnedFunctionCallback(req, q)
+}
+
+// copiedHandleResultsConsumer narrows copiedResultsConsumer for a callback
+// whose result is a slice of dependency handles ([]reflect.Value). Such a
+// slice is rebuilt on the dependency side from its element handles, so only
+// a consumer that copies the elements out and never keeps the slice may
+// observe it: reflect.MakeFunc. A sync.Once* constructor caches the rebuilt
+// slice forever, which is not the slice the original returned.
+func copiedHandleResultsConsumer(req bashPPEvalRequest, q bashPPBridgeRequest) bool {
+	if q.Receiver != nil {
+		return false
+	}
+	alias, name, ok := strings.Cut(q.Selector, ".")
+	return ok && req.Imports[alias] == "reflect" && name == "MakeFunc"
 }

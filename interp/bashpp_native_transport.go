@@ -42,7 +42,7 @@ func validateLocalTransport(req bashPPEvalRequest, q bashPPBridgeRequest) error 
 			if v.localRefusal != "" {
 				return false, false, fmt.Errorf("%s", v.localRefusal)
 			}
-			if v.copiedResults && !copiedResultsConsumer(req, q) {
+			if v.copiedResults && !copiedResultsConsumer(req, q) || v.copiedHandleResults && !copiedHandleResultsConsumer(req, q) {
 				return false, false, fmt.Errorf("gosource: original callback signature requires value-semantics parameters and supported results")
 			}
 			functionCallbacks = true
@@ -248,7 +248,14 @@ func synchronousOriginalMethodCallback(req bashPPEvalRequest, q bashPPBridgeRequ
 		return false
 	}
 	callable := nativeSliceCallable(req, q)
-	if callable == "" || nativeSliceRetainsStorage(callable) || nativeSliceMutatingIndex(callable) >= 0 || nativeRetainedPointerMutator(callable) {
+	if callable == "" || nativeSliceRetainsStorage(callable) || nativeValueRetainer(callable) || nativeSliceMutatingIndex(callable) >= 0 || nativeRetainedPointerMutator(callable) {
+		return false
+	}
+	// The retainer sets above review the standard library. A callee outside
+	// it — the program's own module or a third-party package — is admitted
+	// only once its sources prove it cannot retain or asynchronously invoke
+	// the callback-bearing value (dependencyFunctionCallbackLifetimeProof).
+	if !bashPPStandardImportPath(bashPPCallablePackage(callable)) && !q.sourceSynchronousMethodCallback {
 		return false
 	}
 	if q.coherence != nil {
@@ -261,6 +268,39 @@ func synchronousOriginalMethodCallback(req bashPPEvalRequest, q bashPPBridgeRequ
 		return false
 	}
 	return !nestedNativeSliceViewInRequest(q)
+}
+
+// nativeValueRetainer reports constructors that keep a copy of their argument
+// inside the value they return. reflect.ValueOf wraps the copied value; a
+// later request on that Value can mutate the interpreter-owned references
+// the copy still shares (a map field, say) without any writeback. The
+// reviewed reflect admissions (reflectedMethodValueOf, reflectedValueCopy,
+// reflectedOriginalFunctionValueOf) are decided before the general bridge.
+func nativeValueRetainer(name string) bool {
+	switch name {
+	case "reflect.ValueOf":
+		return true
+	}
+	return false
+}
+
+// bashPPCallablePackage returns the import path of a callable spelled as
+// nativeSliceCallable spells it: "pkg/path.Func", "*pkg/path.Type.Method".
+func bashPPCallablePackage(callable string) string {
+	name := strings.TrimLeft(callable, "*")
+	slash := strings.LastIndexByte(name, '/')
+	dot := strings.IndexByte(name[slash+1:], '.')
+	if dot < 0 {
+		return name
+	}
+	return name[:slash+1+dot]
+}
+
+// bashPPStandardImportPath reports a standard-library import path: by Go's
+// own rule, one whose first element has no dot.
+func bashPPStandardImportPath(path string) bool {
+	first, _, _ := strings.Cut(path, "/")
+	return first != "" && !strings.Contains(first, ".")
 }
 
 func callbackFunctionHandleInRequest(q bashPPBridgeRequest) bool {
@@ -762,32 +802,47 @@ func localMethodsMirrored(req bashPPEvalRequest) bool {
 // blocking synchronization must remain available to other interpreted tasks.
 func requestHasCallbacks(req bashPPEvalRequest, q bashPPBridgeRequest) bool {
 	local := req.localTypePlan()
-	var check func(bashPPBridgeValue) bool
-	check = func(v bashPPBridgeValue) bool {
-		if v.Callbacks || local.localMethodCallbackName(v.Type) {
-			return true
-		}
-		for _, c := range v.Elements {
-			if check(c) {
-				return true
-			}
-		}
-		for _, c := range v.Fields {
-			if check(c) {
-				return true
-			}
-		}
-		for _, e := range v.Entries {
-			if check(e.Key) || check(e.Value) {
-				return true
-			}
-		}
-		return false
-	}
 	for _, v := range q.Args {
-		if check(v) {
+		if bridgeValueCarriesCallbacks(local, v) {
 			return true
 		}
 	}
-	return q.Receiver != nil && check(*q.Receiver)
+	return q.Receiver != nil && bridgeValueCarriesCallbacks(local, *q.Receiver)
+}
+
+// requestFunctionCallbackArgs reports a request handing over an original
+// function value among its arguments.
+func requestFunctionCallbackArgs(q bashPPBridgeRequest) bool {
+	for _, arg := range q.Args {
+		if arg.Kind == "callback" {
+			return true
+		}
+	}
+	return false
+}
+
+// bridgeValueCarriesCallbacks reports a transported value through which the
+// dependency can reach an original body: a retained-callback value, or a
+// local type whose mirrored methods the dependency may invoke, anywhere in
+// the value tree.
+func bridgeValueCarriesCallbacks(local *bashPPLocalTypePlan, v bashPPBridgeValue) bool {
+	if v.Callbacks || local.localMethodCallbackName(v.Type) {
+		return true
+	}
+	for _, c := range v.Elements {
+		if bridgeValueCarriesCallbacks(local, c) {
+			return true
+		}
+	}
+	for _, c := range v.Fields {
+		if bridgeValueCarriesCallbacks(local, c) {
+			return true
+		}
+	}
+	for _, e := range v.Entries {
+		if bridgeValueCarriesCallbacks(local, e.Key) || bridgeValueCarriesCallbacks(local, e.Value) {
+			return true
+		}
+	}
+	return false
 }

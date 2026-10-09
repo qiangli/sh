@@ -486,6 +486,29 @@ func (r *Runner) bashPPZeroValue(typ syntax.BashPPTypeExpr) (any, *bashPPCollect
 	return r.bashPPCollectionZero(typ)
 }
 
+// goSourceOpaqueUnsafeViewIdent reports an identifier holding an unsafe view
+// pointer — (*reflect.SliceHeader)(unsafe.Pointer(p)) — assigned to an
+// imported pointer destination. The pointer stays the interpreter's own
+// storage until an access through it needs the layout (fixedbugs/issue8004:
+// the header is only stored, compared and converted back), so it takes the
+// pointer path of bashPPEvalTypedValue rather than the dependency bridge,
+// which would materialize the view now and refuse a source it cannot lay out.
+func (r *Runner) goSourceOpaqueUnsafeViewIdent(expr syntax.BashPPExpr, expected syntax.BashPPTypeExpr) bool {
+	if _, ok := r.bashPPPointerType(expected); !ok {
+		return false
+	}
+	id, ok := bashPPUnparenExpr(expr).(*syntax.BashPPIdent)
+	if !ok {
+		return false
+	}
+	cell := r.bashPPScope.lookup(id.Name.Value)
+	if cell == nil {
+		return false
+	}
+	cell = cell.view()
+	return cell != nil && cell.pointer && cell.pointerValue != nil && cell.pointerValue.unsafeSource() != nil
+}
+
 func (r *Runner) bashPPEvalTypedValue(expr syntax.BashPPExpr, expected syntax.BashPPTypeExpr) (value any, meta *bashPPCollectionMeta, err error) {
 	defer func() { err = r.goSourceRuntimeFaultAt(err, expr) }()
 	if lit, ok := expr.(*syntax.BashPPCompositeLit); ok && r.bashPPNativeType(expected) {
@@ -514,7 +537,7 @@ func (r *Runner) bashPPEvalTypedValue(expr syntax.BashPPExpr, expected syntax.Ba
 		}
 		return assigned, meta, nil
 	}
-	if r.bashPPGoSource && r.bashPPNativeType(expected) {
+	if r.bashPPGoSource && r.bashPPNativeType(expected) && !r.goSourceOpaqueUnsafeViewIdent(expr, expected) {
 		// A locally-held value can be assigned to an imported interface too.
 		// Let the dependency authenticate that assignment so its static
 		// interface wrapper survives the aggregate field. In particular, a

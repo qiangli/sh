@@ -55,6 +55,21 @@ func dependencyFunctionCallbackLifetimeProof(ctx context.Context, req bashPPEval
 			callbackArgs = append(callbackArgs, i)
 		}
 	}
+	// With no original function among the arguments, the request may still
+	// hand over local values whose mirrored methods the dependency can invoke
+	// (requestHasCallbacks). Such a value is retained exactly as an original
+	// function would be, so the proof supplies it as a callback-bearing value
+	// and the general method-callback bridge consults the result
+	// (synchronousOriginalMethodCallback).
+	methodCallbacks := len(callbackArgs) == 0
+	if methodCallbacks {
+		local := req.localTypePlan()
+		for i, arg := range q.Args {
+			if bridgeValueCarriesCallbacks(local, arg) {
+				callbackArgs = append(callbackArgs, i)
+			}
+		}
+	}
 	if len(callbackArgs) == 0 {
 		return false
 	}
@@ -97,6 +112,13 @@ func dependencyFunctionCallbackLifetimeProof(ctx context.Context, req bashPPEval
 			dispatchTypes = append(dispatchTypes, candidateType)
 		}
 		name = q.Selector
+	}
+	// Standard-library consumers of method-callback values are admitted by
+	// the reviewed name lists of the transport (synchronousOriginalMethodCallback
+	// and its retainer sets); only a program-module or third-party callee
+	// needs its sources proven free of retention.
+	if methodCallbacks && bashPPStandardImportPath(path) {
+		return false
 	}
 	var key strings.Builder
 	key.WriteString(path)

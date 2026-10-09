@@ -1310,6 +1310,11 @@ func (r *Runner) bashPPBridgeCollection(value any, meta *bashPPCollectionMeta, t
 		underlying := bashPPTypeText(r.bashPPUnderlyingType(typ))
 		if (underlying == "complex64" || underlying == "complex128") && bashPPSprint162ComplexCollectionText(value) {
 			result.Kind = "complex"
+		} else if underlying == "float32" || underlying == "float64" {
+			// A float element keeps its float wire kind: the dependency's
+			// decoder refuses a string for a float64 slot, and NaN/Inf
+			// spellings are floats, not integer carriers.
+			result.Kind = "float"
 		} else if kind, ok := r.bashPPBridgeIntegerCarrier(typ, value); ok {
 			result.Kind = kind
 		} else {

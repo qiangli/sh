@@ -123,6 +123,9 @@ type bashPPBridgeValue struct {
 	// a slice of dependency handles, rebuilt on the dependency side on return.
 	// Host-only; only a non-retaining result consumer may carry it.
 	copiedResults bool
+	// copiedHandleResults marks the subset of copiedResults whose result is a
+	// slice of dependency handles; see copiedHandleResultsConsumer.
+	copiedHandleResults bool
 	// newCallback is local request ownership metadata. It never crosses JSON:
 	// a synchronous request releases a callback registered solely for that
 	// call once the dependency has returned.
@@ -188,10 +191,15 @@ type bashPPBridgeRequest struct {
 	// immutable Go sources prove that every callback stays on this call's
 	// stack. It is host-only and deliberately absent from the wire protocol.
 	sourceSynchronousCallback bool
-	sourceProgram             bool   // the call site is in the program package itself
-	ID                        uint64 `json:"id"`
-	Op                        string `json:"op"`
-	PanicOnFault              bool   `json:"panic_on_fault,omitempty"`
+	// sourceSynchronousMethodCallback is the same proof for a request whose
+	// only callbacks are local values with mirrored methods: it admits a
+	// callee outside the standard library to the general method-callback
+	// bridge (synchronousOriginalMethodCallback) and nothing else.
+	sourceSynchronousMethodCallback bool
+	sourceProgram                   bool   // the call site is in the program package itself
+	ID                              uint64 `json:"id"`
+	Op                              string `json:"op"`
+	PanicOnFault                    bool   `json:"panic_on_fault,omitempty"`
 	// PointerReadOnly says this operation cannot mutate any origin pointer in
 	// the dependency. The worker can then omit its global pointer writeback
 	// scan; the bit is derived here from authenticated call metadata.
@@ -964,7 +972,12 @@ func (s *bashPPNativeSession) request(ctx context.Context, req bashPPEvalRequest
 		}
 	}
 	if requestHasCallbacks(req, q) && !synchronousFunctionCallback(req, q) {
-		q.sourceSynchronousCallback = dependencyFunctionCallbackLifetimeProof(ctx, req, q)
+		proven := dependencyFunctionCallbackLifetimeProof(ctx, req, q)
+		if requestFunctionCallbackArgs(q) {
+			q.sourceSynchronousCallback = proven
+		} else {
+			q.sourceSynchronousMethodCallback = proven
+		}
 	}
 	if err := prepareNativeSliceBuffers(ctx, req, &q); err != nil {
 		if errors.Is(err, errNativeCopiedSliceCallback) && nativePoolPutDroppable(q) {
