@@ -4236,9 +4236,11 @@ loop:
 					}
 				}
 				nested := len(ce.Args) > 1
-				for _, arg := range ce.Args[:len(ce.Args)-1] {
-					if arg.Lit() == ":=" || arg.Lit() == "defer" || arg.Lit() == "return" {
-						nested = false
+				if nested {
+					for _, arg := range ce.Args[:len(ce.Args)-1] {
+						if arg.Lit() == ":=" || arg.Lit() == "defer" || arg.Lit() == "return" {
+							nested = false
+						}
 					}
 				}
 				// In a committed Bash++ function, `p = new(T)` is an
