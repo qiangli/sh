@@ -30,18 +30,9 @@ func RunSourceFile(path string, args []string, stdin io.Reader, stdout, stderr i
 		return 2, sourceFileError(path, fence, err)
 	}
 
-	var plan EnvironmentPlan
-	if language == "fsharp" {
-		argv, _, resolveErr := resolveTool(envMap(os.Environ()), "dotnet")
-		if resolveErr != nil {
-			return 2, sourceFileError(path, fence, fmt.Errorf("F# runtime unavailable: %w", resolveErr))
-		}
-		plan = EnvironmentPlan{Executable: argv[0], ExecutableArgs: argv[1:], Dir: filepath.Dir(abs), Env: os.Environ()}
-	} else {
-		plan, err = DiscoverEnvironment(EnvironmentRequest{Language: language, Source: abs, Environ: os.Environ()})
-		if err != nil {
-			return 2, sourceFileError(path, fence, err)
-		}
+	plan, err := DiscoverEnvironment(EnvironmentRequest{Language: language, Source: abs, Environ: os.Environ()})
+	if err != nil {
+		return 2, sourceFileError(path, fence, err)
 	}
 
 	ctx := context.Background()
@@ -50,13 +41,6 @@ func RunSourceFile(path string, args []string, stdin io.Reader, stdout, stderr i
 	}
 	cmdArgs := append([]string(nil), plan.ExecutableArgs...)
 	switch language {
-	case "fsharp":
-		cmdArgs = append(cmdArgs, "fsi", "--exec")
-		if ext == ".fs" {
-			cmdArgs = append(cmdArgs, "--use:"+abs)
-		} else {
-			cmdArgs = append(cmdArgs, abs)
-		}
 	case "typescript":
 		cmdArgs = append(cmdArgs, abs)
 	default: // Python runs on the resolved runtime.
@@ -78,8 +62,6 @@ func sourceFileLanguage(ext string) (language, fence string) {
 		return "python", "py"
 	case ".rs":
 		return "rust", "rs"
-	case ".fs", ".fsx":
-		return "fsharp", "fsharp"
 	}
 	return "", ""
 }

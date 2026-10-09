@@ -61,3 +61,34 @@ func TestRunSourceFileDiagnosticNamesPositionAndFence(t *testing.T) {
 		t.Fatalf("status=%d err=%v", status, err)
 	}
 }
+
+func TestRunSourceFileRefusesUnsupportedExtensions(t *testing.T) {
+	cases := []struct {
+		ext string
+	}{
+		{ext: ".fs"},
+		{ext: ".fsx"},
+		{ext: ".cs"},
+		{ext: ".ps1"},
+		{ext: ".unknown"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.ext, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "program"+tc.ext)
+			if err := os.WriteFile(path, []byte("content"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			status, err := RunSourceFile(path, nil, nil, io.Discard, io.Discard)
+			if status != 2 {
+				t.Fatalf("status = %d, want 2", status)
+			}
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			wantErr := fmt.Sprintf("%s:1:1: unsupported source extension %s", path, tc.ext)
+			if err.Error() != wantErr {
+				t.Fatalf("got error %q, want %q", err.Error(), wantErr)
+			}
+		})
+	}
+}
