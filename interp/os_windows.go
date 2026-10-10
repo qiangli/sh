@@ -13,8 +13,10 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"sync"
 	"syscall"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 	"mvdan.cc/sh/v3/syntax"
@@ -59,7 +61,65 @@ func syncUmaskForChild(mask int) (restore func()) {
 }
 
 func (r *Runner) startExecCmdWithUmask(ctx context.Context, cmd *exec.Cmd, mask int) error {
-	return r.startExecCmd(ctx, cmd)
+	if !r.execProcessGroups {
+		return r.startExecCmd(ctx, cmd)
+	}
+	job, err := windows.CreateJobObject(nil, nil)
+	if err != nil {
+		return fmt.Errorf("create command job: %w", err)
+	}
+	var info windows.JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+	info.BasicLimitInformation.LimitFlags = windows.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+	if _, err := windows.SetInformationJobObject(job, windows.JobObjectExtendedLimitInformation,
+		uintptr(unsafe.Pointer(&info)), uint32(unsafe.Sizeof(info))); err != nil {
+		windows.CloseHandle(job)
+		return fmt.Errorf("set command job limit: %w", err)
+	}
+	if err := r.startExecCmd(ctx, cmd); err != nil {
+		windows.CloseHandle(job)
+		return err
+	}
+	// os/exec does not expose the primary thread handle needed to resume a
+	// CREATE_SUSPENDED child. Assignment immediately after Start leaves a
+	// brief window in which a very fast child can spawn outside this job.
+	proc, err := windows.OpenProcess(windows.PROCESS_SET_QUOTA|windows.PROCESS_TERMINATE, false, uint32(cmd.Process.Pid))
+	if err == nil {
+		err = windows.AssignProcessToJobObject(job, proc)
+		windows.CloseHandle(proc)
+	}
+	if err != nil {
+		_ = cmd.Process.Kill()
+		cmd.WaitDelay = time.Second
+		_ = cmd.Wait()
+		windows.CloseHandle(job)
+		return fmt.Errorf("assign command to job: %w", err)
+	}
+	execJobs.Store(cmd, &execJob{handle: job})
+	return nil
+}
+
+type execJob struct {
+	mu     sync.Mutex
+	handle windows.Handle
+}
+
+var execJobs sync.Map // *exec.Cmd -> *execJob
+
+func (j *execJob) terminate() {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.handle != 0 {
+		_ = windows.TerminateJobObject(j.handle, 1)
+	}
+}
+
+func (j *execJob) close() {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.handle != 0 {
+		_ = windows.CloseHandle(j.handle)
+		j.handle = 0
+	}
 }
 
 func refreshFileTimesNow(file *os.File, path string) error {
@@ -325,6 +385,11 @@ func (*foregroundJobTTY) giveTo(int) error { return nil }
 func (*foregroundJobTTY) restore() error { return nil }
 
 func waitExecCmd(ctx context.Context, cmd *exec.Cmd) (err error, user, sys time.Duration) {
+	defer func() {
+		if value, ok := execJobs.LoadAndDelete(cmd); ok {
+			value.(*execJob).close()
+		}
+	}()
 	err = cmd.Wait()
 	user, sys = processStateCPUTimes(cmd.ProcessState)
 	return err, user, sys
@@ -418,10 +483,16 @@ func hdocServe(body []byte) (*os.File, error) {
 	return f, nil
 }
 
-// setOwnProcessGroup has no process-group equivalent here.
-func setOwnProcessGroup(cmd *exec.Cmd) bool { return false }
+// On Windows ExecProcessGroups uses a Job Object instead of a process group.
+func setOwnProcessGroup(cmd *exec.Cmd) bool { return true }
 
 func signalExecCmd(cmd *exec.Cmd, sig os.Signal, group bool) {
+	if group {
+		if value, ok := execJobs.Load(cmd); ok {
+			value.(*execJob).terminate()
+			return
+		}
+	}
 	if cmd.Process != nil {
 		_ = cmd.Process.Signal(sig)
 	}
