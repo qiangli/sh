@@ -145,6 +145,17 @@ func (hc HandlerContext) DryRun() bool {
 	return hc.runner != nil && hc.runner.dryRun
 }
 
+// Async reports whether the handler was invoked from within an asynchronous
+// list (`cmd &`), including subshells nested inside one. Such a command runs
+// concurrently with the shell's foreground statements and may outlive the
+// script, so middleware that brackets a command's output (buffering stdout
+// until the handler returns) must not apply that window to it: the
+// foreground's later writes would be held until the background job exits,
+// and lost entirely if the shell exits first.
+func (hc HandlerContext) Async() bool {
+	return hc.runner != nil && hc.runner.asyncList
+}
+
 // Umask reports the Runner's current virtual file-creation mask. Custom
 // in-process command handlers use this value to apply the same permissions an
 // external command would inherit at the fork boundary, without changing the
