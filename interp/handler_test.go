@@ -903,7 +903,7 @@ func TestHandlerContextAsyncOutputOutlivesScript(t *testing.T) {
 		}
 	}
 
-	run := func(t *testing.T, respectAsync bool) *bracketingOutput {
+	run := func(t *testing.T, respectAsync bool) string {
 		b := &bracketingOutput{respectAsync: respectAsync, async: map[string]bool{}}
 		file, err := syntax.NewParser(syntax.Variant(syntax.LangPOSIX)).Parse(strings.NewReader(src), "")
 		if err != nil {
@@ -930,18 +930,20 @@ func TestHandlerContextAsyncOutputOutlivesScript(t *testing.T) {
 				p.Kill()
 			}
 		}
-		return b
+		// Snapshot while holding the lock: killing the job lets its handler
+		// finish concurrently and flush the held buffer.
+		return b.out.String()
 	}
 	t.Run("Bracketed", func(t *testing.T) {
 		// Control: a window opened for the background command holds the
 		// foreground echo, which is what lost the output.
-		if b := run(t, false); b.out.Len() != 0 {
-			t.Fatalf("window did not hold foreground output: %q", b.out.String())
+		if out := run(t, false); out != "" {
+			t.Fatalf("window did not hold foreground output: %q", out)
 		}
 	})
 	t.Run("RespectAsync", func(t *testing.T) {
-		if b := run(t, true); !want.MatchString(b.out.String()) {
-			t.Fatalf("got %q, want D <pid>", b.out.String())
+		if out := run(t, true); !want.MatchString(out) {
+			t.Fatalf("got %q, want D <pid>", out)
 		}
 	})
 }
