@@ -12,6 +12,8 @@ import (
 	"io"
 	"io/fs"
 	"os"
+	"os/exec"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
@@ -825,4 +827,121 @@ func TestKillSignal(t *testing.T) {
 			}
 		})
 	}
+}
+
+// bracketingOutput mimics a host middleware that holds a command's output
+// until its handler returns (an output reducer), with writes made outside
+// any command passing straight through. respectAsync makes it skip the
+// window for asynchronous-list commands via [interp.HandlerContext.Async].
+type bracketingOutput struct {
+	respectAsync bool
+
+	mu     sync.Mutex
+	active int
+	held   bytes.Buffer
+	out    bytes.Buffer
+	async  map[string]bool
+}
+
+func (b *bracketingOutput) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.active > 0 {
+		return b.held.Write(p)
+	}
+	return b.out.Write(p)
+}
+
+func (b *bracketingOutput) middleware(next interp.ExecHandlerFunc) interp.ExecHandlerFunc {
+	return func(ctx context.Context, args []string) error {
+		async := interp.HandlerCtx(ctx).Async()
+		b.mu.Lock()
+		b.async[args[0]] = async
+		b.mu.Unlock()
+		if async && b.respectAsync {
+			return next(ctx, args)
+		}
+		b.mu.Lock()
+		b.active++
+		b.mu.Unlock()
+		err := next(ctx, args)
+		b.mu.Lock()
+		if b.active--; b.active == 0 {
+			b.out.Write(b.held.Bytes())
+			b.held.Reset()
+		}
+		b.mu.Unlock()
+		return err
+	}
+}
+
+// TestHandlerContextAsyncOutputOutlivesScript is the regression for output
+// written after `$!` going missing when an external background child outlives
+// the script: `$!` waits for that child to start, after which a host's output
+// window opened for it swallowed every later foreground write. The script
+// must print immediately, without the shell waiting for the job at exit,
+// exactly like bash in POSIX mode.
+func TestHandlerContextAsyncOutputOutlivesScript(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses an external sleep")
+	}
+	sleepPath, err := exec.LookPath("sleep")
+	if err != nil {
+		t.Skip("no external sleep")
+	}
+	src := fmt.Sprintf("set -o posix; %s 3 >/dev/null 2>&1 & /usr/bin/env true; echo D $!", sleepPath)
+	want := regexp.MustCompile(`^D [0-9]+\n$`)
+
+	if bash, err := exec.LookPath("bash"); err == nil {
+		start := time.Now()
+		out, err := exec.Command(bash, "--posix", "-c", src).Output()
+		if err != nil {
+			t.Fatalf("system bash: %v", err)
+		}
+		if !want.Match(out) || time.Since(start) > 2*time.Second {
+			t.Fatalf("system bash printed %q after %v", out, time.Since(start))
+		}
+	}
+
+	run := func(t *testing.T, respectAsync bool) *bracketingOutput {
+		b := &bracketingOutput{respectAsync: respectAsync, async: map[string]bool{}}
+		file, err := syntax.NewParser(syntax.Variant(syntax.LangPOSIX)).Parse(strings.NewReader(src), "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		runner, err := interp.New(interp.StdIO(nil, b, b), interp.ExecHandlers(b.middleware))
+		if err != nil {
+			t.Fatal(err)
+		}
+		start := time.Now()
+		if err := runner.Run(context.Background(), file); err != nil {
+			t.Fatal(err)
+		}
+		if elapsed := time.Since(start); elapsed > 2*time.Second {
+			t.Fatalf("Run waited %v for the background job at exit", elapsed)
+		}
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		if !b.async[sleepPath] || b.async["/usr/bin/env"] {
+			t.Fatalf("Async() = %v, want true only for the background command", b.async)
+		}
+		if pid, err := strconv.Atoi(strings.TrimSpace(strings.TrimPrefix(b.out.String()+b.held.String(), "D "))); err == nil {
+			if p, err := os.FindProcess(pid); err == nil {
+				p.Kill()
+			}
+		}
+		return b
+	}
+	t.Run("Bracketed", func(t *testing.T) {
+		// Control: a window opened for the background command holds the
+		// foreground echo, which is what lost the output.
+		if b := run(t, false); b.out.Len() != 0 {
+			t.Fatalf("window did not hold foreground output: %q", b.out.String())
+		}
+	})
+	t.Run("RespectAsync", func(t *testing.T) {
+		if b := run(t, true); !want.MatchString(b.out.String()) {
+			t.Fatalf("got %q, want D <pid>", b.out.String())
+		}
+	})
 }
