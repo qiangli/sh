@@ -497,3 +497,6 @@ func signalExecCmd(cmd *exec.Cmd, sig os.Signal, group bool) {
 		_ = cmd.Process.Signal(sig)
 	}
 }
+
+// fileWritable has no portable access-mode probe here; fd 0 stays input-only.
+func fileWritable(*os.File) bool { return false }

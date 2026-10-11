@@ -822,3 +822,23 @@ func signalExecCmd(cmd *exec.Cmd, sig os.Signal, group bool) {
 	}
 	_ = cmd.Process.Signal(sig)
 }
+
+// fileWritable reports whether f's descriptor was opened for output
+// (O_WRONLY or O_RDWR). It reads the mode through SyscallConn so an inherited
+// stdin is not switched to blocking mode the way f.Fd() would.
+func fileWritable(f *os.File) bool {
+	rc, err := f.SyscallConn()
+	if err != nil {
+		return false
+	}
+	writable := false
+	_ = rc.Control(func(fd uintptr) {
+		flags, err := unix.FcntlInt(fd, unix.F_GETFL, 0)
+		if err != nil {
+			return
+		}
+		mode := flags & unix.O_ACCMODE
+		writable = mode == unix.O_WRONLY || mode == unix.O_RDWR
+	})
+	return writable
+}

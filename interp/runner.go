@@ -10142,6 +10142,12 @@ func (r *Runner) fdCaps(fd int) (read *os.File, write io.Writer, ok bool) {
 			write = r.fdWriteTable[0]
 		}
 		if r.stdin != nil {
+			// An inherited stdin opened for output (`0>file`, a pipe's
+			// write end) is a valid `>&0` source, as in bash; Zed's login
+			// shell environment capture writes its JSON that way.
+			if write == nil && fileWritable(r.stdin) {
+				write = r.stdin
+			}
 			return r.stdin, write, true
 		}
 		if write != nil {
