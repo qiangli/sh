@@ -2,7 +2,7 @@ module mvdan.cc/sh/moreinterp
 
 go 1.27
 
-toolchain go1.27.1
+toolchain go1.27.2
 
 require (
 	github.com/u-root/u-root v0.15.1-0.20251208185023-2f8c7e763cf8
