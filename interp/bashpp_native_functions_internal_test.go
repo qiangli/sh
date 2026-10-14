@@ -144,6 +144,31 @@ func TestGoSourceWorkerOutputBarrierSequence(t *testing.T) {
 	}
 }
 
+func TestGoSourceWorkerOutputBarrierMissingMarker(t *testing.T) {
+	var output bytes.Buffer
+	drain, err := newBashPPNativeOutputDrainWithWorker(&output, []byte("worker-output-marker"), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer drain.closeWrite()
+	if _, err := drain.write.Write([]byte("native\n")); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		drain.awaitWorker(1)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("missing worker marker stranded output ordering")
+	}
+	if got := output.String(); got != "native\n" {
+		t.Fatalf("output before host barrier = %q", got)
+	}
+}
+
 // Sprint: #281; Story: #809; Story-ID: fac7e14af4a8
 //
 // A failed worker marker on one reply must not consume a global sequence number

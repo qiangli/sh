@@ -34,7 +34,6 @@ type bashPPNativeOutputDrain struct {
 	workerSentinel []byte
 	workerMask     uint8
 	workerReached  atomic.Uint64
-	workerNotify   chan struct{}
 	// mu serializes barriers so at most one sentinel is in flight.
 	mu        sync.Mutex
 	reached   chan struct{} // one token per consumed sentinel
@@ -65,7 +64,6 @@ func newBashPPNativeOutputDrainWithWorker(sink io.Writer, workerSentinel []byte,
 		read: r, write: w, sink: sink, sentinel: sentinel,
 		workerSentinel: append([]byte(nil), workerSentinel...),
 		workerMask:     mask,
-		workerNotify:   make(chan struct{}, 1),
 		reached:        make(chan struct{}, 1), finished: make(chan struct{}),
 	}
 	go d.copy()
@@ -99,10 +97,6 @@ func (d *bashPPNativeOutputDrain) copy() {
 				held = append(held[:0], held[i+len(marker):]...)
 				if worker {
 					d.workerReached.Add(1)
-					select {
-					case d.workerNotify <- struct{}{}:
-					default:
-					}
 				} else {
 					select {
 					case d.reached <- struct{}{}:
@@ -172,12 +166,11 @@ func (d *bashPPNativeOutputDrain) barrier() {
 }
 
 func (d *bashPPNativeOutputDrain) awaitWorker(sequence uint64) {
-	for d.workerReached.Load() < sequence {
-		select {
-		case <-d.workerNotify:
-		case <-d.finished:
-			return
-		}
+	if d.workerReached.Load() < sequence {
+		// A reply may outlive its worker-side marker. A host-written marker
+		// follows that reply's writes in the same pipe and preserves the
+		// ordering guarantee without parking the request indefinitely.
+		d.barrier()
 	}
 }
 
