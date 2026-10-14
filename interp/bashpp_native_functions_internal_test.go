@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -144,28 +145,63 @@ func TestGoSourceWorkerOutputBarrierSequence(t *testing.T) {
 	}
 }
 
-func TestGoSourceWorkerOutputBarrierMissingMarker(t *testing.T) {
+// Replies can reach their waiters out of sequence. An early marker must not
+// wake only a later-sequence waiter and strand an earlier reply indefinitely.
+func TestGoSourceWorkerOutputBarrierConcurrentWaiters(t *testing.T) {
+	oldProcs := runtime.GOMAXPROCS(1)
+	defer runtime.GOMAXPROCS(oldProcs)
 	var output bytes.Buffer
-	drain, err := newBashPPNativeOutputDrainWithWorker(&output, []byte("worker-output-marker"), 1)
+	copying, release := make(chan struct{}), make(chan struct{})
+	sink := callbackProbeWriter(func(p []byte) (int, error) {
+		close(copying)
+		<-release
+		return output.Write(p)
+	})
+	marker := []byte("worker-output-marker")
+	drain, err := newBashPPNativeOutputDrainWithWorker(sink, marker, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer drain.closeWrite()
+	defer func() { drain.closeWrite(); <-drain.finished }()
 	if _, err := drain.write.Write([]byte("native\n")); err != nil {
 		t.Fatal(err)
 	}
-	done := make(chan struct{})
-	go func() {
-		drain.awaitWorker(1)
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("missing worker marker stranded output ordering")
+	<-copying
+	const waiters = 8
+	started, done := make(chan struct{}), make(chan struct{}, waiters)
+	for i := 1; i <= waiters; i++ {
+		sequence := (i+waiters-2)%waiters + 1
+		go func(sequence uint64) {
+			started <- struct{}{}
+			drain.awaitWorker(sequence)
+			done <- struct{}{}
+		}(uint64(sequence))
+		<-started
+		// Let each waiter enter its wait while the copier is held at the sink.
+		runtime.Gosched()
+	}
+	close(release)
+	// Register sequence 8 first. Its first notification arrives before its
+	// target, so it must wait again without stealing sequence 1's progress.
+	for i := 0; i < waiters; i++ {
+		if _, err := drain.write.Write(marker); err != nil {
+			t.Fatal(err)
+		}
+		for j := 0; j < 32; j++ {
+			runtime.Gosched()
+		}
+	}
+	deadline := time.NewTimer(time.Second)
+	defer deadline.Stop()
+	for i := 0; i < waiters; i++ {
+		select {
+		case <-done:
+		case <-deadline.C:
+			t.Fatalf("only %d/%d concurrent output waiters returned before drain closure", i, waiters)
+		}
 	}
 	if got := output.String(); got != "native\n" {
-		t.Fatalf("output before host barrier = %q", got)
+		t.Fatalf("output = %q", got)
 	}
 }
 

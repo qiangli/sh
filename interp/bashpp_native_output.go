@@ -167,9 +167,9 @@ func (d *bashPPNativeOutputDrain) barrier() {
 
 func (d *bashPPNativeOutputDrain) awaitWorker(sequence uint64) {
 	if d.workerReached.Load() < sequence {
-		// A reply may outlive its worker-side marker. A host-written marker
-		// follows that reply's writes in the same pipe and preserves the
-		// ordering guarantee without parking the request indefinitely.
+		// A host-written marker follows this reply's writes in the same pipe.
+		// It preserves ordering without relying on a shared notification that
+		// can leave concurrent request waiters asleep after their markers arrive.
 		d.barrier()
 	}
 }
