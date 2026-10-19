@@ -11,7 +11,9 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"go/importer"
 	"go/scanner"
+	"go/types"
 	"io"
 	"os"
 	"path/filepath"
@@ -23,8 +25,9 @@ import (
 // The grammar-oracle reference adapter for the go-unit dialect
 // (bashsharp-tests docs/grammar-oracle/CONTRACT.md, "Reference adapters").
 // The compared verdict is the vendored gc parser alone, without
-// CheckBranches; the production verdict adds CheckBranches. No type
-// checking, no Load. It runs only when the driver passes -manifest.
+// CheckBranches. The production verdict is the full production pipeline,
+// Load with default options: gc's parser with CheckBranches, then the
+// go/types check and lowering. It runs only when the driver passes -manifest.
 var (
 	oracleManifest = flag.String("manifest", "", "grammar-oracle request TSV (fixture_id dialect policy input_sha256 path)")
 	oracleOut      = flag.String("out", "", "grammar-oracle reference JSONL output path")
@@ -59,7 +62,7 @@ type oracleRecord struct {
 	Diagnostics       []oracleDiag `json:"diagnostics"`
 	ProductionVerdict *string      `json:"production_verdict"`
 	Phase             string       `json:"phase"`
-	// The CheckBranches diagnostics when only the production verdict rejects.
+	// The production diagnostics when only the production verdict rejects.
 	ProductionDiagnostics []oracleDiag `json:"production_diagnostics,omitempty"`
 	Reason                string       `json:"reason,omitempty"`
 }
@@ -149,11 +152,17 @@ func oracleGoRecord(id, dialect, policy, sum, path string) (rec oracleRecord) {
 		return rec
 	}
 
-	// Production: gc's parser with CheckBranches, as Load runs it.
-	prodErrs, _ := gcSyntaxVerdict(path, src, false, false)
+	// Production: Load, as the product runs it. One default importer is
+	// shared across rows so each stdlib package is read once.
 	prod := "accept"
-	if len(prodErrs) > 0 {
+	var prodErrs ErrorList
+	if _, err := Load([]Source{{Name: path, Data: src}}, Options{Importer: oracleImporter}); err != nil {
 		prod = "reject"
+		if list, ok := err.(ErrorList); ok {
+			prodErrs = list
+		} else {
+			prodErrs = ErrorList{err}
+		}
 	}
 	rec.ProductionVerdict = &prod
 
@@ -174,15 +183,17 @@ func oracleGoRecord(id, dialect, policy, sum, path string) (rec oracleRecord) {
 	}
 	rec.Verdict = "accept"
 	rec.Boundary = []oracleSite{{Kind: "go-unit", Start: 0, End: len(src)}}
-	if prod == "reject" {
+	for _, err := range prodErrs {
+		rec.ProductionDiagnostics = append(rec.ProductionDiagnostics, oracleGoDiag(src, path, err))
+	}
+	if branchErrs, _ := gcSyntaxVerdict(path, src, false, false); len(branchErrs) > 0 {
 		// A label, goto, break or continue error: context, not grammar.
 		rec.Phase = "context"
-		for _, err := range prodErrs {
-			rec.ProductionDiagnostics = append(rec.ProductionDiagnostics, oracleGoDiag(src, path, err))
-		}
 	}
 	return rec
 }
+
+var oracleImporter = defaultSourceImporter{Importer: importer.Default()}
 
 func oracleGoDiag(src []byte, name string, err error) oracleDiag {
 	switch e := err.(type) {
@@ -194,6 +205,9 @@ func oracleGoDiag(src []byte, name string, err error) oracleDiag {
 		return d
 	case *scanner.Error:
 		return oracleDiagAt(src, oracleOffset(src, e.Pos.Line, e.Pos.Column), e.Msg)
+	case types.Error:
+		pos := e.Fset.Position(e.Pos)
+		return oracleDiagAt(src, oracleOffset(src, pos.Line, pos.Column), e.Msg)
 	}
 	return oracleDiagAt(src, 0, err.Error())
 }
@@ -242,6 +256,10 @@ func TestGrammarOracleReferenceAdapter(t *testing.T) {
 		{"bad-literal", "gcsyntax", "package p\n\nvar x = 0x\n", false, "reject", "reject", "syntax", 21},
 		{"invalid-byte", "gcsyntax", "package p\n\nvar s = \"é\x00\"\n", false, "reject", "reject", "syntax", 22},
 		{"branch-only", "gcsyntax", "package p\n\nfunc f() {\n\tbreak\n}\n", false, "accept", "reject", "context", 0},
+		// gc's parser takes unary ~ in any expression; only the checker
+		// refuses it. The production verdict is Load's.
+		{"unary-tilde", "gcsyntax", "package p\n\nvar x = 1\nvar _ = ~x\n", false, "accept", "reject", "syntax", 0},
+		{"undefined-name", "gcsyntax", "package p\n\nvar _ = y\n", false, "accept", "reject", "syntax", 0},
 		{"goparser", "goparser", "package p\n\nfunc f( {\n}\n", false, "reject", "reject", "syntax", -1},
 		{"bad-hash", "gcsyntax", "package p\n", true, "missing", "", "syntax", 0},
 	}
