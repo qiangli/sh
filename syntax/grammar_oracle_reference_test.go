@@ -156,7 +156,11 @@ func oracleSyntaxRecord(id, dialect, policy, sum, path string) (rec oracleRecord
 		return rec
 	}
 	rec.Verdict = "accept"
-	rec.Boundary = oracleSites(file)
+	if lang == LangBashPP {
+		// With Bash# off there are no extension sites: an @name shell
+		// function is a plain bash function there.
+		rec.Boundary = oracleSites(file)
+	}
 	return rec
 }
 
@@ -257,6 +261,10 @@ func TestGrammarOracleReferenceAdapter(t *testing.T) {
 		{"typed-func", "bashsharp", "echo hi\nfunc f(x int) int { return x }\n", false,
 			want{verdict: "accept", sites: []oracleSite{{"typed-func", 8, 38}}}},
 		{"typed-func-in-bash", "bash", "func f(x int) int { return x }\n", false, want{verdict: "reject", offset: 6}},
+		// An @name shell function is an at-function site only with Bash# on.
+		{"at-function", "bashsharp", "@d() { echo; }\n", false,
+			want{verdict: "accept", sites: []oracleSite{{"at-function", 0, 14}}}},
+		{"at-function-in-bash", "bash", "@d() { echo; }\n", false, want{verdict: "accept"}},
 		{"bad-hash", "bashsharp", "echo ok\n", true, want{verdict: "missing"}},
 	}
 	var tsv strings.Builder
