@@ -284,6 +284,47 @@ func TestBashPPSourceBlockRunnerOverride(t *testing.T) {
 	}
 }
 
+// Sprint 473 #2395: an opener of 64 or more tildes carries its language past
+// maxLookahead, so truncating before the fence check read it as bare tildes
+// and fell back to shell. Any width of three or more must open, and the
+// first exact closer wins: a different-width tilde line stays body text,
+// even a second line exactly equal to the fence after the block closes.
+func TestBashPPSourceBlockWideFenceFirstExactCloserWins(t *testing.T) {
+	for _, width := range []int{3, 7, 63, 64, 200} {
+		fence := strings.Repeat("~", width)
+		src := fence + "python\n" +
+			"def hi():\n" +
+			"    return 1\n" +
+			"~~~~\n" +
+			fence + "\n" +
+			"x := hi()\n" +
+			fence + "\n"
+		f, err := NewParser(Variant(LangBashPP)).Parse(strings.NewReader(src), "wide.bsh")
+		if err != nil {
+			t.Fatalf("width %d: %v", width, err)
+		}
+		if len(f.Stmts) != 3 {
+			t.Fatalf("width %d: statements = %d", width, len(f.Stmts))
+		}
+		block, ok := f.Stmts[0].Cmd.(*SourceBlock)
+		if !ok {
+			t.Fatalf("width %d: command = %T", width, f.Stmts[0].Cmd)
+		}
+		if block.Fence != fence || block.Language.Value != "python" {
+			t.Fatalf("width %d: fence = %q language = %q", width, block.Fence, block.Language.Value)
+		}
+		if want := "def hi():\n    return 1\n~~~~\n"; block.Body != want {
+			t.Fatalf("width %d: body = %q, want %q", width, block.Body, want)
+		}
+		if _, ok := f.Stmts[1].Cmd.(*BashPPShortDecl); !ok {
+			t.Fatalf("width %d: following call = %#v", width, f.Stmts[1].Cmd)
+		}
+		if _, ok := f.Stmts[2].Cmd.(*SourceBlock); ok {
+			t.Fatalf("width %d: trailing bare fence reopened a block", width)
+		}
+	}
+}
+
 // `embed TYPE "PATH" …` is the file's bytes written as an inline fence, the
 // path relative to the parsed file's directory; other shapes stay commands.
 func TestBashPPEmbed(t *testing.T) {

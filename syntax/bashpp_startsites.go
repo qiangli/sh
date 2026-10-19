@@ -80,13 +80,20 @@ var noMatch = StartSiteMatch{Site: StartNone}
 // (`command var …`, `"var" …`) are handled BEFORE this is consulted, because
 // they work by making the position not a Bash++ command position at all.
 func RecognizeStartSite(src string) StartSiteMatch {
-	if len(src) > maxLookahead {
-		src = src[:maxLookahead]
-	}
+	// The source fence is recognized on the WHOLE opener word before the
+	// bounded truncation below: an opener of 64 or more tildes carries its
+	// language past maxLookahead, so a truncated copy reads as bare tildes
+	// and wrongly falls back to shell. This keeps the bound that matters —
+	// the caller passes the already-lexed word, so no unbuffered input is
+	// scanned — while every other site below keeps the byte budget.
 	// Unlike ordinary shell commands, indentation is itself an escape for a
-	// naked source fence. Check it before the general command-position trim.
+	// naked source fence; that check lives inside recognizeSourceFence and
+	// runs before the general command-position trim below.
 	if recognizeSourceFence(src) {
 		return StartSiteMatch{Site: StartSource, Class: ClassE, Bounded: true}
+	}
+	if len(src) > maxLookahead {
+		src = src[:maxLookahead]
 	}
 	s := strings.TrimLeft(src, " \t")
 	if s == "" {

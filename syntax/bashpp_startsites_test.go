@@ -98,7 +98,10 @@ func TestStartSiteDay1(t *testing.T) {
 func TestStartSiteSourceFence(t *testing.T) {
 	for _, src := range []string{"~~~python", "~~~~python", "~~~python as py", "~~~go", "~~~go as native",
 		"~~~tf as iac", "~~~tf as iac !my-tofu", "~~~tf as !tofu", "~~~dockerfile !img-runner", "~~~foo as x !run_it",
-		"~~~my-config as cfg !my-runner", "~~~c++ as cxx"} {
+		"~~~my-config as cfg !my-runner", "~~~c++ as cxx",
+		// Sprint 473 #2395: the language rides past maxLookahead on a wide
+		// opener, so the fence must be read off the whole opener word.
+		strings.Repeat("~", 64) + "python", strings.Repeat("~", 200) + "python"} {
 		got := RecognizeStartSite(src)
 		if got.Site != StartSource || got.Class != ClassE || !got.Bounded {
 			t.Fatalf("RecognizeStartSite(%q) = %#v", src, got)
@@ -106,7 +109,7 @@ func TestStartSiteSourceFence(t *testing.T) {
 	}
 	for _, src := range []string{" ~~~python", "~~python", "~~~", "~~~python nope", "```python",
 		"~~~tf as", "~~~tf as iac extra", "~~~tf !", "~~~tf !-bad", "~~~tf !a/b", "~~~tf as !my-tofu", "~~~tf as !x !y", "~~~tf !x as y",
-		"~~~-bad as x", "~~~a/b as x", "~~~a.b as x"} {
+		"~~~-bad as x", "~~~a/b as x", "~~~a.b as x", strings.Repeat("~", 64), strings.Repeat("~", 200)} {
 		if got := RecognizeStartSite(src); got.Site != StartNone {
 			t.Fatalf("RecognizeStartSite(%q) = %#v, want no match", src, got)
 		}
