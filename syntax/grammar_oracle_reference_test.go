@@ -16,6 +16,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -150,8 +151,13 @@ func oracleSyntaxRecord(id, dialect, policy, sum, path string) (rec oracleRecord
 	if err != nil {
 		rec.Verdict = "reject"
 		rec.Diagnostics = append(rec.Diagnostics, oracleSyntaxDiag(src, path, err))
-		if pe, ok := err.(ParseError); ok && strings.HasPrefix(pe.Text, "embed: ") {
-			rec.Phase = "context" // embed-target availability is not grammar
+		if pe, ok := err.(ParseError); ok {
+			switch {
+			case strings.HasPrefix(pe.Text, "embed: "):
+				rec.Phase = "context" // embed-target availability is not grammar
+			case strings.HasPrefix(pe.Text, "invalid import statement") && oracleImportPathRefusal(src, int(pe.Pos.Offset())):
+				rec.Phase = "context" // module-path validity is not grammar
+			}
 		}
 		return rec
 	}
@@ -162,6 +168,52 @@ func oracleSyntaxRecord(id, dialect, policy, sum, path string) (rec oracleRecord
 		rec.Boundary = oracleSites(file)
 	}
 	return rec
+}
+
+// oracleImportPathRefusal reports whether the import statement at off is
+// refused only for its path: the line is the exact single-spec shape
+// bashppImport recognizes, `import [ALIAS] "PATH"`, and PATH fails
+// module.CheckImportPath (validBashPPImportPath). An empty literal "" is the
+// Go string_lit for the empty path; its check fails too.
+func oracleImportPathRefusal(src []byte, off int) bool {
+	line := src[off:]
+	if i := bytes.IndexByte(line, '\n'); i >= 0 {
+		line = line[:i]
+	}
+	file, err := NewParser(Variant(LangBash)).Parse(bytes.NewReader(line), "")
+	if err != nil || len(file.Stmts) != 1 || len(file.Stmts[0].Redirs) != 0 {
+		return false
+	}
+	ce, ok := file.Stmts[0].Cmd.(*CallExpr)
+	if !ok || len(ce.Assigns) != 0 || (len(ce.Args) != 2 && len(ce.Args) != 3) {
+		return false
+	}
+	if kw := bashppBareLit(ce.Args[0]); kw == nil || kw.Value != "import" {
+		return false
+	}
+	if len(ce.Args) == 3 {
+		if alias := bashppBareLit(ce.Args[1]); alias == nil || !bashppImportAlias(alias.Value) {
+			return false
+		}
+	}
+	word := ce.Args[len(ce.Args)-1]
+	if len(word.Parts) != 1 {
+		return false
+	}
+	q, ok := word.Parts[0].(*DblQuoted)
+	if !ok || q.Dollar || len(q.Parts) > 1 {
+		return false
+	}
+	lit := ""
+	if len(q.Parts) == 1 {
+		l, ok := q.Parts[0].(*Lit)
+		if !ok {
+			return false
+		}
+		lit = l.Value
+	}
+	path, err := strconv.Unquote(`"` + lit + `"`)
+	return err == nil && !validBashPPImportPath(path)
 }
 
 // oracleSites lists the extension nodes in source order, keyed and anchored
@@ -245,7 +297,8 @@ func TestGrammarOracleReferenceAdapter(t *testing.T) {
 	type want struct {
 		verdict string
 		sites   []oracleSite
-		offset  int // first diagnostic offset when rejecting
+		offset  int    // first diagnostic offset when rejecting
+		phase   string // "" is syntax
 	}
 	cases := []struct {
 		id, dialect, src string
@@ -265,6 +318,10 @@ func TestGrammarOracleReferenceAdapter(t *testing.T) {
 		{"at-function", "bashsharp", "@d() { echo; }\n", false,
 			want{verdict: "accept", sites: []oracleSite{{"at-function", 0, 14}}}},
 		{"at-function-in-bash", "bash", "@d() { echo; }\n", false, want{verdict: "accept"}},
+		// A module-path refusal is context; a refused shape stays syntax.
+		{"import-empty-path", "bashsharp", "import \"\"\necho hi\n", false, want{verdict: "reject", phase: "context"}},
+		{"import-invalid-path", "bashsharp", "import x \"a b\"\n", false, want{verdict: "reject", phase: "context"}},
+		{"import-bad-shape", "bashsharp", "import \"fmt\" extra\n", false, want{verdict: "reject"}},
 		{"bad-hash", "bashsharp", "echo ok\n", true, want{verdict: "missing"}},
 	}
 	var tsv strings.Builder
@@ -301,6 +358,9 @@ func TestGrammarOracleReferenceAdapter(t *testing.T) {
 		t.Logf("%s", lines[i])
 		if rec.FixtureID != c.id || rec.Verdict != c.want.verdict {
 			t.Errorf("%s: got id %q verdict %q, want %q", c.id, rec.FixtureID, rec.Verdict, c.want.verdict)
+		}
+		if phase := cmp.Or(c.want.phase, "syntax"); rec.Phase != phase {
+			t.Errorf("%s: got phase %q, want %q", c.id, rec.Phase, phase)
 		}
 		if rec.Boundary == nil || rec.Diagnostics == nil || rec.ProductionVerdict != nil {
 			t.Errorf("%s: boundary/diagnostics must be lists and production_verdict null: %s", c.id, lines[i])
