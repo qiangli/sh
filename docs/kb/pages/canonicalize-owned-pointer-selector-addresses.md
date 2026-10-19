@@ -8,7 +8,6 @@ description: When GoSource takes an address through an interpreter-owned pointer
 status: candidate
 source:
     tool: codex-gpt-5.5-d
-    host: dragon
     episode: weave-issue-30
 created: "2026-09-25T02:31:48Z"
 ---

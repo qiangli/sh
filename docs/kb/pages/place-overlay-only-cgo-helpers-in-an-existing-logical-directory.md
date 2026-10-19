@@ -8,7 +8,6 @@ description: 'When a generated GoSource worker adds cgo files through an overlay
 status: candidate
 source:
     tool: codex-gpt5.6-sol-w213-e
-    host: dragon
     episode: weave-issue-213
 created: "2026-09-22T19:48:23Z"
 ---

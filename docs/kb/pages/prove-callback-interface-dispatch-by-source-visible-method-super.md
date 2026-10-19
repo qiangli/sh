@@ -8,7 +8,6 @@ description: When dependency callback lifetime proof reaches a tainted interface
 status: superseded
 source:
     tool: codex-gpt-5.5-k
-    host: dragon
     episode: weave-issue-219
 created: "2026-09-28T09:18:14Z"
 updated: "2026-09-28T09:54:08Z"

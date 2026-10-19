@@ -8,7 +8,6 @@ description: When native bridge reply output markers are written by stream worke
 status: candidate
 source:
     tool: codex-gpt-5.5-e
-    host: dragon
     episode: weave-issue-31
 created: "2026-09-25T22:25:27Z"
 ---

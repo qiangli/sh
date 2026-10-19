@@ -5,7 +5,7 @@ converter (gosource/). Fixed rows carry their commit; rows whose cause is in
 `lower/` (the emitter) are written up here for that owner instead of fixed,
 per the S152.2 contract.
 
-Corpus: `/Users/qiangli/projects/poc/go/test`. Transpiler: a `bashy.real`
+Corpus: `$HOME/projects/poc/go/test`. Transpiler: a `bashy.real`
 built from `../bashy` against this checkout. Each reproducer below is an
 out-of-corpus reduction (5–15 lines) transpiled with
 `bashy.real transpile --bashpp --source=go --go-file <root> -o <out> --map <out>.map`.

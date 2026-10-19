@@ -15,8 +15,8 @@ errors carry the operation, input path, and original cause.
 
 ## Reproduction and verification
 
-Windows runs used noviwin1.local, isolated trees under
-`C:\Users\noviadmin\s379-source-route`, `GOWORK=off`, and bashy replacing
+Windows runs used windows-host, isolated trees under
+`$HOME\s379-source-route`, `GOWORK=off`, and bashy replacing
 `mvdan.cc/sh/v3` with `../sh`. The copied bashy tree was
 `8dbe212ba4a85c9e20645284589a0b7a15f57a93`.
 
@@ -34,8 +34,8 @@ Before changing production code:
   exit 1 because the error lacked the resolution operation and full binary
   path.
 
-After the fix, each command below exited 0 on both Dragon (macOS/arm64) and
-noviwin1.local (Windows/amd64):
+After the fix, each command below exited 0 on both dev-host (macOS/arm64) and
+windows-host (Windows/amd64):
 
 ```sh
 go build ./...
@@ -50,7 +50,7 @@ passed separately (exit 0):
 go test -count=1 -run TestRunCompiledGoFileJunctionGOROOT -v ./interp
 ```
 
-The actual bashy CLI suite passed on noviwin1.local (exit 0, 49.162 seconds):
+The actual bashy CLI suite passed on windows-host (exit 0, 49.162 seconds):
 
 ```sh
 go test -count=1 -run TestSourceRoute -v ./cmd/bashy

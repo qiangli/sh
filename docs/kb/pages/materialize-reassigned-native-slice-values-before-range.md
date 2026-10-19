@@ -15,7 +15,6 @@ status: candidate
 evidence: 'cmd/compile/internal/inline/inlheur TestDumpCallSiteScoreDump (Go 1.27.1 GOROOT) reproduced interpreted: var lines []string; lines = strings.Split(...); for _, line := range lines {...} counted 0 for every bucket. Fixed in bashPPValidateReusedShortValue (interp/bashpp_p1.go) and bashPPRangeCollection (interp/bashpp_range.go); regression: interp/gosource_s281_native_reassign_range_test.go (go test -tags full ./interp -run TestGoSourceS281NativeReassign)'
 source:
     tool: claude-sonnet5-q
-    host: dragon
     episode: weave-issue-17
 created: "2026-09-25T21:05:38Z"
 ---

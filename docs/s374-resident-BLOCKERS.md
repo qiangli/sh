@@ -1,6 +1,6 @@
 # BLOCKERS: original ken/chan still exceeds 60 seconds
 
-Three bounded runs on novidesign.local (Darwin arm64, Apple M4 Max, Go 1.27.1)
+Three bounded runs on macos-host (Darwin arm64, Apple M4 Max, Go 1.27.1)
 failed the unchanged 60-second interpreter bound:
 
 1. Prototype: 60.000998958 s, context deadline exceeded.

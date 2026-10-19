@@ -8,7 +8,6 @@ description: When running sh interp TestRunnerRunConfirm against independent GNU
 status: candidate
 source:
     tool: codex-gpt-5.5-g
-    host: dragon
     episode: weave-issue-7
 created: "2026-09-25T00:10:04Z"
 ---

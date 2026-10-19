@@ -1,6 +1,6 @@
 # Review: S152.1 identity-lowering commits
 
-Target reviewed: `FETCH_HEAD` from `/Users/qiangli/.bashy/weave/sh-7e2e7b65/workspaces/issue-132`, detached scratch worktree `../s132-review`, ending at `27ffe0c4`.
+Target reviewed: `FETCH_HEAD` from `$HOME/.bashy/weave/sh-7e2e7b65/workspaces/issue-132`, detached scratch worktree `../s132-review`, ending at `27ffe0c4`.
 
 ## Findings
 
@@ -118,43 +118,43 @@ panic: test timed out after 10m0s
 
 goroutine 11688 [running]:
 testing.(*M).startAlarm.func1()
-	/Users/qiangli/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.0.darwin-arm64/src/testing/testing.go:2959 +0x2c4
+	$HOME/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.0.darwin-arm64/src/testing/testing.go:2959 +0x2c4
 created by time.goFunc
-	/Users/qiangli/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.0.darwin-arm64/src/time/sleep.go:182 +0x38
+	$HOME/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.0.darwin-arm64/src/time/sleep.go:182 +0x38
 
 goroutine 1 [chan receive]:
 testing.(*T).Run(0x73022ede66c8, {0x10121452c?, 0x73022ee05a88?}, 0x101944020)
-	/Users/qiangli/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.0.darwin-arm64/src/testing/testing.go:2266 +0x3cc
+	$HOME/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.0.darwin-arm64/src/testing/testing.go:2266 +0x3cc
 testing.runTests.func1(0x73022ede66c8)
-	/Users/qiangli/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.0.darwin-arm64/src/testing/testing.go:2742 +0x38
+	$HOME/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.0.darwin-arm64/src/testing/testing.go:2742 +0x38
 testing.tRunner(0x73022ede66c8, 0x73022ee05bb8)
-	/Users/qiangli/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.0.darwin-arm64/src/testing/testing.go:2193 +0xc4
+	$HOME/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.0.darwin-arm64/src/testing/testing.go:2193 +0xc4
 testing.runTests({0x10120050e, 0xe}, {0x10120656e, 0x14}, 0x73022eda4198, {0x1019c75d0, 0xdd, 0xdd}, {0x73022ee05c58?, 0x73022ed98a80?, ...})
-	/Users/qiangli/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.0.darwin-arm64/src/testing/testing.go:2740 +0x400
+	$HOME/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.0.darwin-arm64/src/testing/testing.go:2740 +0x400
 testing.(*M).Run(0x73022eda30e0)
-	/Users/qiangli/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.0.darwin-arm64/src/testing/testing.go:2600 +0x578
+	$HOME/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.0.darwin-arm64/src/testing/testing.go:2600 +0x578
 main.main()
 	_testmain.go:488 +0x80
 
 goroutine 5725 [chan receive, 4 minutes]:
 testing.(*T).Parallel(0x73022f412248)
-	/Users/qiangli/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.0.darwin-arm64/src/testing/testing.go:1957 +0x194
+	$HOME/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.0.darwin-arm64/src/testing/testing.go:1957 +0x194
 mvdan.cc/sh/v3/lower_test.TestEntryPassesProcessArgvToShellPositionals(0x73022f412248)
-	/Users/qiangli/.bashy/weave/sh-7e2e7b65/workspaces/s132-review/lower/callables_entry_positional_test.go:105 +0x28
+	$HOME/.bashy/weave/sh-7e2e7b65/workspaces/s132-review/lower/callables_entry_positional_test.go:105 +0x28
 testing.tRunner(0x73022f412248, 0x101943fe8)
-	/Users/qiangli/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.0.darwin-arm64/src/testing/testing.go:2193 +0xc4
+	$HOME/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.0.darwin-arm64/src/testing/testing.go:2193 +0xc4
 created by testing.(*T).Run in goroutine 1
-	/Users/qiangli/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.0.darwin-arm64/src/testing/testing.go:2258 +0x3b8
+	$HOME/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.0.darwin-arm64/src/testing/testing.go:2258 +0x3b8
 
 goroutine 11607 [chan receive]:
 testing.(*T).Run(0x73022ede6488, {0x10120098a?, 0x73022ed6ff58?}, 0x101944300)
-	/Users/qiangli/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.0.darwin-arm64/src/testing/testing.go:2266 +0x3cc
+	$HOME/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.0.darwin-arm64/src/testing/testing.go:2266 +0x3cc
 mvdan.cc/sh/v3/lower_test.TestGoSourceChannelElementBridge(0x73022ede6488)
-	/Users/qiangli/.bashy/weave/sh-7e2e7b65/workspaces/s132-review/lower/gosource_tuple_channel_callable_test.go:154 +0x50
+	$HOME/.bashy/weave/sh-7e2e7b65/workspaces/s132-review/lower/gosource_tuple_channel_callable_test.go:154 +0x50
 testing.tRunner(0x73022ede6488, 0x101944020)
-	/Users/qiangli/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.0.darwin-arm64/src/testing/testing.go:2193 +0xc4
+	$HOME/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.0.darwin-arm64/src/testing/testing.go:2193 +0xc4
 created by testing.(*T).Run in goroutine 1
-	/Users/qiangli/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.0.darwin-arm64/src/testing/testing.go:2258 +0x3b8
+	$HOME/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.27.0.darwin-arm64/src/testing/testing.go:2258 +0x3b8
 
 FAIL	mvdan.cc/sh/v3/lower	600.328s
 ok  	mvdan.cc/sh/v3/lower/shellrt	5.610s

@@ -8,7 +8,6 @@ description: 'When a reviewed synchronous GoSource callback consumer such as tes
 status: candidate
 source:
     tool: codex-gpt-5.5-a
-    host: dragon
     episode: weave-issue-27
 created: "2026-09-25T22:07:04Z"
 ---

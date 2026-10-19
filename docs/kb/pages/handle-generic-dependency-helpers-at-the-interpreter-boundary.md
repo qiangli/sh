@@ -5,7 +5,6 @@ description: When an unchanged Go source calls a generic stdlib dependency helpe
 status: candidate
 source:
     tool: codex-gpt-5.5-x
-    host: dragon
     episode: weave-issue-76
 created: "2026-09-09T18:36:27Z"
 ---

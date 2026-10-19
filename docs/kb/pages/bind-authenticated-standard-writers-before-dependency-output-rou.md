@@ -9,7 +9,6 @@ status: candidate
 evidence: 'Sprint 319 Story 1087: baseline ten-function synthetic Fdump made 5,969 dependency Write requests; focused test is now zero. A 100-function outside-corpus reduction changed from a 60.73s timeout to 38.07s.'
 source:
     tool: codex-gpt5.6-sol-w244-j
-    host: dragon
     episode: weave-issue-244
 created: "2026-09-28T14:38:16Z"
 updated: "2026-09-28T14:38:37Z"

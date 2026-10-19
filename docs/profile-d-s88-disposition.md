@@ -11,7 +11,7 @@ Wave 1 closure.
 
 The interpreter reducer was run against sh revision `98bd69cc` (the frozen
 S88 launch SUT). A PTY-only interactive boundary reducer was then added and
-run at `8d8b13a85bdc2c71474eeeaa7426528fdde9961b` on `novidesign.local` with
+run at `8d8b13a85bdc2c71474eeeaa7426528fdde9961b` on `macos-host` with
 Go 1.26.5. A later public non-TTY `sh -i` reducer exposed the product-owned
 boundary that those tests missed; this revision repairs it.
 

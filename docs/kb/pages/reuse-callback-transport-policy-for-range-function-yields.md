@@ -8,7 +8,6 @@ description: When a GoSource range iterator yields non-scalars, bind the callbac
 status: candidate
 source:
     tool: codex-gpt5.6-sol-e
-    host: dragon
     episode: weave-issue-239
 created: "2026-09-28T13:48:28Z"
 ---

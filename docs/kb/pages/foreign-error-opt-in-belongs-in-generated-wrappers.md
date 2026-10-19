@@ -8,7 +8,6 @@ description: When a typed foreign Bash# call explicitly asks for a trailing erro
 status: candidate
 source:
     tool: codex-gpt-5.5-j
-    host: dragon
     episode: weave-issue-10
 created: "2026-09-21T05:08:21Z"
 ---

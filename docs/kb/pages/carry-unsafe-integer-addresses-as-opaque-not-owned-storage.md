@@ -8,7 +8,6 @@ description: 'When GoSource converts uintptr or reflect.Value.Pointer/UnsafeAddr
 status: candidate
 source:
     tool: codex-gpt-5.5-r
-    host: dragon
     episode: weave-issue-18
 created: "2026-09-25T01:02:42Z"
 ---

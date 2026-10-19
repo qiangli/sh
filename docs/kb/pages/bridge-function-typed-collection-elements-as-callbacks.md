@@ -8,7 +8,6 @@ description: When an interpreter-owned collection stores func-typed elements, br
 status: candidate
 source:
     tool: codex-gpt-5.5-o
-    host: dragon
     episode: weave-issue-15
 created: "2026-09-25T20:31:11Z"
 ---

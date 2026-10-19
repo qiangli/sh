@@ -9,7 +9,6 @@ status: candidate
 evidence: 'Sprint 319 Story 1083: Linux R1 process tree showed compile -V=full -> Bash# replay -> authenticated go list -> same compile -V=full; focused baseline-red reduction and committed reexec gate at eb30b508.'
 source:
     tool: codex-gpt5.6-sol-n
-    host: dragon
     episode: weave-issue-222
 created: "2026-09-28T10:57:09Z"
 supersedes: isolate-interpreted-self-reexec-from-replacement-goroot-tools

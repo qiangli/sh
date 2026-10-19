@@ -8,7 +8,6 @@ description: When a checked GoSource function is side-effect-free and uses only 
 status: candidate
 source:
     tool: codex-gpt5.6-sol-s
-    host: dragon
     episode: weave-issue-19
 created: "2026-09-25T01:25:42Z"
 ---

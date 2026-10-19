@@ -8,7 +8,6 @@ description: 'When an interpreted value is traversed through dependency reflect.
 status: candidate
 source:
     tool: codex-gpt5.6-sol2-p
-    host: dragon
     episode: weave-issue-224
 created: "2026-09-28T11:24:51Z"
 ---

@@ -30,4 +30,4 @@ chan int). Its exact authored source and failure log are retained as a separate
 gap; it is not claimed fixed by this capture-only change. No original sources,
 comparators, or deadlines were modified.
 
-Evidence: /Users/qiangli/.local/state/bashy/sprint118-evidence/timer-lifecycle-028.
+Evidence: $HOME/.local/state/bashy/sprint118-evidence/timer-lifecycle-028.

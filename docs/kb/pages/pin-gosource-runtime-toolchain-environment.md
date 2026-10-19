@@ -8,7 +8,6 @@ description: When a GoSource run starts the native dependency/runtime helper wit
 status: candidate
 source:
     tool: codex-gpt-5.5-f
-    host: dragon
     episode: weave-issue-6
 created: "2026-09-25T16:34:29Z"
 ---

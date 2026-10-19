@@ -8,7 +8,6 @@ description: When GoSource evaluates a typed aggregate element whose destination
 status: candidate
 source:
     tool: codex-gpt5.6-sol2-d
-    host: dragon
     episode: weave-issue-238
 created: "2026-09-28T13:58:45Z"
 ---

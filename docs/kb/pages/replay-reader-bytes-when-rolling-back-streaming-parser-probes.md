@@ -6,7 +6,6 @@ status: validated
 evidence: P2B grouped-import speculative parsing preserves exact malformed and local-module Bash fallback under normal and one-byte readers; focused and full syntax suites passed on 2026-09-03.
 source:
     tool: codex-gpt5.6-sol-s
-    host: dragon
     episode: weave-issue-19
 created: "2026-09-03T11:37:48Z"
 updated: "2026-09-03T13:18:20Z"

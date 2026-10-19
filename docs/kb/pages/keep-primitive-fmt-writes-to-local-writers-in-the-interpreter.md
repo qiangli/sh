@@ -8,7 +8,6 @@ description: When GoSource code calls fmt.Fprint/Fprintln/Fprintf with an interp
 status: superseded
 source:
     tool: codex-gpt-5.5-s
-    host: dragon
     episode: weave-issue-19
 created: "2026-09-25T21:26:53Z"
 updated: "2026-09-28T13:32:25Z"

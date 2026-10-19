@@ -21,5 +21,5 @@
 ## Gates
 
 - `go test ./interp`
-- On novidesign with Bashy `72c3feb`, this candidate, and Go 1.26.5:
+- On macos-host with Bashy `72c3feb`, this candidate, and Go 1.26.5:
   `make test-bash TESTS="set-e test trap"`

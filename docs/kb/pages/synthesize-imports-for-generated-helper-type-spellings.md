@@ -8,7 +8,6 @@ description: When GoSource worker source synthesizes type declarations, signatur
 status: candidate
 source:
     tool: codex-gpt-5.5-m
-    host: dragon
     episode: weave-issue-13
 created: "2026-09-25T19:31:01Z"
 ---

@@ -6,7 +6,6 @@ description: When a GoSource scalar reaches interp as constant.String but its de
 status: candidate
 source:
     tool: codex-gpt-5.5-r
-    host: dragon
     episode: weave-issue-200
 created: "2026-09-13T22:04:26Z"
 ---

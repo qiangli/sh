@@ -8,7 +8,6 @@ description: When GoSource takes the address of an imported package variable, fi
 status: candidate
 source:
     tool: codex-gpt-5.5-h
-    host: dragon
     episode: weave-issue-8
 created: "2026-09-25T18:28:03Z"
 ---

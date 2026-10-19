@@ -8,7 +8,6 @@ description: When bashPPBridgeContents returns metadata with kind=scalar, bashPP
 status: candidate
 source:
     tool: codex-gpt-5.5-n
-    host: dragon
     episode: weave-issue-170
 created: "2026-09-27T12:11:41Z"
 ---

@@ -6,7 +6,6 @@ status: validated
 evidence: Story 204 generic Vec[int] make/slice test and exact syntax/typedjson/interp gate passed on 2026-09-06.
 source:
     tool: codex:gpt5.6-sol-c
-    host: dragon
     episode: weave-issue-29
 created: "2026-09-07T02:24:43Z"
 updated: "2026-09-07T02:24:49Z"

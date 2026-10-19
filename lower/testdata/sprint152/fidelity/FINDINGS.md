@@ -6,7 +6,7 @@ map. This spike measures the distance from that today. Findings only; no file
 under `lower/` or `gosource/` was changed.
 
 Tooling: `bashy.real` build `963ef4b` (`-dirty`), corpus
-`/Users/qiangli/projects/poc/go/test` (Go 1.27), invoked from the corpus dir as
+`$HOME/projects/poc/go/test` (Go 1.27), invoked from the corpus dir as
 `bashy.real transpile --bashpp --source=go --go-file <root> -o <out> --map <out>.map`.
 Diffs were taken with `gofmt` on both sides after dropping `//line` and
 `// lower:N` lines. The eight roots:

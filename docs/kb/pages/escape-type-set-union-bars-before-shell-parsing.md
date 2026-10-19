@@ -5,7 +5,6 @@ description: When Bash++ generic constraints use union terms in command-position
 status: candidate
 source:
     tool: codex-gpt-5.5-z
-    host: dragon
     episode: weave-issue-26
 created: "2026-09-07T01:33:40Z"
 ---

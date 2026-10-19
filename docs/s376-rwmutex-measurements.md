@@ -14,10 +14,10 @@ cases vs `go run`, misuse errors, 16 certificate controls, native/resident
 benchmark) and `sh/interp/gosource_s376_rwmutex_internal_test.go`
 (zero-`sync.` bridge requests, RLock/Lock cancellation, transport refusal).
 
-## Scaled repros (Go 1.27.1, Darwin arm64 `dragon`, single samples)
+## Scaled repros (Go 1.27.1, Darwin arm64 `dev-host`, single samples)
 
 Loop shapes mirror the fixtures at N=2000/4000; program-internal clocks
-exclude parse/build/startup. Linux 4-vCPU projections use these dragon
+exclude parse/build/startup. Linux 4-vCPU projections use these dev-host
 figures as lower bounds (historically ~4x on bridge; eval factor unmeasured).
 
 | Repro | N=2000 | N=4000 | Per-iter |
@@ -35,12 +35,12 @@ Get/Set wrappers.
 
 ## Exact-ID operator decisions (full 60 s roots NOT run here)
 
-Heavy runs stay on a claimed non-dragon host; `dragon` is the excluded
+Heavy runs stay on a claimed non-dev-host host; `dev-host` is the excluded
 class and the 4-vCPU Linux acceptance host is not present in this session,
 so no full-root verdict is claimed from these scales.
 
 - `testdir:fixedbugs/issue79186.go` (51.2M iters): evaluation floor alone
-  is 51.2M x ~5.1 us ≈ 261 s on dragon (≈130 s even at ideal 2-way
+  is 51.2M x ~5.1 us ≈ 261 s on dev-host (≈130 s even at ideal 2-way
   parallelism under the fixture's GOMAXPROCS=2), before any bridge, call,
   or scheduler cost. Resident RWMutex removes the ~79 us/pair bridge class
   (measured above) but the residual all-in rate (~12–14 us/iter ≈ 650 s)
@@ -51,7 +51,7 @@ so no full-root verdict is claimed from these scales.
 - `testdir:ken/chan.go`: uses only Mutex/channels, both already resident;
   the RWMutex mechanism does not apply. Remaining cost is the
   scheduler/polling class (~8.6–14.6 us per Gosched+counter poll-iter on
-  dragon) with the prior scheduler/condvar non-verdict unchanged (zero
+  dev-host) with the prior scheduler/condvar non-verdict unchanged (zero
   native channel/sync requests, 60 s timeout, progress-vs-stuck
   undetermined, three-attempt stop already applied). **Return this exact ID
   to the operator under the existing polling non-verdict.** No new

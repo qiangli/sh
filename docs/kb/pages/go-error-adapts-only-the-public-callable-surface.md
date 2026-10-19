@@ -8,7 +8,6 @@ description: When implementing Bash++ @go.error(), keep the marker out of decora
 status: candidate
 source:
     tool: codex-gpt-5.5-c
-    host: dragon
     episode: weave-issue-3
 created: "2026-09-21T03:30:50Z"
 ---

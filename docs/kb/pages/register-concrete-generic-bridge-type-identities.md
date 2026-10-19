@@ -8,7 +8,6 @@ description: When a Go-source program mentions an instantiated generic type acro
 status: candidate
 source:
     tool: codex-gpt-5.5-c
-    host: dragon
     episode: weave-issue-3
 created: "2026-09-25T16:22:45Z"
 ---

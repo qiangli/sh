@@ -5,7 +5,6 @@ description: When measuring Bash++ interpreted roots with coreutils timeout, pla
 status: candidate
 source:
     tool: codex-gpt-5.5-p
-    host: dragon
     episode: weave-issue-146
 created: "2026-09-12T16:27:19Z"
 ---

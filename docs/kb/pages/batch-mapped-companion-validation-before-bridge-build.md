@@ -8,7 +8,6 @@ description: When GoSource starts a dependency bridge with many mapped assembly 
 status: candidate
 source:
     tool: codex-gpt-5.5-w
-    host: dragon
     episode: weave-issue-23
 created: "2026-09-25T21:42:39Z"
 ---

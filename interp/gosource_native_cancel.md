@@ -34,4 +34,4 @@ Go exits 7; the interpreter preserves `task failed: exit status 7` but can retur
 asserts only that this real failure is never suppressed or replaced by a
 cancellation diagnostic. Raw parity failure and all intermediate original-fixture
 failures are retained in
-`/Users/qiangli/.local/state/bashy/sprint118-evidence/native-cancel-025`.
+`$HOME/.local/state/bashy/sprint118-evidence/native-cancel-025`.

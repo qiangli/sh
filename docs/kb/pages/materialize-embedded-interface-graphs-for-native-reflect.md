@@ -8,7 +8,6 @@ description: 'When interpreted values cross to native reflect.ValueOf, keep usin
 status: candidate
 source:
     tool: aurelia-s88-a
-    host: dragon
     episode: weave-issue-183
 created: "2026-09-27T18:20:24Z"
 ---

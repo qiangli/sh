@@ -8,7 +8,6 @@ description: When Go-source channel planning certifies an interpreter-local doma
 status: candidate
 source:
     tool: codex-gpt5.6-sol-w173-q
-    host: dragon
     episode: weave-issue-173
 created: "2026-09-22T13:25:43Z"
 ---

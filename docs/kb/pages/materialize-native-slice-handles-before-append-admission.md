@@ -8,7 +8,6 @@ description: When a Go-source builtin append operand comes from a dependency cal
 status: candidate
 source:
     tool: codex-gpt-5.5-b
-    host: dragon
     episode: weave-issue-28
 created: "2026-09-25T02:16:39Z"
 ---

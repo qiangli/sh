@@ -9,7 +9,6 @@ status: validated
 evidence: commit fa38ed73; go test -tags full ./interp mapped and Sprint 249 companion regressions passed
 source:
     tool: codex-gpt-5.5-w
-    host: dragon
     episode: weave-issue-205
 created: "2026-09-22T18:20:47Z"
 updated: "2026-09-25T16:46:51Z"

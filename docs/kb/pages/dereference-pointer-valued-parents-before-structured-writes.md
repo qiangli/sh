@@ -6,7 +6,6 @@ status: validated
 evidence: TestGoSourceGbERangeIteratorsInterpreted and all TestGoSourcePointerField cases pass after following the pointer-valued assignment parent; the pre-fix host type assertion panic is gone.
 source:
     tool: codex-gpt5.6-sol-y
-    host: dragon
     episode: weave-issue-129
 created: "2026-09-12T05:19:15Z"
 updated: "2026-09-12T05:19:20Z"

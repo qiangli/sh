@@ -11,10 +11,10 @@ Published baseline: 966a5453. Work on `s376-issue80188`.
    native/unsafe/task paths. Repeat measurements and capture heap profiles.
 4. Assess remaining representation costs; verify the untouched acceptance root
    under its existing limit on a claimed memory-capped Linux host. Never run
-   that full root on dragon. Report partial results explicitly if still open.
+   that full root on dev-host. Report partial results explicitly if still open.
 
 Parent plan: umbrella `docs/sprint-376-master-execution-plan.md`.
-Sprint card: `sprint:qiangli/dragon/376`; story `ac47500351df`.
+Sprint card: `sprint:qiangli/dev-host/376`; story `ac47500351df`.
 
 ## Measured partial result
 
@@ -22,7 +22,7 @@ Sparse struct field metadata removes the per-instance scalar layout map while
 preserving payload fields and Go comparison order. This repairs the comparison
 regression that caused the Sprint 374 allocation reduction to be reverted.
 
-On dragon with Go 1.27.1 and GOMAXPROCS=2, the scaled issue80188 live-heap
+On dev-host with Go 1.27.1 and GOMAXPROCS=2, the scaled issue80188 live-heap
 slope fell from 1,473.4 to 1,217.2 bytes/object (20,000 to 40,000 live objects).
 At 40,000 to 80,000 objects, slopes were 1,474.9 and 1,218.9 bytes/object.
 Three unprofiled 40,000-object runs had median interpreted elapsed times

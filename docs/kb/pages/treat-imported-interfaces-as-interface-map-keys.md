@@ -8,7 +8,6 @@ description: When GoSource map key types are imported named interfaces, admit th
 status: candidate
 source:
     tool: codex-gpt-5.5-x
-    host: dragon
     episode: weave-issue-24
 created: "2026-09-25T01:46:38Z"
 ---

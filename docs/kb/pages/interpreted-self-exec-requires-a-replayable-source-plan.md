@@ -8,7 +8,6 @@ description: 'When an interpreted Go program reexecs os.Executable, returning th
 status: candidate
 source:
     tool: codex-gpt5.6-sol-k
-    host: dragon
     episode: weave-issue-11
 created: "2026-09-25T19:06:49Z"
 ---

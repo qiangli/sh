@@ -8,7 +8,6 @@ description: When a dependency-owned slice or array is assigned into interpreter
 status: candidate
 source:
     tool: codex-gpt5.6-sol-w242-h
-    host: dragon
     episode: weave-issue-242
 created: "2026-09-28T14:04:31Z"
 ---

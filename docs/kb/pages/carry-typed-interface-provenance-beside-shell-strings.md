@@ -6,7 +6,6 @@ status: validated
 evidence: Story 202 preserved interface dynamic type/value side-channel through embedded interface assignment/assertion and function-call paths; exact gate passed.
 source:
     tool: codex-gpt-5.5-v
-    host: dragon
     episode: weave-issue-22
 created: "2026-09-06T23:59:25Z"
 updated: "2026-09-07T00:40:14Z"

@@ -8,7 +8,6 @@ description: When Go-source collection indexes or slice bounds use an integer wi
 status: candidate
 source:
     tool: codex-gpt5.6-sol-p
-    host: dragon
     episode: weave-issue-276
 created: "2026-09-20T00:31:43Z"
 ---

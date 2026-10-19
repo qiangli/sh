@@ -9,7 +9,6 @@ status: candidate
 evidence: 'Story #1087 commit 75998931: end-to-end interpreted syntax Fdump reduction timed out at 61.22s with ellipsis localization disabled and passed in 34.22s under the unchanged 60s bound; focused race gate passed.'
 source:
     tool: codex-gpt5.6-sol2-b
-    host: dragon
     episode: weave-issue-236
 created: "2026-09-28T13:32:25Z"
 supersedes: keep-primitive-fmt-writes-to-local-writers-in-the-interpreter

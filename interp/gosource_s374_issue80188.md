@@ -2,7 +2,7 @@
 
 The full upstream program was not run. A standalone scratch copy retained its
 40 `new(T)` calls per iteration, reduced the two delay loops from 10,000 to
-100, and varied the outer iteration count. On `novidesign.local`, every run
+100, and varied the outer iteration count. On `macos-host`, every run
 was polled at 100 ms and killed above 4 GiB RSS or 120 seconds.
 
 Before the changes, one interpreted goroutine measured:

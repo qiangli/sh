@@ -9,7 +9,6 @@ status: candidate
 evidence: Sprint 319 story 00446a7bd51a; commits c49e3b31 and dfe69871; focused TestS319CallbackProof*, TestS319Manager*, TestS319ConstraintEval*, and TestS281OnceValueValueSliceResult
 source:
     tool: codex-gpt5.6-sol-k
-    host: dragon
     episode: weave-issue-219
 created: "2026-09-28T09:54:08Z"
 updated: "2026-09-28T10:06:14Z"

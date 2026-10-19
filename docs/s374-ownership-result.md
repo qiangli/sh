@@ -47,7 +47,7 @@ See [design](s374-ownership.md) for the wire protocol, callback acknowledgement,
 GC timing and ownership limits. Leases are drained on the next real request;
 there is no arbitrary eviction of native values.
 
-## novidesign.local measurements
+## macos-host measurements
 
 Darwin arm64, Go 1.27.1, sequential execution under the supplied process-tree
 watchdog: **4,000,000,000 bytes / 120 seconds**, sampled every 50 ms. Every run
@@ -192,7 +192,7 @@ claim that total live interpreter memory fell.
 
 rangegen still grows **8 -> 16 origins** and **784 -> 1,568 closures**. Its final
 checkpoint heap is **16,572,936 bytes** before and **16,567,680 bytes** after;
-the output SHA-256 is the same as the novidesign pair. issue15277 still grows
+the output SHA-256 is the same as the macos-host pair. issue15277 still grows
 **2 -> 3 origins** and prints its failed drop-threshold diagnostic. These are
 remaining defects on the required Linux platform, not Darwin-only conclusions.
 

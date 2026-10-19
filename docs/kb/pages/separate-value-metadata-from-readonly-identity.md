@@ -6,7 +6,6 @@ status: validated
 evidence: Story 201 closure required synthesizing pointer metadata for pointer cells and using general zero-value metadata for omitted collection elements so named pointer/composite identity survives reads, comparisons, and new(T); required gate passed.
 source:
     tool: codex-gpt5.6-sol-p
-    host: dragon
     episode: weave-issue-16
 created: "2026-09-06T22:10:30Z"
 updated: "2026-09-06T23:36:31Z"

@@ -1,6 +1,6 @@
 # BLOCKERS: ken/chan.go still misses 60 seconds
 
-Baseline c3aa0e0c25fa40fcc2dd12f3be9768440547fb0e on novidesign.local:
+Baseline c3aa0e0c25fa40fcc2dd12f3be9768440547fb0e on macos-host:
 60.000949666 s, context deadline exceeded; 636,829 native Lock and 636,829
 native Unlock requests, two Mutex allocations, four equality requests and zero
 channel requests.
@@ -31,7 +31,7 @@ Remote reproduction, with PATH=$HOME/sdk/go1.27.1/bin:$PATH, GOTOOLCHAIN=local:
     go tool pprof -top -nodecount=18 /tmp/s374-sync-interp.test /tmp/s374-sync-ken.cpu
 
 Outer subprocess caps were 180 s for each test invocation and 30 s for pprof.
-The files above remain on novidesign.local, under /tmp; checkout ~/s374/sync.
+The files above remain on macos-host, under /tmp; checkout ~/s374/sync.
 
 The required Bash comparison gate was run remotely (180 s outer cap):
 

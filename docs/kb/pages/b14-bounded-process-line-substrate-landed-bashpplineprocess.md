@@ -8,7 +8,6 @@ description: ""
 status: candidate
 source:
     tool: claude-opus4.8-m
-    host: dragon
     episode: weave-issue-13
 created: "2026-09-21T05:39:41Z"
 ---

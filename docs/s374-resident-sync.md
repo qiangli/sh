@@ -26,7 +26,7 @@ Validation: write a trace-based failing test first, then differential small Go
 programs including embedded fields, pointer aliases, goroutines and escape controls.
 Measure warmed interpreted Lock/Unlock pairs with certificates enabled/cleared.
 Run the unchanged SDK ken/chan.go remotely under its existing 60-second bound,
-before and after. Keep all heavy execution on novidesign.local, one capped process
+before and after. Keep all heavy execution on macos-host, one capped process
 at a time. Record limitations and exact results, including failures.
 
 ## Implemented prototype and limits
@@ -62,7 +62,7 @@ rewritten, compiled as a fallback, or sent to native execution.
 
 ## Validation and measurements
 
-Go 1.27.1, novidesign.local, Darwin arm64, Apple M4 Max. Only individual narrow
+Go 1.27.1, macos-host, Darwin arm64, Apple M4 Max. Only individual narrow
 tests ran on the operator host. Remote commands were serialized under Python
 `subprocess.run` time caps. The design and trace regression were written first;
 the first executing regression failed with one native request each for Mutex

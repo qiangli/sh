@@ -8,7 +8,6 @@ description: When a GoSource value-receiver method is bound on a cell whose obje
 status: candidate
 source:
     tool: codex-gpt-5.5-g
-    host: dragon
     episode: weave-issue-215
 created: "2026-09-28T08:50:43Z"
 ---
