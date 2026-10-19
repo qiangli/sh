@@ -9,6 +9,7 @@ func TestBashPPInjectedGoSupported(t *testing.T) {
 	for goVersion, want := range map[string]bool{
 		"go1.27.0": true,
 		"go1.27.1": true,
+		"go1.27.2": true,
 		"go1.28":   true,
 		"go1.26.5": false,
 		"go1.24.0": false,

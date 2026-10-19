@@ -236,20 +236,23 @@ type bashPPGoReview struct {
 	SHA256  string
 }
 
+// bashPPReviewedGoVersion is the one reviewed Go toolchain version for Bash#
+// Go imports. Every site below uses it so the next security bump is one line.
+const bashPPReviewedGoVersion = "go1.27.2"
+
 // bashPPGoReviews is the testable allow-list for platforms on which P2A may
 // execute Go. Each digest reviews the bin/go payload in the official Go
 // toolchain module, not whichever executable happens to be on PATH.
-// Windows payloads were authenticated through sum.golang.org module records:
-// 61743625 amd64: h1:uvUPiZUFKn246/ZPbYpTzP8aUKAjcMH5rgIl9vsjoyQ=
-// 61743797 arm64: h1:YXjMLllerbcM7q21nbeWiTLWhvauClJgEhPAVqX+KaM=
-// The provisioned Windows amd64 binary also matched the authenticated payload.
+// The digests were authenticated from the official release archives: each
+// archive SHA-256 was verified against https://go.dev/dl/?mode=json, then the
+// archive was extracted and bin/go (bin/go.exe on windows) hashed.
 var bashPPGoReviews = []bashPPGoReview{
-	{Version: "go1.27.1", GOOS: "darwin", GOARCH: "amd64", SHA256: "285418143831d996755c236ca0938ad317b22edeeb1d61bfa082f50550399fe3"},
-	{Version: "go1.27.1", GOOS: "darwin", GOARCH: "arm64", SHA256: "132b69336a1f809932a8a20b0201dbbb980e86e3a323ae32e893639d83d71598"},
-	{Version: "go1.27.1", GOOS: "linux", GOARCH: "amd64", SHA256: "30969f97169d7f43fe6a085873d75613adc21e30818a8c61d95bd27275df4624"},
-	{Version: "go1.27.1", GOOS: "linux", GOARCH: "arm64", SHA256: "1675694ef690db0f18fbe7046a886170904bede1d9db6ec96ae27945c1705c64"},
-	{Version: "go1.27.1", GOOS: "windows", GOARCH: "amd64", SHA256: "d3ccdb604eafa6031133aefe1a3db24f0bb7362b857bc2125ac4e4c178b4b490"},
-	{Version: "go1.27.1", GOOS: "windows", GOARCH: "arm64", SHA256: "854e5383bc5d7fa3f3a58268a3c1ca45d9ddc1ec3f34b53f4234fd6b59e79a46"},
+	{Version: bashPPReviewedGoVersion, GOOS: "darwin", GOARCH: "amd64", SHA256: "9dcac8694df86de211ac2ad95878187847b33763f4b6be12fbc035bec005787c"},
+	{Version: bashPPReviewedGoVersion, GOOS: "darwin", GOARCH: "arm64", SHA256: "516c1fbb53b5f8f4852f0c3c379d45bcff53a1032e5cd1a9ca1738f03ba07cb1"},
+	{Version: bashPPReviewedGoVersion, GOOS: "linux", GOARCH: "amd64", SHA256: "548d3c32f83fa81152f543eb1526be7884cfe0526eb5e9ce29d3eca14786e7e0"},
+	{Version: bashPPReviewedGoVersion, GOOS: "linux", GOARCH: "arm64", SHA256: "0e893a1a4ab5d00e64bcd9b22060a53377f90c076434ff0aa1bd2a330b657691"},
+	{Version: bashPPReviewedGoVersion, GOOS: "windows", GOARCH: "amd64", SHA256: "b8cd508a0a7aac883cd750e9e75eb306d219e726bdf1cde29009490729437fbf"},
+	{Version: bashPPReviewedGoVersion, GOOS: "windows", GOARCH: "arm64", SHA256: "177b6ec96f7d32378429af6004ca583ca019267aca94729abed2e1cbc2d19ca0"},
 }
 
 type bashPPGoIdentityInfo struct {
@@ -901,15 +904,15 @@ func bashPPReviewedGoIdentity() (bashPPGoIdentityInfo, error) {
 		return bashPPGoIdentityInfo{}, fmt.Errorf("resolve Go bootstrap: %w", err)
 	}
 	cmd := exec.Command(bootstrap, "env", "GOROOT", "GOOS", "GOARCH")
-	cmd.Env = setEnvString(os.Environ(), "GOTOOLCHAIN", "go1.27.1")
+	cmd.Env = setEnvString(os.Environ(), "GOTOOLCHAIN", bashPPReviewedGoVersion)
 	cmd.Env = setEnvString(cmd.Env, "GOROOT", bootstrapRoot)
 	out, err := cmd.Output()
 	if err != nil {
-		return bashPPGoIdentityInfo{}, fmt.Errorf("resolve GOTOOLCHAIN=go1.27.1: %w", err)
+		return bashPPGoIdentityInfo{}, fmt.Errorf("resolve GOTOOLCHAIN=%s: %w", bashPPReviewedGoVersion, err)
 	}
 	fields := strings.Fields(string(out))
 	if len(fields) != 3 {
-		return bashPPGoIdentityInfo{}, fmt.Errorf("resolve GOTOOLCHAIN=go1.27.1: unexpected go env output %q", out)
+		return bashPPGoIdentityInfo{}, fmt.Errorf("resolve GOTOOLCHAIN=%s: unexpected go env output %q", bashPPReviewedGoVersion, out)
 	}
 	root, goos, goarch := fields[0], fields[1], fields[2]
 	path := filepath.Join(root, "bin", name)
@@ -1069,7 +1072,7 @@ func bashPPGoModuleIdentity() (bashPPGoIdentityInfo, error) {
 		return bashPPGoIdentityInfo{}, fmt.Errorf("module cache path %q is not absolute", modCache)
 	}
 	root := filepath.Join(modCache, "golang.org",
-		"toolchain@v0.0.1-go1.27.1."+runtime.GOOS+"-"+runtime.GOARCH)
+		"toolchain@v0.0.1-"+bashPPReviewedGoVersion+"."+runtime.GOOS+"-"+runtime.GOARCH)
 	name := "go"
 	if runtime.GOOS == "windows" {
 		name += ".exe"
@@ -1086,7 +1089,7 @@ func bashPPGoModuleIdentity() (bashPPGoIdentityInfo, error) {
 	if err != nil {
 		return bashPPGoIdentityInfo{}, err
 	}
-	identity := bashPPGoIdentityInfo{Version: "go1.27.1", GOOS: runtime.GOOS, GOARCH: runtime.GOARCH,
+	identity := bashPPGoIdentityInfo{Version: bashPPReviewedGoVersion, GOOS: runtime.GOOS, GOARCH: runtime.GOARCH,
 		Root: root, Binary: binary, SHA256: digest}
 	if err := validateBashPPGoIdentity(identity, bashPPGoReviews); err != nil {
 		return bashPPGoIdentityInfo{}, err

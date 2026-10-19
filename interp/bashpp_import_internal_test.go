@@ -272,7 +272,7 @@ func TestBashPPGoIdentityIgnoresPATH(t *testing.T) {
 	if got.Binary != want {
 		t.Fatalf("Go identity %q, want %q", got.Binary, want)
 	}
-	if got.Version != "go1.27.1" || got.GOOS != runtime.GOOS || got.GOARCH != runtime.GOARCH {
+	if got.Version != bashPPReviewedGoVersion || got.GOOS != runtime.GOOS || got.GOARCH != runtime.GOARCH {
 		t.Fatalf("Go identity = %#v", got)
 	}
 }
@@ -386,12 +386,12 @@ func TestBashPPEvalRequestPinsReviewedGoEnvironment(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.Reset()
-	r.bashPPTools = bashPPToolchain{goBinary: "/reviewed/go", goRoot: "/reviewed", goVersion: "go1.27.1", eval: &recordingBashPPEval{}}
+	r.bashPPTools = bashPPToolchain{goBinary: "/reviewed/go", goRoot: "/reviewed", goVersion: bashPPReviewedGoVersion, eval: &recordingBashPPEval{}}
 	req, err := r.bashPPEvalRequest()
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := map[string]bool{"GOROOT=/reviewed": false, "GOTOOLCHAIN=go1.27.1": false}
+	want := map[string]bool{"GOROOT=/reviewed": false, "GOTOOLCHAIN=" + bashPPReviewedGoVersion: false}
 	for _, entry := range req.Env {
 		if _, ok := want[entry]; ok {
 			want[entry] = true

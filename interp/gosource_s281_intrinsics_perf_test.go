@@ -212,13 +212,13 @@ func TestS281ConnectedEvalRequestReusesCachedEnvs(t *testing.T) {
 			bridge:         &bashPPNativeSession{conn: left},
 			goBinary:       "go",
 			goRoot:         "/runtime/root",
-			goVersion:      "go1.27.1",
+			goVersion:      bashPPReviewedGoVersion,
 			buildGoBinary:  "go",
 			buildGoRoot:    "/build/root",
-			buildGoVersion: "go1.27.1",
-			requestEnv:     []string{"PATH=/bin", "GOROOT=/runtime/root", "GOTOOLCHAIN=go1.27.1"},
-			buildEnv:       []string{"PATH=/bin", "GOROOT=/build/root", "GOTOOLCHAIN=go1.27.1"},
-			runtimeEnv:     []string{"PATH=/bin", "GOROOT=/runtime/root", "GOTOOLCHAIN=go1.27.1"},
+			buildGoVersion: bashPPReviewedGoVersion,
+			requestEnv:     []string{"PATH=/bin", "GOROOT=/runtime/root", "GOTOOLCHAIN=" + bashPPReviewedGoVersion},
+			buildEnv:       []string{"PATH=/bin", "GOROOT=/build/root", "GOTOOLCHAIN=" + bashPPReviewedGoVersion},
+			runtimeEnv:     []string{"PATH=/bin", "GOROOT=/runtime/root", "GOTOOLCHAIN=" + bashPPReviewedGoVersion},
 		},
 		bashPPImports: map[string]string{},
 	}
@@ -243,10 +243,10 @@ func TestS281ConnectedEvalRequestReusesCachedEnvs(t *testing.T) {
 			bashPPTools: bashPPToolchain{
 				goBinary:       "go",
 				goRoot:         goRoot,
-				goVersion:      "go1.27.1",
+				goVersion:      bashPPReviewedGoVersion,
 				buildGoBinary:  "go",
 				buildGoRoot:    buildRoot,
-				buildGoVersion: "go1.27.1",
+				buildGoVersion: bashPPReviewedGoVersion,
 			},
 		}
 	}
