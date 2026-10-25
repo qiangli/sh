@@ -4826,6 +4826,7 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 		r2.asyncList = true
 		r2.inheritedBang = r.lastBangProc()
 		r2.ignoreAsyncListSignals()
+		var asyncStdin *os.File
 		// POSIX 2.11: an asynchronous list's stdin defaults to /dev/null
 		// whenever job control is not enabled (bash does this in default
 		// mode too, not only in POSIX mode). An explicit redirection on the
@@ -4833,6 +4834,7 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 		if !r.monitorActive() && !r.asyncStdinExplicit {
 			f, err := os.Open(os.DevNull)
 			if err == nil {
+				asyncStdin = f
 				r2.stdin = f
 			}
 		}
@@ -4872,6 +4874,9 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 		// a shell whose fork failed, and `$!` keeps its previous value.
 		if err := r.attachCarrier(bgCtx, r2, bg); err != nil {
 			cancel()
+			if asyncStdin != nil {
+				_ = asyncStdin.Close()
+			}
 			r2.closeDirFile()
 			r.errf("%s%v\n", r.bashErrPrefix(st.Pos()), err)
 			r.exit = exitStatus{code: 1}
@@ -4908,6 +4913,9 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 			go func() {
 				close(launched)
 				defer r2.closeDirFile()
+				if asyncStdin != nil {
+					defer asyncStdin.Close()
+				}
 				cleaned := false
 				cleanup := func() {
 					if cleaned {
