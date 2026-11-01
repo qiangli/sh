@@ -4954,7 +4954,9 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 					// command's EXIT handler before its stdout redirect
 					// is restored. The runner's Run boundary has already
 					// restored it, so retain a /dev/null redirect here.
-					if r2.opts[optPosix] {
+					// Strict POSIX instead uses the environment after the
+					// last command, including restored command-local FDs.
+					if r2.opts[optPosix] && !r2.strictPosix {
 						if call, ok := st2.Cmd.(*syntax.CallExpr); ok && len(call.Args) > 0 &&
 							call.Args[0].Lit() == "trap" {
 							for _, rd := range st2.Redirs {
