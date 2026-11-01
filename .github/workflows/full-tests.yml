@@ -27,10 +27,10 @@ jobs:
       GOFLAGS: -tags=netgo,full
     # The Linux race/lifecycle gate runs a bounded schedule matrix plus the
     # complete race suite; keep CI from killing it before its own diagnostics.
-    # The gate's bounded operations total at most 8340s and its global
+    # The gate's bounded operations total at most 8520s and its global
     # watchdog adds one minute for orchestration. A job-level kill reports no
     # lane, so leave room for the full suite (~35 minutes) before it.
-    timeout-minutes: 180
+    timeout-minutes: 185
     steps:
     - uses: actions/checkout@v5
     - uses: actions/setup-go@v6

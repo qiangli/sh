@@ -6,6 +6,12 @@ cd "$root"
 
 discovery_only=0
 internal=0
+# Reviewed root-module inventory: 23 packages. Growth must be reviewed before
+# it can expand the discovery budget; never silently omit the extra packages.
+max_packages=23
+# Discovery plus fixed lane bounds, then 60s orchestration/cleanup allowance.
+default_global_seconds=$((60 + max_packages * 60 + 60 + 2 * 60 + 300 + 3 * 900 + 3900 + 60))
+global_seconds=${BASHPP_RACE_GLOBAL_TIMEOUT_SECONDS:-$default_global_seconds}
 for arg in "$@"; do
 	case "$arg" in
 		--discovery-only) discovery_only=1 ;;
@@ -78,16 +84,15 @@ start_watcher() {
 # exits, so the nested setsid groups cannot escape the global watchdog.
 if ((!internal)); then
 	# Every operation below has its own diagnostic bound. With the fail-closed
-	# 20-package ceiling, their aggregate maximum is 8340s:
+	# 23-package ceiling, their aggregate maximum is 8520s:
 	#
-	#   list 60 + package discovery 20*60 + focused discovery 60
+	#   list 60 + package discovery 23*60 + focused discovery 60
 	#   + two oracle audits 2*60 + race build 300
 	#   + focused lanes 3*900 + full race suite 3900
 	#
 	# Keep the global watchdog beyond that sum, with one minute for process
 	# startup, evidence copying, and cleanup. It must never erase the more useful
 	# label from a later lane's own timeout diagnostic.
-	global_seconds=${BASHPP_RACE_GLOBAL_TIMEOUT_SECONDS:-8400}
 	args=(--internal)
 	((discovery_only)) && args+=(--discovery-only)
 	marker=$(mktemp "${TMPDIR:-/tmp}/bashpp-race-global.XXXXXX")
@@ -316,7 +321,6 @@ if ((${#packages[@]} == 0)); then
 fi
 # The outer watchdog is derived from this ceiling. Fail closed if the module
 # grows past it rather than silently invalidating the aggregate deadline.
-max_packages=20
 if ((${#packages[@]} > max_packages)); then
 	log "ERROR: package count ${#packages[@]} exceeds deadline budget ceiling $max_packages"
 	exit 1
@@ -400,7 +404,7 @@ if ((legacy_focused_count < 80)); then
 fi
 
 log "Bash++ race/lifecycle gate"
-log "global_deadline_seconds: ${BASHPP_RACE_GLOBAL_TIMEOUT_SECONDS:-3660}"
+log "global_deadline_seconds: $global_seconds"
 log "go_version: $("$go_bin" version)"
 log "goos: $("$go_bin" env GOOS)"
 log "goarch: $("$go_bin" env GOARCH)"
