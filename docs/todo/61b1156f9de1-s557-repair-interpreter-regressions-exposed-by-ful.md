@@ -62,3 +62,27 @@ cannot resolve this imported private method.
 This migration repair preserves the existing fail-closed behavior. No interface
 admission policy was broadened, no assertion was removed, and this diagnostic
 is not counted as a newly passing gate or an exclusion from the full suite.
+
+Additional macOS evidence from the cancelled obsolete run
+
+Run 41327533961 used shell 6982b2e and was cancelled before macOS completed;
+it is not acceptance evidence. Its completed macOS tests exposed three failures
+beyond the Linux 14: bridge readiness/cwd, chanlinear deadline, and selector
+scaling. These remain distinct from the green 14-test focused rerun.
+
+The bridge fixture published `bridge.ready` before its cwd contents were fully
+written. A reader could observe an empty file and resolve it to `.`. The fixture
+now publishes the completed payload by rename, rejects empty readiness payloads,
+and checks path-resolution errors. Both modes pass three local repetitions with
+the original absolute-cwd and package-isolation assertions intact.
+
+The unchanged Go 1.27.2 `chanlinear.go` fixture passed bounded local diagnosis:
+oracle build/run took 0.312s, interpreter began at 0.467s and completed at 1.778s,
+and the whole three-mode comparison took 2.173s. This proves prerequisites shared
+the old execution clock, but does not establish why the obsolete hosted run hit
+60s. Only `TestS243OriginalChannelDomainRegressions` now opts into separately
+bounded 120s builds and unchanged 60s native/interpreter executions, with phase
+timings. Other callers retain their shared deadline. Original fixture bytes and
+exact stdout/stderr comparisons are unchanged. Both original channel fixtures
+passed three repetitions with exact Go 1.27.2 source; hosted validation is still
+required, and the old timeout is not declared resolved by local success.

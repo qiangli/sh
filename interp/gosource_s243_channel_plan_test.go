@@ -75,7 +75,7 @@ func TestS243OriginalChannelDomainRegressions(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Run(name, func(t *testing.T) {
-			typedSendThreeModes(t, string(source))
+			typedSendThreeModesPhaseBounded(t, string(source))
 		})
 	}
 }

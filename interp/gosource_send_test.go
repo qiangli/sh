@@ -111,6 +111,18 @@ func typedSendThreeModes(t *testing.T, source string) {
 // weakened rather than narrowed.
 func typedSendThreeModesNormalized(t *testing.T, source string, normalize func(string) string) {
 	t.Helper()
+	typedSendThreeModesWithPhaseBudgets(t, source, normalize, false)
+}
+
+// Original channel timing fixtures need distinct compiler and runtime evidence.
+// All other callers retain their existing shared deadline.
+func typedSendThreeModesPhaseBounded(t *testing.T, source string) {
+	t.Helper()
+	typedSendThreeModesWithPhaseBudgets(t, source, nil, true)
+}
+
+func typedSendThreeModesWithPhaseBudgets(t *testing.T, source string, normalize func(string) string, separate bool) {
+	t.Helper()
 	if normalize == nil {
 		normalize = func(s string) string { return s }
 	}
@@ -121,10 +133,24 @@ func typedSendThreeModesNormalized(t *testing.T, source string, normalize func(s
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
+	phaseContext := func(limit time.Duration) (context.Context, context.CancelFunc) {
+		if separate {
+			return context.WithTimeout(context.Background(), limit)
+		}
+		return ctx, func() {}
+	}
+	logPhase := func(name string, start time.Time) {
+		if separate {
+			t.Logf("phase %s elapsed %s", name, time.Since(start))
+		}
+	}
 	sdk := filepath.Join(runtime.GOROOT(), "bin", "go")
 	run := func(binary string) (string, string) {
 		var out, errout bytes.Buffer
-		cmd := exec.CommandContext(ctx, binary)
+		phaseCtx, phaseCancel := phaseContext(60 * time.Second)
+		defer phaseCancel()
+		defer logPhase("runtime "+filepath.Base(binary), time.Now())
+		cmd := exec.CommandContext(phaseCtx, binary)
 		cmd.Dir = dir
 		cmd.Stdout, cmd.Stderr = &out, &errout
 		if err := cmd.Run(); err != nil {
@@ -133,7 +159,10 @@ func typedSendThreeModesNormalized(t *testing.T, source string, normalize func(s
 		return out.String(), errout.String()
 	}
 	build := func(output, input string) {
-		cmd := exec.CommandContext(ctx, sdk, "build", "-p", "2", "-o", output, input)
+		phaseCtx, phaseCancel := phaseContext(120 * time.Second)
+		defer phaseCancel()
+		defer logPhase("build "+filepath.Base(output), time.Now())
+		cmd := exec.CommandContext(phaseCtx, sdk, "build", "-p", "2", "-o", output, input)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("build: %v %s", err, out)
 		}
@@ -150,7 +179,12 @@ func typedSendThreeModesNormalized(t *testing.T, source string, normalize func(s
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Run(ctx, program.File); err != nil {
+	runtimeCtx, runtimeCancel := phaseContext(60 * time.Second)
+	runtimeStart := time.Now()
+	runErr := r.Run(runtimeCtx, program.File)
+	runtimeCancel()
+	logPhase("interpreter", runtimeStart)
+	if err := runErr; err != nil {
 		t.Fatalf("Runner: %v out=%q err=%q", err, out.String(), errout.String())
 	}
 	if normalize(out.String()) != normalize(wantOut) || errout.String() != wantErr {
