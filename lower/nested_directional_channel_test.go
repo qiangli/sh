@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -14,7 +15,7 @@ import (
 )
 
 // TestGoSourceNestedDirectionalChannel drives an outer channel whose element
-// is receive-only through lowering and the pinned compiler. A nested ordinary
+// is receive-only through lowering and the installed compiler. A nested ordinary
 // channel is the supported control. Exact output and status plus the deadline
 // reject wrong values, stray output, wrong status, and hangs.
 func TestGoSourceNestedDirectionalChannel(t *testing.T) {
@@ -36,10 +37,28 @@ func TestGoSourceNestedDirectionalChannel(t *testing.T) {
 	if err := os.WriteFile(generated, result.Source, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// Compile separately: compiler diagnostics are not program output, and a
+	// toolchain download must not consume the program's execution deadline.
+	buildCtx, buildCancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer buildCancel()
+	binary := filepath.Join(dir, "program.exe")
+	build := exec.CommandContext(buildCtx, filepath.Join(runtime.GOROOT(), "bin", "go"), "build", "-o", binary, generated)
+	build.Dir = dir
+	build.Env = append(os.Environ(), "GOWORK=off", "GOTOOLCHAIN=local")
+	diagnostics, err := build.CombinedOutput()
+	if buildCtx.Err() != nil {
+		t.Fatalf("generated program compilation exceeded its deadline: %v\n%s", buildCtx.Err(), diagnostics)
+	}
+	if err != nil {
+		t.Fatalf("generated program compilation failed: %v\n%s\n--- generated\n%s", err, diagnostics, result.Source)
+	}
+	if len(diagnostics) > 0 {
+		t.Logf("compiler diagnostics:\n%s", diagnostics)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "go", "run", generated)
-	cmd.Env = append(os.Environ(), "GOTOOLCHAIN=go1.27.1")
+	cmd := exec.CommandContext(ctx, binary)
+	cmd.Dir = dir
 	output, err := cmd.CombinedOutput()
 	if ctx.Err() != nil {
 		t.Fatal("generated program exceeded its deadline")
