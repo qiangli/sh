@@ -4897,7 +4897,13 @@ func (cfg *Config) quotedElemFields(pe *syntax.ParamExp) ([]string, error) {
 	if pe.Excl {
 		switch pe.Names {
 		case syntax.NamesPrefixWords: // "${!prefix@}"
-			return cfg.namesByPrefix(pe.Param.Value), nil
+			names := cfg.namesByPrefix(pe.Param.Value)
+			if names == nil {
+				// A non-nil empty list means zero fields, not fallback to
+				// scalar expansion (which would produce one empty field).
+				names = []string{}
+			}
+			return names, nil
 		case syntax.NamesPrefix: // "${!prefix*}"
 			return []string{cfg.ifsJoin(cfg.namesByPrefix(pe.Param.Value))}, nil
 		}
