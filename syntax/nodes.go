@@ -1165,7 +1165,10 @@ func (c *CoprocClause) End() Pos { return c.Stmt.End() }
 
 // LetClause represents a Bash let clause.
 //
-// This node will only appear with [LangBash] and [LangMirBSDKorn].
+// Bash-family operands are [*Word] values: arithmetic syntax is validated
+// when the builtin executes, after shell argument expansion. Other dialects
+// retain their arithmetic expression trees.
+// This node appears with Bash-family dialects, [LangMirBSDKorn], and [LangZsh].
 type LetClause struct {
 	Let   Pos
 	Exprs []ArithmExpr

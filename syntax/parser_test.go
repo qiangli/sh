@@ -1688,11 +1688,11 @@ var errorCases = []errorCase{
 	),
 	errCase(
 		"let a+ b",
-		langErr("1:6: `+` must be followed by an expression", LangBash|LangMirBSDKorn|LangZsh),
+		langErr("1:6: `+` must be followed by an expression", LangMirBSDKorn|LangZsh),
 	),
 	errCase(
 		"let + a",
-		langErr("1:5: `+` must be followed by an expression", LangBash|LangMirBSDKorn|LangZsh),
+		langErr("1:5: `+` must be followed by an expression", LangMirBSDKorn|LangZsh),
 	),
 	// Bash accepts `let a ++` at parse time and reports the trailing
 	// `++` as a runtime arithmetic error.
@@ -1703,23 +1703,24 @@ var errorCases = []errorCase{
 	// that runtime path — see expand/arith.go for the runtime check.
 	errCase(
 		"let --(a)",
-		langErr("1:5: `--` must be followed by a literal", LangBash|LangMirBSDKorn|LangZsh),
+		langErr("1:7: statements must be separated by &, ; or a newline", LangBash),
+		langErr("1:5: `--` must be followed by a literal", LangMirBSDKorn|LangZsh),
 	),
 	errCase(
 		"let --$a",
-		langErr("1:5: `--` must be followed by a literal", LangBash|LangMirBSDKorn|LangZsh),
+		langErr("1:5: `--` must be followed by a literal", LangMirBSDKorn|LangZsh),
 	),
 	errCase(
 		"let a+\n",
-		langErr("1:6: `+` must be followed by an expression", LangBash|LangMirBSDKorn|LangZsh),
+		langErr("1:6: `+` must be followed by an expression", LangMirBSDKorn|LangZsh),
 	),
 	errCase(
 		"`let !`",
-		langErr("1:6: `!` must be followed by an expression", LangBash|LangMirBSDKorn|LangZsh),
+		langErr("1:6: `!` must be followed by an expression", LangMirBSDKorn|LangZsh),
 	),
 	errCase(
 		"let a:b",
-		langErr("1:6: ternary operator missing `?` before `:`", LangBash|LangMirBSDKorn|LangZsh),
+		langErr("1:6: ternary operator missing `?` before `:`", LangMirBSDKorn|LangZsh),
 	),
 	// `let a+b=c` — runtime error now (see comment above).
 	errCase(

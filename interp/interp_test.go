@@ -120,7 +120,7 @@ fn() {
 }
 [[ $foo == bar ]] && fn
 echo a{b,c}d *.go
-let i=(2 + 3)
+let "i=(2 + 3)"
 `
 	file := parse(b, nil, src)
 	r, _ := interp.New()
@@ -3779,7 +3779,7 @@ var runTests = []runTest{
 		"exit status 1",
 	},
 	{
-		"let i=(3+4); let i++; echo $i; let i--; echo $i",
+		"let \"i=(3+4)\"; let i++; echo $i; let i--; echo $i",
 		"8\n7\n",
 	},
 	{

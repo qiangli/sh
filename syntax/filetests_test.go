@@ -4903,7 +4903,8 @@ var fileTests = []fileTestCase{
 		[]string{`let i++`},
 		langFile(letClause(
 			&UnaryArithm{Op: Inc, Post: true, X: litWord("i")},
-		), LangBash|LangMirBSDKorn|LangZsh),
+		), LangMirBSDKorn|LangZsh),
+		langFile(letClause(litWord("i++")), LangBash),
 		langFile(litStmt("let", "i++"), LangPOSIX),
 	),
 	fileTest(
@@ -4913,14 +4914,16 @@ var fileTests = []fileTestCase{
 			&UnaryArithm{Op: Inc, Post: true, X: litWord("b")},
 			litWord("c"),
 			&UnaryArithm{Op: Plus, X: litWord("d")},
-		), LangBash|LangMirBSDKorn|LangZsh),
+		), LangMirBSDKorn|LangZsh),
+		langFile(letClause(litWord("a++"), litWord("b++"), litWord("c"), litWord("+d")), LangBash),
 	),
 	fileTest(
 		[]string{`let ++i >/dev/null`},
 		langFile(&Stmt{
 			Cmd:    letClause(&UnaryArithm{Op: Inc, X: litWord("i")}),
 			Redirs: []*Redirect{{Op: RdrOut, Word: litWord("/dev/null")}},
-		}, LangBash|LangMirBSDKorn|LangZsh),
+		}, LangMirBSDKorn|LangZsh),
+		langFile(&Stmt{Cmd: letClause(litWord("++i")), Redirs: []*Redirect{{Op: RdrOut, Word: litWord("/dev/null")}}}, LangBash),
 	),
 	fileTest(
 		[]string{
@@ -4946,7 +4949,8 @@ var fileTests = []fileTestCase{
 					Y:  litWord("4"),
 				},
 			},
-		), LangBash),
+		), LangMirBSDKorn|LangZsh),
+		langErr2("1:7: statements must be separated by &, ; or a newline", LangBash),
 		langErr2("1:7: the `let` builtin is a bash feature; tried parsing as LANG", LangPOSIX),
 	),
 	fileTest(
@@ -4954,13 +4958,7 @@ var fileTests = []fileTestCase{
 			`let a=$(echo 3)`,
 			"let a=`echo 3`",
 		},
-		langFile(letClause(
-			&BinaryArithm{
-				Op: Assgn,
-				X:  litWord("a"),
-				Y:  word(cmdSubst(litStmt("echo", "3"))),
-			},
-		), LangBash),
+		langFile(letClause(word(lit("a="), cmdSubst(litStmt("echo", "3")))), LangBash),
 	),
 	fileTest(
 		[]string{"(foo-bar)"},
@@ -4979,7 +4977,8 @@ var fileTests = []fileTestCase{
 				X:    litWord("i"),
 			}),
 			litCall("bar"),
-		), LangBash|LangMirBSDKorn|LangZsh),
+		), LangMirBSDKorn|LangZsh),
+		langFile(stmts(letClause(litWord("i++")), litCall("bar")), LangBash),
 	),
 	fileTest(
 		[]string{
@@ -4997,7 +4996,8 @@ var fileTests = []fileTestCase{
 				Name:  lit("foo"),
 				Array: arrValues(litWord("bar")),
 			}}},
-		), LangBash|LangMirBSDKorn|LangZsh),
+		), LangMirBSDKorn|LangZsh),
+		langFile(stmts(letClause(litWord("i++")), &CallExpr{Assigns: []*Assign{{Name: lit("foo"), Array: arrValues(litWord("bar"))}}}), LangBash),
 	),
 	fileTest(
 		[]string{
@@ -5015,7 +5015,8 @@ var fileTests = []fileTestCase{
 					X:    litWord("i"),
 				})),
 			}},
-		}, LangBash|LangMirBSDKorn|LangZsh),
+		}, LangMirBSDKorn|LangZsh),
+		langFile(&CaseClause{Word: litWord("a"), Items: []*CaseItem{{Op: Break, Patterns: litWords("b"), Stmts: stmts(letClause(litWord("i++")))}}}, LangBash),
 	),
 	fileTest(
 		[]string{"a+=1"},

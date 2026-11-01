@@ -3908,6 +3908,26 @@ func (p *Parser) coprocClause(s *Stmt) {
 
 func (p *Parser) letClause(s *Stmt) {
 	lc := &LetClause{Let: p.pos}
+	if p.lang.in(langBashLike) {
+		// Bash's let is a builtin: operands are shell words, and their
+		// arithmetic syntax is checked only if the command executes. Keep
+		// the existing LetClause representation (Word is an ArithmExpr),
+		// but leave redirections to the ordinary shell lexer/parser.
+		p.next()
+		for !p.stopToken() {
+			if p.peekRedir() {
+				p.doRedirect(s)
+				continue
+			}
+			w := p.getWord()
+			if w == nil {
+				break
+			}
+			lc.Exprs = append(lc.Exprs, w)
+		}
+		s.Cmd = lc
+		return
+	}
 	old := p.preNested(arithmExprLet)
 	p.next()
 	for !p.stopToken() && !p.peekRedir() {

@@ -952,6 +952,21 @@ func arithEmptyDoubleQuotedWord(expr syntax.ArithmExpr) bool {
 }
 
 func (r *Runner) malformedLetAssocSubscript(expr syntax.ArithmExpr) (exprText, token string, ok bool) {
+	// Shell argument splitting can truncate a dynamically expanded array
+	// operand before its closing bracket. Preserve the bad-subscript
+	// diagnostic for that expanded-word form as well as legacy ASTs.
+	if w, ok := expr.(*syntax.Word); ok {
+		text := w.Lit()
+		open := strings.IndexByte(text, '[')
+		comma := strings.Index(text, "],")
+		if open > 0 && comma > open && r.lookupVar(text[:open]).Kind == expand.Associative {
+			tail := text[comma+2:]
+			if next := strings.IndexByte(tail, '['); next > 0 &&
+				syntax.ValidName(tail[:next]) && !strings.Contains(tail[next:], "]") {
+				return text, tail, true
+			}
+		}
+	}
 	un, ok := expr.(*syntax.UnaryArithm)
 	if !ok || (un.Op != syntax.Inc && un.Op != syntax.Dec) {
 		return "", "", false
@@ -2050,6 +2065,12 @@ func traceArrayLiteral(t *tracer, name, op string, elems []*syntax.ArrayElem, r 
 // else with no embedded `'`, otherwise fall back to the default
 // `syntax.Quote`.
 func xtraceQuote(s string) string {
+	return xtraceQuoteContext(s, true)
+}
+
+// An argument to let cannot start an assignment command. An interior # is
+// also literal there (for example, a base prefix), not a shell comment.
+func xtraceQuoteContext(s string, commandWord bool) string {
 	if s == "" {
 		return "''"
 	}
@@ -2064,12 +2085,16 @@ func xtraceQuote(s string) string {
 	}
 	// Bare if no chars need quoting.
 	needsQuote := false
-	for _, r := range s {
+	for i, r := range s {
 		switch r {
 		case ' ', '\t', '\n', '\r', '"', '\'', '\\', '`',
 			'$', '|', '&', ';', '(', ')', '<', '>',
-			'*', '?', '[', '{', '!', '#', '~', '=':
+			'*', '?', '[', '{', '!', '~':
 			needsQuote = true
+		case '=':
+			needsQuote = commandWord
+		case '#':
+			needsQuote = commandWord || i == 0
 		}
 		if !unicodeIsPrint(r) && r != '\t' && r != '\n' {
 			needsQuote = true
@@ -7430,6 +7455,38 @@ func (r *Runner) cmdGeneral(ctx context.Context, cm syntax.Command) {
 	case *syntax.LetClause:
 		var val int
 		exprs := cm.Exprs
+		// Shell-word operands are expanded as command arguments before any
+		// arithmetic executes. Literal nodes carry the resulting arguments
+		// without repeating parameter expansion or quote removal.
+		var expanded []syntax.ArithmExpr
+		for _, expr := range exprs {
+			if w, ok := expr.(*syntax.Word); ok {
+				args, err := expand.Fields(r.ecfg, w)
+				if err != nil {
+					r.expandErr(err)
+					return
+				}
+				for _, arg := range args {
+					expanded = append(expanded, &syntax.Word{Parts: []syntax.WordPart{
+						&syntax.Lit{ValuePos: w.Pos(), ValueEnd: w.End(), Value: arg},
+					}})
+				}
+			} else {
+				expanded = append(expanded, expr)
+			}
+		}
+		exprs = expanded
+		if tracingEnabled {
+			trace.string("let")
+			for _, expr := range exprs {
+				if w, ok := expr.(*syntax.Word); ok {
+					trace.string(" " + xtraceQuoteContext(w.Lit(), false))
+				} else {
+					trace.string(" " + printArithmExpr(expr))
+				}
+			}
+			trace.newLineFlush()
+		}
 		if len(exprs) > 0 {
 			if w, ok := exprs[0].(*syntax.Word); ok && r.literal(w) == "--" {
 				exprs = exprs[1:]
@@ -7442,26 +7499,11 @@ func (r *Runner) cmdGeneral(ctx context.Context, cm syntax.Command) {
 		}
 		for _, expr := range exprs {
 			val = r.letArithm(expr)
-
-			if !tracingEnabled {
-				continue
-			}
-
-			switch expr := expr.(type) {
-			case *syntax.Word:
-				qs, err := syntax.Quote(r.literal(expr), syntax.LangBash)
-				if err != nil {
-					return
-				}
-				trace.stringf("let %v", qs)
-			case *syntax.BinaryArithm, *syntax.UnaryArithm:
-				trace.expr(cm)
-			case *syntax.ParenArithm:
-				// TODO
+			if r.lastArithErr != nil {
+				r.exit.code = 1
+				return
 			}
 		}
-
-		trace.newLineFlush()
 		r.exit.oneIf(val == 0)
 	case *syntax.CaseClause:
 		if r.fireDebugTrap(ctx, cm) {
