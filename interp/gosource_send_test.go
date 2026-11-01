@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"runtime/pprof"
 	"strings"
 	"sync"
 	"testing"
@@ -181,10 +182,30 @@ func typedSendThreeModesWithPhaseBudgets(t *testing.T, source string, normalize 
 	}
 	runtimeCtx, runtimeCancel := phaseContext(60 * time.Second)
 	runtimeStart := time.Now()
+	var stopDiagnostic func() string
+	if separate {
+		t.Logf("phase interpreter start goroutines=%d GOMAXPROCS=%d", runtime.NumGoroutine(), runtime.GOMAXPROCS(0))
+		stopDiagnostic = startPhaseDiagnostic(55*time.Second, func() string {
+			var snapshot bytes.Buffer
+			if err := pprof.Lookup("goroutine").WriteTo(&snapshot, 2); err != nil {
+				return "goroutine snapshot failed: " + err.Error()
+			}
+			return snapshot.String()
+		})
+		defer stopDiagnostic()
+	}
 	runErr := r.Run(runtimeCtx, program.File)
+	var diagnostic string
+	if stopDiagnostic != nil {
+		diagnostic = stopDiagnostic()
+		t.Logf("phase interpreter end goroutines=%d", runtime.NumGoroutine())
+	}
 	runtimeCancel()
 	logPhase("interpreter", runtimeStart)
 	if err := runErr; err != nil {
+		if diagnostic != "" {
+			t.Logf("slow interpreter snapshot at 55s (execution limit remains 60s):\n%s", diagnostic)
+		}
 		t.Fatalf("Runner: %v out=%q err=%q", err, out.String(), errout.String())
 	}
 	if normalize(out.String()) != normalize(wantOut) || errout.String() != wantErr {

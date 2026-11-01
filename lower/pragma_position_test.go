@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -43,8 +44,10 @@ func TestGoSourcePragmaPosition(t *testing.T) {
 			if err := os.WriteFile(generated, result.Source, 0o600); err != nil {
 				t.Fatal(err)
 			}
-			cmd := exec.Command("go", "tool", "compile", "-p=pragmafixture", "-o", generated+".o", generated)
-			cmd.Env = append(os.Environ(), "GOTOOLCHAIN=go1.27.1")
+			// Use the SDK running this test: provisioning another toolchain is
+			// not a compiler diagnostic and must not contaminate the exact oracle.
+			cmd := exec.Command(filepath.Join(runtime.GOROOT(), "bin", "go"), "tool", "compile", "-p=pragmafixture", "-o", generated+".o", generated)
+			cmd.Env = append(os.Environ(), "GOTOOLCHAIN=local", "GOWORK=off")
 			output, runErr := cmd.CombinedOutput()
 			if (runErr != nil) != tc.wantStatus {
 				t.Fatalf("compiler status error = %v, want failure %v\n%s\n--- generated\n%s", runErr, tc.wantStatus, output, result.Source)
