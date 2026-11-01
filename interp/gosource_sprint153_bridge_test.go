@@ -11,17 +11,9 @@ package interp_test
 // bashpp_native_structured_test.go.
 
 import (
-	"bytes"
-	"context"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
-	"time"
-
-	"mvdan.cc/sh/v3/gosource"
-	"mvdan.cc/sh/v3/interp"
-	"mvdan.cc/sh/v3/syntax"
 )
 
 // differSprint153 runs every .go program in one mechanism directory through
@@ -87,34 +79,16 @@ func TestGoSourceBridgeSliceReconcile(t *testing.T) {
 	differSprint153(t, "slice-reconcile")
 }
 
-// TestGoSourceBridgeSliceRetainedRefusal proves the remaining class is
-// refused, not hung: slice storage the buffer writeback cannot reach — here
-// nested inside another slice — fails fast with the retention message.
+// TestGoSourceBridgeSliceRetainedRefusal retains the historical fixture and
+// test identity. Sprint 374 added shared-view Reverse, so this formerly refused
+// nested slice must now match native Go rather than reintroduce the old refusal.
 func TestGoSourceBridgeSliceRetainedRefusal(t *testing.T) {
 	path := filepath.Join("testdata", "sprint153", "slice-reconcile", "retained_refusal.go.txt")
 	source, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	program, err := gosource.Parse(bytes.NewReader(source), path, gosource.Options{RunMain: true})
-	if err != nil {
-		t.Fatalf("gosource.Parse: %v", err)
-	}
-	var stdout, stderr bytes.Buffer
-	runner, err := interp.New(interp.Lang(syntax.LangBashPP), interp.Dir(t.TempDir()),
-		interp.StdIO(strings.NewReader(""), &stdout, &stderr))
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	err = runner.Run(ctx, program.File)
-	if ctx.Err() != nil {
-		t.Fatal("retained-slice refusal timed out instead of failing fast")
-	}
-	if err == nil || !strings.Contains(err.Error(), "native slice retention or mutation is unsupported") {
-		t.Fatalf("want retention refusal, got err=%v stdout=%q stderr=%q", err, stdout.String(), stderr.String())
-	}
+	differGoSource(t, string(source), nil, "")
 }
 
 // TestGoSourceBridgeGenericInstantiation covers instantiated local generic

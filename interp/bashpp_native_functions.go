@@ -561,6 +561,11 @@ func (r *Runner) bashPPRunCallbackFunc(ctx context.Context, fn *bashPPFunc, args
 }
 
 func synchronousFunctionCallback(req bashPPEvalRequest, q bashPPBridgeRequest) bool {
+	// Lifetime proof alone cannot establish semantic equivalence for an
+	// allocation observer: bridge callbacks add their own allocations.
+	if nativeSliceCallable(req, q) == "testing.AllocsPerRun" {
+		return false
+	}
 	if q.sourceSynchronousCallback {
 		return true
 	}
