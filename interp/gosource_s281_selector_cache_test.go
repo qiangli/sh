@@ -45,10 +45,12 @@ func itoaSelCache(n int) string {
 
 // genWideFieldRead builds a program with a struct of numFields int fields whose
 // last field is read iters times in a hot loop. Each read resolves the field
-// selector; unmemoized, that resolution walks every field.
+// selector; unmemoized, that resolution walks every field. The checksum uses
+// interpreted println: importing fmt would time native-helper compilation of
+// the mirrored wide type as well, confounding selector cost with SDK/cache I/O.
 func genWideFieldRead(numFields, iters int) string {
 	var sb strings.Builder
-	sb.WriteString("package main\n\nimport \"fmt\"\n\ntype wide struct {\n")
+	sb.WriteString("package main\n\ntype wide struct {\n")
 	for i := 0; i < numFields; i++ {
 		sb.WriteString("\tf")
 		sb.WriteString(itoaSelCache(i))
@@ -61,7 +63,7 @@ func genWideFieldRead(numFields, iters int) string {
 	sb.WriteString(itoaSelCache(iters))
 	sb.WriteString("; i++ {\n\t\tsum += w.f")
 	sb.WriteString(last)
-	sb.WriteString("\n\t}\n\tfmt.Println(sum)\n}\n")
+	sb.WriteString("\n\t}\n\tprintln(sum)\n}\n")
 	return sb.String()
 }
 
@@ -81,10 +83,10 @@ func runSelCacheProgram(tb testing.TB, src string) (time.Duration, string) {
 	start := time.Now()
 	err = runner.Run(ctx, program.File)
 	d := time.Since(start)
-	if err != nil || errout.Len() > 0 {
-		tb.Fatalf("err=%v stderr=%s", err, errout.String())
+	if err != nil || out.Len() > 0 {
+		tb.Fatalf("err=%v stdout=%q stderr=%q", err, out.String(), errout.String())
 	}
-	return d, strings.TrimSpace(out.String())
+	return d, strings.TrimSpace(errout.String())
 }
 
 func TestSelectorResolutionScales(t *testing.T) {
@@ -102,9 +104,9 @@ func TestSelectorResolutionScales(t *testing.T) {
 		iters, narrow, narrowDur, wide, wideDur, float64(wideDur)/float64(narrowDur))
 
 	// A 256x wider struct must not cost anywhere near 256x. With the selector
-	// cache the marginal per-read cost is amortized O(1); measured ratio is
-	// ~2.5 with the cache versus ~5 without, so a factor of 4 both fails the
-	// unmemoized path and leaves ample headroom for machine and GC noise.
+	// cache the marginal per-read cost is amortized O(1). The factor of 4
+	// rejects the unmemoized path while leaving headroom for machine and GC
+	// noise, independently of native dependency helper build/cache costs.
 	if ratio := float64(wideDur) / float64(narrowDur); ratio > 4.0 {
 		t.Fatalf("selector read cost scales with field count: %.2fx from %d to %d fields (want < 4x)",
 			ratio, narrow, wide)
