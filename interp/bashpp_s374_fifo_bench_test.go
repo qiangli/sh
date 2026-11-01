@@ -8,7 +8,7 @@ import "testing"
 // for the loop or its synchronization.
 func BenchmarkBashPPFIFORegistryContention(b *testing.B) {
 	const goroutines = 8
-	const statementsPerGoroutine = 200
+	const statementsPerGoroutine = 200 // bashpp-racegate:safe-private immutable benchmark workload constant
 	const source = `package main
 func main() {
 	done := make(chan bool, 8)

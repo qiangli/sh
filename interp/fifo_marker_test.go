@@ -138,7 +138,7 @@ func TestValidFifoLeaf(t *testing.T) {
 // mkfifo calls must never name the same pipe — a FIFO recreated after an
 // unlink is a new and distinct one.
 func TestNewFifoLeaf(t *testing.T) {
-	seen := make(map[string]bool)
+	seen := make(map[string]bool) // bashpp-racegate:safe-private local to this serial uniqueness loop
 	for range 100 {
 		leaf := newFifoLeaf()
 		if !validFifoLeaf(leaf) {

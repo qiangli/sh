@@ -1,7 +1,6 @@
 package interp
 
 import (
-	"bytes"
 	"context"
 	"os"
 	"path/filepath"
@@ -39,7 +38,7 @@ func TestStrictPosixAsyncExitTrapRedirection(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				var stdout, stderr bytes.Buffer
+				var stdout, stderr syncBuffer // background jobs and post-run snapshots use the same mutex
 				dir := t.TempDir()
 				r, err := New(Dir(dir), StdIO(nil, &stdout, &stderr), WithStrictPosix(strict))
 				if err != nil {
@@ -54,7 +53,7 @@ func TestStrictPosixAsyncExitTrapRedirection(t *testing.T) {
 				if strict {
 					want = tc.strictOut
 				}
-				if stdout.String() != want || stderr.Len() != 0 {
+				if stdout.String() != want || stderr.String() != "" {
 					t.Fatalf("stdout=%q want=%q stderr=%q", stdout.String(), want, stderr.String())
 				}
 				if tc.fileOut != "" {

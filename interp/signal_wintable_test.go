@@ -17,8 +17,8 @@ func TestWindowsSignalTableRoundTrips(t *testing.T) {
 	if len(table) != 64 {
 		t.Fatalf("table has %d entries, want 64 (31 named + RTMIN..RTMAX)", len(table))
 	}
-	seenNum := map[int]bool{}
-	seenName := map[string]bool{}
+	seenNum := map[int]bool{}     // bashpp-racegate:safe-private local to this test invocation; no spawned users
+	seenName := map[string]bool{} // bashpp-racegate:safe-private local to this test invocation; no spawned users
 	for i, e := range table {
 		if e.Num != i+1 {
 			t.Errorf("entry %d (%s) has number %d; the table must be dense 1..64", i, e.Name, e.Num)
