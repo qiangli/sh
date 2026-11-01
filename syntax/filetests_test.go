@@ -4928,6 +4928,32 @@ var fileTests = []fileTestCase{
 	fileTest(
 		[]string{
 			`let a=(1 + 2) b=3+4`,
+		},
+		langFile(letClause(
+			&BinaryArithm{
+				Op: Assgn,
+				X:  litWord("a"),
+				Y: parenArit(&BinaryArithm{
+					Op: Add,
+					X:  litWord("1"),
+					Y:  litWord("2"),
+				}),
+			},
+			&BinaryArithm{
+				Op: Assgn,
+				X:  litWord("b"),
+				Y: &BinaryArithm{
+					Op: Add,
+					X:  litWord("3"),
+					Y:  litWord("4"),
+				},
+			},
+		), LangMirBSDKorn|LangZsh),
+		langFile(letClause(word(lit("a="), lit("("), lit("1"), lit(" "), lit("+"), lit(" "), lit("2"), lit(")")), litWord("b=3+4")), LangBash),
+		langErr2("1:7: the `let` builtin is a bash feature; tried parsing as LANG", LangPOSIX),
+	),
+	fileTest(
+		[]string{
 			`let a=(1+2) b=3+4`,
 		},
 		langFile(letClause(
@@ -4950,7 +4976,7 @@ var fileTests = []fileTestCase{
 				},
 			},
 		), LangMirBSDKorn|LangZsh),
-		langErr2("1:7: statements must be separated by &, ; or a newline", LangBash),
+		langFile(letClause(word(lit("a="), lit("("), lit("1+2"), lit(")")), litWord("b=3+4")), LangBash),
 		langErr2("1:7: the `let` builtin is a bash feature; tried parsing as LANG", LangPOSIX),
 	),
 	fileTest(

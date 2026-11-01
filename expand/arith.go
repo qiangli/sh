@@ -160,7 +160,7 @@ func (cfg *Config) arithmIndexedParamLiteral(word *syntax.Word) (string, bool, e
 		// expansion to the result of a subscript's parameter expansion, so
 		// the key must match how the assignment path (resolveAritLvalue)
 		// computed it — a plain Literal of the original index word.
-		key, lerr := Literal(cfg, word)
+		key, lerr := cfg.arithmAssocKey(word)
 		if lerr != nil {
 			return "", true, lerr
 		}
@@ -810,7 +810,15 @@ func arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 		// operators — `let "jv *= 2"` quotes the whole expression
 		// in a Word, but we still need to evaluate it.
 		if containsArithOp(str) {
-			if err := expandedAssocSubscriptError(str); err != nil {
+			parseText, rawKeys := cfg.protectLetAssocKeys(str)
+			// let receives already expanded command arguments. A surviving
+			// dollar operand is arithmetic data, not another shell expansion.
+			if cfg.LetArithmetic {
+				if token := letDollarArithmToken(parseText); token != "" {
+					return 0, &ArithmError{Text: str, Err: fmt.Errorf("arithmetic syntax error: operand expected (error token is %q)", token)}
+				}
+			}
+			if err := expandedAssocSubscriptError(parseText); err != nil {
 				return 0, err
 			}
 			// Check for literal `$` tokens in single-quoted text before re-parsing.
@@ -820,7 +828,7 @@ func arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 					return 0, fmt.Errorf("arithmetic syntax error: operand expected (error token is %q)", token)
 				}
 			}
-			file, perr := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader("(("+str+"))"), "")
+			file, perr := syntax.NewParser(syntax.Variant(syntax.LangBash)).Parse(strings.NewReader("(("+parseText+"))"), "")
 			if perr != nil {
 				return 0, &ArithmError{Text: str, Err: arithmParseError(str, perr)}
 			}
@@ -831,7 +839,17 @@ func arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 					if word, isWord := ac.X.(*syntax.Word); !isWord || arithmWordHasParam(word) {
 						prev := cfg.arithmParamValues
 						cfg.arithmParamValues = nil
+						previousKeys := cfg.arithmRawAssocKeys
+						if len(rawKeys) > 0 {
+							bound, bindErr := bindLetAssocKeys(ac.X, rawKeys, previousKeys)
+							if bindErr != nil {
+								cfg.arithmParamValues = prev
+								return 0, bindErr
+							}
+							cfg.arithmRawAssocKeys = bound
+						}
 						n, err := Arithm(cfg, ac.X)
+						cfg.arithmRawAssocKeys = previousKeys
 						cfg.arithmParamValues = prev
 						if err != nil {
 							if _, ok := err.(*ArithmError); ok {
@@ -1212,10 +1230,23 @@ func (cfg *Config) resolveAritLvalue(lval arithLvalue) (arithLvalue, error) {
 	if lval.index == nil || lval.indexSet {
 		return lval, nil
 	}
-	if vr := cfg.Env.Get(lval.name); vr.Kind == Associative {
+	vr := cfg.Env.Get(lval.name)
+	// Expanded raw keys must resolve through the same nameref as reads.
+	if word, ok := lval.index.(*syntax.Word); ok {
+		if _, raw := cfg.arithmRawAssocKeys[word]; raw {
+			if name, resolved := vr.Resolve(cfg.Env); name != "" {
+				lval.name, vr = name, resolved
+			}
+		}
+	}
+	if vr.Kind == Associative {
 		word, ok := lval.index.(*syntax.Word)
 		if !ok {
 			return lval, fmt.Errorf("bad array subscript")
+		}
+		if key, ok := cfg.arithmRawAssocKeys[word]; ok {
+			lval.indexKey, lval.indexAssoc, lval.indexSet = key, true, true
+			return lval, nil
 		}
 		// With `assoc_expand_once` set, a `let` subscript is expanded
 		// only once: quote characters that survive that single word

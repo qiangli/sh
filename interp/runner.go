@@ -771,6 +771,7 @@ func (r *Runner) arithm(expr syntax.ArithmExpr) int {
 }
 
 func (r *Runner) letArithm(expr syntax.ArithmExpr) int {
+	sourcePos := expr.Pos()
 	if exprText, ok := r.letEmptyQuotedBinary(expr); ok {
 		r.errf("%slet: %s: arithmetic syntax error: operand expected (error token is \"\"\"\")\n",
 			r.bashErrPrefix(expr.Pos()), exprText)
@@ -797,7 +798,7 @@ func (r *Runner) letArithm(expr syntax.ArithmExpr) int {
 			prefix = "bash"
 		}
 		err := fmt.Errorf("%s: line %d: let: %s: bad array subscript (error token is %q)",
-			prefix, expr.Pos().Line(), exprText, token)
+			prefix, sourcePos.Line(), exprText, token)
 		r.lastArithErr = err
 		r.expandErr(err)
 		return 0
@@ -818,17 +819,6 @@ func (r *Runner) letArithm(expr syntax.ArithmExpr) int {
 		}
 		exprTextOverride = arithErr.Text
 		err = arithErr.Err
-	}
-	// A re-parsed $( … )/`…` operand reports as "<operand>: <msg>" with
-	// no `let:` framing, the same as arithmetic expansion and commands.
-	if err != nil && r.bashCompatErrors && exprTextOverride != "" {
-		if msg := err.Error(); strings.Contains(msg, "arithmetic syntax error: operand expected") &&
-			(strings.Contains(msg, "error token is \"$") || strings.Contains(msg, "error token is \"`")) {
-			err = r.bashArithmError(expr, err, false, exprTextOverride)
-			r.lastArithErr = err
-			r.expandErr(err)
-			return n
-		}
 	}
 	if err != nil && r.bashCompatErrors {
 		exprText := r.arithmSourceText(expr, false)
@@ -860,10 +850,10 @@ func (r *Runner) letArithm(expr syntax.ArithmExpr) int {
 		}
 		if msg := err.Error(); strings.HasPrefix(msg, `"`) &&
 			strings.Contains(msg, ": arithmetic syntax error") {
-			err = fmt.Errorf("%s: line %d: %s", prefix, expr.Pos().Line(), msg)
+			err = fmt.Errorf("%s: line %d: %s", prefix, sourcePos.Line(), msg)
 		} else {
 			err = fmt.Errorf("%s: line %d: let: %s: %s",
-				prefix, expr.Pos().Line(), exprText, err)
+				prefix, sourcePos.Line(), exprText, err)
 		}
 	}
 	r.lastArithErr = err

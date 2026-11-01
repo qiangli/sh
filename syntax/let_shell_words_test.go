@@ -26,6 +26,8 @@ func TestLetShellWords(t *testing.T) {
 		{`let !`, 1, 0},
 		{`let a:b`, 1, 0},
 		{`let "n=(1 + 2)"`, 1, 0},
+		{`let n=(6 + 4) m=(8 + 5)`, 2, 0},
+		{`let n=(6*4)/2`, 1, 0},
 		{"let n=1 \\\n n+=2", 2, 0},
 	}
 	for _, lang := range []LangVariant{LangBash, LangBats, LangBashPP} {
@@ -92,8 +94,18 @@ func TestLetDialectBoundaries(t *testing.T) {
 				}
 			}
 			_, err = NewParser(Variant(lang)).Parse(strings.NewReader(`let i=(1 + 2)`), "")
-			if (err == nil) != (lang == LangMirBSDKorn || lang == LangZsh) {
+			if (err == nil) != (lang != LangPOSIX) {
 				t.Fatalf("grouped unquoted operand: %v", err)
+			}
+		})
+	}
+}
+
+func TestLetParenthesisGrammar(t *testing.T) {
+	for _, src := range []string{`let (2+3)`, `let n=2/(3+4)`, `let n=(2 + (3*4))`, `let n=(1 > 0)`, `if false; then let n=(.; fi`} {
+		t.Run(src, func(t *testing.T) {
+			if _, err := NewParser(Variant(LangBash)).Parse(strings.NewReader(src), ""); err == nil {
+				t.Fatal("invalid shell parenthesis grammar accepted")
 			}
 		})
 	}

@@ -18,7 +18,7 @@ case i in foo) bar ;; esac
 (foo)
 foo() { bar; }
 declare foo
-let 'foo=(bar)+3'
+let foo=(bar)+3
 time foo
 coproc foo
 ((2))

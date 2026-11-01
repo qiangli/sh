@@ -253,7 +253,8 @@ type Config struct {
 	// arithmParamValues snapshots explicit parameter expansions inside
 	// a single arithmetic expression. Bare arithmetic variables remain
 	// live, but `$x` expands before arithmetic side effects run.
-	arithmParamValues map[*syntax.ParamExp]string
+	arithmParamValues  map[*syntax.ParamExp]string
+	arithmRawAssocKeys map[*syntax.Word]string
 
 	// LetArithmetic is set by the interpreter while evaluating the
 	// `let` builtin, whose subscript quote handling differs from

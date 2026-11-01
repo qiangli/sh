@@ -3931,6 +3931,16 @@ func (p *Parser) letClause(s *Stmt) {
 			if w == nil {
 				break
 			}
+			// Bash accepts assignment-shaped parenthesized operands here,
+			// using shell array-assignment grammar rather than arithmetic
+			// grouping (nested parentheses and redirections remain errors).
+			if prefix := w.Lit(); p.tok == leftParen && !p.spaced &&
+				strings.HasSuffix(prefix, "=") && ValidName(strings.TrimSuffix(strings.TrimSuffix(prefix, "="), "+")) {
+				w.Parts = append(w.Parts, p.evalArrayArgParts()...)
+				if !p.spaced {
+					w.Parts = p.wordParts(w.Parts)
+				}
+			}
 			lc.Exprs = append(lc.Exprs, w)
 		}
 		s.Cmd = lc

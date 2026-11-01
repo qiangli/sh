@@ -19,6 +19,8 @@ func TestLetShellWordsRuntime(t *testing.T) {
 		{"interleaved-redirect", `let n=1 >out n+=2; printf '%s:%s' "$?" "$n"`, "0:3"},
 		{"adjacent-redirect", `n=1; let n>out; printf '%s:%s' "$?" "$n"`, "0:1"},
 		{"quoted-comparison", `n=1; let 'n>0'; printf '%s:%s' "$?" "$n"`, "0:1"},
+		{"assignment-group", `let n=(6 + 4) m=(8 + 5); printf '%s:%s' "$n" "$m"`, "10:13"},
+		{"assignment-group-tail", `let n=(6*4)/2; printf '%s' "$n"`, "12"},
 		{"quoted-group", `let "n=(1 + 2)"; printf '%s:%s' "$?" "$n"`, "0:3"},
 		{"unreachable-operand", `if false; then let .sh.subshell; fi; printf reached`, "reached"},
 		{"unreachable-case", `case bash in ksh) let .sh.subshell;; esac; printf reached`, "reached"},
@@ -33,6 +35,8 @@ func TestLetShellWordsRuntime(t *testing.T) {
 		{"abort-on-error", `let 1/0 n=4 2>err; printf '%s:%s' "$?" "${n-unset}"`, "1:unset"},
 		{"empty-unquoted", `args=; let $args 2>err; printf '%s' "$?"`, "1"},
 		{"valid-assoc-comma", `declare -A a; a[x]=1; let 'a[x],n=2'; printf '%s' "$n"`, "2"},
+		{"raw-key-option-unset", `shopt -u assoc_expand_once; declare -A m; k="'clock'"; let "m[$k]=4"; printf '%s' "${m[clock]}"`, "4"},
+		{"ordinary-arithmetic", `shopt -s assoc_expand_once; declare -A m; k="o'clock"; ((m[$k]=4)); printf '%s' "${m[$k]}"`, "4"},
 		{"last-operand", `let 1 0; printf '%s:' "$?"; let 0 1; printf '%s' "$?"`, "1:0"},
 	}
 	for _, tc := range cases {
