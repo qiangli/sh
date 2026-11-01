@@ -25,3 +25,10 @@ multiline interpreter cases pass alongside existing TestQuoteArrayFidelity
 5.3.15, including a quoted associative-array operand before and after another
 operand. bash formatter, diff and public scrub checks passed. No foreign
 modernish suite or full product build ran locally; hosted gates remain pending.
+
+Review follow-up: scan the borrowed source byte slice directly, avoiding a
+whole-script-tail string conversion per unset. Only an individual token is
+converted for command-name comparison. An allocation regression exercises the
+actual Runner source accessor with empty and 4 MiB irrelevant tails: both use
+zero allocations for an operand-free unset. All scanner/continuation/quote
+checks still pass (0.473s). No unsafe conversion or second lexer was added.

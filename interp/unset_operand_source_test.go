@@ -3,6 +3,7 @@ package interp
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"mvdan.cc/sh/v3/syntax"
 	"reflect"
 	"strings"
@@ -32,7 +33,7 @@ func TestScanUnsetOperandSourcesBoundaries(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var got []bool
-			for _, operand := range scanUnsetOperandSources(tc.line) {
+			for _, operand := range scanUnsetOperandSources([]byte(tc.line)) {
 				got = append(got, operand.quoted)
 			}
 			if !reflect.DeepEqual(got, tc.want) {
@@ -66,6 +67,25 @@ func TestUnsetContinuedOperands(t *testing.T) {
 			}
 			if out.String() != tc.want {
 				t.Fatalf("output=%q want=%q", out.String(), tc.want)
+			}
+		})
+	}
+}
+
+// Even a large script tail must stay borrowed: an unset with no operands needs
+// no result allocation, and scanning stops at its first unescaped newline.
+func TestUnsetOperandSourcesDoesNotCopyScriptTail(t *testing.T) {
+	for _, size := range []int{0, 4 << 20} {
+		t.Run(fmt.Sprint(size), func(t *testing.T) {
+			source := append([]byte("unset\n"), bytes.Repeat([]byte("x"), size)...)
+			r := &Runner{bashSource: source}
+			allocations := testing.AllocsPerRun(20, func() {
+				if got := r.unsetOperandSources(syntax.NewPos(0, 1, 1)); len(got) != 0 {
+					panic("scanned beyond logical line")
+				}
+			})
+			if allocations != 0 {
+				t.Fatalf("irrelevant tail %d bytes: %.0f allocations per scan, want zero", size, allocations)
 			}
 		})
 	}
