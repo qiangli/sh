@@ -46,3 +46,17 @@ hosted Bash 5.3 gates remain required; this is not a conformance pass claim.
 Known pre-existing diagnostic differences outside this fix: nested indexed/assoc
 malformed-key wording and BashCompat let division-by-zero wording. Rejection and
 no-mutation are asserted for the nested case; existing division assertions remain.
+
+
+### Hosted full-shell follow-up
+
+The prior full-shell run also exposed shfmt's flags fixture expecting `let a+`
+to fail Bash parsing. GNU Bash 5.3.15 accepts authored `let n+` under -n and
+reports the malformed arithmetic only on execution (status 1). Updated the
+default/explicit Bash formatter expectations to success with exact output;
+retained mksh rejection and POSIX successes. Focused TestScript/flags passed.
+
+The unchanged interp Example now passes on 84cfca80. Its parenthesized assignment
+also produced the documented abc123 5/global_value output in an authored Bash
+comparison. No Example edits are needed. Separate hosted SDK-download stderr and
+macOS chanlinear interpreter deadline failures were reported for other workers.
