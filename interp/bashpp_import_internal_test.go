@@ -301,7 +301,7 @@ endpoint.Host = "changed.test"
 		}
 		const wantStderr = "BASHPP-EREADONLY-MUTATION: cannot mutate readonly value \"endpoint\" through field .Host\n"
 		if stderr.String() != wantStderr {
-			t.Fatalf("stderr = %q, want %q", stderr.String(), wantStderr)
+			t.Fatalf("stderr = %q, want %q; Run error = %v", stderr.String(), wantStderr, err)
 		}
 		if !errors.Is(err, ExitStatus(2)) {
 			t.Fatalf("error = %v, want exit status 2", err)
@@ -327,7 +327,7 @@ endpoint.Host = "changed.test"
 	if runtime.GOOS == "windows" {
 		testBinary += ".exe"
 	}
-	build := exec.Command(goBinary, "test", "-c", "-trimpath", "-o", testBinary, "mvdan.cc/sh/v3/interp")
+	build := exec.Command(goBinary, "test", "-c", "-tags=full", "-trimpath", "-o", testBinary, "mvdan.cc/sh/v3/interp")
 	build.Env = append(bashPPEnvWithout(os.Environ(), "GOROOT", "GOTOOLCHAIN"), "CGO_ENABLED=0", "GOTOOLCHAIN=local")
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build trimpath child: %v\n%s", err, out)

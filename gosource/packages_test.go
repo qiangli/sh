@@ -705,12 +705,9 @@ func TestDuplicateTopLevelNameStillRefused(t *testing.T) {
 	}
 }
 
-// TestMappedTypeNameKnownDifference documents the limit that remains after
-// name mangling: the flat file spells every linked type under the program's
-// package, and a mapped type by its rename, so a mapped a.T prints as
-// main.__gosource_pkg_0_T where go run prints a.T. Pinned, not hidden; a
-// display name for the type would have to be registered by the native
-// dependency bridge, which mirrors the type into its helper under that name.
+// TestMappedTypeNameKnownDifference retains the historical regression name,
+// but now requires mapped types to preserve their original package display
+// name, matching native Go for both direct and dependency-local formatting.
 func TestMappedTypeNameKnownDifference(t *testing.T) {
 	m := mappedProgram{
 		program: []Source{src("main.go", `package main
@@ -738,11 +735,12 @@ func New(n int) T { return T{N: n} }
 func Describe(t T) string { return fmt.Sprintf("%T", t) }
 `)}}},
 	}
-	if want, got := "a.T {3} 3\na.T\n", goRunMapped(t, m); got != want {
-		t.Fatalf("go run = %q, want %q", got, want)
+	native := goRunMapped(t, m)
+	if want := "a.T {3} 3\na.T\n"; native != want {
+		t.Fatalf("go run = %q, want %q", native, want)
 	}
-	if want, got := "main.__gosource_pkg_0_T {3} 3\nmain.__gosource_pkg_0_T\n", runMapped(t, m); got != want {
-		t.Fatalf("interp = %q, want the pinned known difference %q (if a mapped type now keeps its package, update this test and FINDINGS-M1.md)", got, want)
+	if want, got := native, runMapped(t, m); got != want {
+		t.Fatalf("interp = %q, want native Go %q", got, want)
 	}
 }
 

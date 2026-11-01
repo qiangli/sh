@@ -1,3 +1,8 @@
+> Sprint557 correction (story61b1156f9de1): the historical `%T` difference
+> described below is resolved. `TestMappedTypeNameKnownDifference` now requires
+> native parity (`a.T`) both in the caller and inside the mapped dependency.
+> The original findings below remain a record of Sprint151.
+
 # Sprint 151 M1 — running a Go program against the explicit package map
 
 Sprint: #151, Story: #72, Story-ID: 828995f7380b. Bounded spike, findings only;
