@@ -30,3 +30,35 @@ Reviewed repair evidence:
 - The directional-channel compile/runtime fixture was already repaired by
   5f83027e under story167. Nil-interface and resident method-value repairs remain
   under review. Full hosted shell and race acceptance remains required.
+
+Delivery note: separate pre-existing interface limitation
+
+The following diagnostic is separate from the 14 failures observed in hosted
+run 41327533961. A typed nil pointer to an imported concrete type can be refused
+when assigned to an imported interface containing a package-private method:
+
+```go
+package main
+
+import (
+    "fmt"
+    tree "go/ast"
+)
+
+func main() {
+    var x tree.Decl = (*tree.GenDecl)(nil)
+    fmt.Println(x == nil)
+}
+```
+
+Native Go accepts this program and prints `false`. The interpreter reports
+`BASHPP-EINTERFACE-MISSING: *tree.GenDecl does not implement interface (missing method declNode)`.
+The same refusal occurs without the import alias. Focused diagnostic overlays
+reproduced it with both the current nil-declaration code and the version before
+6c5220fd; that repair did not introduce the limitation. The typed nil has no
+dependency-owned handle, so admission falls back to local method lookup, which
+cannot resolve this imported private method.
+
+This migration repair preserves the existing fail-closed behavior. No interface
+admission policy was broadened, no assertion was removed, and this diagnostic
+is not counted as a newly passing gate or an exclusion from the full suite.
