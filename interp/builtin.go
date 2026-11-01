@@ -4233,6 +4233,17 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			exit.code = 2
 			return exit
 		}
+		// POSIX XBD 8.1 permits rejecting readonly OPTARG/OPTIND writes,
+		// but the utility must then fail. Bash compatibility deliberately
+		// retains success after diagnosing these assignments.
+		assignmentFailed := false
+		assign := func(name, value string) {
+			if r.strictPosix && r.lookupVar(name).ReadOnly {
+				assignmentFailed = true
+			}
+			r.setVarString(name, value)
+		}
+
 		optind, _ := strconv.Atoi(r.envGet("OPTIND"))
 		if optind-1 != r.optState.argidx {
 			if optind < 1 {
@@ -4285,15 +4296,23 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		nameRefBadTarget := nameVar.Kind == expand.NameRef && nameVar.Str == "" &&
 			!validNameRefTarget(string(storeOpt))
 		if !nameRefBadTarget {
-			r.setVarString(name, string(storeOpt))
+			assign(name, string(storeOpt))
 		}
 		// bash's getopts only surfaces the OPTARG-readonly diagnostic
 		// when it would have written to OPTARG (i.e. the default branch
 		// below): the unset that happens at the top of every getopts
 		// call is silent on readonly.
-		optargRO := r.lookupVar("OPTARG").ReadOnly
-		if !optargRO {
+		optargVar := r.lookupVar("OPTARG")
+		// A present but empty required argument is still an assignment.
+		strictEmptyArg := r.strictPosix && !done && opt != '?' && opt != ':' && strings.Contains(optstr, string(opt)+":")
+		writesOptarg := (optarg != "" || strictEmptyArg) && !(opt == '?' && diagnostics && !done || opt == ':' && diagnostics)
+		if !optargVar.ReadOnly {
 			r.delVar("OPTARG")
+		} else if r.strictPosix && optargVar.IsSet() && !writesOptarg {
+			// Clearing a previously set readonly OPTARG is also a rejected
+			// modification. Leave an already unset variable alone.
+			r.delVar("OPTARG")
+			assignmentFailed = true
 		}
 		// bash prefixes diagnostics with $0 (the script name) and prints
 		// the offending character unquoted (e.g. `./script.sh: illegal
@@ -4311,11 +4330,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		case opt == ':' && diagnostics:
 			r.errf("%s: option requires an argument -- %s\n", scriptName, optarg)
 		default:
-			if optarg != "" {
-				r.setVarString("OPTARG", optarg)
+			if writesOptarg {
+				assign("OPTARG", optarg)
 			}
 		}
-		r.setVarString("OPTIND", strconv.FormatInt(int64(r.optState.argidx+1), 10))
+		assign("OPTIND", strconv.FormatInt(int64(r.optState.argidx+1), 10))
 		// Bash reports a readonly OPTARG assignment but getopts still
 		// succeeds when it parsed an option.
 		if nameRefBadTarget {
@@ -4323,6 +4342,10 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 
 		exit.oneIf(done)
+		if assignmentFailed {
+			// Keep ordinary end-of-options (1) distinct from utility errors.
+			exit.code = 2
+		}
 
 	case "shopt":
 		if len(args) >= 2 && (args[0] == "--set" || args[0] == "--unset") {
