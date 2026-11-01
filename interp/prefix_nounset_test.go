@@ -81,3 +81,37 @@ func TestPrefixNamesNounset(t *testing.T) {
 		})
 	}
 }
+
+func TestPrefixNamesInvalidQuoted(t *testing.T) {
+	for _, op := range []string{"@", "*"} {
+		for _, nounset := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/nounset=%v", op, nounset), func(t *testing.T) {
+				src := `printf '%s' "${!1` + op + `}"; printf UNREACHED`
+				if nounset {
+					src = "set -u; " + src
+				}
+				f, err := syntax.NewParser().Parse(strings.NewReader(src), "case.sh")
+				if err != nil {
+					t.Fatal(err)
+				}
+				var out, errs bytes.Buffer
+				r, err := New(Dir(t.TempDir()), StdIO(nil, &out, &errs), WithBashCompatErrors(true))
+				if err != nil {
+					t.Fatal(err)
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+				defer cancel()
+				if err := r.Run(ctx, f); err == nil || out.Len() != 0 || !strings.Contains(errs.String(), "bad substitution") {
+					t.Fatalf("error=%v stdout=%q stderr=%q", err, out.String(), errs.String())
+				}
+				if reference := os.Getenv("SH_TEST_BASH_REFERENCE"); reference != "" {
+					cmd := exec.CommandContext(ctx, reference, "-c", src)
+					data, err := cmd.CombinedOutput()
+					if err == nil || !strings.Contains(string(data), "bad substitution") || strings.Contains(string(data), "UNREACHED") {
+						t.Fatalf("Bash error=%v output=%q", err, data)
+					}
+				}
+			})
+		}
+	}
+}

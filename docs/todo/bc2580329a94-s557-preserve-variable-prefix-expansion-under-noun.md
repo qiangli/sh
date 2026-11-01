@@ -37,3 +37,12 @@ Bounded tests passed with GOWORK=off, GOMAXPROCS=2, GOFLAGS=-p=2:
 
 No foreign fixture or full product build ran locally. Hosted Modernish and
 release conformance gates remain required; parent owns review/publication.
+
+
+### Review follow-up: invalid quoted names
+
+Parent review identified that the non-nil zero-field result must not bypass
+validation for `${!1@}`. Added explicit name validation before both quoted prefix
+paths. Four authored quoted-invalid cases (@/*, nounset on/off) now fail with bad
+substitution before subsequent commands, also confirmed against GNU Bash 5.3.15.
+All 20 prefix differential cases and existing error-boundary tests pass.

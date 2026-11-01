@@ -4895,6 +4895,9 @@ func (cfg *Config) quotedElemFields(pe *syntax.ParamExp) ([]string, error) {
 	}
 	name := pe.Param.Value
 	if pe.Excl {
+		if pe.Names != 0 && !syntax.ValidName(name) {
+			return nil, BadSubstitutionError{Node: pe}
+		}
 		switch pe.Names {
 		case syntax.NamesPrefixWords: // "${!prefix@}"
 			names := cfg.namesByPrefix(pe.Param.Value)
