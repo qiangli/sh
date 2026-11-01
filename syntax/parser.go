@@ -576,6 +576,8 @@ func (p *Parser) Arithmetic(r io.Reader) (ArithmExpr, error) {
 // Parser holds the internal state of the parsing mechanism of a
 // program.
 type Parser struct {
+	commandWordObserver func(string, Pos) error
+
 	src io.Reader
 	bs  []byte // current chunk of read bytes
 	bsp uint   // offset within [Parser.bs] for the rune after [Parser.r]
@@ -2845,6 +2847,9 @@ func (p *Parser) doRedirect(s *Stmt) {
 }
 
 func (p *Parser) getStmt(readEnd, binCmd, fnBody bool) *Stmt {
+	if !p.observeCommandWord() {
+		return nil
+	}
 	pos, ok := p.gotRsrv("!")
 	s := &Stmt{Position: pos}
 	if ok {
@@ -2960,6 +2965,9 @@ func (p *Parser) gotStmtPipe(s *Stmt, binCmd bool) *Stmt {
 		p.doRedirect(s)
 	}
 	redirsStart := len(s.Redirs)
+	if !p.observeCommandWord() {
+		return nil
+	}
 	switch p.tok {
 	case _LitWord:
 		if p.lang.in(LangBashPP) && (p.bashppLabel(s) || p.bashppKeywordStatement(s)) {

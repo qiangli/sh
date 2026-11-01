@@ -2959,7 +2959,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			if r.noOpSetState["verbose"] {
 				r.errf("%s", content)
 			}
-			file, err = p.Parse(bytes.NewReader(content), path)
+			file, err = r.parseSourceAliases(p, content, path)
 		} else {
 			if r.noOpSetState["verbose"] {
 				content, rerr := io.ReadAll(f)
@@ -2967,9 +2967,13 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					return failf(1, "source: %v\n", rerr)
 				}
 				r.errf("%s", content)
-				file, err = p.Parse(bytes.NewReader(content), path)
+				file, err = r.parseSourceAliases(p, content, path)
 			} else {
-				file, err = p.Parse(f, path)
+				content, readErr := io.ReadAll(f)
+				if readErr != nil {
+					return failf(1, "source: %v\n", readErr)
+				}
+				file, err = r.parseSourceAliases(p, content, path)
 			}
 		}
 		if err != nil {
