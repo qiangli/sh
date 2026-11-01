@@ -1,7 +1,6 @@
 package interp
 
 import (
-	"fmt"
 	"strings"
 
 	"mvdan.cc/sh/v3/syntax"
@@ -60,7 +59,8 @@ type sourceAliasRange struct {
 }
 
 // parseSourceAliases retries only at lexer-identified command words. The
-// bounded reparse never executes partial trees or scans/replaces arbitrary text.
+// reparse never executes partial trees or scans/replaces arbitrary text. Alias
+// ancestry bounds recursion per occurrence, not the number of valid commands.
 // Alias definition/unalias commands inside this source are not executed early.
 func (r *Runner) parseSourceAliases(p *syntax.Parser, source []byte, path string) (*syntax.File, error) {
 	if !r.opts[optExpandAliases] || len(r.alias) == 0 {
@@ -89,7 +89,7 @@ func (r *Runner) parseSourceAliases(p *syntax.Parser, source []byte, path string
 		return &sourceAliasEdit{start, end, replacement, names}
 	})(p)
 	defer syntax.CommandWordObserver(nil)(p)
-	for n := 0; n < 1024; n++ {
+	for {
 		file, err := p.Parse(strings.NewReader(text), path)
 		edit, ok := err.(*sourceAliasEdit)
 		if !ok {
@@ -108,5 +108,4 @@ func (r *Runner) parseSourceAliases(p *syntax.Parser, source []byte, path string
 		text = text[:edit.start] + edit.replacement + text[edit.end:]
 		ranges = append(ranges, sourceAliasRange{edit.start, edit.start + len(edit.replacement), edit.names})
 	}
-	return nil, fmt.Errorf("%s: source alias expansion limit exceeded", path)
 }
