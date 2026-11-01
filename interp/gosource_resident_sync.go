@@ -184,14 +184,32 @@ func (r *Runner) goSourceResidentSyncRequest(ctx context.Context, q bashPPBridge
 			err = fmt.Errorf("native dependency panic: %v", p)
 		}
 	}()
-	if q.Op != "call" {
-		return nil, true, fmt.Errorf("unsupported resident sync operation %s", q.Op)
+	if q.Receiver.residentSyncMethod != "" {
+		if q.Op != "call" || q.Selector != "" {
+			return nil, true, fmt.Errorf("unsupported bound resident sync operation %s", q.Op)
+		}
+		receiver := *q.Receiver
+		q.Selector = receiver.residentSyncMethod
+		receiver.Type = receiver.residentSyncType
+		receiver.residentSyncMethod, receiver.residentSyncType = "", ""
+		q.Receiver = &receiver
 	}
 	typ := q.Receiver.Type
 	if q.Receiver.Kind == "pointer" && len(q.Receiver.Elements) == 1 {
 		typ = q.Receiver.Elements[0].Type
 	}
 	typ = strings.TrimPrefix(typ, "*")
+	if q.Op == "get" {
+		signature := residentSyncMethodSignature(typ, q.Selector)
+		if signature == "" {
+			return nil, true, fmt.Errorf("unsupported resident sync method %s.%s", typ, q.Selector)
+		}
+		return []bashPPBridgeValue{{Kind: "handle", Type: signature, Function: true,
+			residentSync: s, residentSyncMethod: q.Selector, residentSyncType: typ}}, true, nil
+	}
+	if q.Op != "call" {
+		return nil, true, fmt.Errorf("unsupported resident sync operation %s", q.Op)
+	}
 	switch typ {
 	case "sync.Mutex":
 		switch q.Selector {
@@ -427,4 +445,33 @@ func (r *Runner) goSourceResidentSyncRequest(ctx context.Context, q bashPPBridge
 		}
 	}
 	return nil, true, fmt.Errorf("unsupported resident sync method %s.%s", typ, q.Selector)
+}
+
+// Only methods already implemented by the resident call path can be captured.
+func residentSyncMethodSignature(typ, method string) string {
+	switch typ {
+	case "sync.Mutex", "sync.RWMutex":
+		switch method {
+		case "Lock", "Unlock":
+			return "func()"
+		case "TryLock":
+			return "func() bool"
+		}
+		if typ == "sync.RWMutex" {
+			switch method {
+			case "RLock", "RUnlock":
+				return "func()"
+			case "TryRLock":
+				return "func() bool"
+			}
+		}
+	case "sync.WaitGroup":
+		switch method {
+		case "Wait", "Done":
+			return "func()"
+		case "Add":
+			return "func(int)"
+		}
+	}
+	return ""
 }

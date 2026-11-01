@@ -42,6 +42,10 @@ type bashPPBridgeValue struct {
 	handleOwner  *bashPPHandleOwner    // shared by every interpreter copy; never serialized
 	Lease        uint64                `json:"lease,omitempty"`
 	residentSync *goSourceResidentSync // host-only; never serialized
+	// A bound resident method retains its receiver identity without sending
+	// synchronization state or a closure through the dependency transport.
+	residentSyncMethod string
+	residentSyncType   string
 	// deferredNativeComposite is return-boundary provenance minted only while
 	// evaluating the mirrored method frame's own return expression. The worker
 	// reconstructs the value at the declared reflect result type; the marker is
