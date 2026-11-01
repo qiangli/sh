@@ -496,22 +496,26 @@ func (r *Runner) unsetOperandSources(pos syntax.Pos) []unsetOperandSource {
 	if !ok {
 		return nil
 	}
-	end := offs
-	for end < len(r.bashSource) && r.bashSource[end] != '\n' {
-		end++
-	}
-	line := string(r.bashSource[offs:end])
-	return scanUnsetOperandSources(line)
+	// Let the operand scanner find the logical line boundary. Cutting at a
+	// physical newline loses continued operands and can leave a trailing escape.
+	return scanUnsetOperandSources(string(r.bashSource[offs:]))
 }
 
 func scanUnsetOperandSources(line string) []unsetOperandSource {
 	var operands []unsetOperandSource
 	i := 0
 	for i < len(line) {
-		for i < len(line) && (line[i] == ' ' || line[i] == '\t') {
-			i++
+		for i < len(line) {
+			if line[i] == ' ' || line[i] == '\t' {
+				i++
+			} else if strings.HasPrefix(line[i:], "\\\n") {
+				// A line continuation between words is not an operand.
+				i += 2
+			} else {
+				break
+			}
 		}
-		if i >= len(line) {
+		if i >= len(line) || line[i] == '\n' {
 			break
 		}
 		start := i
@@ -519,7 +523,10 @@ func scanUnsetOperandSources(line string) []unsetOperandSource {
 		for i < len(line) {
 			switch line[i] {
 			case '\\':
-				i += 2
+				i++
+				if i < len(line) {
+					i++
+				}
 			case '\'':
 				i++
 				for i < len(line) && line[i] != '\'' {
@@ -532,7 +539,10 @@ func scanUnsetOperandSources(line string) []unsetOperandSource {
 				i++
 				for i < len(line) {
 					if line[i] == '\\' {
-						i += 2
+						i++
+						if i < len(line) {
+							i++
+						}
 						continue
 					}
 					if line[i] == '"' {
@@ -541,14 +551,14 @@ func scanUnsetOperandSources(line string) []unsetOperandSource {
 					}
 					i++
 				}
-			case ' ', '\t':
+			case ' ', '\t', '\n':
 				goto wordDone
 			default:
 				i++
 			}
 		}
 	wordDone:
-		if line[start:i] == "unset" {
+		if strings.ReplaceAll(line[start:i], "\\\n", "") == "unset" {
 			continue
 		}
 		if strings.HasPrefix(line[start:i], "-") {
