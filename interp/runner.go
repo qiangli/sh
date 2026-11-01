@@ -238,6 +238,15 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 			shellHist.cmdSubst.Add(1)
 			r2.stmts(ctx, cs.Stmts)
 			shellHist.cmdSubst.Add(-1)
+			// A locally installed EXIT trap belongs to this substitution's
+			// subshell. Run it before closing the capture pipe or clearing
+			// its exit status; inherited parent traps remain non-executable.
+			// Cancellation and panics must not start new cleanup commands.
+			if ctx.Err() == nil {
+				if cb := r2.trapCallbacks["EXIT"]; cb != "" && !r2.inheritedExitTrap {
+					r2.trapCallback(ctx, cb, "exit")
+				}
+			}
 			r2.exit.exiting = false // subshells don't exit the parent shell
 			r2.exit.discarding = false
 			r2.exit.returning = false // and they swallow `return` locally
