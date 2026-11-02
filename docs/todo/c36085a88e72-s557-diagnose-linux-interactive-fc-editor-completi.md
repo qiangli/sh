@@ -7,7 +7,7 @@ status: assigned
 priority: p1
 created: 2026-11-02T02:37:24.581474Z
 weave: 1
-assignee: genie-glm-5.3
+assignee: claude-opus5.5
 sprint: 557
 sprint_id: f5ccf563-f5d1-5b94-8be4-9388e51ef86d
 sprint_title: 'Bashy v1.0.0 preparation: split private/public development and retire qiangli/dhnt'
