@@ -477,6 +477,30 @@ func (s *bashPPNativeSession) closeCanceled(cause error) {
 		}
 	})
 }
+func (s *bashPPNativeSession) waitNativeProcess(listener io.Closer) {
+	err := s.cmd.Wait()
+	// Process completion owns the forwarding lifetime even if a session
+	// owner retains the bridge. Join before publishing completion.
+	if s.stopSignals != nil {
+		s.stopSignals()
+	}
+	s.mu.Lock()
+	s.waitErr = err
+	conn := s.conn
+	s.mu.Unlock()
+	close(s.done)
+	// The child's descriptors are gone; retiring the host write ends lets
+	// each copier drain to EOF and flush the program's final output.
+	s.closeDrains()
+	_ = listener.Close()
+	if conn != nil {
+		// Serialize local close with writes and cancellation provenance.
+		s.write.Lock()
+		_ = conn.Close()
+		s.write.Unlock()
+	}
+}
+
 func bridgeImportIdentity(imports map[string]string) string {
 	data, _ := json.Marshal(imports)
 	return string(data)
@@ -807,32 +831,15 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 	// The helper owns the native standard-library state of the interpreted Go
 	// program. Keep it in an isolated process group for cleanup, but proxy the
 	// program process's catchable signals as an exec replacement would.
-	s.stopSignals = forwardBashPPNativeSignalsWithReport(cmd.Process.Pid, func(sig int) {
+	s.stopSignals = sync.OnceFunc(forwardBashPPNativeSignalsWithReport(cmd.Process.Pid, func(sig int) {
 		s.mu.Lock()
 		s.forwardedSignal = sig
 		s.mu.Unlock()
-	})
+	}))
 	s.cmd = cmd
 	s.done = make(chan struct{})
 	s.pending = make(map[uint64]chan bashPPBridgeResponse)
-	go func() {
-		err := cmd.Wait()
-		s.mu.Lock()
-		s.waitErr = err
-		conn := s.conn
-		s.mu.Unlock()
-		close(s.done)
-		// The child's descriptors are gone; retiring the host write ends lets
-		// each copier drain to EOF and flush the program's final output.
-		s.closeDrains()
-		_ = listener.Close()
-		if conn != nil {
-			// Serialize local close with writes and cancellation provenance.
-			s.write.Lock()
-			_ = conn.Close()
-			s.write.Unlock()
-		}
-	}()
+	go s.waitNativeProcess(listener)
 	if tcp, ok := listener.(*net.TCPListener); ok {
 		_ = tcp.SetDeadline(time.Now().Add(10 * time.Second))
 	}
