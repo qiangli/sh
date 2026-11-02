@@ -2681,7 +2681,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		if r.LangVariant() == syntax.LangBashPP {
 			syntax.Variant(syntax.LangBashPP)(p)
 		}
-		file, err := p.Parse(strings.NewReader(src), "")
+		file, err := r.parseEvalDeclarationAliases(p, []byte(src))
 		if err != nil {
 			if r.opts[optExpandAliases] {
 				if expanded, ok := r.expandRawAliasSource(src); ok {

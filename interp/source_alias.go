@@ -66,6 +66,18 @@ type sourceAliasRange struct {
 // ancestry bounds recursion per occurrence, not the number of valid commands.
 // Alias definition/unalias commands inside this source are not executed early.
 func (r *Runner) parseSourceAliases(p *syntax.Parser, source []byte, path string) (*syntax.File, error) {
+	return r.parseReadAliases(p, source, path, false)
+}
+
+// Eval reads new input with the caller's aliases. Declaration commands are
+// parsed as DeclClause rather than CallExpr, so their aliases must be expanded
+// before parsing consumes the assignment operands. Other eval aliases retain
+// their existing execution and parse-error retry paths.
+func (r *Runner) parseEvalDeclarationAliases(p *syntax.Parser, source []byte) (*syntax.File, error) {
+	return r.parseReadAliases(p, source, "", true)
+}
+
+func (r *Runner) parseReadAliases(p *syntax.Parser, source []byte, path string, declarationsOnly bool) (*syntax.File, error) {
 	if !r.opts[optExpandAliases] || len(r.alias) == 0 {
 		return p.Parse(strings.NewReader(string(source)), path)
 	}
@@ -93,9 +105,21 @@ func (r *Runner) parseSourceAliases(p *syntax.Parser, source []byte, path string
 			}
 		}
 		names := make(map[string]bool)
-		replacement, ok := r.sourceGrammarAlias(name, names)
-		if !ok {
-			return nil
+		var replacement string
+		if declarationsOnly {
+			switch name {
+			case "export", "readonly", "declare", "typeset", "local", "nameref":
+				replacement = aliasValue(r.alias[name])
+				names[name] = true
+			default:
+				return nil
+			}
+		} else {
+			var ok bool
+			replacement, ok = r.sourceGrammarAlias(name, names)
+			if !ok {
+				return nil
+			}
 		}
 		return &sourceAliasEdit{start, end, replacement, names}
 	})(p)
