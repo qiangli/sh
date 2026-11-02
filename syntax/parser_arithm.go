@@ -348,6 +348,20 @@ func (p *Parser) arithmExprValue(compact bool) ArithmExpr {
 		}
 	}
 
+	// Shell expansions can contribute empty text or operators after a
+	// parenthesized arithmetic operand. Preserve them as word parts so
+	// expansion (including lazy alternate bodies) precedes arithmetic parsing.
+	if _, grouped := x.(*ParenArithm); grouped && !compact && p.lang.in(langBashLike|LangPOSIX) {
+		switch p.tok {
+		case dollar, dollBrace, dollParen, dollDblParen, bckQuote:
+			if suffix := p.getWord(); suffix != nil {
+				parts := arithmeticWordParts(nil, x)
+				parts = append(parts, suffix.Parts...)
+				x = &Word{Parts: parts}
+			}
+		}
+	}
+
 	if compact && p.spaced {
 		return x
 	}
@@ -691,4 +705,47 @@ func (p *Parser) arithmEnd(ltok token, lpos Pos, old saveState) Pos {
 	pos := p.pos
 	p.next()
 	return pos
+}
+
+// arithmeticWordParts keeps shell expansions as nodes while spelling the
+// surrounding arithmetic as literal text. No arithmetic is evaluated here.
+func arithmeticWordParts(parts []WordPart, expr ArithmExpr) []WordPart {
+	literal := func(pos, end Pos, text string) {
+		parts = append(parts, &Lit{ValuePos: pos, ValueEnd: end, Value: text})
+	}
+	switch expr := expr.(type) {
+	case *Word:
+		for _, part := range expr.Parts {
+			switch part := part.(type) {
+			case *SglQuoted:
+				if !part.Dollar {
+					literal(part.Pos(), part.End(), "'"+part.Value+"'")
+					continue
+				}
+			case *ParamExp:
+				if !part.Dollar.IsValid() {
+					literal(part.Pos(), part.End(), arithmParamExpText(part))
+					continue
+				}
+			}
+			parts = append(parts, part)
+		}
+	case *ParenArithm:
+		literal(expr.Lparen, posAddCol(expr.Lparen, 1), "(")
+		parts = arithmeticWordParts(parts, expr.X)
+		literal(expr.Rparen, posAddCol(expr.Rparen, 1), ")")
+	case *UnaryArithm:
+		if expr.Post {
+			parts = arithmeticWordParts(parts, expr.X)
+		}
+		literal(expr.OpPos, posAddCol(expr.OpPos, len(expr.Op.String())), " "+expr.Op.String()+" ")
+		if !expr.Post {
+			parts = arithmeticWordParts(parts, expr.X)
+		}
+	case *BinaryArithm:
+		parts = arithmeticWordParts(parts, expr.X)
+		literal(expr.OpPos, posAddCol(expr.OpPos, len(expr.Op.String())), " "+expr.Op.String()+" ")
+		parts = arithmeticWordParts(parts, expr.Y)
+	}
+	return parts
 }
