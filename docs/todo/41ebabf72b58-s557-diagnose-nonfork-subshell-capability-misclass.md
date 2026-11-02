@@ -3,13 +3,15 @@ id: 41ebabf72b58
 kind: task
 title: S557 diagnose nonfork subshell capability misclassification
 seq: 190
-status: assigned
+status: done
 priority: p1
 created: 2026-11-02T04:22:01.021969Z
 assignee: s557-test-readiness
 sprint: 557
 sprint_id: f5ccf563-f5d1-5b94-8be4-9388e51ef86d
 sprint_title: 'Bashy v1.0.0 preparation: split private/public development and retire qiangli/dhnt'
+closed: 2026-11-02T04:36:14.212241Z
+closed_by: s557-manager
 ---
 
 Modernish41387486509 at umbrella6b423d63, Bashy69c1bfe9/Shdc51034c passes prior signal and export-alias blockers, but now exits128 in sanitycheck003: NONFORKSUBSH on non-ksh93. Preserve all fixtures and verdicts. Read exact capability discovery and sanity predicate before attribution. Earlier safe identity probe showed sibling command substitutions share depth-based BASHPID; investigate whether this causes current classification. Use authored GNU5.3 differential reproduction, no local foreign suite or unsafe OS signals. If identity repair is necessary, keep it bounded, preserve $$ ancestor semantics, deterministic mode, self-signal routing and existing process ownership. Do not introduce a broad process registry without evidence. Root owns integration and hosted acceptance; new story separate from188/189 already resolved mechanisms.

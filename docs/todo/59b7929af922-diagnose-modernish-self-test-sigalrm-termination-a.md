@@ -3,12 +3,14 @@ id: 59b7929af922
 kind: task
 title: Diagnose Modernish self-test SIGALRM termination after successful initialization
 seq: 188
-status: assigned
+status: done
 created: 2026-11-02T03:02:03.436993Z
 assignee: s557-test-readiness
 sprint: 557
 sprint_id: f5ccf563-f5d1-5b94-8be4-9388e51ef86d
 sprint_title: 'Bashy v1.0.0 preparation: split private/public development and retire qiangli/dhnt'
+closed: 2026-11-02T04:36:13.629686Z
+closed_by: s557-manager
 ---
 
 Hosted Modernish run 41380385436 at umbrella ed2b89b4, Bashy c9cf91cb, Sh13838f82 completes init/version with exit0 but self-test exits142 with no summary. Preserve the foreign fixture, all assertions and timeout. Read-only pinned-source analysis and bounded authored reproductions first; distinguish measured zero counters from unknown partial execution. No local foreign suite/full builds. Manager owns integration and hosted acceptance.
