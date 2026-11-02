@@ -3,13 +3,15 @@ id: 565c7507cbb1
 kind: bug
 title: S557 diagnose Windows printf shell-start timestamp mismatch
 seq: 181
-status: assigned
+status: done
 priority: p1
 created: 2026-11-02T00:55:16.928258Z
 assignee: s557-test-readiness
 sprint: 557
 sprint_id: f5ccf563-f5d1-5b94-8be4-9388e51ef86d
 sprint_title: 'Bashy v1.0.0 preparation: split private/public development and retire qiangli/dhnt'
+closed: 2026-11-02T01:26:18.464955Z
+closed_by: s557-manager
 ---
 
 Bash5341365164988 WindowsprintfnewFAIL one-second starttimestamp difference in -2format; Linux/macprintfPASS. Rawretained /tmp/s557-bash53-41365164988/bash53-windows-latest/_temp/umbrella-validation/bash53-diffs/printf.want and.got. Diagnose exactBash5.3fixturecontract and starttimecapture, authoredminimalchecks only; do notmodifyforeignfixture/normalizeawaytiming/hidefailure. Windowsfullmeasurement82/86includesarith,array(old176),glob-testknownfilesystemlimitation. Readsourceandreportminimalfix/proof, isolatedworktreecurrentSh; nofullforeignsuite/productbuildlocal.
