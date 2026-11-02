@@ -1944,14 +1944,6 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					continue
 				}
 			}
-			// BASHPID of an in-process subshell is virtual. Never send it
-			// to the kernel, where it may name an unrelated process/thread.
-			if handled, selfExit := r.signalVirtualSelf(pid, sig); handled {
-				if selfExit.exiting {
-					return selfExit
-				}
-				continue
-			}
 			// A signal directed at our own $$ for which this runner (or a
 			// foreground parent it runs inline within) owns a trap is
 			// delivered synchronously into that runner's pending queue,
@@ -1967,8 +1959,25 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			if r.asyncList && r.execReplacement != nil {
 				replacement = r.execReplacement.current.Load()
 				if replacement != nil {
-					<-replacement.ready
-					replacementPid = int(replacement.pid.Load())
+					var published bool
+					if replacementPid, published = replacement.await(ctx); !published {
+						exit.code = 1
+						continue
+					}
+				}
+			}
+			// BASHPID of an in-process subshell is virtual. Never send it
+			// to the kernel, where it may name an unrelated process/thread.
+			// The virtual number is getpid()+level, so it can coincide with a
+			// real identity this runner routes: a live exec replacement child
+			// (sequential PID allocation makes that deterministic on Darwin).
+			// The real routed identity wins.
+			if replacementPid == 0 || pid != replacementPid {
+				if handled, selfExit := r.signalVirtualSelf(pid, sig); handled {
+					if selfExit.exiting {
+						return selfExit
+					}
+					continue
 				}
 			}
 			if pid == r.shellPid() || replacementPid > 0 && pid == replacementPid {
@@ -1994,11 +2003,14 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				if attempt, queued := r.routeAsyncOwnerSignal(sig); queued {
 					continue
 				} else if attempt != nil {
-					<-attempt.ready
+					pid, published := attempt.await(ctx)
+					if !published {
+						exit.code = 1
+						continue
+					}
 					if bg, _ := ctx.Value(bgProcCtxKey{}).(*bgProc); bg != nil {
 						attempt.observer.Store(bg)
 					}
-					pid := int(attempt.pid.Load())
 					if pid == 0 {
 						exit.code = 1
 					} else if err := sendSignal(pid, sig); err != nil {

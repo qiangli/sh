@@ -1477,8 +1477,34 @@ type execReplacementState struct {
 
 type execReplacementAttempt struct {
 	ready    chan struct{}
+	once     sync.Once
 	pid      atomic.Int64
 	observer atomic.Pointer[bgProc]
+}
+
+// publish records the started child's PID (0 for a failed start) and releases
+// every waiter. Only the first call counts, so the handler may publish the
+// real outcome and also defer a PID-0 publication covering early returns.
+func (a *execReplacementAttempt) publish(pid int) {
+	a.once.Do(func() {
+		a.pid.Store(int64(pid))
+		close(a.ready)
+	})
+}
+
+// await returns the published PID (0 for a failed start). It gives up with
+// ok false when ctx ends first; a nil ctx waits for publication.
+func (a *execReplacementAttempt) await(ctx context.Context) (pid int, ok bool) {
+	var done <-chan struct{}
+	if ctx != nil {
+		done = ctx.Done()
+	}
+	select {
+	case <-a.ready:
+		return int(a.pid.Load()), true
+	case <-done:
+		return 0, false
+	}
 }
 
 type jobState int32
