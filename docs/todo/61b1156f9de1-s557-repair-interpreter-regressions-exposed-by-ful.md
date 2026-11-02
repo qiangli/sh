@@ -3,13 +3,16 @@ id: 61b1156f9de1
 kind: bug
 title: S557 repair interpreter regressions exposed by full migrated shell suite
 seq: 168
-status: assigned
+status: wontfix
 priority: p1
+labels:
+    - superseded
 created: 2026-11-01T17:42:07.645828Z
 assignee: s557-manager
 sprint: 557
 sprint_id: f5ccf563-f5d1-5b94-8be4-9388e51ef86d
 sprint_title: 'Bashy v1.0.0 preparation: split private/public development and retire qiangli/dhnt'
+closed: 2026-11-02T05:32:10.449906Z
 ---
 
 Full hosted shell run41327533961 Linux executes3902 tests with14 top-level failures and19 subtest failures. Repair explicit unsafe.Pointer conversion, native callback refusal and method-value/nil semantics without weakening bridge authorization, assertions, coverage or native differential oracles. Replace stale retained-slice refusal with native differential only where current supported shared-view semantics are independently covered. Preserve existing full/race discovery; manifest maintenance remains story3ea2aafcb341. Bounded focused reproductions on developer host; full and race suites hosted. Manager owns integration, agent test_readiness and repair_review provide coordinated patches.
@@ -86,3 +89,7 @@ timings. Other callers retain their shared deadline. Original fixture bytes and
 exact stdout/stderr comparisons are unchanged. Both original channel fixtures
 passed three repetitions with exact Go 1.27.2 source; hosted validation is still
 required, and the old timeout is not declared resolved by local success.
+
+## Superseded by consolidation — 2026-11-02
+
+Operator requested consolidation of implementation repairs into acceptance owners. Scope, original acceptance, unresolved work and evidence transfer to public umbrella #6, story `bf7624a5c2f2`. This record is closed by decision with label `superseded`; it is NOT a delivery acceptance, test pass, waiver or feature retirement. The parent remains open. Continue corrections under that parent rather than creating another repair story. Original content above is retained unchanged.

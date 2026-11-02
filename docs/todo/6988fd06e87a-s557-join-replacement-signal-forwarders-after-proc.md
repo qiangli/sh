@@ -3,13 +3,16 @@ id: 6988fd06e87a
 kind: bug
 title: S557 join replacement signal forwarders after process completion
 seq: 179
-status: assigned
+status: wontfix
 priority: p1
+labels:
+    - superseded
 created: 2026-11-01T23:54:32.875763Z
 assignee: s557-manager
 sprint: 557
 sprint_id: f5ccf563-f5d1-5b94-8be4-9388e51ef86d
 sprint_title: 'Bashy v1.0.0 preparation: split private/public development and retire qiangli/dhnt'
+closed: 2026-11-02T05:32:09.400822Z
 ---
 
 Native41359794189 Linuxworkspace TestConcurrencyScheduleMatrix detects2goroutines forwardSignalsWithReport.func2 exec_replacement_signal_unix.go82 age1min. Candidate74697208. Diagnose cleanupownership without addingallowlist or reducing schedule matrix. /tmp/s557-native-125007549282.log. Boundedsignal/concurrency tests; nofullsuite local. Preserve sync/async signalcontracts.
@@ -44,3 +47,7 @@ Bounded GOWORK=off / GOMAXPROCS=2 / GOFLAGS=-p=2 tests passed:
   and two repetitions per scheduler setting, no allowlist/threshold changes).
 Combined focused check completed in 1.164s. Full hosted native validation remains
 required to confirm the original leak report is resolved in suite ordering.
+
+## Superseded by consolidation — 2026-11-02
+
+Operator requested consolidation of implementation repairs into acceptance owners. Scope, original acceptance, unresolved work and evidence transfer to public umbrella #6, story `bf7624a5c2f2`. This record is closed by decision with label `superseded`; it is NOT a delivery acceptance, test pass, waiver or feature retirement. The parent remains open. Continue corrections under that parent rather than creating another repair story. Original content above is retained unchanged.

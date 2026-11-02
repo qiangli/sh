@@ -3,13 +3,16 @@ id: 50c64b10fca7
 kind: bug
 title: S557 repair full-shell toolchain fixture and channel timeout evidence
 seq: 177
-status: assigned
+status: wontfix
 priority: p1
+labels:
+    - superseded
 created: 2026-11-01T23:52:56.068293Z
 assignee: s557-test-readiness
 sprint: 557
 sprint_id: f5ccf563-f5d1-5b94-8be4-9388e51ef86d
 sprint_title: 'Bashy v1.0.0 preparation: split private/public development and retire qiangli/dhnt'
+closed: 2026-11-02T05:32:09.590846Z
 ---
 
 Fullshell41356393662 at74697208: TestGoSourcePragmaPosition supported.go compilerstdoutpolluted by go1.27.1 SDKdownload bothOS; macOS TestS243OriginalChannelDomainRegressions chanlinear.go stillruntime60s. Diagnose independently preserve exact assertions/runtime60s and sourcebehavior; no fullsuite/productbuild local. Evidence /tmp/s557-shell-full-41356393662-failed.log. Separate let/flags failures owned176. Workisolated currentSh8d8ce12b, focusedauthored/regressionchecks only GOMAXPROCS2 GOFLAGS-p2; commitnopush.
@@ -41,3 +44,7 @@ wrong resolver version, wrong compiler version, resolver failure and compiler
 failure. Actual cached Go1.27.1 resolver/compiler identity checks pass. Unchanged
 TestGoSourceTypedWideUint and TestClassicWideIntegerParity pass (4.217s). No full
 local suite was run; cold-cache full acceptance remains hosted.
+
+## Superseded by consolidation — 2026-11-02
+
+Operator requested consolidation of implementation repairs into acceptance owners. Scope, original acceptance, unresolved work and evidence transfer to public umbrella #6, story `bf7624a5c2f2`. This record is closed by decision with label `superseded`; it is NOT a delivery acceptance, test pass, waiver or feature retirement. The parent remains open. Continue corrections under that parent rather than creating another repair story. Original content above is retained unchanged.

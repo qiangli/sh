@@ -3,13 +3,16 @@ id: 7b0044a95807
 kind: bug
 title: S557 restore Bash fixture fidelity after let shell-word parsing
 seq: 176
-status: assigned
+status: wontfix
 priority: p1
+labels:
+    - superseded
 created: 2026-11-01T22:43:49.398523Z
 assignee: s557-public-tooling
 sprint: 557
 sprint_id: f5ccf563-f5d1-5b94-8be4-9388e51ef86d
 sprint_title: 'Bashy v1.0.0 preparation: split private/public development and retire qiangli/dhnt'
+closed: 2026-11-02T05:32:09.875701Z
 ---
 
 HostedBash5341356620602 atSh74697208 nowfails arith,array,assoc onLinux/macOS vs previous86/86. Introducedby173letWordAST change likelydiagnostic/line+assoc semantics; preservecorrectshellwordgrammar. Logs/tmp/s557-bash53-41356620602.log; downloadretainedrawartifactsforfulldiffs. Exactfixturesmustremainunchanged, nofailthresholdskips. ValidateauthoredminimalreprosagainstBash5.3andfocused existingguards, nofullforeignsuite/productbuildlocal. Workisolated74697208, coordinatealiasworkerd59 touchingbuiltin/source; ownletarithm runner/errorpaths. Selectivecommitnopush. StrictPOSIX1833/1833bothpanels nowPASSmustremain.
@@ -102,3 +105,7 @@ passed against GNU Bash (0.500s). Raw source is bound to exact AST index nodes,
 so offsets from a recursive parse cannot address an enclosing expression.
 The expanded selection with prior let/array/quote and optional-suffix guards
 passed (0.682s); expand arithmetic/let guards passed (0.334s).
+
+## Superseded by consolidation — 2026-11-02
+
+Operator requested consolidation of implementation repairs into acceptance owners. Scope, original acceptance, unresolved work and evidence transfer to public umbrella #6, story `bf7624a5c2f2`. This record is closed by decision with label `superseded`; it is NOT a delivery acceptance, test pass, waiver or feature retirement. The parent remains open. Continue corrections under that parent rather than creating another repair story. Original content above is retained unchanged.

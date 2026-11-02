@@ -3,13 +3,16 @@ id: d59ea3c8b6c7
 kind: bug
 title: S557 preserve parse-time aliases in sourced compound commands
 seq: 175
-status: assigned
+status: wontfix
 priority: p1
+labels:
+    - superseded
 created: 2026-11-01T22:42:38.673311Z
 assignee: s557-test-readiness
 sprint: 557
 sprint_id: f5ccf563-f5d1-5b94-8be4-9388e51ef86d
 sprint_title: 'Bashy v1.0.0 preparation: split private/public development and retire qiangli/dhnt'
+closed: 2026-11-02T05:32:09.210054Z
 ---
 
 Modernish41356391458 atSh74697208 BLOCKED mktemp.mm310 done canonlyendloop, exit128. Loaderaliasforever='while :;' usedforever do in sourcedfunction; not='! ' also failscommandnotfound. Validate authoredminimalreproagainstBash5.3, inspectexisting aliasReparsePhysicalLine/withAliasReparse and eval aliasretry beforedesign. Correctsource aliasparse timing inclcompoundcommands, quoting, comments, here-docs, recursion/timing; no regexgloballyrewritingscripts. Reuseexistinglexer/parsermechanisms, preservealiasdefinitionexecutiontiming. Foreignsuiteonlyhosted; boundedauthoredtests+negativeguardslocally. Commitselectivenopush. Evidence/tmp/s557-modernish-41356391458.
@@ -58,3 +61,7 @@ inherit exports from a previous quick/full process. The race gate now invokes
 and exports the same validated reference itself, retaining its setup log. This
 also resolves the prepared cache on Linux where PATH still contains Bash5.2.
 No race selector or execution deadline changes.
+
+## Superseded by consolidation — 2026-11-02
+
+Operator requested consolidation of implementation repairs into acceptance owners. Scope, original acceptance, unresolved work and evidence transfer to public umbrella #6, story `bf7624a5c2f2`. This record is closed by decision with label `superseded`; it is NOT a delivery acceptance, test pass, waiver or feature retirement. The parent remains open. Continue corrections under that parent rather than creating another repair story. Original content above is retained unchanged.

@@ -3,13 +3,16 @@ id: 74b5b0a013a8
 kind: bug
 title: S557 parse parameter expansion as arithmetic operands in sourced conditions
 seq: 180
-status: assigned
+status: wontfix
 priority: p1
+labels:
+    - superseded
 created: 2026-11-02T00:14:27.329307Z
 assignee: s557-public-tooling
 sprint: 557
 sprint_id: f5ccf563-f5d1-5b94-8be4-9388e51ef86d
 sprint_title: 'Bashy v1.0.0 preparation: split private/public development and retire qiangli/dhnt'
+closed: 2026-11-02T05:32:10.159935Z
 ---
 
 Modernish41365178630 at48af783e progresses beyondVARPREFIX but stillinitFAIL var/arith/cmp.mm76:78 notvalidarithmeticoperator `${`. Inspectpinnedfixturecde49fa37f93e943b9cb9b9536ce83836c4864ae read-only; minimalauthoredGNU5.3 differential, preservePOSIX/Bashgrammarerrors andlazyexpansion. Nofullforeignsuite/localproductbuild. Evidence/tmp/s557-modernish-41365178630. Isolatedcurrentmaster, commitnopush; rootreviewandhostedrerun.
@@ -41,3 +44,7 @@ Bounded GOWORK=off, GOMAXPROCS=2, GOFLAGS=-p=2 checks passed:
 
 No full suite, foreign suite, or product build ran locally. Hosted Modernish,
 strict POSIX and Bash 5.3 confirmation remain parent-owned release gates.
+
+## Superseded by consolidation — 2026-11-02
+
+Operator requested consolidation of implementation repairs into acceptance owners. Scope, original acceptance, unresolved work and evidence transfer to public umbrella #6, story `bf7624a5c2f2`. This record is closed by decision with label `superseded`; it is NOT a delivery acceptance, test pass, waiver or feature retirement. The parent remains open. Continue corrections under that parent rather than creating another repair story. Original content above is retained unchanged.

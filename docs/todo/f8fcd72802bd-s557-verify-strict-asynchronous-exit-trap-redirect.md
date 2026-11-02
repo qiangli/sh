@@ -3,13 +3,16 @@ id: f8fcd72802bd
 kind: bug
 title: S557 verify strict asynchronous EXIT trap redirection lifetime
 seq: 172
-status: assigned
+status: wontfix
 priority: p1
+labels:
+    - superseded
 created: 2026-11-01T18:26:27.416844Z
 assignee: s557-public-tooling
 sprint: 557
 sprint_id: f5ccf563-f5d1-5b94-8be4-9388e51ef86d
 sprint_title: 'Bashy v1.0.0 preparation: split private/public development and retire qiangli/dhnt'
+closed: 2026-11-02T05:32:09.970601Z
 ---
 
 Strict cmd/sh Yash41335572423 measures1831/1833; trap-p166 background trap builtin with command-local stdout redirection then wait losesEXIToutput. Verify pinnedfixture and primaryPOSIX redirection/trap semantics beforebehaviorchange. Distinguish strict profile fromBashcompatibilityreference (which sharesfailure). Preservecommand-lifetimeFDscope, inheritedtrapreset, process/cancellationownership and Bash86compatibility; add directasync/simplecommand/subshell/redirect/nestedtrap cases. No fixturealteration/score reclassification. BoundedlocalGo tests only, foreignsuite hosted. Rootownsreview/push.
@@ -34,3 +37,7 @@ traps, nested command-substitution traps, and parent output. All nine Bash-profi
 cases match installed Bash 5.3.15. These plus existing command-substitution,
 cancellation/panic, and strict trap-status regressions pass in 0.430s under a
 90-second bound. Foreign Yash/modernish/full Bash86 remain hosted-only.
+
+## Superseded by consolidation — 2026-11-02
+
+Operator requested consolidation of implementation repairs into acceptance owners. Scope, original acceptance, unresolved work and evidence transfer to public umbrella #6, story `bf7624a5c2f2`. This record is closed by decision with label `superseded`; it is NOT a delivery acceptance, test pass, waiver or feature retirement. The parent remains open. Continue corrections under that parent rather than creating another repair story. Original content above is retained unchanged.

@@ -3,13 +3,16 @@ id: a554eec72b20
 kind: bug
 title: S557 isolate asynchronous process substitution from history reader replay
 seq: 183
-status: assigned
+status: wontfix
 priority: p1
+labels:
+    - superseded
 created: 2026-11-02T01:22:28.912441Z
 assignee: s557-test-readiness
 sprint: 557
 sprint_id: f5ccf563-f5d1-5b94-8be4-9388e51ef86d
 sprint_title: 'Bashy v1.0.0 preparation: split private/public development and retire qiangli/dhnt'
+closed: 2026-11-02T05:32:09.6859Z
 ---
 
 Hosted Bash 5.3 run 41370659557 macOS reports histexpand failure (85/86; Linux 86/86). Retained raw difference begins with missing process-substitution output and subsequent literal history events. Diagnose with bounded authored differential and deterministic scheduling tests; repair only proven reader ownership defect. Preserve exact upstream fixtures and assertions. Full validation stays hosted; no local foreign suite or product build. Parent owns integration and frozen candidate pins.
@@ -42,3 +45,7 @@ that exact hosted difference to this proven ownership defect remains a hypothesi
 pending the unchanged hosted rerun. A subsequent green run would not erase that
 historical evidence. This repair does not redesign the singleton history store
 or move history expansion ahead of all argument/redirection evaluation.
+
+## Superseded by consolidation — 2026-11-02
+
+Operator requested consolidation of implementation repairs into acceptance owners. Scope, original acceptance, unresolved work and evidence transfer to public umbrella #6, story `bf7624a5c2f2`. This record is closed by decision with label `superseded`; it is NOT a delivery acceptance, test pass, waiver or feature retirement. The parent remains open. Continue corrections under that parent rather than creating another repair story. Original content above is retained unchanged.
