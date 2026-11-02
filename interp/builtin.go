@@ -1944,14 +1944,6 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					continue
 				}
 			}
-			// BASHPID of an in-process subshell is virtual. Never send it
-			// to the kernel, where it may name an unrelated process/thread.
-			if handled, selfExit := r.signalVirtualSelf(pid, sig); handled {
-				if selfExit.exiting {
-					return selfExit
-				}
-				continue
-			}
 			// A signal directed at our own $$ for which this runner (or a
 			// foreground parent it runs inline within) owns a trap is
 			// delivered synchronously into that runner's pending queue,
@@ -1969,6 +1961,20 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				if replacement != nil {
 					<-replacement.ready
 					replacementPid = int(replacement.pid.Load())
+				}
+			}
+			// BASHPID of an in-process subshell is virtual. Never send it
+			// to the kernel, where it may name an unrelated process/thread.
+			// The virtual number is getpid()+level, so it can coincide with a
+			// real identity this runner routes: a live exec replacement child
+			// (sequential PID allocation makes that deterministic on Darwin).
+			// The real routed identity wins.
+			if replacementPid == 0 || pid != replacementPid {
+				if handled, selfExit := r.signalVirtualSelf(pid, sig); handled {
+					if selfExit.exiting {
+						return selfExit
+					}
+					continue
 				}
 			}
 			if pid == r.shellPid() || replacementPid > 0 && pid == replacementPid {
