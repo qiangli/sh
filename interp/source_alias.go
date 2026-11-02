@@ -20,7 +20,10 @@ func (r *Runner) sourceGrammarAlias(name string, seen map[string]bool) (string, 
 	seen[name] = true
 	value := aliasValue(a)
 	trimmed := strings.TrimLeft(value, " \t\r\n")
-	for _, kw := range []string{"!", "while", "until", "for", "select", "if", "case", "{"} {
+	// Compound aliases may supply either side of a block or a clause separator.
+	// Leaving a closing alias to execution can make an otherwise valid outer
+	// construct fail to parse before the alias is ever reached.
+	for _, kw := range []string{"!", "while", "until", "for", "select", "if", "case", "{", "}", "do", "done", "then", "else", "elif", "fi"} {
 		if trimmed == kw || strings.HasPrefix(trimmed, kw+" ") || strings.HasPrefix(trimmed, kw+"\t") || strings.HasPrefix(trimmed, kw+"\n") || strings.HasPrefix(trimmed, kw+";") {
 			return value, true
 		}

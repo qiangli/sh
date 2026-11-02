@@ -23,6 +23,15 @@ func TestSourceGrammarAliases(t *testing.T) {
 		}
 	}
 	cases := []struct{ name, setup, body, want string }{
+		{"paired-braces", "alias OPEN='{'; alias CLOSE='}'", "if true; then OPEN printf yes; CLOSE; else printf bad; fi", "yes"},
+		{"paired-split-braces", "alias OPEN='{ {'; alias NEXT='}; {'; alias CLOSE='}; }'", "if true; then OPEN :; NEXT printf split; CLOSE; else printf bad; fi", "split"},
+		{"paired-loop", "alias LOOP='while'; alias DO='do'; alias DONE='done'", "LOOP true; DO printf loop; break; DONE", "loop"},
+		{"paired-conditional", "alias IF='if'; alias THEN='then'; alias ELSE='else'; alias FI='fi'", "IF false; THEN printf bad; ELSE printf conditional; FI", "conditional"},
+		{"closing-chain", "alias OPEN='{'; alias FINISH=CLOSE; alias CLOSE='}'", "OPEN printf chain; FINISH", "chain"},
+		{"closing-alias-literals", "CLOSE() { printf literal; }; alias CLOSE='}'", "'CLOSE'; \"CLOSE\"; \\CLOSE; printf '%s' CLOSE; value=CLOSE; printf '%s' \"$value\"", "literalliteralliteralCLOSECLOSE"},
+		{"closing-alias-heredoc", "alias OPEN='{'; alias CLOSE='}'", "cat <<'END'\nCLOSE\nEND\nOPEN printf ok; CLOSE # CLOSE\n", "CLOSE\nok"},
+		{"paired-function-body", "alias LOCAL='{ {'; alias BEGIN='}; worker() {'; alias END='}; worker; }'", "if true; then LOCAL :; BEGIN printf worker; END; else printf bad; fi", "worker"},
+		{"conditional-elif", "alias IF='if'; alias THEN='then'; alias ELIF='elif'; alias FI='fi'", "IF false; THEN printf bad; ELIF true; THEN printf elif; FI", "elif"},
 		{"loop-function", "alias forever='while :;'", "f() { forever do printf loop; break; done; }; f", "loop"},
 		{"nested-loop", "alias forever='while :;'", "f() { for x in a; do forever do printf '%s' \"$x\"; break; done; done; }; f", "a"},
 		{"negation", "alias not='! '", "not false; printf '%s' \"$?\"; if not true; then printf bad; else printf good; fi", "0good"},
@@ -95,6 +104,11 @@ func TestSourceGrammarAliasParseGuards(t *testing.T) {
 	}
 	if _, exists := r.alias["newly"]; exists {
 		t.Fatal("parsing mutated aliases")
+	}
+	// Case terminators are not command-word alias positions in GNU Bash.
+	r.alias["ENDCASE"] = alias{text: "esac"}
+	if _, err := r.parseSourceAliases(syntax.NewParser(), []byte("case x in x) :;; ENDCASE"), "module.sh"); err == nil {
+		t.Fatal("accepted aliased case terminator rejected by GNU Bash")
 	}
 	r.alias["a"], r.alias["b"] = alias{text: "b"}, alias{text: "a"}
 	if _, ok := r.sourceGrammarAlias("a", make(map[string]bool)); ok {
