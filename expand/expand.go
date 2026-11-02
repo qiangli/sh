@@ -255,6 +255,7 @@ type Config struct {
 	// live, but `$x` expands before arithmetic side effects run.
 	arithmParamValues  map[*syntax.ParamExp]string
 	arithmRawAssocKeys map[*syntax.Word]string
+	arithmLetIndexes   map[syntax.ArithmExpr]string
 
 	// LetArithmetic is set by the interpreter while evaluating the
 	// `let` builtin, whose subscript quote handling differs from

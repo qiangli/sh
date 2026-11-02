@@ -779,19 +779,7 @@ func (r *Runner) letArithm(expr syntax.ArithmExpr) int {
 		r.lastArithErr = fmt.Errorf("let: %s: arithmetic syntax error: operand expected (error token is \"\"\"\")", exprText)
 		return 0
 	}
-	if text, ok := r.assocExpandOnceLetQuotedIndex(expr); ok {
-		quoted := `"` + text + `"`
-		err := fmt.Errorf("%s: arithmetic syntax error: operand expected (error token is \"%s\")",
-			quoted, quoted)
-		r.lastArithErr = err
-		r.expandErr(err)
-		r.exit.code = 1
-		r.exit.exiting = true
-		if !r.opts[optPosix] {
-			r.exit.discarding = true
-		}
-		return 0
-	}
+
 	if exprText, token, ok := r.malformedLetAssocSubscript(expr); ok {
 		prefix := r.filename
 		if prefix == "" {
@@ -812,6 +800,16 @@ func (r *Runner) letArithm(expr syntax.ArithmExpr) int {
 	n, err := expand.Arithm(r.ecfg, expr)
 	r.ecfg.LetArithmetic = prevLetArithmetic
 	r.ecfg.AssocExpandOnce = prevAssocExpandOnce
+	var indexErr *expand.LetIndexError
+	if errors.As(err, &indexErr) {
+		r.lastArithErr = indexErr
+		r.errf("%s%s\n", r.bashErrPrefix(sourcePos), indexErr)
+		r.exit.code, r.exit.exiting = 1, true
+		if !r.opts[optPosix] {
+			r.discardExpansionLine()
+		}
+		return 0
+	}
 	exprTextOverride := ""
 	if arithErr, arithExpr := innermostArithmError(err); arithErr != nil {
 		if arithExpr != nil {
@@ -876,58 +874,6 @@ func (r *Runner) letEmptyQuotedBinary(expr syntax.ArithmExpr) (string, bool) {
 	}
 	if strings.Contains(exprText, `- ""`) {
 		return exprText, true
-	}
-	return "", false
-}
-
-func (r *Runner) assocExpandOnceLetQuotedIndex(expr syntax.ArithmExpr) (string, bool) {
-	opt, _ := r.bashOptByName("assoc_expand_once")
-	if opt == nil || !*opt {
-		return "", false
-	}
-	lvalue := ""
-	switch expr := expr.(type) {
-	case *syntax.BinaryArithm:
-		switch expr.Op {
-		case syntax.Assgn, syntax.AddAssgn, syntax.SubAssgn,
-			syntax.MulAssgn, syntax.QuoAssgn, syntax.RemAssgn,
-			syntax.AndAssgn, syntax.OrAssgn, syntax.XorAssgn,
-			syntax.ShlAssgn, syntax.ShrAssgn:
-			if w, ok := expr.X.(*syntax.Word); ok {
-				lvalue = r.literal(w)
-			}
-		}
-	case *syntax.Word:
-		lvalue = r.literal(expr)
-		if eq := strings.IndexByte(lvalue, '='); eq >= 0 {
-			lvalue = lvalue[:eq]
-			open := strings.IndexByte(lvalue, '[')
-			close := strings.LastIndexByte(lvalue, ']')
-			if open <= 0 || close <= open+1 || close != len(lvalue)-1 {
-				return "", false
-			}
-			sub := lvalue[open+1 : close]
-			if sub == `""` {
-				return "", true
-			}
-			return "", false
-		}
-	}
-	if lvalue == "" {
-		return "", false
-	}
-	open := strings.IndexByte(lvalue, '[')
-	close := strings.LastIndexByte(lvalue, ']')
-	if open <= 0 || close <= open+1 || close != len(lvalue)-1 {
-		return "", false
-	}
-	sub := lvalue[open+1 : close]
-	if len(sub) < 2 || sub[0] != '"' || sub[len(sub)-1] != '"' {
-		return "", false
-	}
-	text := sub[1 : len(sub)-1]
-	if text == "" || strings.TrimSpace(text) == "" {
-		return text, true
 	}
 	return "", false
 }

@@ -2910,6 +2910,10 @@ func (r *Runner) posixOptByFlag(flag byte) *bool {
 }
 
 func (r *Runner) bashOptByName(name string) (status *bool, supported bool) {
+	// Bash exposes two names for one setting; the last toggle wins.
+	if name == "array_expand_once" {
+		name = "assoc_expand_once"
+	}
 	for i, opt := range bashOptsTable {
 		if opt.name == name {
 			index := len(posixOptsTable) + i

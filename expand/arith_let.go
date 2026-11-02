@@ -145,3 +145,51 @@ func bindLetAssocKeys(expr syntax.ArithmExpr, keys map[uint]letAssocKey, previou
 	}
 	return bound, nil
 }
+
+// LetIndexError is an expansion-once error in an indexed let subscript.
+// Unlike an ordinary let operand error, Bash reports the index without a let
+// prefix and discards the current input line.
+type LetIndexError struct{ Text, Token string }
+
+func (e *LetIndexError) Error() string {
+	return fmt.Sprintf("%s: arithmetic syntax error: operand expected (error token is \"%s\")", e.Text, e.Token)
+}
+
+func (cfg *Config) letIndexedSubscriptError(index syntax.ArithmExpr) error {
+	if !cfg.LetArithmetic || !cfg.AssocExpandOnce || index == nil {
+		return nil
+	}
+	text := subscriptText(index)
+	if original, ok := cfg.arithmLetIndexes[index]; ok {
+		text = original
+	}
+	token := literalDollarArithmToken(text)
+	if token == "" {
+		token = ArithmCmdSubstToken(text)
+	}
+	if token == "" && len(text) > 0 && (text[0] == '"' || text[0] == '\'') {
+		token = text
+	}
+	if token != "" {
+		return &LetIndexError{Text: text, Token: token}
+	}
+	return nil
+}
+
+// Bind source slices to this parse's exact index nodes. A recursive reparse
+// must not interpret its independent offsets against an enclosing operand.
+func letIndexSources(expr syntax.ArithmExpr, source string) map[syntax.ArithmExpr]string {
+	indexes := make(map[syntax.ArithmExpr]string)
+	syntax.Walk(expr, func(node syntax.Node) bool {
+		pe, ok := node.(*syntax.ParamExp)
+		if !ok || pe.Index == nil {
+			return true
+		}
+		start, end := int(pe.Index.Pos().Offset())-2, int(pe.Index.End().Offset())-2
+		if start >= 0 && end >= start && end <= len(source) {
+			indexes[pe.Index] = source[start:end]
+		}
+		return true
+	})
+	return indexes
+}

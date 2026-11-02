@@ -60,3 +60,45 @@ The unchanged interp Example now passes on 84cfca80. Its parenthesized assignmen
 also produced the documented abc123 5/global_value output in an authored Bash
 comparison. No Example edits are needed. Separate hosted SDK-download stderr and
 macOS chanlinear interpreter deadline failures were reported for other workers.
+
+
+### Retained Bash 5.3 arithmetic/array follow-up (internal helper, s557-manager)
+
+Run 41365164988 retained exactly one Unix arithmetic difference (quoted-space
+indexed let assignment incorrectly accepted) and one array difference (expanded
+command-shaped indexed let subscript executed twice instead of being refused).
+The repair checks indexed subscripts lazily before read/lvalue expansion when
+expansion-once is enabled. Associative keys retain their literal-key path;
+short-circuited branches remain unevaluated. Exact expanded subscript source is
+retained through arithmetic reparse for Bash diagnostics. A typed index error
+uses the existing input-line discard mechanism, preserving next-line recovery.
+The obsolete eager quote-only special case is removed; it also incorrectly
+rejected a valid associative empty-quoted key.
+
+Both option names share one canonical setting, matching GNU Bash alias behavior
+and preserving last-toggle semantics. Shopt and BASHOPTS enumeration read that
+same setting. No syntax/parser files or foreign fixture bytes were changed.
+
+Fourteen authored cases compared successfully with installed GNU Bash 5.3.15,
+including both retained failures, read/write refusal, backticks, literal dollar
+operand, no execution in short-circuit/ternary branches, option-off behavior,
+associative quoted keys, and unchanged indexed value after next-line recovery.
+The prior 12 let differential cases and shell-word/raw-key/array/quote guards
+also passed in the focused selection (0.620s). No foreign suite was run locally.
+The separate Windows printf one-second start-time mismatch was reported to its
+assigned worker and remains outside this repair.
+
+Negative control: an uncommitted Go source overlay restoring23fcb1ec production
+files made both authored retained-failure cases fail (0.396s): quoted-space was
+accepted silently, and command-shaped subscript emitted BADBAD.
+
+Rebased onto ed938a78. The final focused interpreter selection including
+story180 optional-suffix tests passed (0.655s); expand let/arithmetic guards
+passed (0.272s). Original assertions and ten-minute hosted gate remain intact.
+
+Independent boundary follow-up adds both alias-toggle orders and listing checks,
+plus a recursive arithmetic-value diagnostic. Twenty authored indexed cases
+passed against GNU Bash (0.500s). Raw source is bound to exact AST index nodes,
+so offsets from a recursive parse cannot address an enclosing expression.
+The expanded selection with prior let/array/quote and optional-suffix guards
+passed (0.682s); expand arithmetic/let guards passed (0.334s).

@@ -4482,7 +4482,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				sort.Strings(names)
 				for _, n := range names {
 					i := idx[n]
-					enabled := r.opts[len(posixOptsTable)+i]
+					enabled := r.bashShoptEnabled(n)
 					if (enabled && !showSet) || (!enabled && !showUnset) {
 						continue
 					}
@@ -5461,8 +5461,8 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			for i, opt := range &posixOptsTable {
 				m[opt.name] = r.opts[i]
 			}
-			for i, opt := range bashOptsTable {
-				m[opt.name] = r.opts[len(posixOptsTable)+i]
+			for _, opt := range bashOptsTable {
+				m[opt.name] = r.bashShoptEnabled(opt.name)
 			}
 			return m
 		}

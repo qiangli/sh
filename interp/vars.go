@@ -1025,8 +1025,8 @@ func (r *Runner) lookupVarUnhosted(name string) expand.Variable {
 		vr.ReadOnly = true
 	case "BASHOPTS":
 		var opts []string
-		for i, opt := range bashOptsTable {
-			if r.opts[len(posixOptsTable)+i] {
+		for _, opt := range bashOptsTable {
+			if r.bashShoptEnabled(opt.name) {
 				opts = append(opts, opt.name)
 			}
 		}
@@ -1790,12 +1790,8 @@ func (r *Runner) setGlobalVarString(name, value string) {
 
 // bashShoptEnabled reports the state of a bash `shopt` option by name.
 func (r *Runner) bashShoptEnabled(name string) bool {
-	for i, opt := range bashOptsTable {
-		if opt.name == name {
-			return r.opts[len(posixOptsTable)+i]
-		}
-	}
-	return false
+	opt, _ := r.bashOptByName(name)
+	return opt != nil && *opt
 }
 
 func (r *Runner) delVar(name string) {

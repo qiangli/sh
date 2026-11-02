@@ -169,6 +169,9 @@ func (cfg *Config) arithmIndexedParamLiteral(word *syntax.Word) (string, bool, e
 		}
 		return "0", true, nil
 	}
+	if err := cfg.letIndexedSubscriptError(pe.Index); err != nil {
+		return "", true, err
+	}
 	// An empty subscript (`y[$none]` where $none is unset expands to the
 	// literal `y[]`) is rejected by bash's arithmetic evaluator while it
 	// parses the array reference's name part — before any arithmetic is
@@ -848,7 +851,12 @@ func arithm(cfg *Config, expr syntax.ArithmExpr) (int, error) {
 							}
 							cfg.arithmRawAssocKeys = bound
 						}
+						previousIndexes := cfg.arithmLetIndexes
+						if cfg.LetArithmetic && cfg.AssocExpandOnce {
+							cfg.arithmLetIndexes = letIndexSources(ac.X, parseText)
+						}
 						n, err := Arithm(cfg, ac.X)
+						cfg.arithmLetIndexes = previousIndexes
 						cfg.arithmRawAssocKeys = previousKeys
 						cfg.arithmParamValues = prev
 						if err != nil {
@@ -1297,6 +1305,9 @@ func (cfg *Config) resolveAritLvalue(lval arithLvalue) (arithLvalue, error) {
 		lval.indexAssoc = true
 		lval.indexSet = true
 		return lval, nil
+	}
+	if err := cfg.letIndexedSubscriptError(lval.index); err != nil {
+		return lval, err
 	}
 	if index, ok := arithEscapedQuotedIndex(lval.index); ok && !lval.fromString {
 		lval.indexValue = index
