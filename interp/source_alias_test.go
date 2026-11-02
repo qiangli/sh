@@ -3,6 +3,7 @@ package interp
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,14 +14,56 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
-func TestSourceGrammarAliases(t *testing.T) {
-	bash := ""
-	for _, candidate := range []string{"/opt/homebrew/bin/bash", "bash"} {
+// sourceAliasBashReference fails closed rather than accepting macOS's Bash
+// 3.2 or omitting the differential half of the semantic assertions.
+func sourceAliasBashReference() (string, error) {
+	candidates := []string{"/opt/homebrew/bin/bash", "/usr/local/bin/bash", "bash"}
+	if explicit := os.Getenv("SH_TEST_BASH_REFERENCE"); explicit != "" {
+		candidates = []string{explicit}
+	}
+	for _, candidate := range candidates {
 		version, err := exec.Command(candidate, "--version").Output()
-		if err == nil && strings.Contains(string(version), "GNU bash, version") && !strings.Contains(string(version), "bashy") {
-			bash = candidate
-			break
+		if err == nil && sourceAliasBash53Version(string(version)) {
+			path, err := exec.LookPath(candidate)
+			if err != nil {
+				return "", err
+			}
+			return filepath.Abs(path)
 		}
+	}
+	return "", fmt.Errorf("GNU Bash 5.3 reference required; run scripts/prepare-bash-reference.sh and set SH_TEST_BASH_REFERENCE")
+}
+
+func sourceAliasBash53Version(version string) bool {
+	return strings.HasPrefix(version, "GNU bash, version 5.3.") && !strings.Contains(version, "bashy")
+}
+
+func TestSourceAliasReferenceIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		version string
+		want    bool
+	}{
+		{"GNU bash, version 5.3.0(1)-release", true},
+		{"GNU bash, version 5.3.15(1)-release", true},
+		{"GNU bash, version 3.2.57(1)-release", false},
+		{"GNU bash, version 5.2.37(1)-release", false},
+		{"GNU bash, version 5.3.0(1)-bashy", false},
+		{"other shell 5.3.0", false},
+	} {
+		if got := sourceAliasBash53Version(tc.version); got != tc.want {
+			t.Errorf("version %q accepted=%v; want %v", tc.version, got, tc.want)
+		}
+	}
+	t.Setenv("SH_TEST_BASH_REFERENCE", filepath.Join(t.TempDir(), "missing-reference"))
+	if _, err := sourceAliasBashReference(); err == nil {
+		t.Fatal("invalid explicit oracle fell back to another binary")
+	}
+}
+
+func TestSourceGrammarAliases(t *testing.T) {
+	bash, err := sourceAliasBashReference()
+	if err != nil {
+		t.Fatal(err)
 	}
 	cases := []struct{ name, setup, body, want string }{
 		{"paired-braces", "alias OPEN='{'; alias CLOSE='}'", "if true; then OPEN printf yes; CLOSE; else printf bad; fi", "yes"},
@@ -59,7 +102,7 @@ func TestSourceGrammarAliases(t *testing.T) {
 			src := "shopt -s expand_aliases\n" + tc.setup + "; source ./module.sh\n"
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			if bash != "" {
+			{
 				cmd := exec.CommandContext(ctx, bash, "--noprofile", "--norc", "-c", src)
 				cmd.Dir = dir
 				var oracleOut, oracleErr bytes.Buffer

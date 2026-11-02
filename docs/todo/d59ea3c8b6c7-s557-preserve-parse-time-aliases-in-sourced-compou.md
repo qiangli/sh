@@ -29,3 +29,26 @@ Scope limitation: source still parses a complete read unit before execution. Ali
 ### Review follow-up
 
 Removed the original total 1024-rewrite cap because it rejected valid files with many independent aliases. Added a 1,030-occurrence regression, an indirect grammar-alias cycle, and positive command-substitution negation/ordinary-alias cases. The unchanged 60-second bounded selector passed (syntax 0.235s; interp 0.724s), including all 16 authored GNU Bash differential cases. A separate focused run of `TestSourceGrammarAliases/many-independent` passed in 0.20s (package 0.546s); this measures the authored case on one local host, not a scalability guarantee. Parent independently verified the initial commit's focused gate before this follow-up. Hosted corpus validation remains pending.
+
+## GNU oracle selection follow-up
+
+Frozen native run41370643706 macOS workspace failed the indirect-self-reference
+oracle comparison, with GNU reporting syntax error at `! a`. A minimal authored
+comparison reproduces that exact error with the system GNU Bash3.2.57; GNU5.3.15
+returns the unchanged expected `literal0`. The original test accepted any GNU
+version and could choose the older system binary on Intel macOS.
+
+The test now requires GNU Bash5.3, accepts an explicit SH_TEST_BASH_REFERENCE,
+searches both Homebrew prefixes and PATH, and fails closed when no suitable
+oracle exists. It never silently omits the differential comparison. Canonical
+quick/full setup resolves the reference before test execution; when absent it
+builds the public GNU5.3 archive after verifying the existing fixture-contract
+SHA256. Source/build trees are disposable and no foreign suite is executed.
+An invalid explicit reference fails rather than silently selecting another one.
+All original semantic expectations and five-second comparison deadlines remain.
+
+Local verification: existing GNU5.3.15 selection passes, explicit system3.2
+rejection passes, and identity/alias regressions pass count3 in1.469s. The GNU
+source digest matches the existing public fixture source contract. Script syntax
+checks pass. No local GNU build or full suite was run; provisioning on a host
+without5.3 and native/full acceptance remain hosted validation work.
