@@ -253,3 +253,8 @@
 ./interp|pipeline|TestStory682ProcSubstPipePathPassesThroughPathconv
 ./interp|pipeline|TestStory682ProcSubstPipePathRecognised
 ./interp|signal|TestWindowsSignalBypassesPipe
+
+# Command-substitution EXIT ownership: cancellation and panic must not run traps.
+./interp|cancellation|TestCommandSubstitutionExitTrapCancellation
+./interp|panic|TestCommandSubstitutionExitTrapPanic
+./interp|cancellation|TestPhaseDiagnosticCanceledBeforeSnapshot

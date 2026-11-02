@@ -36,3 +36,15 @@ interp test package cross-compiled successfully; Windows execution remains
 hosted. Audit self-test PASS; production audit PASS (scanned=51 skipped=1136
 total=1187). Full race and fresh-cache hosted acceptance remain pending. No
 full local suite, push, parent pin change, or parser/let edit occurred.
+
+## New lifecycle regression inventory follow-up
+
+Frozen run41370656834 correctly refused race execution because the exact manifest
+omitted TestCommandSubstitutionExitTrapCancellation. Auditing retained hosted
+interp discovery found another new prior-selector member:
+TestPhaseDiagnosticCanceledBeforeSnapshot. Both now have explicit cancellation
+rows. The companion TestCommandSubstitutionExitTrapPanic is explicitly included
+in the panic category. All169 hosted-discovered interp legacy-selector members
+are covered; no selector, category floor, test assertion or deadline is relaxed.
+Focused race execution of these three authored regressions passes count3. The
+full race gate remains a required hosted acceptance check.
