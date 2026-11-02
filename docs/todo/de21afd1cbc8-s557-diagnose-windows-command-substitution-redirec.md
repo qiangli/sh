@@ -3,8 +3,9 @@ id: de21afd1cbc8
 kind: task
 title: S557 diagnose Windows command-substitution redirection ambiguity
 seq: 187
-status: todo
+status: assigned
 created: 2026-11-02T02:42:57.70123Z
+assignee: s557-public-tooling
 sprint: 557
 sprint_id: f5ccf563-f5d1-5b94-8be4-9388e51ef86d
 sprint_title: 'Bashy v1.0.0 preparation: split private/public development and retire qiangli/dhnt'
@@ -29,3 +30,13 @@ native Windows against the unchanged GNU expectation; do not assume an errno
 normalization or timing cause. Original suite output must remain 84/86 until a
 new complete hosted run proves otherwise. The known glob-test filename failure
 is separate from this one-line redirection difference.
+
+
+Diagnostic checkpoint: four independently authored cases now exercise integer
+prefix redirection, the eval comparison, unset/redeclare with prior arithmetic
+eval, and direct capture bytes. Each runs 20 iterations with a five-second
+context. GNU Bash 5.3.15 agrees with every exact stdout/stderr expectation.
+The Darwin race-enabled focused test passes (1.605s). No runtime change or
+foreign assertion change is included. Native Windows proof remains required;
+these results do not resolve or reclassify the hosted 84/86 result. An earlier
+IFS hypothesis was withdrawn because it had no retained evidence.
