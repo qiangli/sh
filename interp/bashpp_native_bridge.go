@@ -651,10 +651,7 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 	linkValues["bridgeAuthPath"] = authPath
 	buildLDFlags := bashPPWorkerBuildLDFlags(linkValues)
 	binary := file.Name() + ".bin"
-	buildEnv := setEnvString(req.internalBuildEnv(), "CGO_ENABLED", "0")
-	if len(req.CgoPackages) > 0 {
-		buildEnv = setEnvString(req.internalBuildEnv(), "CGO_ENABLED", "1")
-	}
+	buildEnv := bashPPWorkerBuildEnv(req)
 	// The importcfg link routes below bypass cmd/go, so the original build's
 	// default GODEBUG must be replayed into the worker by hand; the go build
 	// routes compute it themselves. See bashPPDefaultGODEBUG.

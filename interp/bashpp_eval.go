@@ -202,6 +202,20 @@ func bashPPGoListFacts(ctx context.Context, req bashPPEvalRequest, path string) 
 	return facts, nil
 }
 
+// bashPPWorkerUsesCgo reports whether the native worker for req is built
+// with cgo: only a request carrying package-scoped cgo bindings is.
+func bashPPWorkerUsesCgo(req bashPPEvalRequest) bool { return len(req.CgoPackages) > 0 }
+
+// bashPPWorkerBuildEnv is the build environment of the native worker for req.
+// Import admission and the bridge build share it so a package is classified
+// under the CGO_ENABLED value it is actually compiled with.
+func bashPPWorkerBuildEnv(req bashPPEvalRequest) []string {
+	if bashPPWorkerUsesCgo(req) {
+		return setEnvString(req.internalBuildEnv(), "CGO_ENABLED", "1")
+	}
+	return setEnvString(req.internalBuildEnv(), "CGO_ENABLED", "0")
+}
+
 // policyBashPPEvaluator is the evaluator the runner uses by default. It owns
 // the capability decision and delegates permitted execution to one replaceable
 // package-private adapter. Production installs [nativeBashPPEvaluator], the
@@ -244,12 +258,14 @@ func (e *policyBashPPEvaluator) Resolve(ctx context.Context, req bashPPEvalReque
 	capability := classifyBashPPPackage(facts, path)
 	// Cgo files can be optional: under an inherited CGO_ENABLED=1 (a race
 	// build on Linux), go list reports net's resolver files as CgoFiles, yet
-	// the worker builds with CGO_ENABLED=0 (bashPPNativeBridge) and net is
-	// pure Go there. Ask the worker's own configuration before refusing; a
-	// package that genuinely needs cgo still classifies as capCgo.
-	if capability == capCgo {
+	// a pure-Go worker builds with CGO_ENABLED=0 (bashPPWorkerBuildEnv) and
+	// net is pure Go there. Ask that exact configuration before refusing; a
+	// package that genuinely needs cgo still classifies as capCgo. A worker
+	// carrying cgo packages builds with CGO_ENABLED=1, so its first listing
+	// already is the worker's configuration and the refusal stands.
+	if capability == capCgo && !bashPPWorkerUsesCgo(req) {
 		pure := req
-		pure.BuildEnv = setEnvString(req.internalBuildEnv(), "CGO_ENABLED", "0")
+		pure.BuildEnv = bashPPWorkerBuildEnv(req)
 		retry, err := load(ctx, pure, path)
 		if err != nil {
 			if ctxErr := ctx.Err(); ctxErr != nil {
