@@ -72,6 +72,14 @@ func (r *Runner) parseSourceAliases(p *syntax.Parser, source []byte, path string
 	text := string(source)
 	var ranges []sourceAliasRange
 	syntax.CommandWordObserver(func(name string, pos syntax.Pos) error {
+		// Parsing does not execute alias definitions or removals. Every name
+		// recorded in an ancestry span therefore remains in this fixed map.
+		// Ordinary words need neither ancestry suppression nor resolution;
+		// checking them against every earlier expansion on every reparse makes
+		// a sequence of independent aliases needlessly cubic.
+		if _, ok := r.alias[name]; !ok {
+			return nil
+		}
 		start := int(pos.Offset())
 		end := start + len(name)
 		if start < 0 || end > len(text) || text[start:end] != name {
