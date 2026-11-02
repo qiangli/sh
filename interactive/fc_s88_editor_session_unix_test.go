@@ -39,9 +39,9 @@ func TestFcS88EditorSessionThroughInteractivePTY(t *testing.T) {
 	editor := filepath.Join(dir, "s88-editor")
 	editorScript := `#!/bin/sh
 printf '%s\n' S88_EDITOR_READY >&2
-IFS= read -r edit || exit 40
-[ "$edit" = 's/world/goodbye/' ] || exit 41
-printf '%s\n' 'echo hello goodbye' >"$1" || exit 42
+IFS= read -r edit || { printf 'S88_EDITOR_READ_FAILED:%s\n' "$?" >&2; exit 40; }
+[ "$edit" = 's/world/goodbye/' ] || { printf 'S88_EDITOR_BAD_LINE:<%s>\n' "$edit" >&2; exit 41; }
+printf '%s\n' 'echo hello goodbye' >"$1" || { printf '%s\n' S88_EDITOR_WRITE_FAILED >&2; exit 42; }
 printf '%s\n' S88_EDITOR_DONE >&2
 `
 	if err := os.WriteFile(editor, []byte(editorScript), 0o700); err != nil {
