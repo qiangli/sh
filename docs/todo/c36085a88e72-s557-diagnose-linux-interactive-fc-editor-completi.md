@@ -17,3 +17,6 @@ Native41370643706 Linuxworkspace125040178282 atroot58a2442 fails interp TestFcS8
 
 
 Consolidation: duplicate internal helper story79456e1ca444 was filed just before its turn failed for capacity, with no source edits. This story186 retains the full scope; duplicate archived before removal. Helper isolated standalone testcase count10 passed1.503s; hostedLinux failure remains unresolved. Temporary workspace-mode attempt failed before tests (not a testcase verdict). Evidence /tmp/s557-fc-pty-baseline.log; no implementation lost. GLM owns the sole repair assignment.
+
+
+Reassignment checkpoint: GLM's second attempt was stopped through weave after twenty minutes of read-only exploration with no committed/uncommitted source changes or concrete checkpoint, despite two live steering requests. Its earlier interface audit was delivered separately. Run sh#1 workspace/logs are preserved, not discarded. Continue this bounded editor task from the current successor source; do not replay broad discovery. Existing standalone Darwin authored case count10 passed, original Linux workspace failure remains the evidence to explain. Manager is preparing native hosted tests; request minimal diagnostics if Linux attribution remains unavailable. No broader shell or Modernish changes (separate owners).
