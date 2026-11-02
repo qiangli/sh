@@ -529,6 +529,9 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			state.mu.Unlock()
 			if replacement != nil {
 				defer state.current.CompareAndSwap(replacement, nil)
+				// Every return before the start outcome is published (the
+				// ENOEXEC descriptor refusal among them) is a failed start.
+				defer replacement.publish(0)
 			}
 		}
 		if hc.ExecReplace && !proxyReplace {
@@ -659,10 +662,11 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			}
 		}
 		if replacement != nil {
+			pid := 0
 			if err == nil {
-				replacement.pid.Store(int64(cmd.Process.Pid))
+				pid = cmd.Process.Pid
 			}
-			close(replacement.ready)
+			replacement.publish(pid)
 		}
 		if err != nil && hc.runner != nil && hc.runner.bashCompatErrors {
 			if interp, ok := missingShebangInterpreter(diagnosticScriptPath); ok {

@@ -4,8 +4,11 @@ package interp
 
 import (
 	"context"
+	"errors"
+	"os"
 	"os/exec"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -131,4 +134,121 @@ func TestVirtualSelfSignalBash(t *testing.T) {
 			}
 		})
 	}
+}
+
+// asyncReplacementRunner is an asynchronous-list subshell whose virtual
+// BASHPID is exactly virtualPid and whose shared exec replacement state holds
+// attempt. It sends no signal by itself.
+func asyncReplacementRunner(t *testing.T, virtualPid int, attempt *execReplacementAttempt) *Runner {
+	t.Helper()
+	parent, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := parent.Subshell()
+	r.asyncList = true
+	r.subshellLevel = virtualPid - os.Getpid()
+	if r.bashPID() != virtualPid || r.bashPID() == r.shellPid() {
+		t.Fatalf("virtual BASHPID %d, want %d distinct from $$ %d", r.bashPID(), virtualPid, r.shellPid())
+	}
+	r.execReplacement.current.Store(attempt)
+	return r
+}
+
+// TestVirtualSelfYieldsToPublishedReplacementPid pins the routing order with a
+// deterministic collision instead of relying on sequential PID allocation: the
+// virtual BASHPID is set equal to the PID of a helper child this test owns and
+// published as the live exec replacement. TERM must reach that child, not end
+// the virtual subshell with 143. No other PID is signalled.
+func TestVirtualSelfYieldsToPublishedReplacementPid(t *testing.T) {
+	helper := exec.Command("sleep", "30")
+	if err := helper.Start(); err != nil {
+		t.Fatal(err)
+	}
+	var waitErr error
+	waited := make(chan struct{})
+	go func() { waitErr = helper.Wait(); close(waited) }()
+	t.Cleanup(func() {
+		select {
+		case <-waited:
+		default:
+			_ = helper.Process.Kill()
+			<-waited
+		}
+	})
+	attempt := &execReplacementAttempt{ready: make(chan struct{})}
+	attempt.publish(helper.Process.Pid)
+	r := asyncReplacementRunner(t, helper.Process.Pid, attempt)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	status := r.builtin(ctx, syntax.Pos{}, "kill", []string{"-TERM", strconv.Itoa(helper.Process.Pid)})
+	if status.exiting || status.code != 0 {
+		t.Fatalf("kill -TERM collided identity: %+v; want delivery to the replacement child", status)
+	}
+	select {
+	case <-waited:
+		err := waitErr
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) {
+			t.Fatalf("helper wait: %v", err)
+		}
+		ws, ok := exitErr.Sys().(syscall.WaitStatus)
+		if !ok || !ws.Signaled() || ws.Signal() != syscall.SIGTERM {
+			t.Fatalf("helper ended %v, want SIGTERM", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("TERM did not reach the replacement child")
+	}
+}
+
+// TestVirtualSelfReplacementReadiness covers the readiness handoff the kill
+// routing waits on: a pending attempt must not block past cancellation, and a
+// failed start (PID 0) leaves virtual self-signals virtual and refuses $$.
+func TestVirtualSelfReplacementReadiness(t *testing.T) {
+	sig, _ := signalByName("ALRM")
+	// Synthetic identity above the Linux/macOS kernel PID range: a routing
+	// regression cannot reach a real process.
+	virtualPid := os.Getpid() + 1<<30
+
+	t.Run("pending-cancelled", func(t *testing.T) {
+		r := asyncReplacementRunner(t, virtualPid, &execReplacementAttempt{ready: make(chan struct{})})
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan exitStatus, 1)
+		go func() { done <- r.builtin(ctx, syntax.Pos{}, "kill", []string{"-ALRM", strconv.Itoa(virtualPid)}) }()
+		select {
+		case status := <-done:
+			t.Fatalf("kill returned %+v before publication or cancellation", status)
+		case <-time.After(50 * time.Millisecond):
+		}
+		cancel()
+		select {
+		case status := <-done:
+			if status.exiting || status.code != 1 {
+				t.Fatalf("cancelled wait: %+v, want non-exiting failure", status)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("kill stayed blocked on an unpublished replacement after cancellation")
+		}
+	})
+
+	t.Run("failed-start", func(t *testing.T) {
+		attempt := &execReplacementAttempt{ready: make(chan struct{})}
+		attempt.publish(0)
+		attempt.publish(os.Getpid()) // later publications are ignored
+		if pid, ok := attempt.await(context.Background()); !ok || pid != 0 {
+			t.Fatalf("await = %d, %v; want failed start 0", pid, ok)
+		}
+		r := asyncReplacementRunner(t, virtualPid, attempt)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		status := r.builtin(ctx, syntax.Pos{}, "kill", []string{"-ALRM", strconv.Itoa(virtualPid)})
+		if !status.exiting || int(status.code) != 128+sigNum(sig) {
+			t.Fatalf("virtual self after failed start: %+v", status)
+		}
+		// $$ with a failed replacement start is refused without a kernel send.
+		r = asyncReplacementRunner(t, virtualPid, attempt)
+		if status = r.builtin(ctx, syntax.Pos{}, "kill", []string{"-0", strconv.Itoa(r.shellPid())}); status.exiting || status.code != 1 {
+			t.Fatalf("$$ after failed start: %+v, want refusal", status)
+		}
+	})
 }

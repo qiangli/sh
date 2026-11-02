@@ -807,9 +807,8 @@ func (r *Runner) lookupVarUnhosted(name string) expand.Variable {
 			pid := int64(os.Getpid())
 			if r.asyncList && r.execReplacement != nil {
 				if replacement := r.execReplacement.current.Load(); replacement != nil {
-					<-replacement.ready
-					if replacementPid := replacement.pid.Load(); replacementPid > 0 {
-						pid = replacementPid
+					if replacementPid, _ := replacement.await(r.ectx); replacementPid > 0 {
+						pid = int64(replacementPid)
 						if r.asyncProc != nil {
 							replacement.observer.Store(r.asyncProc)
 						}
