@@ -209,3 +209,51 @@ func TestBashPPCallHonoursCancellation(t *testing.T) {
 		t.Fatalf("native ran under a cancelled context (%d calls)", native.calls)
 	}
 }
+
+// TestBashPPOptionalCgoFilesUseWorkerConfiguration pins import admission to
+// the worker's CGO_ENABLED=0 build. Linux net lists resolver CgoFiles under an
+// inherited CGO_ENABLED=1 (a race build), yet builds as pure Go in the worker;
+// a package that still needs cgo under CGO_ENABLED=0 keeps its refusal.
+func TestBashPPOptionalCgoFilesUseWorkerConfiguration(t *testing.T) {
+	cgoEnabled := func(req bashPPEvalRequest) string {
+		value := ""
+		for _, kv := range req.internalBuildEnv() {
+			if name, v, ok := strings.Cut(kv, "="); ok && name == "CGO_ENABLED" {
+				value = v
+			}
+		}
+		return value
+	}
+	dir := t.TempDir()
+	for _, test := range []struct {
+		name, path string
+		pure       bashPPPackageFacts
+		want       string
+	}{
+		{"optional", "net", bashPPPackageFacts{Name: "net", Standard: true, Dir: dir, GoFiles: []string{"net.go"}}, ""},
+		{"required", "example.com/c", bashPPPackageFacts{Name: "c", Dir: dir, IgnoredGoFiles: []string{"c.go"}}, "requires cgo"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var seen []string
+			policy := &policyBashPPEvaluator{facts: func(_ context.Context, req bashPPEvalRequest, _ string) (bashPPPackageFacts, error) {
+				seen = append(seen, cgoEnabled(req))
+				if cgoEnabled(req) == "0" {
+					return test.pure, nil
+				}
+				return bashPPPackageFacts{Name: test.pure.Name, Standard: test.pure.Standard, Dir: test.pure.Dir, GoFiles: test.pure.GoFiles, CgoFiles: []string{"cgo_linux.go"}}, nil
+			}}
+			req := bashPPEvalRequest{Env: []string{"CGO_ENABLED=1"}}
+			name, err := policy.Resolve(context.Background(), req, test.path)
+			if test.want == "" {
+				if err != nil || name != test.pure.Name {
+					t.Fatalf("Resolve = %q, %v; want %q admitted", name, err, test.pure.Name)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Resolve error = %v, want %q", err, test.want)
+			}
+			if strings.Join(seen, ",") != "1,0" {
+				t.Fatalf("listed CGO_ENABLED = %v, want inherited then worker configuration", seen)
+			}
+		})
+	}
+}

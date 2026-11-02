@@ -242,6 +242,23 @@ func (e *policyBashPPEvaluator) Resolve(ctx context.Context, req bashPPEvalReque
 		return "", err
 	}
 	capability := classifyBashPPPackage(facts, path)
+	// Cgo files can be optional: under an inherited CGO_ENABLED=1 (a race
+	// build on Linux), go list reports net's resolver files as CgoFiles, yet
+	// the worker builds with CGO_ENABLED=0 (bashPPNativeBridge) and net is
+	// pure Go there. Ask the worker's own configuration before refusing; a
+	// package that genuinely needs cgo still classifies as capCgo.
+	if capability == capCgo {
+		pure := req
+		pure.BuildEnv = setEnvString(req.internalBuildEnv(), "CGO_ENABLED", "0")
+		retry, err := load(ctx, pure, path)
+		if err != nil {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return "", ctxErr
+			}
+		} else if c := classifyBashPPPackage(retry, path); c == capReviewedStdlib || c == capExternalPureGo || c == capUnreviewedStdlib {
+			facts, capability = retry, c
+		}
+	}
 	// Sprint 165 D8: an INTERNAL standard-library package outside the
 	// reviewed inventory is admitted for a declared identity that cmd/go's
 	// rule admits it for (bashPPIdentityAdmitsInternal); nothing else moves.
