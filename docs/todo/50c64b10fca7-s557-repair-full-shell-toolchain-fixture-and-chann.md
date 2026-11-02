@@ -24,3 +24,20 @@ Hosted phase evidence establishes that the macOS chanlinear failure is in interp
 Only the separately timed original-channel helper now logs interpreter start/end goroutine counts and GOMAXPROCS, and samples goroutine stacks once at 55s. The snapshot is emitted only on interpreter failure. Its timer is canceled and its goroutine joined on normal completion and cleanup before accessing the captured string. The interpreter deadline remains 60s; native deadlines, original source, output comparisons, and compiled-artifact assertions are untouched. No speculative channel runtime changes were made.
 
 The timer/capture helper's authored cancellation and join tests passed three repetitions under `-race` in 1.237s using only its two test files. The original focused channel regression with instrumentation passed again: interpreter 1.403s, package 2.842s, start/end goroutines 3/4. Hosted focused execution and potentially the full-package contention context remain required to obtain the failing stack and identify the runtime cause. This delivery fixes the pragma fixture and improves channel evidence; it does not claim the macOS timeout fixed.
+
+## Cold-cache pinned compiler follow-up
+
+Frozen run41370656834 Linux discovered/executed3940 top-level cases, with one
+failure: TestGoSourceTypedWideUint combined output included the Go1.27.1 download
+notice before `true`. Its compiler pin, ten-second deadline and exact combined
+output assertion remain unchanged. The canonical full runner now prepares that
+oracle before package enumeration or timed fixture execution. Preparation logs
+resolver and compiler identities, requires both to be exactly Go1.27.1, and fails
+closed on provisioning or identity errors. Acquisition diagnostics are retained
+in the setup log, never filtered out of program output.
+
+Five mocked preparation cases pass: expected identity with download diagnostics,
+wrong resolver version, wrong compiler version, resolver failure and compiler
+failure. Actual cached Go1.27.1 resolver/compiler identity checks pass. Unchanged
+TestGoSourceTypedWideUint and TestClassicWideIntegerParity pass (4.217s). No full
+local suite was run; cold-cache full acceptance remains hosted.
