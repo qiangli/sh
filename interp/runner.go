@@ -152,9 +152,9 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 				if cs.TempFile && cs.Left.Line() != cs.Right.Line() {
 					r.funsubLineOffset = 1
 				}
-				shellHist.cmdSubst.Add(1)
+				r.histSubstDepth++
 				r.stmts(ctx, cs.Stmts)
-				shellHist.cmdSubst.Add(-1)
+				r.histSubstDepth--
 				r.funsubLineOffset = oldFunsubLineOffset
 				reply := ""
 				if cs.ReplyVar {
@@ -235,9 +235,9 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 			} else {
 				r2.opts[optErrExit] = false
 			}
-			shellHist.cmdSubst.Add(1)
+			r2.histSubstDepth++
 			r2.stmts(ctx, cs.Stmts)
-			shellHist.cmdSubst.Add(-1)
+			r2.histSubstDepth--
 			// A locally installed EXIT trap belongs to this substitution's
 			// subshell. Run it before closing the capture pipe or clearing
 			// its exit status; inherited parent traps remain non-executable.
@@ -271,6 +271,8 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 			path := pipe.path()
 
 			r2 := r.subshell(true)
+			// The enclosing reader owns this body, even when it runs later.
+			r2.histSubstDepth++
 			stdout := r.origStdout
 			// TODO: note that `man bash` mentions that `wait` only waits for the last
 			// process substitution as long as it is $!; the logic here would mean we wait for all of them.

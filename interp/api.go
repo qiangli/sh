@@ -71,6 +71,11 @@ const BashyHardIgnoreEnv = "BASHY_HARD_IGNORE"
 // Runner's exported fields are meant to be configured via [RunnerOption];
 // once a Runner has been created, the fields should be treated as read-only.
 type Runner struct {
+	// History reader suppression belongs to this execution context. A child
+	// inherits its parent's depth, but must never suppress the parent reader.
+	histReplayDepth int
+	histSubstDepth  int
+
 	// ownedExecPaths are verified identities of Bashy-owned child binaries.
 	// Only these may consume the private argv handoff protocol.
 	ownedExecPaths []string
@@ -3989,6 +3994,8 @@ func (r *Runner) subshellWithBashPPCapture(background bool, capture map[*bashPPC
 	r.ensureDirFile(r.Dir)
 	dirFile, _ := dupRunnerDir(r.dirFile)
 	r2 := &Runner{
+		histReplayDepth:      r.histReplayDepth,
+		histSubstDepth:       r.histSubstDepth,
 		goSourceEnvironment:  slices.Clone(r.goSourceEnvironment),
 		ownedExecPaths:       slices.Clone(r.ownedExecPaths),
 		bashPPAgentic:        r.bashPPAgentic,
