@@ -134,6 +134,17 @@ fi
 
 : >"$evidence"
 log() { printf '%s\n' "$*" | tee -a "$evidence"; }
+# This is also invoked independently of the quick/full runners. Their exported
+# reference does not survive a separate make invocation; resolve it here too.
+bash_reference_log="${evidence}.bash-reference.log"
+if SH_TEST_BASH_REFERENCE=$(bash "$root/scripts/prepare-bash-reference.sh" 2>"$bash_reference_log"); then
+	export SH_TEST_BASH_REFERENCE
+	log "bash_reference: $SH_TEST_BASH_REFERENCE"
+else
+	cat "$bash_reference_log" >&2
+	log "ERROR: could not prepare GNU Bash 5.3 reference"
+	exit 1
+fi
 go_path=$(command -v "${GO:-go}")
 go_dir=$(dirname "$go_path")
 # Resolve the toolchain ONCE and invoke it by absolute path. The gate adds

@@ -52,3 +52,9 @@ rejection passes, and identity/alias regressions pass count3 in1.469s. The GNU
 source digest matches the existing public fixture source contract. Script syntax
 checks pass. No local GNU build or full suite was run; provisioning on a host
 without5.3 and native/full acceptance remain hosted validation work.
+
+Independent review identified that a separate race-gate invocation does not
+inherit exports from a previous quick/full process. The race gate now invokes
+and exports the same validated reference itself, retaining its setup log. This
+also resolves the prepared cache on Linux where PATH still contains Bash5.2.
+No race selector or execution deadline changes.
