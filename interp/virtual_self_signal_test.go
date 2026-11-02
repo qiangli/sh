@@ -3,7 +3,6 @@
 package interp
 
 import (
-	"bytes"
 	"context"
 	"os/exec"
 	"os/signal"
@@ -104,18 +103,20 @@ func TestVirtualSelfSignalBash(t *testing.T) {
 			})
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			cmd := exec.CommandContext(ctx, reference, "-c", tc.script)
-			var want, referr bytes.Buffer
-			cmd.Stdout = &want
-			cmd.Stderr = &referr
-			if err := cmd.Run(); err != nil {
-				t.Fatalf("GNU: %v %s", err, &referr)
+			// Output returns immutable snapshots after Wait joins the copiers.
+			want, err := exec.CommandContext(ctx, reference, "-c", tc.script).Output()
+			if err != nil {
+				var referr []byte
+				if ee, ok := err.(*exec.ExitError); ok {
+					referr = ee.Stderr
+				}
+				t.Fatalf("GNU: %v %s", err, referr)
 			}
 			node, err := syntax.NewParser().Parse(strings.NewReader(tc.script), "virtual-self")
 			if err != nil {
 				t.Fatal(err)
 			}
-			var got, stderr bytes.Buffer
+			var got, stderr lockedBuffer
 			r, err := New(StdIO(nil, &got, &stderr))
 			if err != nil {
 				t.Fatal(err)
@@ -125,8 +126,8 @@ func TestVirtualSelfSignalBash(t *testing.T) {
 			if err = r.Run(ctx, node); err != nil {
 				t.Fatalf("run: %v stderr=%s", err, &stderr)
 			}
-			if got.String() != want.String() {
-				t.Fatalf("got %q want %q stderr=%q", got.String(), want.String(), stderr.String())
+			if got.String() != string(want) {
+				t.Fatalf("got %q want %q stderr=%q", got.String(), want, stderr.String())
 			}
 		})
 	}
