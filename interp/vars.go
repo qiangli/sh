@@ -931,7 +931,7 @@ func (r *Runner) lookupVarUnhosted(name string) expand.Variable {
 			// shift by subshellLevel to make BASHPID differ per
 			// subshell layer — scripts that compare $BASHPID across
 			// boundaries (the canonical use case) keep working.
-			vr.Kind, vr.Str = expand.String, strconv.Itoa(os.Getpid()+r.subshellLevel)
+			vr.Kind, vr.Str = expand.String, strconv.Itoa(r.bashPID())
 		}
 	case "SECONDS":
 		if r.deterministic {

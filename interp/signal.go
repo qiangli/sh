@@ -490,6 +490,47 @@ func (r *Runner) shellPid() int {
 	return os.Getpid()
 }
 
+// bashPID is the identity advertised by BASHPID. Foreground subshells are
+// in-process runners, so this legacy identity is not an OS signal target.
+func (r *Runner) bashPID() int {
+	if r.deterministic {
+		return int(r.deterministicSeed & 0x7fff)
+	}
+	return os.Getpid() + r.subshellLevel
+}
+
+// signalVirtualSelf handles only this runner's advertised virtual identity.
+// $$ still follows the existing ancestor/OS ownership path. Inherited caught
+// traps are reset in a subshell; only a locally installed handler can fire.
+func (r *Runner) signalVirtualSelf(pid int, sig killSig) (bool, exitStatus) {
+	if pid != r.bashPID() || pid == r.shellPid() {
+		return false, exitStatus{}
+	}
+	if sigIsZero(sig) {
+		return true, exitStatus{}
+	}
+	if name, ok := signalName(sig); ok && name != "KILL" && name != "STOP" {
+		if r.isStartupIgnored(name) {
+			return true, exitStatus{}
+		}
+		if callback, set := r.trapCallbacks[name]; set && callback == "" {
+			return true, exitStatus{}
+		}
+		if r.trapSignalActive(name) {
+			r.markPendingSignal(name)
+			return true, exitStatus{}
+		}
+	}
+	if signalDefaultDoesNotTerminate(sig) {
+		return true, exitStatus{}
+	}
+	if name, _ := signalName(sig); name == "KILL" {
+		// SIGKILL cannot execute EXIT cleanup in this virtual process.
+		delete(r.trapCallbacks, "EXIT")
+	}
+	return true, exitStatus{code: uint8(128 + sigNum(sig)), exiting: true}
+}
+
 // trapSignalActive reports whether this runner has installed an OS signal
 // handler (via signal.Notify) for the named signal. A subshell clone returns
 // false because the signal infrastructure is not inherited.

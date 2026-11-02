@@ -1944,6 +1944,14 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					continue
 				}
 			}
+			// BASHPID of an in-process subshell is virtual. Never send it
+			// to the kernel, where it may name an unrelated process/thread.
+			if handled, selfExit := r.signalVirtualSelf(pid, sig); handled {
+				if selfExit.exiting {
+					return selfExit
+				}
+				continue
+			}
 			// A signal directed at our own $$ for which this runner (or a
 			// foreground parent it runs inline within) owns a trap is
 			// delivered synchronously into that runner's pending queue,
