@@ -5925,15 +5925,35 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 	case "declare", "typeset":
 		// Simple declare when called as a command (not keyword).
 		// Keyword form is handled by DeclClause in runner.go.
+		nameOfBuiltin := name
 		inFuncScope := r.inFunc || len(r.callStack) > 0
 		printMode := false
-		exportMode := false
+		exportMode, unexportMode := false, false
+		globalMode, optionsEnded := false, false
 		readonlyMode := false
 		namerefMode := false
 		arrayMode := ""
+		lookup := func(name string) expand.Variable {
+			if globalMode {
+				return r.lookupGlobalVar(name)
+			}
+			return r.lookupVar(name)
+		}
+		store := func(name string, vr expand.Variable) {
+			if globalMode {
+				vr.Local = false
+				r.setGlobalVar(name, vr)
+			} else {
+				r.setVar(name, vr)
+			}
+		}
 		var names []string
 		for _, arg := range args {
-			if strings.HasPrefix(arg, "-") && !strings.Contains(arg, "=") {
+			if !optionsEnded && arg == "--" {
+				optionsEnded = true
+				continue
+			}
+			if !optionsEnded && (strings.HasPrefix(arg, "-") || arg == "+x") && !strings.Contains(arg, "=") {
 				fp := flagParser{remaining: []string{arg}}
 				for fp.more() {
 					switch flag := fp.flag(); flag {
@@ -5941,34 +5961,53 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 						printMode = true
 					case "-x":
 						exportMode = true
+					case "+x":
+						unexportMode = true
+					case "-g":
+						globalMode = true
 					case "-r":
 						readonlyMode = true
 					case "-n":
 						namerefMode = true
 					case "-a", "-A":
 						arrayMode = flag
+					case "-f", "-F", "-i", "-I", "-l", "-u", "-c", "-t":
+						// Preserve existing handling of valid flags outside this
+						// command-form fallback's supported attribute subset.
 					default:
-						// Other simple-command declare flags are handled by
-						// DeclClause in the common path; keep this fallback
-						// narrowly scoped to the inline-assignment cases.
+						r.errf("%s%s: %s: invalid option\n", r.bashErrPrefix(pos), name, flag)
+						r.errf("%s: usage: %s\n", name, bashUsage[name])
+						return exitStatus{code: 2}
 					}
 				}
 				continue
 			}
 			eqIdx := strings.IndexByte(arg, '=')
+			// After the first operand, a flag-shaped argument is a name.
+			// Keep other existing operand forms on their original paths.
+			if optionsEnded && (strings.HasPrefix(arg, "-") || strings.HasPrefix(arg, "+")) {
+				exit = invalidIdentifier(nameOfBuiltin, arg)
+				continue
+			}
+			optionsEnded = true
 			if eqIdx >= 0 {
 				name := arg[:eqIdx]
 				val := arg[eqIdx+1:]
 				vr := expand.Variable{Set: true, Kind: expand.String, Str: val}
-				prev := r.lookupVar(name)
-				vr.Exported = prev.Exported || exportMode
+				prev := lookup(name)
+				if prev.ReadOnly {
+					r.errf("%s%s: %s: readonly variable\n", r.bashErrPrefix(pos), nameOfBuiltin, name)
+					exit.code = 1
+					continue
+				}
+				vr.Exported = (prev.Exported || exportMode) && !unexportMode
 				if readonlyMode {
 					vr.ReadOnly = true
 				}
-				if inFuncScope {
+				if inFuncScope && !globalMode {
 					vr.Local = true
 				}
-				r.setVar(name, vr)
+				store(name, vr)
 				names = append(names, name)
 			} else if namerefMode {
 				// `VAR=val declare -n NAME` (and other CallExpr-form
@@ -5976,7 +6015,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				// NAME's current value as a reference target, matching
 				// the keyword DeclClause path (nameref11.sub line 22).
 				names = append(names, arg)
-				vr := r.lookupVar(arg)
+				vr := lookup(arg)
 				if vr.Kind == expand.String && (vr.Str != "" || vr.Set) && !validNameRefTarget(vr.Str) {
 					r.errf("%s%s: `%s': invalid variable name for name reference\n",
 						r.bashErrPrefix(pos), name, vr.Str)
@@ -5984,18 +6023,19 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					continue
 				}
 				vr.Kind = expand.NameRef
-				vr.Exported = vr.Exported || exportMode
+				vr.Exported = (vr.Exported || exportMode) && !unexportMode
 				vr.ReadOnly = vr.ReadOnly || readonlyMode
-				vr.Local = vr.Local || inFuncScope
-				r.setVar(arg, vr)
+				vr.Local = vr.Local || (inFuncScope && !globalMode)
+				store(arg, vr)
 			} else {
 				names = append(names, arg)
-				if exportMode || readonlyMode || inFuncScope {
-					vr := r.lookupVar(arg)
-					vr.Exported = vr.Exported || exportMode
+				if exportMode || unexportMode || readonlyMode || inFuncScope {
+					vr := lookup(arg)
+					vr.Exported = (vr.Exported || exportMode) && !unexportMode
 					vr.ReadOnly = vr.ReadOnly || readonlyMode
-					vr.Local = vr.Local || inFuncScope
-					r.setVar(arg, vr)
+					vr.Local = vr.Local || (inFuncScope && !globalMode)
+					vr.Kind = expand.KeepValue
+					store(arg, vr)
 				}
 			}
 		}
