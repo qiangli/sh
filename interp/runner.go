@@ -329,6 +329,14 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 						endpoint = r2.bashPPFIFOPublish(c, f, path, os.O_WRONLY)
 					}
 					r2.stdout = f
+					if runtime.GOOS == "darwin" {
+						// A reader may discard the published path before this
+						// goroutine writes. Keep EPIPE/SIGPIPE on the simulated
+						// producer, as for an in-process pipeline child.
+						defer r2.stopSignalSubscriptions()
+						r2.pipelineOutput = true
+						r2.stdout = &pipelineWriter{w: f, runner: r2}
+					}
 					defer func() {
 						if err := closeEndpoint(f); err != nil {
 							r.errf("closing stdout fifo: %v\n", err)

@@ -620,7 +620,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		pipeBroken := r.pipelineWriteBroken.Swap(false) || isBrokenPipeWriteErr(r.outErr)
 		if r.pipelineOutput && pipeBroken {
 			ignored := r.pipelineSIGPIPEIgnored()
-			if !ignored {
+			caught := r.procSubstOwnIO && r.trapSignalActive("PIPE")
+			if caught {
+				r.markPendingSignal("PIPE")
+			}
+			if !ignored && !caught {
 				exit.code = 128 + 13
 				exit.exiting = true
 				r.outErr = prevOutErr

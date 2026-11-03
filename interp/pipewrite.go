@@ -53,6 +53,10 @@ func (r *Runner) applyPipelineWriteFailure() {
 	if r.pipelineSIGPIPEIgnored() {
 		return
 	}
+	if r.procSubstOwnIO && r.trapSignalActive("PIPE") {
+		r.markPendingSignal("PIPE")
+		return
+	}
 	r.exit.code = 128 + 13
 	r.exit.exiting = true
 	if n := len(r.pipeStatus); n > 0 {
