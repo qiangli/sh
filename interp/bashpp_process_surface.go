@@ -284,7 +284,7 @@ func (r *Runner) bashPPStartSubshell(ctx context.Context, argv []string) *bashPP
 	go func() {
 		defer close(src.done)
 		defer pw.Close()
-		defer r2.closeSubshellFiles()
+		defer r2.closeDirFile()
 		r2.stmts(cctx, []*syntax.Stmt{{Cmd: &syntax.CallExpr{Args: words}}})
 		if r2.exit.fatalExit && r2.exit.err != nil && cctx.Err() == nil {
 			src.fatal = r2.exit.err

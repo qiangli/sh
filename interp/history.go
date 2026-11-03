@@ -45,8 +45,10 @@ type histGroup struct {
 }
 
 type histState struct {
-	mu     sync.Mutex
-	active atomic.Bool // fast-path gate for histSync
+	mu       sync.Mutex
+	active   atomic.Bool  // fast-path gate for histSync
+	replay   atomic.Int32 // >0 while re-executing an expanded line
+	cmdSubst atomic.Int32 // >0 while evaluating a command/process substitution body
 
 	enabled bool // `set -o history`
 	expand  bool // `set -H` / `set -o histexpand`
@@ -99,6 +101,8 @@ func histReset() {
 	h.quotedBreak = nil
 	h.noExpand = nil
 	h.suppressFromLine, h.suppressThroughLine = 0, 0
+	h.replay.Store(0)
+	h.cmdSubst.Store(0)
 	h.searchString, h.searchMatch, h.substLHS, h.substRHS = "", "", "", ""
 	h.list, h.base = nil, 1
 	h.linesThisSession, h.linesInFile, h.loaded = 0, 0, false
@@ -148,7 +152,7 @@ func (r *Runner) histSync(ctx context.Context, pos syntax.Pos) bool {
 	}
 	// While re-executing the result of a history expansion, the reader has
 	// already consumed these lines: don't record, expand or suppress again.
-	if r.histReplayDepth > 0 {
+	if h.replay.Load() > 0 {
 		return false
 	}
 	// Commands inside a command/process substitution are part of the
@@ -159,7 +163,7 @@ func (r *Runner) histSync(ctx context.Context, pos syntax.Pos) bool {
 	// will record and replay the entire line. This avoids triggering a
 	// nested whole-line replay from inside the substitution's own output
 	// capture.
-	if r.histSubstDepth > 0 {
+	if h.cmdSubst.Load() > 0 {
 		return false
 	}
 	line := int(pos.Line())
@@ -211,9 +215,9 @@ func (r *Runner) histSync(ctx context.Context, pos syntax.Pos) bool {
 			r.errf("%s\n", e)
 		}
 		if p.status == histChanged {
-			r.histReplayDepth++
+			h.replay.Add(1)
 			r.histRunString(ctx, p.execText)
-			r.histReplayDepth--
+			h.replay.Add(-1)
 		}
 	}
 	return suppress
@@ -2223,7 +2227,7 @@ parseOpts:
 	// This interpreter records the enclosing line only after the body runs
 	// (at r.call), so h.lastAdded here still points at the genuine previous
 	// command, which must be kept. Don't subtract for it.
-	if r.histSubstDepth > 0 {
+	if h.cmdSubst.Load() > 0 {
 		la = 0
 	}
 

@@ -42,10 +42,6 @@ type bashPPBridgeValue struct {
 	handleOwner  *bashPPHandleOwner    // shared by every interpreter copy; never serialized
 	Lease        uint64                `json:"lease,omitempty"`
 	residentSync *goSourceResidentSync // host-only; never serialized
-	// A bound resident method retains its receiver identity without sending
-	// synchronization state or a closure through the dependency transport.
-	residentSyncMethod string
-	residentSyncType   string
 	// deferredNativeComposite is return-boundary provenance minted only while
 	// evaluating the mirrored method frame's own return expression. The worker
 	// reconstructs the value at the declared reflect result type; the marker is
@@ -477,30 +473,6 @@ func (s *bashPPNativeSession) closeCanceled(cause error) {
 		}
 	})
 }
-func (s *bashPPNativeSession) waitNativeProcess(listener io.Closer) {
-	err := s.cmd.Wait()
-	// Process completion owns the forwarding lifetime even if a session
-	// owner retains the bridge. Join before publishing completion.
-	if s.stopSignals != nil {
-		s.stopSignals()
-	}
-	s.mu.Lock()
-	s.waitErr = err
-	conn := s.conn
-	s.mu.Unlock()
-	close(s.done)
-	// The child's descriptors are gone; retiring the host write ends lets
-	// each copier drain to EOF and flush the program's final output.
-	s.closeDrains()
-	_ = listener.Close()
-	if conn != nil {
-		// Serialize local close with writes and cancellation provenance.
-		s.write.Lock()
-		_ = conn.Close()
-		s.write.Unlock()
-	}
-}
-
 func bridgeImportIdentity(imports map[string]string) string {
 	data, _ := json.Marshal(imports)
 	return string(data)
@@ -651,7 +623,10 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 	linkValues["bridgeAuthPath"] = authPath
 	buildLDFlags := bashPPWorkerBuildLDFlags(linkValues)
 	binary := file.Name() + ".bin"
-	buildEnv := bashPPWorkerBuildEnv(req)
+	buildEnv := setEnvString(req.internalBuildEnv(), "CGO_ENABLED", "0")
+	if len(req.CgoPackages) > 0 {
+		buildEnv = setEnvString(req.internalBuildEnv(), "CGO_ENABLED", "1")
+	}
 	// The importcfg link routes below bypass cmd/go, so the original build's
 	// default GODEBUG must be replayed into the worker by hand; the go build
 	// routes compute it themselves. See bashPPDefaultGODEBUG.
@@ -828,15 +803,32 @@ func (s *bashPPNativeSession) begin(ctx context.Context, req bashPPEvalRequest) 
 	// The helper owns the native standard-library state of the interpreted Go
 	// program. Keep it in an isolated process group for cleanup, but proxy the
 	// program process's catchable signals as an exec replacement would.
-	s.stopSignals = sync.OnceFunc(forwardBashPPNativeSignalsWithReport(cmd.Process.Pid, func(sig int) {
+	s.stopSignals = forwardBashPPNativeSignalsWithReport(cmd.Process.Pid, func(sig int) {
 		s.mu.Lock()
 		s.forwardedSignal = sig
 		s.mu.Unlock()
-	}))
+	})
 	s.cmd = cmd
 	s.done = make(chan struct{})
 	s.pending = make(map[uint64]chan bashPPBridgeResponse)
-	go s.waitNativeProcess(listener)
+	go func() {
+		err := cmd.Wait()
+		s.mu.Lock()
+		s.waitErr = err
+		conn := s.conn
+		s.mu.Unlock()
+		close(s.done)
+		// The child's descriptors are gone; retiring the host write ends lets
+		// each copier drain to EOF and flush the program's final output.
+		s.closeDrains()
+		_ = listener.Close()
+		if conn != nil {
+			// Serialize local close with writes and cancellation provenance.
+			s.write.Lock()
+			_ = conn.Close()
+			s.write.Unlock()
+		}
+	}()
 	if tcp, ok := listener.(*net.TCPListener); ok {
 		_ = tcp.SetDeadline(time.Now().Add(10 * time.Second))
 	}

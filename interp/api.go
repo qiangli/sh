@@ -71,11 +71,6 @@ const BashyHardIgnoreEnv = "BASHY_HARD_IGNORE"
 // Runner's exported fields are meant to be configured via [RunnerOption];
 // once a Runner has been created, the fields should be treated as read-only.
 type Runner struct {
-	// History reader suppression belongs to this execution context. A child
-	// inherits its parent's depth, but must never suppress the parent reader.
-	histReplayDepth int
-	histSubstDepth  int
-
 	// ownedExecPaths are verified identities of Bashy-owned child binaries.
 	// Only these may consume the private argv handoff protocol.
 	ownedExecPaths []string
@@ -1029,11 +1024,7 @@ type Runner struct {
 	// with subshells (fds are inherited in bash), but mutations in a
 	// subshell do not leak back to the parent because the map itself
 	// is cloned by [Runner.subshell].
-	fdTable                map[int]*os.File
-	procSubstDescriptors   map[int]*procSubstDescriptor
-	procSubstDescriptorFDs map[int]bool
-	procSubstOwnIO         bool
-	procSubstIOFiles       []*os.File
+	fdTable map[int]*os.File
 	// fdReadTable marks fdTable entries that are valid input sources.
 	fdReadTable map[int]bool
 
@@ -1481,34 +1472,8 @@ type execReplacementState struct {
 
 type execReplacementAttempt struct {
 	ready    chan struct{}
-	once     sync.Once
 	pid      atomic.Int64
 	observer atomic.Pointer[bgProc]
-}
-
-// publish records the started child's PID (0 for a failed start) and releases
-// every waiter. Only the first call counts, so the handler may publish the
-// real outcome and also defer a PID-0 publication covering early returns.
-func (a *execReplacementAttempt) publish(pid int) {
-	a.once.Do(func() {
-		a.pid.Store(int64(pid))
-		close(a.ready)
-	})
-}
-
-// await returns the published PID (0 for a failed start). It gives up with
-// ok false when ctx ends first; a nil ctx waits for publication.
-func (a *execReplacementAttempt) await(ctx context.Context) (pid int, ok bool) {
-	var done <-chan struct{}
-	if ctx != nil {
-		done = ctx.Done()
-	}
-	select {
-	case <-a.ready:
-		return int(a.pid.Load()), true
-	case <-done:
-		return 0, false
-	}
 }
 
 type jobState int32
@@ -2945,10 +2910,6 @@ func (r *Runner) posixOptByFlag(flag byte) *bool {
 }
 
 func (r *Runner) bashOptByName(name string) (status *bool, supported bool) {
-	// Bash exposes two names for one setting; the last toggle wins.
-	if name == "array_expand_once" {
-		name = "assoc_expand_once"
-	}
 	for i, opt := range bashOptsTable {
 		if opt.name == name {
 			index := len(posixOptsTable) + i
@@ -3151,8 +3112,6 @@ const (
 // mean that the shell state will be kept, including variables, options, and the
 // current directory.
 func (r *Runner) Reset() {
-	r.closeProcSubstDescriptors()
-	r.closeProcSubstIO()
 	r.closeGoSourceBridge()
 	if !r.usedNew {
 		panic("use interp.New to construct a Runner")
@@ -4026,8 +3985,6 @@ func (r *Runner) subshellWithBashPPCapture(background bool, capture map[*bashPPC
 	r.ensureDirFile(r.Dir)
 	dirFile, _ := dupRunnerDir(r.dirFile)
 	r2 := &Runner{
-		histReplayDepth:      r.histReplayDepth,
-		histSubstDepth:       r.histSubstDepth,
 		goSourceEnvironment:  slices.Clone(r.goSourceEnvironment),
 		ownedExecPaths:       slices.Clone(r.ownedExecPaths),
 		bashPPAgentic:        r.bashPPAgentic,
@@ -4134,13 +4091,6 @@ func (r *Runner) subshellWithBashPPCapture(background bool, capture map[*bashPPC
 		coprocReg: r.coprocReg,
 
 		ulimitOverride: maps.Clone(r.ulimitOverride),
-	}
-	r2.procSubstDescriptors = r.cloneProcSubstDescriptors(r2)
-	r2.procSubstDescriptorFDs = maps.Clone(r.procSubstDescriptorFDs)
-	if r.procSubstOwnIO {
-		if err := r2.cloneProcSubstIO(); err != nil {
-			r2.exit.fatal(err)
-		}
 	}
 	r2.writeEnv = newOverlayEnviron(r.writeEnv, background)
 	// Callback stack depth is invocation state and cannot cross a Runner clone.

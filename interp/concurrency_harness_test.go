@@ -36,7 +36,6 @@ import (
 	"fmt"
 	"runtime"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -173,20 +172,6 @@ type cgGoroutine struct {
 	full      string // the entire block, for the report
 }
 
-// identity excludes the mutable state and elapsed-wait annotations in a
-// runtime header. Keep an unrecognized header intact rather than merging it
-// into a shared zero identity and concealing a new goroutine.
-func (g cgGoroutine) identity() string {
-	text, ok := strings.CutPrefix(g.header, "goroutine ")
-	if ok {
-		id, _, found := strings.Cut(text, " ")
-		if n, err := strconv.ParseUint(id, 10, 64); found && err == nil && n > 0 {
-			return "goroutine " + id
-		}
-	}
-	return g.header
-}
-
 // cgParseGoroutines splits a runtime.Stack(all) dump into individual
 // goroutines, extracting the creation site so a leak can be pinned to where it
 // was spawned rather than merely counted.
@@ -272,7 +257,7 @@ func cgAllowed(g cgGoroutine) (cgAllowRule, bool) {
 // for goroutines and file descriptors to drain, then reports whatever remains
 // that is neither in the baseline nor on the named allowlist.
 type cgLeakDetector struct {
-	baseline map[string]bool // stable goroutine identity set at start
+	baseline map[string]bool // goroutine header set at start
 	fdBefore int
 	fdErr    error
 }
@@ -284,7 +269,7 @@ func cgNewLeakDetector(t *testing.T) *cgLeakDetector {
 	cgGCSettle()
 	d := &cgLeakDetector{baseline: map[string]bool{}}
 	for _, g := range cgParseGoroutines(cgStackDump()) {
-		d.baseline[g.identity()] = true
+		d.baseline[g.header] = true
 	}
 	d.fdBefore, d.fdErr = cgCountFDs()
 	return d
@@ -315,7 +300,7 @@ func (d *cgLeakDetector) Check(t *testing.T) {
 	for {
 		leaked = leaked[:0]
 		for _, g := range cgParseGoroutines(cgStackDump()) {
-			if d.baseline[g.identity()] {
+			if d.baseline[g.header] {
 				continue
 			}
 			if _, ok := cgAllowed(g); ok {

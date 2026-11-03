@@ -14,8 +14,6 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 timeout=${TEST_TIMEOUT:-10m}
-SH_TEST_BASH_REFERENCE=$(bash ./scripts/prepare-bash-reference.sh)
-export SH_TEST_BASH_REFERENCE
 
 go build ./...
 

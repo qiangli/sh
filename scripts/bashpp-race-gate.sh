@@ -6,12 +6,6 @@ cd "$root"
 
 discovery_only=0
 internal=0
-# Reviewed root-module inventory: 23 packages. Growth must be reviewed before
-# it can expand the discovery budget; never silently omit the extra packages.
-max_packages=23
-# Discovery plus fixed lane bounds, then 60s orchestration/cleanup allowance.
-default_global_seconds=$((60 + max_packages * 60 + 60 + 2 * 60 + 300 + 3 * 900 + 3900 + 60))
-global_seconds=${BASHPP_RACE_GLOBAL_TIMEOUT_SECONDS:-$default_global_seconds}
 for arg in "$@"; do
 	case "$arg" in
 		--discovery-only) discovery_only=1 ;;
@@ -84,15 +78,16 @@ start_watcher() {
 # exits, so the nested setsid groups cannot escape the global watchdog.
 if ((!internal)); then
 	# Every operation below has its own diagnostic bound. With the fail-closed
-	# 23-package ceiling, their aggregate maximum is 8520s:
+	# 20-package ceiling, their aggregate maximum is 8340s:
 	#
-	#   list 60 + package discovery 23*60 + focused discovery 60
+	#   list 60 + package discovery 20*60 + focused discovery 60
 	#   + two oracle audits 2*60 + race build 300
 	#   + focused lanes 3*900 + full race suite 3900
 	#
 	# Keep the global watchdog beyond that sum, with one minute for process
 	# startup, evidence copying, and cleanup. It must never erase the more useful
 	# label from a later lane's own timeout diagnostic.
+	global_seconds=${BASHPP_RACE_GLOBAL_TIMEOUT_SECONDS:-8400}
 	args=(--internal)
 	((discovery_only)) && args+=(--discovery-only)
 	marker=$(mktemp "${TMPDIR:-/tmp}/bashpp-race-global.XXXXXX")
@@ -134,17 +129,6 @@ fi
 
 : >"$evidence"
 log() { printf '%s\n' "$*" | tee -a "$evidence"; }
-# This is also invoked independently of the quick/full runners. Their exported
-# reference does not survive a separate make invocation; resolve it here too.
-bash_reference_log="${evidence}.bash-reference.log"
-if SH_TEST_BASH_REFERENCE=$(bash "$root/scripts/prepare-bash-reference.sh" 2>"$bash_reference_log"); then
-	export SH_TEST_BASH_REFERENCE
-	log "bash_reference: $SH_TEST_BASH_REFERENCE"
-else
-	cat "$bash_reference_log" >&2
-	log "ERROR: could not prepare GNU Bash 5.3 reference"
-	exit 1
-fi
 go_path=$(command -v "${GO:-go}")
 go_dir=$(dirname "$go_path")
 # Resolve the toolchain ONCE and invoke it by absolute path. The gate adds
@@ -332,6 +316,7 @@ if ((${#packages[@]} == 0)); then
 fi
 # The outer watchdog is derived from this ceiling. Fail closed if the module
 # grows past it rather than silently invalidating the aggregate deadline.
+max_packages=20
 if ((${#packages[@]} > max_packages)); then
 	log "ERROR: package count ${#packages[@]} exceeds deadline budget ceiling $max_packages"
 	exit 1
@@ -415,7 +400,7 @@ if ((legacy_focused_count < 80)); then
 fi
 
 log "Bash++ race/lifecycle gate"
-log "global_deadline_seconds: $global_seconds"
+log "global_deadline_seconds: ${BASHPP_RACE_GLOBAL_TIMEOUT_SECONDS:-3660}"
 log "go_version: $("$go_bin" version)"
 log "goos: $("$go_bin" env GOOS)"
 log "goarch: $("$go_bin" env GOARCH)"

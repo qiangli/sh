@@ -777,11 +777,6 @@ ordinaryAddress:
 	if cell == nil {
 		return nil, fmt.Errorf("BASHPP-EPOINTER-TARGET: undefined pointer target %s", root)
 	}
-	// A pointer can escape through a captured parameter without the pointee
-	// itself appearing in the task's lexical capture set. Arm its storage
-	// before that first escape, so later address formation snapshots metadata
-	// safely while a task updates the value through the pointer.
-	cell.shareGuard()
 	// The pointer must name the REAL storage, so cell itself is what goes into
 	// target; every field this decision reads comes from one snapshot of it.
 	stored := cell.view()

@@ -33,11 +33,8 @@ stderr '-filename can only be used with stdin'
 
 # Check all the -ln variations.
 
-# Bash accepts let operands as shell words; malformed arithmetic is a runtime
-# error, so a formatter must accept this input just like bash -n.
 stdin input-posix
-exec shfmt
-stdout '^let a[+]$'
+! exec shfmt
 
 stdin input-posix
 exec shfmt -ln=posix
@@ -51,8 +48,7 @@ stdin input-posix
 ! exec shfmt -ln=mksh
 
 stdin input-posix
-exec shfmt -ln=bash
-stdout '^let a[+]$'
+! exec shfmt -ln=bash
 
 stdin input-mksh
 exec shfmt -ln=mksh

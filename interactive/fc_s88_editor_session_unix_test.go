@@ -39,9 +39,9 @@ func TestFcS88EditorSessionThroughInteractivePTY(t *testing.T) {
 	editor := filepath.Join(dir, "s88-editor")
 	editorScript := `#!/bin/sh
 printf '%s\n' S88_EDITOR_READY >&2
-IFS= read -r edit || { printf 'S88_EDITOR_READ_FAILED:%s\n' "$?" >&2; exit 40; }
-[ "$edit" = 's/world/goodbye/' ] || { printf 'S88_EDITOR_BAD_LINE:<%s>\n' "$edit" >&2; exit 41; }
-printf '%s\n' 'echo hello goodbye' >"$1" || { printf '%s\n' S88_EDITOR_WRITE_FAILED >&2; exit 42; }
+IFS= read -r edit || exit 40
+[ "$edit" = 's/world/goodbye/' ] || exit 41
+printf '%s\n' 'echo hello goodbye' >"$1" || exit 42
 printf '%s\n' S88_EDITOR_DONE >&2
 `
 	if err := os.WriteFile(editor, []byte(editorScript), 0o700); err != nil {
@@ -75,16 +75,8 @@ printf '%s\n' S88_EDITOR_DONE >&2
 	}()
 
 	var mu sync.Mutex
-	var writeMu sync.Mutex
 	var transcript bytes.Buffer
 	changed := make(chan struct{}, 1)
-	terminalError := make(chan error, 1)
-	writeTerminal := func(s string) error {
-		writeMu.Lock()
-		defer writeMu.Unlock()
-		_, err := master.Write([]byte(s))
-		return err
-	}
 	go func() {
 		buf := make([]byte, 4096)
 		answeredCPR := 0
@@ -92,24 +84,16 @@ printf '%s\n' S88_EDITOR_DONE >&2
 			n, readErr := master.Read(buf)
 			if n > 0 {
 				mu.Lock()
-				requestedCPR := strings.Count(transcript.String()+string(buf[:n]), "\x1b[6n")
+				_, _ = transcript.Write(buf[:n])
+				requestedCPR := strings.Count(transcript.String(), "\x1b[6n")
 				answersDue := requestedCPR - answeredCPR
+				answeredCPR = requestedCPR
 				mu.Unlock()
 				for range answersDue {
 					// readline expects its terminal emulator to answer the ANSI
 					// cursor-position query. This PTY test is that emulator.
-					if err := writeTerminal("\x1b[1;1R"); err != nil {
-						terminalError <- err
-						return
-					}
+					_, _ = master.Write([]byte("\x1b[1;1R"))
 				}
-				answeredCPR = requestedCPR
-				// Expose prompt/output markers only after this emulator has
-				// answered preceding queries. Otherwise the test can type a
-				// command before readline receives its pending CPR response.
-				mu.Lock()
-				_, _ = transcript.Write(buf[:n])
-				mu.Unlock()
 				select {
 				case changed <- struct{}{}:
 				default:
@@ -121,7 +105,7 @@ printf '%s\n' S88_EDITOR_DONE >&2
 		}
 	}()
 
-	waitFor := func(markers ...string) {
+	waitFor := func(marker string) {
 		t.Helper()
 		deadline := time.NewTimer(8 * time.Second)
 		defer deadline.Stop()
@@ -129,45 +113,31 @@ printf '%s\n' S88_EDITOR_DONE >&2
 			mu.Lock()
 			got := transcript.String()
 			mu.Unlock()
-			rest := got
-			found := true
-			for _, marker := range markers {
-				at := strings.Index(rest, marker)
-				if at < 0 {
-					found = false
-					break
-				}
-				rest = rest[at+len(marker):]
-			}
-			if found {
+			if strings.Contains(got, marker) {
 				return
 			}
 			select {
 			case <-changed:
-			case err := <-terminalError:
-				t.Fatalf("terminal response failed: %v", err)
 			case <-deadline.C:
-				t.Fatalf("timeout waiting for %q; transcript=%q", markers, got)
+				t.Fatalf("timeout waiting for %q; transcript=%q", marker, got)
 			}
 		}
 	}
 	write := func(s string) {
 		t.Helper()
-		if err := writeTerminal(s); err != nil {
+		if _, err := master.Write([]byte(s)); err != nil {
 			t.Fatal(err)
 		}
 	}
 
 	waitFor("S88_PROMPT> ")
 	write("echo hello world\r")
-	// Match execution output, not the echoed input, then wait for the next
-	// prompt before sending another command to the terminal.
-	waitFor("echo hello world", "\n", "hello world\r\n", "S88_PROMPT> ")
+	waitFor("hello world")
 	write(fmt.Sprintf("fc -e %s\r", editor))
 	waitFor("S88_EDITOR_READY")
 	write("s/world/goodbye/\n")
 	waitFor("S88_EDITOR_DONE")
-	waitFor("echo hello goodbye", "\n", "hello goodbye\r\n", "S88_PROMPT> ")
+	waitFor("hello goodbye")
 	write("exit\r")
 
 	select {

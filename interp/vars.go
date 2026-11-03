@@ -807,8 +807,9 @@ func (r *Runner) lookupVarUnhosted(name string) expand.Variable {
 			pid := int64(os.Getpid())
 			if r.asyncList && r.execReplacement != nil {
 				if replacement := r.execReplacement.current.Load(); replacement != nil {
-					if replacementPid, _ := replacement.await(r.ectx); replacementPid > 0 {
-						pid = int64(replacementPid)
+					<-replacement.ready
+					if replacementPid := replacement.pid.Load(); replacementPid > 0 {
+						pid = replacementPid
 						if r.asyncProc != nil {
 							replacement.observer.Store(r.asyncProc)
 						}
@@ -930,7 +931,7 @@ func (r *Runner) lookupVarUnhosted(name string) expand.Variable {
 			// shift by subshellLevel to make BASHPID differ per
 			// subshell layer — scripts that compare $BASHPID across
 			// boundaries (the canonical use case) keep working.
-			vr.Kind, vr.Str = expand.String, strconv.Itoa(r.bashPID())
+			vr.Kind, vr.Str = expand.String, strconv.Itoa(os.Getpid()+r.subshellLevel)
 		}
 	case "SECONDS":
 		if r.deterministic {
@@ -1024,8 +1025,8 @@ func (r *Runner) lookupVarUnhosted(name string) expand.Variable {
 		vr.ReadOnly = true
 	case "BASHOPTS":
 		var opts []string
-		for _, opt := range bashOptsTable {
-			if r.bashShoptEnabled(opt.name) {
+		for i, opt := range bashOptsTable {
+			if r.opts[len(posixOptsTable)+i] {
 				opts = append(opts, opt.name)
 			}
 		}
@@ -1789,8 +1790,12 @@ func (r *Runner) setGlobalVarString(name, value string) {
 
 // bashShoptEnabled reports the state of a bash `shopt` option by name.
 func (r *Runner) bashShoptEnabled(name string) bool {
-	opt, _ := r.bashOptByName(name)
-	return opt != nil && *opt
+	for i, opt := range bashOptsTable {
+		if opt.name == name {
+			return r.opts[len(posixOptsTable)+i]
+		}
+	}
+	return false
 }
 
 func (r *Runner) delVar(name string) {

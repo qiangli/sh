@@ -75,9 +75,9 @@ import (
 
 // shareGuard arms cell for concurrent host access.
 //
-// It is called from [bashPPCloner.cloneCell] while aliasing a cell into a
-// task snapshot, and from address formation before a pointer can escape.
-// Both happen before the first task can access that storage. The field is therefore written only on a cell's
+// It is called only from [bashPPCloner.cloneCell] while it aliases a cell into
+// a task snapshot, which always runs in the launching goroutine before that
+// task's goroutine starts. The field is therefore written only on a cell's
 // FIRST aliasing — when no other goroutine can yet reach it — and is only read
 // afterwards.
 func (c *bashPPCell) shareGuard() {

@@ -142,7 +142,7 @@ func (r *Runner) bashPPBridgeFunction(fn *bashPPFunc) (bashPPBridgeValue, error)
 	for id, existing := range s.functions {
 		if existing == fn {
 			if registered.template != nil {
-				registered.template.closeSubshellFiles()
+				registered.template.closeDirFile()
 			}
 			return bashPPBridgeValue{Kind: "callback", Handle: id, Session: s.id, Callbacks: true, copiedResults: copiedResults, copiedHandleResults: copiedHandleResults, callRefusal: callRefusal, localRefusal: localRefusal}, nil
 		}
@@ -295,7 +295,7 @@ func (s *bashPPNativeSession) closeCallbackFunctionTemplates() {
 	s.mu.Unlock()
 	for _, callback := range registered {
 		if callback != nil && callback.template != nil {
-			callback.template.closeSubshellFiles()
+			callback.template.closeDirFile()
 		}
 	}
 }
@@ -347,7 +347,7 @@ func (s *bashPPNativeSession) releaseCallbackFunctions(handles []uint64) {
 	s.mu.Unlock()
 	for _, callback := range callbacks {
 		if callback.template != nil {
-			callback.template.closeSubshellFiles()
+			callback.template.closeDirFile()
 		}
 	}
 }
@@ -561,11 +561,6 @@ func (r *Runner) bashPPRunCallbackFunc(ctx context.Context, fn *bashPPFunc, args
 }
 
 func synchronousFunctionCallback(req bashPPEvalRequest, q bashPPBridgeRequest) bool {
-	// Lifetime proof alone cannot establish semantic equivalence for an
-	// allocation observer: bridge callbacks add their own allocations.
-	if nativeSliceCallable(req, q) == "testing.AllocsPerRun" {
-		return false
-	}
 	if q.sourceSynchronousCallback {
 		return true
 	}

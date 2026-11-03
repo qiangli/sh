@@ -147,7 +147,7 @@ func (r *Runner) bashPPShortDeclCapture(ctx context.Context, d *syntax.BashPPSho
 func (r *Runner) bashPPCaptureExec(ctx context.Context, name string, argv []string, childStderr io.Writer) (stdout, stderr string, status int, errMsg string) {
 	var outBuf, errBuf bytes.Buffer
 	r2 := r.subshell(false)
-	defer r2.closeSubshellFiles()
+	defer r2.closeDirFile()
 	r2.bgProcs = r.bgProcs
 	r2.jobsReadOnly = true
 	r2.stdout = &outBuf

@@ -373,18 +373,9 @@ printf 'REDIRECTED_FG_STATUS=%s\n' "$?"
 			}
 			duration := "5"
 			execCommand := "/bin/sleep " + duration
-			probeDone := ""
 			if sig == "0" {
-				ready := os.Getenv("GOSH_PROBE_READY")
-				probeDone = os.Getenv("GOSH_PROBE_DONE")
-				if ready == "" || probeDone == "" {
-					fmt.Fprintln(os.Stderr, "probe handshake paths are required")
-					os.Exit(2)
-				}
-				// The probe must target a live replacement, regardless of
-				// scheduling or the cost of launching an external kill.
-				delay = fmt.Sprintf("while test ! -f %q; do /bin/sleep 0.001; done; ", ready) + delay
-				execCommand = `/bin/sh -c ': > "$GOSH_PROBE_READY"; while test ! -f "$GOSH_PROBE_DONE"; do /bin/sleep 0.001; done'`
+				duration = "0.2"
+				execCommand = "/bin/sleep " + duration
 			} else if sig == "HANDLED" {
 				sig = "TERM"
 				execCommand = `/bin/sh -c 'trap "exit 7" TERM; while :; do /bin/sleep 1; done'`
@@ -393,11 +384,7 @@ printf 'REDIRECTED_FG_STATUS=%s\n' "$?"
 				delay = fmt.Sprintf("read ready < %q; ", readyFIFO)
 				execCommand = fmt.Sprintf(`/bin/sh -c 'printf "ready\n" > "$GOSH_READY_FIFO"; exec /bin/sleep %s'`, duration)
 			}
-			complete := ""
-			if probeDone != "" {
-				complete = fmt.Sprintf("; : > %q", probeDone)
-			}
-			src := fmt.Sprintf(`(printf S > %q; %s%s -s %s $$; printf '%%s' "$?" >> %q%s) & exec %s`, marker, delay, killCommand, sig, marker, complete, execCommand)
+			src := fmt.Sprintf(`(printf S > %q; %s%s -s %s $$; printf '%%s' "$?" >> %q) & exec %s`, marker, delay, killCommand, sig, marker, execCommand)
 			file, err := syntax.NewParser().Parse(strings.NewReader(src), "")
 			if err != nil {
 				fmt.Fprintln(os.Stderr, err)

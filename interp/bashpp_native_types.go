@@ -96,12 +96,7 @@ func (r *Runner) bashPPNativeDeclaration(d *syntax.BashPPDecl) bool {
 		return true
 	}
 	if _, iface := r.bashPPInterfaceType(d.DeclTypeExpr); iface {
-		// A zero interface returned by the worker already carries matching
-		// canonical Type/NativeType/Interface identities. Replacing only its
-		// Interface with a source alias makes it look like a typed nil payload.
-		if d.InitExpr != nil || value.Interface == "" {
-			value.Interface = r.bashPPBridgeTypeIdentity(d.DeclTypeExpr)
-		}
+		value.Interface = r.bashPPBridgeTypeIdentity(d.DeclTypeExpr)
 	}
 	if d.Name.Value != "_" {
 		r.bashPPBindNativeValue(d.Name.Value, value)
