@@ -6,6 +6,7 @@
 package interp_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -91,7 +92,7 @@ func winSignalServerHelper() {
 func runWinSignalScript(t *testing.T, src string, opts ...interp.RunnerOption) (string, error) {
 	t.Helper()
 	file := parse(t, nil, src)
-	var out concBuffer // signal/background output and snapshots are synchronized
+	var out bytes.Buffer
 	opts = append([]interp.RunnerOption{
 		interp.StdIO(nil, &out, &out),
 		interp.ExecHandlers(testExecHandler),

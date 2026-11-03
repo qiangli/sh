@@ -58,7 +58,7 @@ func (g *bashPPTestingCallbackFrames) finish(r *Runner) {
 		}
 	}
 	g.mu.Unlock()
-	r.closeSubshellFiles()
+	r.closeDirFile()
 }
 
 func (g *bashPPTestingCallbackFrames) adopt(r *Runner) error {
@@ -86,7 +86,7 @@ func (g *bashPPTestingCallbackFrames) closeFrames() {
 		frames := append([]*Runner(nil), g.frames...)
 		g.mu.Unlock()
 		for _, frame := range frames {
-			frame.closeSubshellFiles()
+			frame.closeDirFile()
 		}
 	})
 }

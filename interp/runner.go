@@ -152,9 +152,9 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 				if cs.TempFile && cs.Left.Line() != cs.Right.Line() {
 					r.funsubLineOffset = 1
 				}
-				r.histSubstDepth++
+				shellHist.cmdSubst.Add(1)
 				r.stmts(ctx, cs.Stmts)
-				r.histSubstDepth--
+				shellHist.cmdSubst.Add(-1)
 				r.funsubLineOffset = oldFunsubLineOffset
 				reply := ""
 				if cs.ReplyVar {
@@ -189,7 +189,7 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 				return nil
 			}
 			r2 := r.subshell(false)
-			defer r2.closeSubshellFiles()
+			defer r2.closeDirFile()
 			r2.bgProcs = r.bgProcs
 			r2.jobsReadOnly = true
 			// Capture through ONE real pipe, not the Go buffer: bash's
@@ -235,18 +235,9 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 			} else {
 				r2.opts[optErrExit] = false
 			}
-			r2.histSubstDepth++
+			shellHist.cmdSubst.Add(1)
 			r2.stmts(ctx, cs.Stmts)
-			r2.histSubstDepth--
-			// A locally installed EXIT trap belongs to this substitution's
-			// subshell. Run it before closing the capture pipe or clearing
-			// its exit status; inherited parent traps remain non-executable.
-			// Cancellation and panics must not start new cleanup commands.
-			if ctx.Err() == nil {
-				if cb := r2.trapCallbacks["EXIT"]; cb != "" && !r2.inheritedExitTrap {
-					r2.trapCallback(ctx, cb, "exit")
-				}
-			}
+			shellHist.cmdSubst.Add(-1)
 			r2.exit.exiting = false // subshells don't exit the parent shell
 			r2.exit.discarding = false
 			r2.exit.returning = false // and they swallow `return` locally
@@ -271,17 +262,7 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 			path := pipe.path()
 
 			r2 := r.subshell(true)
-			r2.excludeProcSubstDescriptor(path)
-			if native, ok := pipe.(interface{ prepareSubshell(*Runner) error }); ok {
-				if err := native.prepareSubshell(r2); err != nil {
-					pipe.cleanup()
-					r2.closeSubshellFiles()
-					return "", err
-				}
-			}
-			// The enclosing reader owns this body, even when it runs later.
-			r2.histSubstDepth++
-			stdout := r2.origStdout
+			stdout := r.origStdout
 			// TODO: note that `man bash` mentions that `wait` only waits for the last
 			// process substitution as long as it is $!; the logic here would mean we wait for all of them.
 			bg := &bgProc{
@@ -293,7 +274,7 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 			r.bgProcs = append(r.bgProcs, bg)
 			r.lastBang = bg
 			go func() {
-				defer r2.closeSubshellFiles()
+				defer r2.closeDirFile()
 				defer func() {
 					*bg.exit = r2.exit
 					close(bg.done)
@@ -329,14 +310,6 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 						endpoint = r2.bashPPFIFOPublish(c, f, path, os.O_WRONLY)
 					}
 					r2.stdout = f
-					if runtime.GOOS == "darwin" {
-						// A reader may discard the published path before this
-						// goroutine writes. Keep EPIPE/SIGPIPE on the simulated
-						// producer, as for an in-process pipeline child.
-						defer r2.stopSignalSubscriptions()
-						r2.pipelineOutput = true
-						r2.stdout = &pipelineWriter{w: f, runner: r2}
-					}
 					defer func() {
 						if err := closeEndpoint(f); err != nil {
 							r.errf("closing stdout fifo: %v\n", err)
@@ -789,7 +762,6 @@ func (r *Runner) arithm(expr syntax.ArithmExpr) int {
 }
 
 func (r *Runner) letArithm(expr syntax.ArithmExpr) int {
-	sourcePos := expr.Pos()
 	if exprText, ok := r.letEmptyQuotedBinary(expr); ok {
 		r.errf("%slet: %s: arithmetic syntax error: operand expected (error token is \"\"\"\")\n",
 			r.bashErrPrefix(expr.Pos()), exprText)
@@ -797,14 +769,26 @@ func (r *Runner) letArithm(expr syntax.ArithmExpr) int {
 		r.lastArithErr = fmt.Errorf("let: %s: arithmetic syntax error: operand expected (error token is \"\"\"\")", exprText)
 		return 0
 	}
-
+	if text, ok := r.assocExpandOnceLetQuotedIndex(expr); ok {
+		quoted := `"` + text + `"`
+		err := fmt.Errorf("%s: arithmetic syntax error: operand expected (error token is \"%s\")",
+			quoted, quoted)
+		r.lastArithErr = err
+		r.expandErr(err)
+		r.exit.code = 1
+		r.exit.exiting = true
+		if !r.opts[optPosix] {
+			r.exit.discarding = true
+		}
+		return 0
+	}
 	if exprText, token, ok := r.malformedLetAssocSubscript(expr); ok {
 		prefix := r.filename
 		if prefix == "" {
 			prefix = "bash"
 		}
 		err := fmt.Errorf("%s: line %d: let: %s: bad array subscript (error token is %q)",
-			prefix, sourcePos.Line(), exprText, token)
+			prefix, expr.Pos().Line(), exprText, token)
 		r.lastArithErr = err
 		r.expandErr(err)
 		return 0
@@ -818,16 +802,6 @@ func (r *Runner) letArithm(expr syntax.ArithmExpr) int {
 	n, err := expand.Arithm(r.ecfg, expr)
 	r.ecfg.LetArithmetic = prevLetArithmetic
 	r.ecfg.AssocExpandOnce = prevAssocExpandOnce
-	var indexErr *expand.LetIndexError
-	if errors.As(err, &indexErr) {
-		r.lastArithErr = indexErr
-		r.errf("%s%s\n", r.bashErrPrefix(sourcePos), indexErr)
-		r.exit.code, r.exit.exiting = 1, true
-		if !r.opts[optPosix] {
-			r.discardExpansionLine()
-		}
-		return 0
-	}
 	exprTextOverride := ""
 	if arithErr, arithExpr := innermostArithmError(err); arithErr != nil {
 		if arithExpr != nil {
@@ -835,6 +809,17 @@ func (r *Runner) letArithm(expr syntax.ArithmExpr) int {
 		}
 		exprTextOverride = arithErr.Text
 		err = arithErr.Err
+	}
+	// A re-parsed $( … )/`…` operand reports as "<operand>: <msg>" with
+	// no `let:` framing, the same as arithmetic expansion and commands.
+	if err != nil && r.bashCompatErrors && exprTextOverride != "" {
+		if msg := err.Error(); strings.Contains(msg, "arithmetic syntax error: operand expected") &&
+			(strings.Contains(msg, "error token is \"$") || strings.Contains(msg, "error token is \"`")) {
+			err = r.bashArithmError(expr, err, false, exprTextOverride)
+			r.lastArithErr = err
+			r.expandErr(err)
+			return n
+		}
 	}
 	if err != nil && r.bashCompatErrors {
 		exprText := r.arithmSourceText(expr, false)
@@ -866,10 +851,10 @@ func (r *Runner) letArithm(expr syntax.ArithmExpr) int {
 		}
 		if msg := err.Error(); strings.HasPrefix(msg, `"`) &&
 			strings.Contains(msg, ": arithmetic syntax error") {
-			err = fmt.Errorf("%s: line %d: %s", prefix, sourcePos.Line(), msg)
+			err = fmt.Errorf("%s: line %d: %s", prefix, expr.Pos().Line(), msg)
 		} else {
 			err = fmt.Errorf("%s: line %d: let: %s: %s",
-				prefix, sourcePos.Line(), exprText, err)
+				prefix, expr.Pos().Line(), exprText, err)
 		}
 	}
 	r.lastArithErr = err
@@ -896,6 +881,58 @@ func (r *Runner) letEmptyQuotedBinary(expr syntax.ArithmExpr) (string, bool) {
 	return "", false
 }
 
+func (r *Runner) assocExpandOnceLetQuotedIndex(expr syntax.ArithmExpr) (string, bool) {
+	opt, _ := r.bashOptByName("assoc_expand_once")
+	if opt == nil || !*opt {
+		return "", false
+	}
+	lvalue := ""
+	switch expr := expr.(type) {
+	case *syntax.BinaryArithm:
+		switch expr.Op {
+		case syntax.Assgn, syntax.AddAssgn, syntax.SubAssgn,
+			syntax.MulAssgn, syntax.QuoAssgn, syntax.RemAssgn,
+			syntax.AndAssgn, syntax.OrAssgn, syntax.XorAssgn,
+			syntax.ShlAssgn, syntax.ShrAssgn:
+			if w, ok := expr.X.(*syntax.Word); ok {
+				lvalue = r.literal(w)
+			}
+		}
+	case *syntax.Word:
+		lvalue = r.literal(expr)
+		if eq := strings.IndexByte(lvalue, '='); eq >= 0 {
+			lvalue = lvalue[:eq]
+			open := strings.IndexByte(lvalue, '[')
+			close := strings.LastIndexByte(lvalue, ']')
+			if open <= 0 || close <= open+1 || close != len(lvalue)-1 {
+				return "", false
+			}
+			sub := lvalue[open+1 : close]
+			if sub == `""` {
+				return "", true
+			}
+			return "", false
+		}
+	}
+	if lvalue == "" {
+		return "", false
+	}
+	open := strings.IndexByte(lvalue, '[')
+	close := strings.LastIndexByte(lvalue, ']')
+	if open <= 0 || close <= open+1 || close != len(lvalue)-1 {
+		return "", false
+	}
+	sub := lvalue[open+1 : close]
+	if len(sub) < 2 || sub[0] != '"' || sub[len(sub)-1] != '"' {
+		return "", false
+	}
+	text := sub[1 : len(sub)-1]
+	if text == "" || strings.TrimSpace(text) == "" {
+		return text, true
+	}
+	return "", false
+}
+
 func arithEmptyDoubleQuotedWord(expr syntax.ArithmExpr) bool {
 	word, ok := expr.(*syntax.Word)
 	if !ok || len(word.Parts) != 1 {
@@ -906,21 +943,6 @@ func arithEmptyDoubleQuotedWord(expr syntax.ArithmExpr) bool {
 }
 
 func (r *Runner) malformedLetAssocSubscript(expr syntax.ArithmExpr) (exprText, token string, ok bool) {
-	// Shell argument splitting can truncate a dynamically expanded array
-	// operand before its closing bracket. Preserve the bad-subscript
-	// diagnostic for that expanded-word form as well as legacy ASTs.
-	if w, ok := expr.(*syntax.Word); ok {
-		text := w.Lit()
-		open := strings.IndexByte(text, '[')
-		comma := strings.Index(text, "],")
-		if open > 0 && comma > open && r.lookupVar(text[:open]).Kind == expand.Associative {
-			tail := text[comma+2:]
-			if next := strings.IndexByte(tail, '['); next > 0 &&
-				syntax.ValidName(tail[:next]) && !strings.Contains(tail[next:], "]") {
-				return text, tail, true
-			}
-		}
-	}
 	un, ok := expr.(*syntax.UnaryArithm)
 	if !ok || (un.Op != syntax.Inc && un.Op != syntax.Dec) {
 		return "", "", false
@@ -2019,12 +2041,6 @@ func traceArrayLiteral(t *tracer, name, op string, elems []*syntax.ArrayElem, r 
 // else with no embedded `'`, otherwise fall back to the default
 // `syntax.Quote`.
 func xtraceQuote(s string) string {
-	return xtraceQuoteContext(s, true)
-}
-
-// An argument to let cannot start an assignment command. An interior # is
-// also literal there (for example, a base prefix), not a shell comment.
-func xtraceQuoteContext(s string, commandWord bool) string {
 	if s == "" {
 		return "''"
 	}
@@ -2039,16 +2055,12 @@ func xtraceQuoteContext(s string, commandWord bool) string {
 	}
 	// Bare if no chars need quoting.
 	needsQuote := false
-	for i, r := range s {
+	for _, r := range s {
 		switch r {
 		case ' ', '\t', '\n', '\r', '"', '\'', '\\', '`',
 			'$', '|', '&', ';', '(', ')', '<', '>',
-			'*', '?', '[', '{', '!', '~':
+			'*', '?', '[', '{', '!', '#', '~', '=':
 			needsQuote = true
-		case '=':
-			needsQuote = commandWord
-		case '#':
-			needsQuote = commandWord || i == 0
 		}
 		if !unicodeIsPrint(r) && r != '\t' && r != '\n' {
 			needsQuote = true
@@ -4865,7 +4877,7 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 			if asyncStdin != nil {
 				_ = asyncStdin.Close()
 			}
-			r2.closeSubshellFiles()
+			r2.closeDirFile()
 			r.errf("%s%v\n", r.bashErrPrefix(st.Pos()), err)
 			r.exit = exitStatus{code: 1}
 		} else {
@@ -4900,7 +4912,7 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 			launched := make(chan struct{})
 			go func() {
 				close(launched)
-				defer r2.closeSubshellFiles()
+				defer r2.closeDirFile()
 				if asyncStdin != nil {
 					defer asyncStdin.Close()
 				}
@@ -4933,9 +4945,7 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 					// command's EXIT handler before its stdout redirect
 					// is restored. The runner's Run boundary has already
 					// restored it, so retain a /dev/null redirect here.
-					// Strict POSIX instead uses the environment after the
-					// last command, including restored command-local FDs.
-					if r2.opts[optPosix] && !r2.strictPosix {
+					if r2.opts[optPosix] {
 						if call, ok := st2.Cmd.(*syntax.CallExpr); ok && len(call.Args) > 0 &&
 							call.Args[0].Lit() == "trap" {
 							for _, rd := range st2.Redirs {
@@ -5331,7 +5341,6 @@ func (r *Runner) stmtRunCmd(ctx context.Context, st *syntax.Stmt) {
 }
 
 func (r *Runner) stmtSyncGeneral(ctx context.Context, st *syntax.Stmt) {
-	defer r.procSubstScope()()
 	r.exit.noNegate = false
 
 	scopeIndex := len(r.redirScopes)
@@ -5343,7 +5352,6 @@ func (r *Runner) stmtSyncGeneral(ctx context.Context, st *syntax.Stmt) {
 	// still see whether exec made this scope persistent.
 	defer func() {
 		r.redirScopes = r.redirScopes[:scopeIndex]
-		r.reconcileProcSubstDescriptors()
 		if r.bashPPHasFIFOs() {
 			r.bashPPReconcileFIFOs()
 		}
@@ -5411,9 +5419,6 @@ func (r *Runner) stmtSyncGeneral(ctx context.Context, st *syntax.Stmt) {
 			}
 		}
 	}
-	r.redirScopes[scopeIndex].procSubstRestoreFD = func(fd int) bool {
-		return !keepRedirs() && !persistNamedRedirs && (lateRedir || slices.Contains(modifiedFds, fd))
-	}
 	oldRedirMoveCloseFds := r.redirMoveCloseFds
 	// A FIFO registered later is a fresh descriptor, never one of the
 	// files this scope restores, so a scope that begins with none
@@ -5466,7 +5471,7 @@ func (r *Runner) stmtSyncGeneral(ctx context.Context, st *syntax.Stmt) {
 	}
 	if st.Cmd == nil && len(st.Redirs) > 0 {
 		r2 := r.subshell(false)
-		defer r2.closeSubshellFiles()
+		defer r2.closeDirFile()
 		if r2.bashPPConcurrent != nil {
 			defer r2.bashPPConcurrent.closeFIFOs(r2)
 		}
@@ -5746,12 +5751,11 @@ func (r *Runner) stmtSyncGeneral(ctx context.Context, st *syntax.Stmt) {
 }
 
 type redirScope struct {
-	hasRedirs          bool
-	persist            bool
-	closeAt            int
-	boundaryClosers    []io.Closer
-	fifoRestoreRefs    func(map[*os.File]bool)
-	procSubstRestoreFD func(int) bool
+	hasRedirs       bool
+	persist         bool
+	closeAt         int
+	boundaryClosers []io.Closer
+	fifoRestoreRefs func(map[*os.File]bool)
 }
 
 // persistCurrentRedirs marks the exec statement itself and propagates that
@@ -5995,7 +5999,7 @@ func (r *Runner) cmdGeneral(ctx context.Context, cm syntax.Command) {
 		if bg, _ := ctx.Value(bgProcCtxKey{}).(*bgProc); bg != nil && bg.carrierRootSubshell == cm {
 			bg.carrierSignalRunner.Store(r2)
 		}
-		defer r2.closeSubshellFiles()
+		defer r2.closeDirFile()
 		// This internal shell cannot be reused or Reset by the caller. Join
 		// its own subscriptions after EXIT cleanup, without canceling any
 		// asynchronous descendants that outlive the parenthesized scope.
@@ -6924,7 +6928,7 @@ func (r *Runner) cmdGeneral(ctx context.Context, cm syntax.Command) {
 			r.asyncStdinExplicit = true
 			var wg sync.WaitGroup
 			wg.Go(func() {
-				defer r2.closeSubshellFiles()
+				defer r2.closeDirFile()
 				xctx := context.WithValue(ctx, bgNonPrimaryPidCtxKey{}, true)
 				xctx = context.WithValue(xctx, pipelineExecCtxKey{}, true)
 				if subshell, ok := plainPipelineSubshell(cm.X); ok {
@@ -6950,7 +6954,7 @@ func (r *Runner) cmdGeneral(ctx context.Context, cm syntax.Command) {
 				// supply a sparse parent env (e.g. expand.FuncEnviron
 				// with no Each enumeration) still resolve variables.
 				r3 = r.subshell(false)
-				defer r3.closeSubshellFiles()
+				defer r3.closeDirFile()
 				r3.stdin = prDup
 				r3.stdinRedirected = true
 				r3.asyncStdinExplicit = true
@@ -7415,38 +7419,6 @@ func (r *Runner) cmdGeneral(ctx context.Context, cm syntax.Command) {
 	case *syntax.LetClause:
 		var val int
 		exprs := cm.Exprs
-		// Shell-word operands are expanded as command arguments before any
-		// arithmetic executes. Literal nodes carry the resulting arguments
-		// without repeating parameter expansion or quote removal.
-		var expanded []syntax.ArithmExpr
-		for _, expr := range exprs {
-			if w, ok := expr.(*syntax.Word); ok {
-				args, err := expand.Fields(r.ecfg, w)
-				if err != nil {
-					r.expandErr(err)
-					return
-				}
-				for _, arg := range args {
-					expanded = append(expanded, &syntax.Word{Parts: []syntax.WordPart{
-						&syntax.Lit{ValuePos: w.Pos(), ValueEnd: w.End(), Value: arg},
-					}})
-				}
-			} else {
-				expanded = append(expanded, expr)
-			}
-		}
-		exprs = expanded
-		if tracingEnabled {
-			trace.string("let")
-			for _, expr := range exprs {
-				if w, ok := expr.(*syntax.Word); ok {
-					trace.string(" " + xtraceQuoteContext(w.Lit(), false))
-				} else {
-					trace.string(" " + printArithmExpr(expr))
-				}
-			}
-			trace.newLineFlush()
-		}
 		if len(exprs) > 0 {
 			if w, ok := exprs[0].(*syntax.Word); ok && r.literal(w) == "--" {
 				exprs = exprs[1:]
@@ -7459,11 +7431,26 @@ func (r *Runner) cmdGeneral(ctx context.Context, cm syntax.Command) {
 		}
 		for _, expr := range exprs {
 			val = r.letArithm(expr)
-			if r.lastArithErr != nil {
-				r.exit.code = 1
-				return
+
+			if !tracingEnabled {
+				continue
+			}
+
+			switch expr := expr.(type) {
+			case *syntax.Word:
+				qs, err := syntax.Quote(r.literal(expr), syntax.LangBash)
+				if err != nil {
+					return
+				}
+				trace.stringf("let %v", qs)
+			case *syntax.BinaryArithm, *syntax.UnaryArithm:
+				trace.expr(cm)
+			case *syntax.ParenArithm:
+				// TODO
 			}
 		}
+
+		trace.newLineFlush()
 		r.exit.oneIf(val == 0)
 	case *syntax.CaseClause:
 		if r.fireDebugTrap(ctx, cm) {
@@ -8911,7 +8898,7 @@ func (r *Runner) cmdGeneral(ctx context.Context, cm syntax.Command) {
 		}
 		bgCtx = context.WithValue(bgCtx, bgProcCtxKey{}, bg)
 		go func() {
-			defer r2.closeSubshellFiles()
+			defer r2.closeDirFile()
 			defer func() {
 				cancel()
 				pw.Close()
@@ -9874,9 +9861,6 @@ func (r *Runner) allocateFd() (int, bool) {
 		}
 	}
 	for n := 10; limit == 0 || n < limit; n++ {
-		if r.procSubstDescriptors[n] != nil {
-			continue
-		}
 		if _, ok := r.fdTable[n]; !ok {
 			if _, ok := r.fdWriteTable[n]; !ok {
 				return n, true
@@ -9907,9 +9891,6 @@ func (r *Runner) execExtraFiles() ([]*os.File, string, func(), error) {
 	var fds []string
 	var cleanup []func()
 	maxFD := 2
-	for fd := range r.procSubstDescriptors {
-		maxFD = max(maxFD, fd)
-	}
 	limit := r.effectiveNofileLimit()
 	for fd := range r.fdTable {
 		if fd < 0 || fd >= limit {
@@ -9926,11 +9907,6 @@ func (r *Runner) execExtraFiles() ([]*os.File, string, func(), error) {
 	var closedSlot *os.File
 	for fd := 3; fd <= maxFD; fd++ {
 		f, ok := r.fdTable[fd]
-		if !ok && r.fdWriteTable[fd] == nil && !r.fdClosedTable[fd] {
-			if p := r.procSubstDescriptors[fd]; p != nil {
-				f, ok = p.file, true
-			}
-		}
 		if !ok {
 			if w, wok := r.fdWriteTable[fd].(*os.File); wok {
 				f, ok = w, true
@@ -10162,22 +10138,7 @@ func (r *Runner) dupFd(targetFd, sourceFd int, rd *syntax.Redirect) error {
 		r.errf("%s%s: Bad file descriptor\n", r.bashErrPrefix(rd.Word.Pos()), redirWordText(rd))
 		return fmt.Errorf("%s: Bad file descriptor", redirWordText(rd))
 	}
-	if p := r.procSubstDescriptors[sourceFd]; p != nil && (read == p.file || write == p.file) {
-		f, _, err := dupPipeFd(p.file)
-		if err != nil {
-			return err
-		}
-		if read == p.file {
-			read = f
-		}
-		if write == p.file {
-			write = f
-		}
-	}
 	r.bindFdCaps(targetFd, read, write)
-	if targetFd >= 3 && r.procSubstDescriptorFDs[sourceFd] {
-		r.procSubstDescriptorFDs[targetFd] = true
-	}
 	return nil
 }
 
@@ -10259,16 +10220,6 @@ func (r *Runner) fdCaps(fd int) (read *os.File, write io.Writer, ok bool) {
 					read = f
 				}
 			}
-		}
-	}
-	if !ok {
-		if p := r.procSubstDescriptors[fd]; p != nil {
-			if p.read {
-				read = p.file
-			} else {
-				write = p.file
-			}
-			ok = true
 		}
 	}
 	// Resolve any REGISTERED inherited descriptor (via WithInheritedFds /
@@ -10620,11 +10571,7 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (closer io.Clos
 		return nil, fmt.Errorf("%s: Bad file descriptor", label)
 	}
 	openFile := func(path string, flags int, mode os.FileMode, print bool) (io.ReadWriteCloser, error) {
-		f, err := r.bashPPTaskOpen(ctx, path, flags, mode, print, false)
-		if _, owned := r.ownedProcSubstDescriptorFD(path); err == nil && owned && targetFd >= 3 {
-			r.procSubstDescriptorFDs[targetFd] = true
-		}
-		return f, err
+		return r.bashPPTaskOpen(ctx, path, flags, mode, print, false)
 	}
 	switch rd.Op {
 	case syntax.WordHdoc:
@@ -12046,9 +11993,6 @@ func (r *Runner) customOpenActive() bool {
 }
 
 func (r *Runner) open(ctx context.Context, path string, flags int, mode os.FileMode, print bool) (io.ReadWriteCloser, error) {
-	if f, ok, err := r.openProcSubstDescriptor(path, flags); ok {
-		return f, err
-	}
 	if bg := r.asyncProc; bg != nil && bg.launchYield != nil && r.openMayBlock(ctx, path) {
 		r.yieldAsyncLaunch()
 	}
@@ -12162,10 +12106,6 @@ func (r *Runner) statVirtualFd(name string) (fs.FileInfo, bool, error) {
 		})
 	}
 	if statter == nil {
-		if p := r.procSubstDescriptors[fd]; p != nil && strconv.Itoa(fd) == name[len(prefix):] {
-			info, err := p.file.Stat()
-			return info, true, err
-		}
 		// Not a bashy-managed descriptor (closed, or an unregistered real fd):
 		// fall through to the filesystem, which correctly reports a closed
 		// /dev/fd/N as nonexistent.

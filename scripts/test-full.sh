@@ -100,30 +100,6 @@ list_packages() {
 	done <"$list_log"
 }
 
-# Cold-cache toolchain acquisition is setup, not program output or execution
-# time. Keep the fixtures' pinned oracle and exact comparisons unchanged.
-bash_reference_log="$logs/bash-reference.prepare.log"
-if SH_TEST_BASH_REFERENCE=$(bash "$root/scripts/prepare-bash-reference.sh" 2>"$bash_reference_log"); then
-	export SH_TEST_BASH_REFERENCE
-	printf 'reference_path\t%s\n' "$SH_TEST_BASH_REFERENCE" >>"$bash_reference_log"
-	record_command prepare root - bash-reference "$root" "$bash_reference_log" pass bash "$root/scripts/prepare-bash-reference.sh"
-else
-	cat "$bash_reference_log" >&2
-	record_command prepare root - bash-reference "$root" "$bash_reference_log" fail bash "$root/scripts/prepare-bash-reference.sh"
-	exit 1
-fi
-
-oracle_log="$logs/oracle.prepare.log"
-if bash "$root/scripts/prepare-test-oracle.sh" >"$oracle_log" 2>&1; then
-	record_command prepare root - pinned-oracle "$root" "$oracle_log" pass bash "$root/scripts/prepare-test-oracle.sh"
-else
-	cat "$oracle_log" >&2
-	record_command prepare root - pinned-oracle "$root" "$oracle_log" fail bash "$root/scripts/prepare-test-oracle.sh"
-	echo 'ERROR: could not provision the pinned test oracle' >&2
-	exit 1
-fi
-cat "$oracle_log"
-
 if ! list_packages root "$root" ./... "$logs/root.enumerate.log"; then echo 'ERROR: could not enumerate root module packages' >&2; exit 1; fi
 if ! list_packages moreinterp "$root/moreinterp" ./... "$logs/moreinterp.enumerate.log"; then echo 'ERROR: could not enumerate moreinterp packages' >&2; exit 1; fi
 

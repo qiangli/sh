@@ -253,9 +253,7 @@ type Config struct {
 	// arithmParamValues snapshots explicit parameter expansions inside
 	// a single arithmetic expression. Bare arithmetic variables remain
 	// live, but `$x` expands before arithmetic side effects run.
-	arithmParamValues  map[*syntax.ParamExp]string
-	arithmRawAssocKeys map[*syntax.Word]string
-	arithmLetIndexes   map[syntax.ArithmExpr]string
+	arithmParamValues map[*syntax.ParamExp]string
 
 	// LetArithmetic is set by the interpreter while evaluating the
 	// `let` builtin, whose subscript quote handling differs from
@@ -4896,18 +4894,9 @@ func (cfg *Config) quotedElemFields(pe *syntax.ParamExp) ([]string, error) {
 	}
 	name := pe.Param.Value
 	if pe.Excl {
-		if pe.Names != 0 && !syntax.ValidName(name) {
-			return nil, BadSubstitutionError{Node: pe}
-		}
 		switch pe.Names {
 		case syntax.NamesPrefixWords: // "${!prefix@}"
-			names := cfg.namesByPrefix(pe.Param.Value)
-			if names == nil {
-				// A non-nil empty list means zero fields, not fallback to
-				// scalar expansion (which would produce one empty field).
-				names = []string{}
-			}
-			return names, nil
+			return cfg.namesByPrefix(pe.Param.Value), nil
 		case syntax.NamesPrefix: // "${!prefix*}"
 			return []string{cfg.ifsJoin(cfg.namesByPrefix(pe.Param.Value))}, nil
 		}

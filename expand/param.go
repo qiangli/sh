@@ -1283,10 +1283,7 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 	if cfg.NoUnset && index != nil && nodeLit(index) != "@" && nodeLit(index) != "*" {
 		addressedSet = arrayElemSet(vr, index, cfg)
 	}
-	// Name enumeration queries the namespace, not the prefix variable's
-	// value. Even zero matches are valid under nounset. Malformed name
-	// queries still reach the bad-substitution checks below.
-	if cfg.NoUnset && pe.Names == 0 && !addressedSet && !overridingUnset(pe) &&
+	if cfg.NoUnset && !addressedSet && !overridingUnset(pe) &&
 		!(orig.Kind == NameRef && index != nil && vr.Kind == Indexed) &&
 		nodeLit(index) != "@" && nodeLit(index) != "*" {
 		if index != nil {
@@ -1623,7 +1620,7 @@ func (cfg *Config) paramExp(pe *syntax.ParamExp) (string, error) {
 		// `${!name[*]}` joins the keys/indices with the first IFS char
 		// (nothing when IFS is empty), like `${name[*]}`; the `[@]` form
 		// joins with a space.
-		if pe.Names == syntax.NamesPrefix || nodeLit(index) == "*" || nodeLit(indirectIndex) == "*" {
+		if nodeLit(index) == "*" || nodeLit(indirectIndex) == "*" {
 			str = cfg.ifsJoin(strs)
 		} else {
 			str = strings.Join(strs, " ")

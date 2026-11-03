@@ -369,32 +369,6 @@ func artifact(t *testing.T, source string) (string, string, int) {
 		t.Fatal(err)
 	}
 
-	if strings.Contains(source, "mvdan.cc/sh/v3") {
-		// A workspace build may have cached a different x/tools version than
-		// this standalone module requires. Prepare the exact module graph in
-		// a disposable copy before exercising the offline artifact contract.
-		// Never let module download progress enter the program-output oracle.
-		prepareDir := t.TempDir()
-		for _, name := range []string{"go.mod", "go.sum"} {
-			data, err := os.ReadFile(filepath.Join(root, name))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(filepath.Join(prepareDir, name), data, 0600); err != nil {
-				t.Fatal(err)
-			}
-		}
-		prepareCtx, prepareCancel := context.WithTimeout(context.Background(), 120*time.Second)
-		prepare := exec.CommandContext(prepareCtx, goBin, "mod", "download")
-		prepare.Dir = prepareDir
-		prepare.Env = append(os.Environ(), "GOWORK=off", "GOTOOLCHAIN=local", "GOFLAGS=-mod=mod")
-		prepared, prepareErr := prepare.CombinedOutput()
-		prepareCancel()
-		if prepareErr != nil {
-			t.Fatalf("prepare standalone module cache: %v\n%s", prepareErr, prepared)
-		}
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	env := append(os.Environ(), "GOWORK=off", "GOTOOLCHAIN=local", "GOFLAGS=-mod=mod", "GOPROXY=off")

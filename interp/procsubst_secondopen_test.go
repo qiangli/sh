@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"context"
 	"io/fs"
-	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -117,7 +116,7 @@ echo`
 // been scheduled; what is pinned is that the path goes away, not when.
 func TestProcSubstSpentSubstitutionIsGone(t *testing.T) {
 	t.Parallel()
-	src := `count_lines() {
+	const src = `count_lines() {
 	while read -r _; do echo -n .; done < "$1"
 	echo
 	n=0
@@ -125,14 +124,7 @@ func TestProcSubstSpentSubstitutionIsGone(t *testing.T) {
 	if [ -e "$1" ]; then echo live; else echo gone; fi
 }
 count_lines <(echo one; echo two)`
-	want := "..\ngone\n"
-	if runtime.GOOS == "darwin" {
-		// Native /dev/fd publication lasts through the enclosing command, as
-		// GNU Bash does. The FIFO implementations unlink on producer completion.
-		src = strings.Replace(src, "while [ -e \"$1\" ] && [ $n -lt 100000 ]", "while false", 1)
-		want = "..\nlive\n"
-	}
-	if got := runProcSubstScript(t, src); got != want {
+	if got, want := runProcSubstScript(t, src), "..\ngone\n"; got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
 }

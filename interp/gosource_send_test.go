@@ -16,7 +16,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"runtime/pprof"
 	"strings"
 	"sync"
 	"testing"
@@ -112,18 +111,6 @@ func typedSendThreeModes(t *testing.T, source string) {
 // weakened rather than narrowed.
 func typedSendThreeModesNormalized(t *testing.T, source string, normalize func(string) string) {
 	t.Helper()
-	typedSendThreeModesWithPhaseBudgets(t, source, normalize, false)
-}
-
-// Original channel timing fixtures need distinct compiler and runtime evidence.
-// All other callers retain their existing shared deadline.
-func typedSendThreeModesPhaseBounded(t *testing.T, source string) {
-	t.Helper()
-	typedSendThreeModesWithPhaseBudgets(t, source, nil, true)
-}
-
-func typedSendThreeModesWithPhaseBudgets(t *testing.T, source string, normalize func(string) string, separate bool) {
-	t.Helper()
 	if normalize == nil {
 		normalize = func(s string) string { return s }
 	}
@@ -134,24 +121,10 @@ func typedSendThreeModesWithPhaseBudgets(t *testing.T, source string, normalize 
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	phaseContext := func(limit time.Duration) (context.Context, context.CancelFunc) {
-		if separate {
-			return context.WithTimeout(context.Background(), limit)
-		}
-		return ctx, func() {}
-	}
-	logPhase := func(name string, start time.Time) {
-		if separate {
-			t.Logf("phase %s elapsed %s", name, time.Since(start))
-		}
-	}
 	sdk := filepath.Join(runtime.GOROOT(), "bin", "go")
 	run := func(binary string) (string, string) {
 		var out, errout bytes.Buffer
-		phaseCtx, phaseCancel := phaseContext(60 * time.Second)
-		defer phaseCancel()
-		defer logPhase("runtime "+filepath.Base(binary), time.Now())
-		cmd := exec.CommandContext(phaseCtx, binary)
+		cmd := exec.CommandContext(ctx, binary)
 		cmd.Dir = dir
 		cmd.Stdout, cmd.Stderr = &out, &errout
 		if err := cmd.Run(); err != nil {
@@ -160,10 +133,7 @@ func typedSendThreeModesWithPhaseBudgets(t *testing.T, source string, normalize 
 		return out.String(), errout.String()
 	}
 	build := func(output, input string) {
-		phaseCtx, phaseCancel := phaseContext(120 * time.Second)
-		defer phaseCancel()
-		defer logPhase("build "+filepath.Base(output), time.Now())
-		cmd := exec.CommandContext(phaseCtx, sdk, "build", "-p", "2", "-o", output, input)
+		cmd := exec.CommandContext(ctx, sdk, "build", "-p", "2", "-o", output, input)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("build: %v %s", err, out)
 		}
@@ -180,32 +150,7 @@ func typedSendThreeModesWithPhaseBudgets(t *testing.T, source string, normalize 
 	if err != nil {
 		t.Fatal(err)
 	}
-	runtimeCtx, runtimeCancel := phaseContext(60 * time.Second)
-	runtimeStart := time.Now()
-	var stopDiagnostic func() string
-	if separate {
-		t.Logf("phase interpreter start goroutines=%d GOMAXPROCS=%d", runtime.NumGoroutine(), runtime.GOMAXPROCS(0))
-		stopDiagnostic = startPhaseDiagnostic(55*time.Second, func() string {
-			var snapshot bytes.Buffer
-			if err := pprof.Lookup("goroutine").WriteTo(&snapshot, 2); err != nil {
-				return "goroutine snapshot failed: " + err.Error()
-			}
-			return snapshot.String()
-		})
-		defer stopDiagnostic()
-	}
-	runErr := r.Run(runtimeCtx, program.File)
-	var diagnostic string
-	if stopDiagnostic != nil {
-		diagnostic = stopDiagnostic()
-		t.Logf("phase interpreter end goroutines=%d", runtime.NumGoroutine())
-	}
-	runtimeCancel()
-	logPhase("interpreter", runtimeStart)
-	if err := runErr; err != nil {
-		if diagnostic != "" {
-			t.Logf("slow interpreter snapshot at 55s (execution limit remains 60s):\n%s", diagnostic)
-		}
+	if err := r.Run(ctx, program.File); err != nil {
 		t.Fatalf("Runner: %v out=%q err=%q", err, out.String(), errout.String())
 	}
 	if normalize(out.String()) != normalize(wantOut) || errout.String() != wantErr {

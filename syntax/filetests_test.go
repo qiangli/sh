@@ -4903,8 +4903,7 @@ var fileTests = []fileTestCase{
 		[]string{`let i++`},
 		langFile(letClause(
 			&UnaryArithm{Op: Inc, Post: true, X: litWord("i")},
-		), LangMirBSDKorn|LangZsh),
-		langFile(letClause(litWord("i++")), LangBash),
+		), LangBash|LangMirBSDKorn|LangZsh),
 		langFile(litStmt("let", "i++"), LangPOSIX),
 	),
 	fileTest(
@@ -4914,46 +4913,18 @@ var fileTests = []fileTestCase{
 			&UnaryArithm{Op: Inc, Post: true, X: litWord("b")},
 			litWord("c"),
 			&UnaryArithm{Op: Plus, X: litWord("d")},
-		), LangMirBSDKorn|LangZsh),
-		langFile(letClause(litWord("a++"), litWord("b++"), litWord("c"), litWord("+d")), LangBash),
+		), LangBash|LangMirBSDKorn|LangZsh),
 	),
 	fileTest(
 		[]string{`let ++i >/dev/null`},
 		langFile(&Stmt{
 			Cmd:    letClause(&UnaryArithm{Op: Inc, X: litWord("i")}),
 			Redirs: []*Redirect{{Op: RdrOut, Word: litWord("/dev/null")}},
-		}, LangMirBSDKorn|LangZsh),
-		langFile(&Stmt{Cmd: letClause(litWord("++i")), Redirs: []*Redirect{{Op: RdrOut, Word: litWord("/dev/null")}}}, LangBash),
+		}, LangBash|LangMirBSDKorn|LangZsh),
 	),
 	fileTest(
 		[]string{
 			`let a=(1 + 2) b=3+4`,
-		},
-		langFile(letClause(
-			&BinaryArithm{
-				Op: Assgn,
-				X:  litWord("a"),
-				Y: parenArit(&BinaryArithm{
-					Op: Add,
-					X:  litWord("1"),
-					Y:  litWord("2"),
-				}),
-			},
-			&BinaryArithm{
-				Op: Assgn,
-				X:  litWord("b"),
-				Y: &BinaryArithm{
-					Op: Add,
-					X:  litWord("3"),
-					Y:  litWord("4"),
-				},
-			},
-		), LangMirBSDKorn|LangZsh),
-		langFile(letClause(word(lit("a="), lit("("), lit("1"), lit(" "), lit("+"), lit(" "), lit("2"), lit(")")), litWord("b=3+4")), LangBash),
-		langErr2("1:7: the `let` builtin is a bash feature; tried parsing as LANG", LangPOSIX),
-	),
-	fileTest(
-		[]string{
 			`let a=(1+2) b=3+4`,
 		},
 		langFile(letClause(
@@ -4975,8 +4946,7 @@ var fileTests = []fileTestCase{
 					Y:  litWord("4"),
 				},
 			},
-		), LangMirBSDKorn|LangZsh),
-		langFile(letClause(word(lit("a="), lit("("), lit("1+2"), lit(")")), litWord("b=3+4")), LangBash),
+		), LangBash),
 		langErr2("1:7: the `let` builtin is a bash feature; tried parsing as LANG", LangPOSIX),
 	),
 	fileTest(
@@ -4984,7 +4954,13 @@ var fileTests = []fileTestCase{
 			`let a=$(echo 3)`,
 			"let a=`echo 3`",
 		},
-		langFile(letClause(word(lit("a="), cmdSubst(litStmt("echo", "3")))), LangBash),
+		langFile(letClause(
+			&BinaryArithm{
+				Op: Assgn,
+				X:  litWord("a"),
+				Y:  word(cmdSubst(litStmt("echo", "3"))),
+			},
+		), LangBash),
 	),
 	fileTest(
 		[]string{"(foo-bar)"},
@@ -5003,8 +4979,7 @@ var fileTests = []fileTestCase{
 				X:    litWord("i"),
 			}),
 			litCall("bar"),
-		), LangMirBSDKorn|LangZsh),
-		langFile(stmts(letClause(litWord("i++")), litCall("bar")), LangBash),
+		), LangBash|LangMirBSDKorn|LangZsh),
 	),
 	fileTest(
 		[]string{
@@ -5022,8 +4997,7 @@ var fileTests = []fileTestCase{
 				Name:  lit("foo"),
 				Array: arrValues(litWord("bar")),
 			}}},
-		), LangMirBSDKorn|LangZsh),
-		langFile(stmts(letClause(litWord("i++")), &CallExpr{Assigns: []*Assign{{Name: lit("foo"), Array: arrValues(litWord("bar"))}}}), LangBash),
+		), LangBash|LangMirBSDKorn|LangZsh),
 	),
 	fileTest(
 		[]string{
@@ -5041,8 +5015,7 @@ var fileTests = []fileTestCase{
 					X:    litWord("i"),
 				})),
 			}},
-		}, LangMirBSDKorn|LangZsh),
-		langFile(&CaseClause{Word: litWord("a"), Items: []*CaseItem{{Op: Break, Patterns: litWords("b"), Stmts: stmts(letClause(litWord("i++")))}}}, LangBash),
+		}, LangBash|LangMirBSDKorn|LangZsh),
 	),
 	fileTest(
 		[]string{"a+=1"},

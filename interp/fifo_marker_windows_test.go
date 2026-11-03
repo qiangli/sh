@@ -477,7 +477,7 @@ func fifoRunScript(t *testing.T, dir, src string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var b syncBuffer // shared stdout/stderr may be written by background jobs
+	var b bytes.Buffer
 	r, err := New(Dir(dir), StdIO(nil, &b, &b))
 	if err != nil {
 		t.Fatal(err)

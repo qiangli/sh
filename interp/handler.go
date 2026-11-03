@@ -16,7 +16,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"time"
 
@@ -530,9 +529,6 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			state.mu.Unlock()
 			if replacement != nil {
 				defer state.current.CompareAndSwap(replacement, nil)
-				// Every return before the start outcome is published (the
-				// ENOEXEC descriptor refusal among them) is a failed start.
-				defer replacement.publish(0)
 			}
 		}
 		if hc.ExecReplace && !proxyReplace {
@@ -663,11 +659,10 @@ func DefaultExecHandler(killTimeout time.Duration) ExecHandlerFunc {
 			}
 		}
 		if replacement != nil {
-			pid := 0
 			if err == nil {
-				pid = cmd.Process.Pid
+				replacement.pid.Store(int64(cmd.Process.Pid))
 			}
-			replacement.publish(pid)
+			close(replacement.ready)
 		}
 		if err != nil && hc.runner != nil && hc.runner.bashCompatErrors {
 			if interp, ok := missingShebangInterpreter(diagnosticScriptPath); ok {
@@ -1643,52 +1638,4 @@ func handlerDir(ctx context.Context) string {
 	}
 	hc, _ := ctx.Value(handlerCtxKey{}).(HandlerContext)
 	return hc.Dir
-}
-
-// ResolveOwnedDescriptor maps a shell-owned /dev/fd path to this handler's
-// actual host descriptor. The returned path is borrowed: it is valid only
-// during this synchronous handler invocation and must not be retained by
-// background work. Ordinary paths return owned=false. An owned but closed
-// descriptor returns an error, never an unrelated ambient host descriptor.
-func (hc HandlerContext) ResolveOwnedDescriptor(path string) (nativePath string, owned bool, err error) {
-	if hc.runner == nil {
-		return "", false, nil
-	}
-	fd, owned := hc.runner.ownedProcSubstDescriptorFD(path)
-	if !owned {
-		return "", false, nil
-	}
-	read, write, ok := hc.runner.fdCaps(fd)
-	file := read
-	if file == nil {
-		file, _ = write.(*os.File)
-	}
-	if !ok || file == nil {
-		return "", true, &os.PathError{Op: "open", Path: path, Err: os.ErrNotExist}
-	}
-	raw, e := file.SyscallConn()
-	if e != nil {
-		return "", true, e
-	}
-	var physical uintptr
-	if e = raw.Control(func(fd uintptr) { physical = fd }); e != nil {
-		return "", true, e
-	}
-	return "/dev/fd/" + strconv.FormatUint(uint64(physical), 10), true, nil
-}
-
-// PrepareChildDescriptors snapshots process-substitution-owned logical slots
-// into cmd.ExtraFiles for a child started by an in-process handler. Existing
-// unrelated slots are preserved; conflicting owned slots fail closed. Cleanup
-// closes only the new duplicates and is safe immediately after Start returns,
-// including failure. It creates no stream-copy goroutines and does not wait.
-// If the child's environment already declares BASHY_INHERITED_FDS, only its
-// owned slots are reconciled. An absent declaration remains absent; other
-// environment entries and arguments are unchanged.
-// On platforms without managed process substitutions it is a no-op.
-func (hc HandlerContext) PrepareChildDescriptors(cmd *exec.Cmd) (func(), error) {
-	if hc.runner == nil {
-		return func() {}, nil
-	}
-	return hc.runner.prepareOwnedChildDescriptors(cmd)
 }

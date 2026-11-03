@@ -576,8 +576,6 @@ func (p *Parser) Arithmetic(r io.Reader) (ArithmExpr, error) {
 // Parser holds the internal state of the parsing mechanism of a
 // program.
 type Parser struct {
-	commandWordObserver func(string, Pos) error
-
 	src io.Reader
 	bs  []byte // current chunk of read bytes
 	bsp uint   // offset within [Parser.bs] for the rune after [Parser.r]
@@ -2847,9 +2845,6 @@ func (p *Parser) doRedirect(s *Stmt) {
 }
 
 func (p *Parser) getStmt(readEnd, binCmd, fnBody bool) *Stmt {
-	if !p.observeCommandWord() {
-		return nil
-	}
 	pos, ok := p.gotRsrv("!")
 	s := &Stmt{Position: pos}
 	if ok {
@@ -2965,9 +2960,6 @@ func (p *Parser) gotStmtPipe(s *Stmt, binCmd bool) *Stmt {
 		p.doRedirect(s)
 	}
 	redirsStart := len(s.Redirs)
-	if !p.observeCommandWord() {
-		return nil
-	}
 	switch p.tok {
 	case _LitWord:
 		if p.lang.in(LangBashPP) && (p.bashppLabel(s) || p.bashppKeywordStatement(s)) {
@@ -3916,36 +3908,6 @@ func (p *Parser) coprocClause(s *Stmt) {
 
 func (p *Parser) letClause(s *Stmt) {
 	lc := &LetClause{Let: p.pos}
-	if p.lang.in(langBashLike) {
-		// Bash's let is a builtin: operands are shell words, and their
-		// arithmetic syntax is checked only if the command executes. Keep
-		// the existing LetClause representation (Word is an ArithmExpr),
-		// but leave redirections to the ordinary shell lexer/parser.
-		p.next()
-		for !p.stopToken() {
-			if p.peekRedir() {
-				p.doRedirect(s)
-				continue
-			}
-			w := p.getWord()
-			if w == nil {
-				break
-			}
-			// Bash accepts assignment-shaped parenthesized operands here,
-			// using shell array-assignment grammar rather than arithmetic
-			// grouping (nested parentheses and redirections remain errors).
-			if prefix := w.Lit(); p.tok == leftParen && !p.spaced &&
-				strings.HasSuffix(prefix, "=") && ValidName(strings.TrimSuffix(strings.TrimSuffix(prefix, "="), "+")) {
-				w.Parts = append(w.Parts, p.evalArrayArgParts()...)
-				if !p.spaced {
-					w.Parts = p.wordParts(w.Parts)
-				}
-			}
-			lc.Exprs = append(lc.Exprs, w)
-		}
-		s.Cmd = lc
-		return
-	}
 	old := p.preNested(arithmExprLet)
 	p.next()
 	for !p.stopToken() && !p.peekRedir() {

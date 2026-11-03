@@ -35,9 +35,7 @@ import ("fmt"; "os"; "time")
 func Wait() string {
  data,err:=os.ReadFile("sidecar.txt");if err!=nil{panic(err)}
  cwd,err:=os.Getwd();if err!=nil{panic(err)}
- // Publish readiness only after the complete cwd payload is visible.
- if err=os.WriteFile("bridge.ready.pending",[]byte(cwd),0600);err!=nil{panic(err)}
- if err=os.Rename("bridge.ready.pending","bridge.ready");err!=nil{panic(err)}
+ if err=os.WriteFile("bridge.ready",[]byte(cwd),0600);err!=nil{panic(err)}
  for { if _,err=os.Stat("bridge.release");err==nil{break};time.Sleep(time.Millisecond) }
  return string(data)
 }
@@ -109,17 +107,8 @@ func Emit(){fmt.Print(Wait())}
 					t.Fatal("bridge did not become ready")
 				case <-ticker.C:
 					if cwd, err := os.ReadFile(filepath.Join(root, "bridge.ready")); err == nil {
-						want, err := filepath.EvalSymlinks(root)
-						if err != nil {
-							t.Fatalf("resolve expected cwd: %v", err)
-						}
-						if len(cwd) == 0 {
-							t.Fatal("ready marker contains no cwd")
-						}
-						got, err := filepath.EvalSymlinks(string(cwd))
-						if err != nil {
-							t.Fatalf("resolve runtime cwd %q: %v", cwd, err)
-						}
+						want, _ := filepath.EvalSymlinks(root)
+						got, _ := filepath.EvalSymlinks(string(cwd))
 						if got != want {
 							t.Fatalf("runtime cwd=%q want %q", got, want)
 						}

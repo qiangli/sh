@@ -618,12 +618,6 @@ func (r *Runner) bashPPTaskOpen(ctx context.Context, path string, flags int, mod
 			}
 			return nil, err
 		}
-		// A managed /dev/fd path names this runner's already-open endpoint,
-		// not the host descriptor with the same number. Duplicate and publish
-		// it through the native-open path; no pathname rendezvous is needed.
-		if _, owned := r.ownedProcSubstDescriptorFD(path); owned {
-			return r.bashPPFIFOOpenNative(ctx, path, flags, mode, print)
-		}
 		// The registered-peer rendezvous below is for a group with
 		// concurrent members. Until the File has had a task, a FIFO open
 		// is Bash's blocking open (a Classic script under the Bash++
@@ -1154,7 +1148,7 @@ func (r *Runner) closeBashPPTaskResources() {
 		_ = file.Close()
 	}
 	r.bashPPTaskFiles = nil
-	r.closeSubshellFiles()
+	r.closeDirFile()
 }
 
 func cloneStringMap(src map[string]string) map[string]string {

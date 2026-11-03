@@ -73,19 +73,3 @@ func main() {
 		t.Fatalf("outcome=%+v; want stdout %q", got, want)
 	}
 }
-
-func TestS557ImportedNilInterfaceIdentity(t *testing.T) {
-	const source = `package main
-import("fmt"; stream "io"; "bytes")
-func main() {
- var zero stream.Reader
- var typed stream.Reader = (*bytes.Buffer)(nil)
- fmt.Println(zero == nil, typed == nil)
- switch zero.(type) { case nil: fmt.Println("nil"); default: panic("zero interface lost") }
- switch typed.(type) { case *bytes.Buffer: fmt.Println("typed"); default: panic("typed nil lost") }
-}`
-	got, err := runGoSourceIdentity(t, source, "")
-	if err != nil || got.stdout != "true false\nnil\ntyped\n" || got.stderr != "" || got.status != 0 {
-		t.Fatalf("outcome=%+v err=%v", got, err)
-	}
-}

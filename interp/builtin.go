@@ -496,26 +496,22 @@ func (r *Runner) unsetOperandSources(pos syntax.Pos) []unsetOperandSource {
 	if !ok {
 		return nil
 	}
-	// Let the operand scanner find the logical line boundary. Cutting at a
-	// physical newline loses continued operands and can leave a trailing escape.
-	return scanUnsetOperandSources(r.bashSource[offs:])
+	end := offs
+	for end < len(r.bashSource) && r.bashSource[end] != '\n' {
+		end++
+	}
+	line := string(r.bashSource[offs:end])
+	return scanUnsetOperandSources(line)
 }
 
-func scanUnsetOperandSources(line []byte) []unsetOperandSource {
+func scanUnsetOperandSources(line string) []unsetOperandSource {
 	var operands []unsetOperandSource
 	i := 0
 	for i < len(line) {
-		for i < len(line) {
-			if line[i] == ' ' || line[i] == '\t' {
-				i++
-			} else if line[i] == '\\' && i+1 < len(line) && line[i+1] == '\n' {
-				// A line continuation between words is not an operand.
-				i += 2
-			} else {
-				break
-			}
+		for i < len(line) && (line[i] == ' ' || line[i] == '\t') {
+			i++
 		}
-		if i >= len(line) || line[i] == '\n' {
+		if i >= len(line) {
 			break
 		}
 		start := i
@@ -523,10 +519,7 @@ func scanUnsetOperandSources(line []byte) []unsetOperandSource {
 		for i < len(line) {
 			switch line[i] {
 			case '\\':
-				i++
-				if i < len(line) {
-					i++
-				}
+				i += 2
 			case '\'':
 				i++
 				for i < len(line) && line[i] != '\'' {
@@ -539,10 +532,7 @@ func scanUnsetOperandSources(line []byte) []unsetOperandSource {
 				i++
 				for i < len(line) {
 					if line[i] == '\\' {
-						i++
-						if i < len(line) {
-							i++
-						}
+						i += 2
 						continue
 					}
 					if line[i] == '"' {
@@ -551,17 +541,17 @@ func scanUnsetOperandSources(line []byte) []unsetOperandSource {
 					}
 					i++
 				}
-			case ' ', '\t', '\n':
+			case ' ', '\t':
 				goto wordDone
 			default:
 				i++
 			}
 		}
 	wordDone:
-		if strings.ReplaceAll(string(line[start:i]), "\\\n", "") == "unset" {
+		if line[start:i] == "unset" {
 			continue
 		}
-		if line[start] == '-' {
+		if strings.HasPrefix(line[start:i], "-") {
 			continue
 		}
 		operands = append(operands, unsetOperandSource{quoted: quoted})
@@ -620,11 +610,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		pipeBroken := r.pipelineWriteBroken.Swap(false) || isBrokenPipeWriteErr(r.outErr)
 		if r.pipelineOutput && pipeBroken {
 			ignored := r.pipelineSIGPIPEIgnored()
-			caught := r.procSubstOwnIO && r.trapSignalActive("PIPE")
-			if caught {
-				r.markPendingSignal("PIPE")
-			}
-			if !ignored && !caught {
+			if !ignored {
 				exit.code = 128 + 13
 				exit.exiting = true
 				r.outErr = prevOutErr
@@ -1963,25 +1949,8 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			if r.asyncList && r.execReplacement != nil {
 				replacement = r.execReplacement.current.Load()
 				if replacement != nil {
-					var published bool
-					if replacementPid, published = replacement.await(ctx); !published {
-						exit.code = 1
-						continue
-					}
-				}
-			}
-			// BASHPID of an in-process subshell is virtual. Never send it
-			// to the kernel, where it may name an unrelated process/thread.
-			// The virtual number is getpid()+level, so it can coincide with a
-			// real identity this runner routes: a live exec replacement child
-			// (sequential PID allocation makes that deterministic on Darwin).
-			// The real routed identity wins.
-			if replacementPid == 0 || pid != replacementPid {
-				if handled, selfExit := r.signalVirtualSelf(pid, sig); handled {
-					if selfExit.exiting {
-						return selfExit
-					}
-					continue
+					<-replacement.ready
+					replacementPid = int(replacement.pid.Load())
 				}
 			}
 			if pid == r.shellPid() || replacementPid > 0 && pid == replacementPid {
@@ -2007,14 +1976,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				if attempt, queued := r.routeAsyncOwnerSignal(sig); queued {
 					continue
 				} else if attempt != nil {
-					pid, published := attempt.await(ctx)
-					if !published {
-						exit.code = 1
-						continue
-					}
+					<-attempt.ready
 					if bg, _ := ctx.Value(bgProcCtxKey{}).(*bgProc); bg != nil {
 						attempt.observer.Store(bg)
 					}
+					pid := int(attempt.pid.Load())
 					if pid == 0 {
 						exit.code = 1
 					} else if err := sendSignal(pid, sig); err != nil {
@@ -2697,7 +2663,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		if r.LangVariant() == syntax.LangBashPP {
 			syntax.Variant(syntax.LangBashPP)(p)
 		}
-		file, err := r.parseEvalDeclarationAliases(p, []byte(src))
+		file, err := p.Parse(strings.NewReader(src), "")
 		if err != nil {
 			if r.opts[optExpandAliases] {
 				if expanded, ok := r.expandRawAliasSource(src); ok {
@@ -2906,9 +2872,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 		var path string
 		var err error
-		if r.procSubstDescriptor(args[0]) != nil {
-			path = args[0]
-		} else if havePathOverride {
+		if havePathOverride {
 			// Search the explicit PATH only; layer a one-off overlay on
 			// top of the writeEnv so PATH is overridden but other env
 			// stays intact for the search.
@@ -2985,7 +2949,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			if r.noOpSetState["verbose"] {
 				r.errf("%s", content)
 			}
-			file, err = r.parseSourceAliases(p, content, path)
+			file, err = p.Parse(bytes.NewReader(content), path)
 		} else {
 			if r.noOpSetState["verbose"] {
 				content, rerr := io.ReadAll(f)
@@ -2993,13 +2957,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					return failf(1, "source: %v\n", rerr)
 				}
 				r.errf("%s", content)
-				file, err = r.parseSourceAliases(p, content, path)
+				file, err = p.Parse(bytes.NewReader(content), path)
 			} else {
-				content, readErr := io.ReadAll(f)
-				if readErr != nil {
-					return failf(1, "source: %v\n", readErr)
-				}
-				file, err = r.parseSourceAliases(p, content, path)
+				file, err = p.Parse(f, path)
 			}
 		}
 		if err != nil {
@@ -3871,11 +3831,6 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			default:
 				f, ok := r.fdTable[readFD]
 				if !ok && !r.fdClosedTable[readFD] {
-					if p := r.procSubstDescriptors[readFD]; p != nil && p.read {
-						f, ok = p.file, true
-					}
-				}
-				if !ok && !r.fdClosedTable[readFD] {
 					f, ok = r.inheritedFd(readFD)
 				}
 				if !ok {
@@ -4268,17 +4223,6 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			exit.code = 2
 			return exit
 		}
-		// POSIX XBD 8.1 permits rejecting readonly OPTARG/OPTIND writes,
-		// but the utility must then fail. Bash compatibility deliberately
-		// retains success after diagnosing these assignments.
-		assignmentFailed := false
-		assign := func(name, value string) {
-			if r.strictPosix && r.lookupVar(name).ReadOnly {
-				assignmentFailed = true
-			}
-			r.setVarString(name, value)
-		}
-
 		optind, _ := strconv.Atoi(r.envGet("OPTIND"))
 		if optind-1 != r.optState.argidx {
 			if optind < 1 {
@@ -4331,23 +4275,15 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		nameRefBadTarget := nameVar.Kind == expand.NameRef && nameVar.Str == "" &&
 			!validNameRefTarget(string(storeOpt))
 		if !nameRefBadTarget {
-			assign(name, string(storeOpt))
+			r.setVarString(name, string(storeOpt))
 		}
 		// bash's getopts only surfaces the OPTARG-readonly diagnostic
 		// when it would have written to OPTARG (i.e. the default branch
 		// below): the unset that happens at the top of every getopts
 		// call is silent on readonly.
-		optargVar := r.lookupVar("OPTARG")
-		// A present but empty required argument is still an assignment.
-		strictEmptyArg := r.strictPosix && !done && opt != '?' && opt != ':' && strings.Contains(optstr, string(opt)+":")
-		writesOptarg := (optarg != "" || strictEmptyArg) && !(opt == '?' && diagnostics && !done || opt == ':' && diagnostics)
-		if !optargVar.ReadOnly {
+		optargRO := r.lookupVar("OPTARG").ReadOnly
+		if !optargRO {
 			r.delVar("OPTARG")
-		} else if r.strictPosix && optargVar.IsSet() && !writesOptarg {
-			// Clearing a previously set readonly OPTARG is also a rejected
-			// modification. Leave an already unset variable alone.
-			r.delVar("OPTARG")
-			assignmentFailed = true
 		}
 		// bash prefixes diagnostics with $0 (the script name) and prints
 		// the offending character unquoted (e.g. `./script.sh: illegal
@@ -4365,11 +4301,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		case opt == ':' && diagnostics:
 			r.errf("%s: option requires an argument -- %s\n", scriptName, optarg)
 		default:
-			if writesOptarg {
-				assign("OPTARG", optarg)
+			if optarg != "" {
+				r.setVarString("OPTARG", optarg)
 			}
 		}
-		assign("OPTIND", strconv.FormatInt(int64(r.optState.argidx+1), 10))
+		r.setVarString("OPTIND", strconv.FormatInt(int64(r.optState.argidx+1), 10))
 		// Bash reports a readonly OPTARG assignment but getopts still
 		// succeeds when it parsed an option.
 		if nameRefBadTarget {
@@ -4377,10 +4313,6 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 
 		exit.oneIf(done)
-		if assignmentFailed {
-			// Keep ordinary end-of-options (1) distinct from utility errors.
-			exit.code = 2
-		}
 
 	case "shopt":
 		if len(args) >= 2 && (args[0] == "--set" || args[0] == "--unset") {
@@ -4513,7 +4445,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				sort.Strings(names)
 				for _, n := range names {
 					i := idx[n]
-					enabled := r.bashShoptEnabled(n)
+					enabled := r.opts[len(posixOptsTable)+i]
 					if (enabled && !showSet) || (!enabled && !showUnset) {
 						continue
 					}
@@ -5142,11 +5074,6 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		default:
 			f, ok := r.fdTable[readFD]
 			if !ok && !r.fdClosedTable[readFD] {
-				if p := r.procSubstDescriptors[readFD]; p != nil && p.read {
-					f, ok = p.file, true
-				}
-			}
-			if !ok && !r.fdClosedTable[readFD] {
 				f, ok = r.inheritedFd(readFD)
 			}
 			if !ok {
@@ -5497,8 +5424,8 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			for i, opt := range &posixOptsTable {
 				m[opt.name] = r.opts[i]
 			}
-			for _, opt := range bashOptsTable {
-				m[opt.name] = r.bashShoptEnabled(opt.name)
+			for i, opt := range bashOptsTable {
+				m[opt.name] = r.opts[len(posixOptsTable)+i]
 			}
 			return m
 		}
@@ -5961,35 +5888,15 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 	case "declare", "typeset":
 		// Simple declare when called as a command (not keyword).
 		// Keyword form is handled by DeclClause in runner.go.
-		nameOfBuiltin := name
 		inFuncScope := r.inFunc || len(r.callStack) > 0
 		printMode := false
-		exportMode, unexportMode := false, false
-		globalMode, optionsEnded := false, false
+		exportMode := false
 		readonlyMode := false
 		namerefMode := false
 		arrayMode := ""
-		lookup := func(name string) expand.Variable {
-			if globalMode {
-				return r.lookupGlobalVar(name)
-			}
-			return r.lookupVar(name)
-		}
-		store := func(name string, vr expand.Variable) {
-			if globalMode {
-				vr.Local = false
-				r.setGlobalVar(name, vr)
-			} else {
-				r.setVar(name, vr)
-			}
-		}
 		var names []string
 		for _, arg := range args {
-			if !optionsEnded && arg == "--" {
-				optionsEnded = true
-				continue
-			}
-			if !optionsEnded && (strings.HasPrefix(arg, "-") || arg == "+x") && !strings.Contains(arg, "=") {
+			if strings.HasPrefix(arg, "-") && !strings.Contains(arg, "=") {
 				fp := flagParser{remaining: []string{arg}}
 				for fp.more() {
 					switch flag := fp.flag(); flag {
@@ -5997,53 +5904,34 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 						printMode = true
 					case "-x":
 						exportMode = true
-					case "+x":
-						unexportMode = true
-					case "-g":
-						globalMode = true
 					case "-r":
 						readonlyMode = true
 					case "-n":
 						namerefMode = true
 					case "-a", "-A":
 						arrayMode = flag
-					case "-f", "-F", "-i", "-I", "-l", "-u", "-c", "-t":
-						// Preserve existing handling of valid flags outside this
-						// command-form fallback's supported attribute subset.
 					default:
-						r.errf("%s%s: %s: invalid option\n", r.bashErrPrefix(pos), name, flag)
-						r.errf("%s: usage: %s\n", name, bashUsage[name])
-						return exitStatus{code: 2}
+						// Other simple-command declare flags are handled by
+						// DeclClause in the common path; keep this fallback
+						// narrowly scoped to the inline-assignment cases.
 					}
 				}
 				continue
 			}
 			eqIdx := strings.IndexByte(arg, '=')
-			// After the first operand, a flag-shaped argument is a name.
-			// Keep other existing operand forms on their original paths.
-			if optionsEnded && (strings.HasPrefix(arg, "-") || strings.HasPrefix(arg, "+")) {
-				exit = invalidIdentifier(nameOfBuiltin, arg)
-				continue
-			}
-			optionsEnded = true
 			if eqIdx >= 0 {
 				name := arg[:eqIdx]
 				val := arg[eqIdx+1:]
 				vr := expand.Variable{Set: true, Kind: expand.String, Str: val}
-				prev := lookup(name)
-				if prev.ReadOnly {
-					r.errf("%s%s: %s: readonly variable\n", r.bashErrPrefix(pos), nameOfBuiltin, name)
-					exit.code = 1
-					continue
-				}
-				vr.Exported = (prev.Exported || exportMode) && !unexportMode
+				prev := r.lookupVar(name)
+				vr.Exported = prev.Exported || exportMode
 				if readonlyMode {
 					vr.ReadOnly = true
 				}
-				if inFuncScope && !globalMode {
+				if inFuncScope {
 					vr.Local = true
 				}
-				store(name, vr)
+				r.setVar(name, vr)
 				names = append(names, name)
 			} else if namerefMode {
 				// `VAR=val declare -n NAME` (and other CallExpr-form
@@ -6051,7 +5939,7 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				// NAME's current value as a reference target, matching
 				// the keyword DeclClause path (nameref11.sub line 22).
 				names = append(names, arg)
-				vr := lookup(arg)
+				vr := r.lookupVar(arg)
 				if vr.Kind == expand.String && (vr.Str != "" || vr.Set) && !validNameRefTarget(vr.Str) {
 					r.errf("%s%s: `%s': invalid variable name for name reference\n",
 						r.bashErrPrefix(pos), name, vr.Str)
@@ -6059,19 +5947,18 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 					continue
 				}
 				vr.Kind = expand.NameRef
-				vr.Exported = (vr.Exported || exportMode) && !unexportMode
+				vr.Exported = vr.Exported || exportMode
 				vr.ReadOnly = vr.ReadOnly || readonlyMode
-				vr.Local = vr.Local || (inFuncScope && !globalMode)
-				store(arg, vr)
+				vr.Local = vr.Local || inFuncScope
+				r.setVar(arg, vr)
 			} else {
 				names = append(names, arg)
-				if exportMode || unexportMode || readonlyMode || inFuncScope {
-					vr := lookup(arg)
-					vr.Exported = (vr.Exported || exportMode) && !unexportMode
+				if exportMode || readonlyMode || inFuncScope {
+					vr := r.lookupVar(arg)
+					vr.Exported = vr.Exported || exportMode
 					vr.ReadOnly = vr.ReadOnly || readonlyMode
-					vr.Local = vr.Local || (inFuncScope && !globalMode)
-					vr.Kind = expand.KeepValue
-					store(arg, vr)
+					vr.Local = vr.Local || inFuncScope
+					r.setVar(arg, vr)
 				}
 			}
 		}
