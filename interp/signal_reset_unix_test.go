@@ -193,6 +193,8 @@ func TestBackgroundSelfSignalSurvivesExecReplacement(t *testing.T) {
 		{name: "probe_immediate", signal: "0"},
 		{name: "external_term", signal: "TERM", delay: "0.05", wantSignal: syscall.SIGTERM, external: true},
 		{name: "external_probe", signal: "0", delay: "0.05", external: true},
+		// The replacement used to expire after 0.2s, before a delayed probe.
+		{name: "external_probe_late", signal: "0", delay: "0.3", external: true},
 		{name: "carrier_term", signal: "TERM", delay: "0.05", wantSignal: syscall.SIGTERM, carrier: true},
 		{name: "carrier_usr1", signal: "USR1", delay: "0.05", wantSignal: syscall.SIGUSR1, carrier: true},
 		{name: "carrier_usr2", signal: "USR2", delay: "0.05", wantSignal: syscall.SIGUSR2, carrier: true},
@@ -210,7 +212,14 @@ func TestBackgroundSelfSignalSurvivesExecReplacement(t *testing.T) {
 				"GOSH_SIGNAL="+tc.signal,
 				"GOSH_DELAY="+tc.delay,
 			)
-			if tc.delay == "" {
+			if tc.signal == "0" {
+				probeDir := t.TempDir()
+				cmd.Env = append(cmd.Env,
+					"GOSH_PROBE_READY="+probeDir+"/ready",
+					"GOSH_PROBE_DONE="+probeDir+"/done")
+				cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+			}
+			if tc.delay == "" && tc.signal != "0" {
 				// This row measures a signal with no delay after an actual
 				// replacement has started. A separate test covers a signal
 				// which wins before any exec publication.
@@ -252,7 +261,7 @@ func TestBackgroundSelfSignalSurvivesExecReplacement(t *testing.T) {
 					t.Fatalf("probe replacement: %v", err)
 				}
 			case <-time.After(2 * time.Second):
-				if tc.delay == "" {
+				if tc.delay == "" || tc.signal == "0" {
 					_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 				}
 				_ = cmd.Process.Kill()
