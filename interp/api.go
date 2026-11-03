@@ -1029,7 +1029,11 @@ type Runner struct {
 	// with subshells (fds are inherited in bash), but mutations in a
 	// subshell do not leak back to the parent because the map itself
 	// is cloned by [Runner.subshell].
-	fdTable map[int]*os.File
+	fdTable                map[int]*os.File
+	procSubstDescriptors   map[int]*procSubstDescriptor
+	procSubstDescriptorFDs map[int]bool
+	procSubstOwnIO         bool
+	procSubstIOFiles       []*os.File
 	// fdReadTable marks fdTable entries that are valid input sources.
 	fdReadTable map[int]bool
 
@@ -3147,6 +3151,8 @@ const (
 // mean that the shell state will be kept, including variables, options, and the
 // current directory.
 func (r *Runner) Reset() {
+	r.closeProcSubstDescriptors()
+	r.closeProcSubstIO()
 	r.closeGoSourceBridge()
 	if !r.usedNew {
 		panic("use interp.New to construct a Runner")
@@ -4128,6 +4134,13 @@ func (r *Runner) subshellWithBashPPCapture(background bool, capture map[*bashPPC
 		coprocReg: r.coprocReg,
 
 		ulimitOverride: maps.Clone(r.ulimitOverride),
+	}
+	r2.procSubstDescriptors = r.cloneProcSubstDescriptors(r2)
+	r2.procSubstDescriptorFDs = maps.Clone(r.procSubstDescriptorFDs)
+	if r.procSubstOwnIO {
+		if err := r2.cloneProcSubstIO(); err != nil {
+			r2.exit.fatal(err)
+		}
 	}
 	r2.writeEnv = newOverlayEnviron(r.writeEnv, background)
 	// Callback stack depth is invocation state and cannot cross a Runner clone.

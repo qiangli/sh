@@ -189,7 +189,7 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 				return nil
 			}
 			r2 := r.subshell(false)
-			defer r2.closeDirFile()
+			defer r2.closeSubshellFiles()
 			r2.bgProcs = r.bgProcs
 			r2.jobsReadOnly = true
 			// Capture through ONE real pipe, not the Go buffer: bash's
@@ -271,9 +271,17 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 			path := pipe.path()
 
 			r2 := r.subshell(true)
+			r2.excludeProcSubstDescriptor(path)
+			if native, ok := pipe.(interface{ prepareSubshell(*Runner) error }); ok {
+				if err := native.prepareSubshell(r2); err != nil {
+					pipe.cleanup()
+					r2.closeSubshellFiles()
+					return "", err
+				}
+			}
 			// The enclosing reader owns this body, even when it runs later.
 			r2.histSubstDepth++
-			stdout := r.origStdout
+			stdout := r2.origStdout
 			// TODO: note that `man bash` mentions that `wait` only waits for the last
 			// process substitution as long as it is $!; the logic here would mean we wait for all of them.
 			bg := &bgProc{
@@ -285,7 +293,7 @@ func (r *Runner) fillExpandConfig(ctx context.Context) {
 			r.bgProcs = append(r.bgProcs, bg)
 			r.lastBang = bg
 			go func() {
-				defer r2.closeDirFile()
+				defer r2.closeSubshellFiles()
 				defer func() {
 					*bg.exit = r2.exit
 					close(bg.done)
@@ -4849,7 +4857,7 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 			if asyncStdin != nil {
 				_ = asyncStdin.Close()
 			}
-			r2.closeDirFile()
+			r2.closeSubshellFiles()
 			r.errf("%s%v\n", r.bashErrPrefix(st.Pos()), err)
 			r.exit = exitStatus{code: 1}
 		} else {
@@ -4884,7 +4892,7 @@ func (r *Runner) stmt(ctx context.Context, st *syntax.Stmt) {
 			launched := make(chan struct{})
 			go func() {
 				close(launched)
-				defer r2.closeDirFile()
+				defer r2.closeSubshellFiles()
 				if asyncStdin != nil {
 					defer asyncStdin.Close()
 				}
@@ -5315,6 +5323,7 @@ func (r *Runner) stmtRunCmd(ctx context.Context, st *syntax.Stmt) {
 }
 
 func (r *Runner) stmtSyncGeneral(ctx context.Context, st *syntax.Stmt) {
+	defer r.procSubstScope()()
 	r.exit.noNegate = false
 
 	scopeIndex := len(r.redirScopes)
@@ -5326,6 +5335,7 @@ func (r *Runner) stmtSyncGeneral(ctx context.Context, st *syntax.Stmt) {
 	// still see whether exec made this scope persistent.
 	defer func() {
 		r.redirScopes = r.redirScopes[:scopeIndex]
+		r.reconcileProcSubstDescriptors()
 		if r.bashPPHasFIFOs() {
 			r.bashPPReconcileFIFOs()
 		}
@@ -5393,6 +5403,9 @@ func (r *Runner) stmtSyncGeneral(ctx context.Context, st *syntax.Stmt) {
 			}
 		}
 	}
+	r.redirScopes[scopeIndex].procSubstRestoreFD = func(fd int) bool {
+		return !keepRedirs() && !persistNamedRedirs && (lateRedir || slices.Contains(modifiedFds, fd))
+	}
 	oldRedirMoveCloseFds := r.redirMoveCloseFds
 	// A FIFO registered later is a fresh descriptor, never one of the
 	// files this scope restores, so a scope that begins with none
@@ -5445,7 +5458,7 @@ func (r *Runner) stmtSyncGeneral(ctx context.Context, st *syntax.Stmt) {
 	}
 	if st.Cmd == nil && len(st.Redirs) > 0 {
 		r2 := r.subshell(false)
-		defer r2.closeDirFile()
+		defer r2.closeSubshellFiles()
 		if r2.bashPPConcurrent != nil {
 			defer r2.bashPPConcurrent.closeFIFOs(r2)
 		}
@@ -5725,11 +5738,12 @@ func (r *Runner) stmtSyncGeneral(ctx context.Context, st *syntax.Stmt) {
 }
 
 type redirScope struct {
-	hasRedirs       bool
-	persist         bool
-	closeAt         int
-	boundaryClosers []io.Closer
-	fifoRestoreRefs func(map[*os.File]bool)
+	hasRedirs          bool
+	persist            bool
+	closeAt            int
+	boundaryClosers    []io.Closer
+	fifoRestoreRefs    func(map[*os.File]bool)
+	procSubstRestoreFD func(int) bool
 }
 
 // persistCurrentRedirs marks the exec statement itself and propagates that
@@ -5973,7 +5987,7 @@ func (r *Runner) cmdGeneral(ctx context.Context, cm syntax.Command) {
 		if bg, _ := ctx.Value(bgProcCtxKey{}).(*bgProc); bg != nil && bg.carrierRootSubshell == cm {
 			bg.carrierSignalRunner.Store(r2)
 		}
-		defer r2.closeDirFile()
+		defer r2.closeSubshellFiles()
 		// This internal shell cannot be reused or Reset by the caller. Join
 		// its own subscriptions after EXIT cleanup, without canceling any
 		// asynchronous descendants that outlive the parenthesized scope.
@@ -6902,7 +6916,7 @@ func (r *Runner) cmdGeneral(ctx context.Context, cm syntax.Command) {
 			r.asyncStdinExplicit = true
 			var wg sync.WaitGroup
 			wg.Go(func() {
-				defer r2.closeDirFile()
+				defer r2.closeSubshellFiles()
 				xctx := context.WithValue(ctx, bgNonPrimaryPidCtxKey{}, true)
 				xctx = context.WithValue(xctx, pipelineExecCtxKey{}, true)
 				if subshell, ok := plainPipelineSubshell(cm.X); ok {
@@ -6928,7 +6942,7 @@ func (r *Runner) cmdGeneral(ctx context.Context, cm syntax.Command) {
 				// supply a sparse parent env (e.g. expand.FuncEnviron
 				// with no Each enumeration) still resolve variables.
 				r3 = r.subshell(false)
-				defer r3.closeDirFile()
+				defer r3.closeSubshellFiles()
 				r3.stdin = prDup
 				r3.stdinRedirected = true
 				r3.asyncStdinExplicit = true
@@ -8889,7 +8903,7 @@ func (r *Runner) cmdGeneral(ctx context.Context, cm syntax.Command) {
 		}
 		bgCtx = context.WithValue(bgCtx, bgProcCtxKey{}, bg)
 		go func() {
-			defer r2.closeDirFile()
+			defer r2.closeSubshellFiles()
 			defer func() {
 				cancel()
 				pw.Close()
@@ -9852,6 +9866,9 @@ func (r *Runner) allocateFd() (int, bool) {
 		}
 	}
 	for n := 10; limit == 0 || n < limit; n++ {
+		if r.procSubstDescriptors[n] != nil {
+			continue
+		}
 		if _, ok := r.fdTable[n]; !ok {
 			if _, ok := r.fdWriteTable[n]; !ok {
 				return n, true
@@ -9882,6 +9899,9 @@ func (r *Runner) execExtraFiles() ([]*os.File, string, func(), error) {
 	var fds []string
 	var cleanup []func()
 	maxFD := 2
+	for fd := range r.procSubstDescriptors {
+		maxFD = max(maxFD, fd)
+	}
 	limit := r.effectiveNofileLimit()
 	for fd := range r.fdTable {
 		if fd < 0 || fd >= limit {
@@ -9898,6 +9918,11 @@ func (r *Runner) execExtraFiles() ([]*os.File, string, func(), error) {
 	var closedSlot *os.File
 	for fd := 3; fd <= maxFD; fd++ {
 		f, ok := r.fdTable[fd]
+		if !ok && r.fdWriteTable[fd] == nil && !r.fdClosedTable[fd] {
+			if p := r.procSubstDescriptors[fd]; p != nil {
+				f, ok = p.file, true
+			}
+		}
 		if !ok {
 			if w, wok := r.fdWriteTable[fd].(*os.File); wok {
 				f, ok = w, true
@@ -10129,7 +10154,22 @@ func (r *Runner) dupFd(targetFd, sourceFd int, rd *syntax.Redirect) error {
 		r.errf("%s%s: Bad file descriptor\n", r.bashErrPrefix(rd.Word.Pos()), redirWordText(rd))
 		return fmt.Errorf("%s: Bad file descriptor", redirWordText(rd))
 	}
+	if p := r.procSubstDescriptors[sourceFd]; p != nil && (read == p.file || write == p.file) {
+		f, _, err := dupPipeFd(p.file)
+		if err != nil {
+			return err
+		}
+		if read == p.file {
+			read = f
+		}
+		if write == p.file {
+			write = f
+		}
+	}
 	r.bindFdCaps(targetFd, read, write)
+	if targetFd >= 3 && r.procSubstDescriptorFDs[sourceFd] {
+		r.procSubstDescriptorFDs[targetFd] = true
+	}
 	return nil
 }
 
@@ -10211,6 +10251,16 @@ func (r *Runner) fdCaps(fd int) (read *os.File, write io.Writer, ok bool) {
 					read = f
 				}
 			}
+		}
+	}
+	if !ok {
+		if p := r.procSubstDescriptors[fd]; p != nil {
+			if p.read {
+				read = p.file
+			} else {
+				write = p.file
+			}
+			ok = true
 		}
 	}
 	// Resolve any REGISTERED inherited descriptor (via WithInheritedFds /
@@ -10562,7 +10612,11 @@ func (r *Runner) redir(ctx context.Context, rd *syntax.Redirect) (closer io.Clos
 		return nil, fmt.Errorf("%s: Bad file descriptor", label)
 	}
 	openFile := func(path string, flags int, mode os.FileMode, print bool) (io.ReadWriteCloser, error) {
-		return r.bashPPTaskOpen(ctx, path, flags, mode, print, false)
+		f, err := r.bashPPTaskOpen(ctx, path, flags, mode, print, false)
+		if _, owned := r.ownedProcSubstDescriptorFD(path); err == nil && owned && targetFd >= 3 {
+			r.procSubstDescriptorFDs[targetFd] = true
+		}
+		return f, err
 	}
 	switch rd.Op {
 	case syntax.WordHdoc:
@@ -11984,6 +12038,9 @@ func (r *Runner) customOpenActive() bool {
 }
 
 func (r *Runner) open(ctx context.Context, path string, flags int, mode os.FileMode, print bool) (io.ReadWriteCloser, error) {
+	if f, ok, err := r.openProcSubstDescriptor(path, flags); ok {
+		return f, err
+	}
 	if bg := r.asyncProc; bg != nil && bg.launchYield != nil && r.openMayBlock(ctx, path) {
 		r.yieldAsyncLaunch()
 	}
@@ -12097,6 +12154,10 @@ func (r *Runner) statVirtualFd(name string) (fs.FileInfo, bool, error) {
 		})
 	}
 	if statter == nil {
+		if p := r.procSubstDescriptors[fd]; p != nil && strconv.Itoa(fd) == name[len(prefix):] {
+			info, err := p.file.Stat()
+			return info, true, err
+		}
 		// Not a bashy-managed descriptor (closed, or an unregistered real fd):
 		// fall through to the filesystem, which correctly reports a closed
 		// /dev/fd/N as nonexistent.

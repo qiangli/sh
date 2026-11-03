@@ -1148,7 +1148,7 @@ func (r *Runner) closeBashPPTaskResources() {
 		_ = file.Close()
 	}
 	r.bashPPTaskFiles = nil
-	r.closeDirFile()
+	r.closeSubshellFiles()
 }
 
 func cloneStringMap(src map[string]string) map[string]string {

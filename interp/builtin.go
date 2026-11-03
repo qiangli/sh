@@ -2902,7 +2902,9 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 		}
 		var path string
 		var err error
-		if havePathOverride {
+		if r.procSubstDescriptor(args[0]) != nil {
+			path = args[0]
+		} else if havePathOverride {
 			// Search the explicit PATH only; layer a one-off overlay on
 			// top of the writeEnv so PATH is overridden but other env
 			// stays intact for the search.
@@ -3864,6 +3866,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 				// `-u 0` is just stdin — no swap needed.
 			default:
 				f, ok := r.fdTable[readFD]
+				if !ok && !r.fdClosedTable[readFD] {
+					if p := r.procSubstDescriptors[readFD]; p != nil && p.read {
+						f, ok = p.file, true
+					}
+				}
 				if !ok && !r.fdClosedTable[readFD] {
 					f, ok = r.inheritedFd(readFD)
 				}
@@ -5130,6 +5137,11 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 			return failf(2, "%s: %d: invalid file descriptor: not open for reading\n", name, readFD)
 		default:
 			f, ok := r.fdTable[readFD]
+			if !ok && !r.fdClosedTable[readFD] {
+				if p := r.procSubstDescriptors[readFD]; p != nil && p.read {
+					f, ok = p.file, true
+				}
+			}
 			if !ok && !r.fdClosedTable[readFD] {
 				f, ok = r.inheritedFd(readFD)
 			}

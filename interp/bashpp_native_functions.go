@@ -142,7 +142,7 @@ func (r *Runner) bashPPBridgeFunction(fn *bashPPFunc) (bashPPBridgeValue, error)
 	for id, existing := range s.functions {
 		if existing == fn {
 			if registered.template != nil {
-				registered.template.closeDirFile()
+				registered.template.closeSubshellFiles()
 			}
 			return bashPPBridgeValue{Kind: "callback", Handle: id, Session: s.id, Callbacks: true, copiedResults: copiedResults, copiedHandleResults: copiedHandleResults, callRefusal: callRefusal, localRefusal: localRefusal}, nil
 		}
@@ -295,7 +295,7 @@ func (s *bashPPNativeSession) closeCallbackFunctionTemplates() {
 	s.mu.Unlock()
 	for _, callback := range registered {
 		if callback != nil && callback.template != nil {
-			callback.template.closeDirFile()
+			callback.template.closeSubshellFiles()
 		}
 	}
 }
@@ -347,7 +347,7 @@ func (s *bashPPNativeSession) releaseCallbackFunctions(handles []uint64) {
 	s.mu.Unlock()
 	for _, callback := range callbacks {
 		if callback.template != nil {
-			callback.template.closeDirFile()
+			callback.template.closeSubshellFiles()
 		}
 	}
 }
