@@ -63,6 +63,7 @@
 ./interp|process-boundary|TestBashPPRunSeparatesThreeChannels
 ./interp|process-boundary|TestBashPPCaptureLargeExternalPipe
 ./interp|adversarial|TestConcurrencyAdversarial
+./interp|adversarial|TestConcurrencyLeakIdentity
 ./interp|adversarial|TestConcurrencyScheduleMatrix
 ./interp|capability-policy|TestBashPPCapabilityPolicyTable
 ./interp|capability-policy|TestBashPPPolicyFailsClosed
