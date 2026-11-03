@@ -593,7 +593,7 @@ func waitExecCmd(ctx context.Context, cmd *exec.Cmd) (err error, user, sys time.
 	}
 }
 
-func execReplace(ctx context.Context, path string, args, env []string, stdin any, stdout any, stderr any, owned *ownedExecHandoff) (bool, error) {
+func execReplaceLegacy(ctx context.Context, path string, args, env []string, stdin any, stdout any, stderr any, owned *ownedExecHandoff) (bool, error) {
 	hc := HandlerCtx(ctx)
 	// syscall.Exec has no directory argument. The Runner keeps its working
 	// directory in-process, so after a shell `cd` it can differ from the Go
