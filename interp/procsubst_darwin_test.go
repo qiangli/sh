@@ -288,3 +288,18 @@ func TestDarwinProcSubstChildMetadata(t *testing.T) {
 		})
 	}
 }
+
+func TestDarwinProcSubstTaskOutput(t *testing.T) {
+	out, err := runBashPPConcurrency(t, `
+func emit(ack) { echo published > >(/bin/cat); wait; ack <- ok; }
+func main() {
+ ack := make(chan string)
+ go emit(ack)
+ <-ack
+}
+main()
+`)
+	if err != nil || out != "published\n" {
+		t.Fatalf("out=%q err=%v", out, err)
+	}
+}
