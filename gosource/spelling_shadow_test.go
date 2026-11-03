@@ -24,6 +24,7 @@ import (
 	"go/parser"
 	"go/token"
 	"go/types"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -239,7 +240,10 @@ func TestSpellingShadowHotTypeUsesFastPath(t *testing.T) {
 // ~8.8× the time (linear); the pre-fix O(references × decls) descent took
 // ~15.5× at the same sizes. The 12× ceiling clears the linear cost with margin
 // while still failing on the quadratic. Best-of-three absorbs scheduler/GC
-// noise; skipped under -short because it is timing-sensitive.
+// noise. Each sample starts after collecting the previous sample's discarded
+// AST/type graph, so the larger input is not charged for cleanup left over by
+// the smaller input. GC triggered by the measured Parse remains included.
+// Skipped under -short because it is timing-sensitive.
 func TestSpellingShadowParseScaling(t *testing.T) {
 	if testing.Short() {
 		t.Skip("timing-sensitive; skipped under -short")
@@ -248,6 +252,7 @@ func TestSpellingShadowParseScaling(t *testing.T) {
 		src := opConstFile(n)
 		best := time.Duration(1<<62 - 1)
 		for i := 0; i < 3; i++ {
+			runtime.GC()
 			start := time.Now()
 			if _, err := Parse(strings.NewReader(src), "scaling.go", Options{RunMain: true}); err != nil {
 				t.Fatalf("n=%d parse: %v", n, err)
