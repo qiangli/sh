@@ -2018,6 +2018,14 @@ func (r *Runner) builtin(ctx context.Context, pos syntax.Pos, name string, args 
 							// would suspend all in-process runners.
 							continue
 						}
+						// A standalone shell owns its process signal disposition.
+						// Relay the default action so its parent observes WIFSIGNALED,
+						// rather than a normal exit with status 128+signal.
+						if _, standalone := r.sigReset.(OSSignalResetter); standalone {
+							if err := relayAsyncOwnerSignal(sig); err == nil {
+								continue
+							}
+						}
 						exit.code = uint8(128 + sigNum(sig))
 						exit.exiting = true
 						return exit
