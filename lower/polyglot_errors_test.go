@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -33,7 +34,7 @@ type foreignOutcome struct {
 // foreignOutcomes runs source through the interpreter and through the lowered
 // native program and returns both outcomes. Unlike the parity helper it
 // tolerates a non-zero process status, which the failure shapes rely on.
-func foreignOutcomes(t *testing.T, source string) (interpreted, native foreignOutcome) {
+func foreignOutcomes(t *testing.T, source string, args ...string) (interpreted, native foreignOutcome) {
 	t.Helper()
 	file := parse(t, source, "input.bpp")
 	result, err := lower.Compile(file, lower.Options{})
@@ -44,7 +45,7 @@ func foreignOutcomes(t *testing.T, source string) (interpreted, native foreignOu
 	defer cancel()
 
 	var out, errOut bytes.Buffer
-	runner, err := interp.New(interp.Lang(syntax.LangBashPP), interp.StdIO(nil, &out, &errOut))
+	runner, err := interp.New(interp.Lang(syntax.LangBashPP), interp.StdIO(nil, &out, &errOut), interp.Params(args...))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +77,7 @@ func foreignOutcomes(t *testing.T, source string) (interpreted, native foreignOu
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build: %v\n%s\n%s", err, output, result.Source)
 	}
-	cmd = exec.CommandContext(ctx, binary)
+	cmd = exec.CommandContext(ctx, binary, args...)
 	cmd.Dir = t.TempDir()
 	var nativeOut, nativeErr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &nativeOut, &nativeErr
@@ -161,6 +162,55 @@ func TestForeignErrorOptInPython(t *testing.T) {
 			t.Run(c.name+"/"+mode, func(t *testing.T) {
 				expectForeignOutcomes(t, pythonErrorFence+prelude+c.script, c.want)
 			})
+		}
+	}
+}
+
+// The entry's own error result must not capture a top-level source binding
+// named err. A differently named error binding is the control for that scope.
+func TestForeignErrorBindingNamedErr(t *testing.T) {
+	const fence = `~~~python as py
+def Run(fail: bool) -> int:
+    if fail:
+        raise ValueError("boom")
+    return 7
+~~~
+`
+	for _, tc := range []struct {
+		name, script string
+		want         foreignOutcome
+	}{
+		{"error name failure", "rc, err := py.Run(true)\necho \"rc=$rc err=$err status=$?\"\n", foreignOutcome{"rc=0 err=ValueError: boom status=0\n", ""}},
+		{"renamed failure", "rc, exception := py.Run(true)\necho \"rc=$rc err=$exception status=$?\"\n", foreignOutcome{"rc=0 err=ValueError: boom status=0\n", ""}},
+		{"error name success", "rc, err := py.Run(false)\necho \"rc=$rc err=$err status=$?\"\n", foreignOutcome{"rc=7 err= status=0\n", ""}},
+		{"renamed success", "rc, exception := py.Run(false)\necho \"rc=$rc err=$exception status=$?\"\n", foreignOutcome{"rc=7 err= status=0\n", ""}},
+	} {
+		for mode, prelude := range map[string]string{"static": "", "execution": "(true)\n"} {
+			t.Run(tc.name+"/"+mode, func(t *testing.T) {
+				expectForeignOutcomes(t, fence+prelude+tc.script, tc.want)
+			})
+		}
+	}
+}
+
+func TestGoFenceExitStatus(t *testing.T) {
+	for _, status := range []int{3, 42} {
+		for _, call := range []string{"g.Main()", "callErr := g.Main()"} {
+			for mode, prelude := range map[string]string{"static": "", "execution": "(true)\n"} {
+				t.Run(fmt.Sprintf("%d/%s/%s", status, call, mode), func(t *testing.T) {
+					tail, want := "echo \"status=$?\"\n", fmt.Sprintf("status=%d\n", status)
+					if strings.HasPrefix(call, "callErr") {
+						tail, want = "echo \"err=$callErr status=$?\"\n", "err= "+want
+					}
+					source := fmt.Sprintf("~~~go as g\nimport \"os\"\nfunc Main() { os.Exit(%d) }\n~~~\n%s%s\n%s", status, prelude, call, tail)
+					interpreted, native := foreignOutcomes(t, source)
+					for engine, got := range map[string]foreignOutcome{"interpreted": interpreted, "native": native} {
+						if got.stdout != want || !strings.Contains(got.stderr, "Go worker") {
+							t.Errorf("%s: %+q", engine, got)
+						}
+					}
+				})
+			}
 		}
 	}
 }
@@ -264,5 +314,46 @@ func TestForeignErrorOptInGeneratedShape(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestPythonFenceHandleTransportFailure(t *testing.T) {
+	source := `~~~python as py
+def make():
+    class Item:
+        def die(self):
+            import os
+            os._exit(3)
+    return Item()
+~~~
+h, err := py.make()
+v, err := h.die()
+echo "domain=$err status=$?"
+`
+	for mode, prelude := range map[string]string{"static": "", "execution": "(true)\n"} {
+		t.Run(mode, func(t *testing.T) {
+			interpreted, native := foreignOutcomes(t, prelude+source)
+			for name, got := range map[string]foreignOutcome{"interpreted": interpreted, "native": native} {
+				if got.stdout != "domain= status=1\n" || !strings.Contains(got.stderr, "Python worker exited with status 3") {
+					t.Errorf("%s: %+q", name, got)
+				}
+			}
+		})
+	}
+}
+
+func TestPythonFenceScalarIsNotHandle(t *testing.T) {
+	source := `~~~python as py
+def make(): return "<_io.StringIO object at 0x123>"
+~~~
+h, err := py.make()
+v, err := h.read()
+`
+	interpreted, native := foreignOutcomes(t, source)
+	if !strings.Contains(interpreted.stderr, "ESELECTOR-TYPE") {
+		t.Fatalf("interpreted=%+q", interpreted)
+	}
+	if !strings.Contains(native.stderr, "not an object") {
+		t.Fatalf("native=%+q", native)
 	}
 }

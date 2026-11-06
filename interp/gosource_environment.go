@@ -8,8 +8,9 @@ import (
 )
 
 // GoSourceEnv supplies the original Go program's process environment in caller
-// order. The slice is copied. It applies only to GoSource dependency processes;
-// Bash variables and shell subprocess environments retain their usual behavior.
+// order. The slice is copied. It applies to GoSource dependency processes and
+// explicitly invoked Go fence commands; Bash variables, shell subprocesses,
+// and typed Go fence calls retain their usual behavior.
 // An empty slice means an empty environment. Without this option, exported
 // variables in the initial Runner.Env are used, in its iteration order.
 // Reset retains this configuration; os.Setenv/Unsetenv in the Go program change
@@ -50,4 +51,52 @@ func (r *Runner) bashPPGoSourceEnvironment() []string {
 		})
 	}
 	return slices.DeleteFunc(env, func(entry string) bool { return entry == "" })
+}
+
+// bashPPGoCommandEnvironment keeps the exact caller snapshot for a Go command
+// and overlays only exports or unsets made by the running shell. The ordinary
+// shell environment contains startup additions that were never in that
+// snapshot, so passing execEnv directly would expose those to the guest.
+func (r *Runner) bashPPGoCommandEnvironment() []string {
+	current := execEnv(r.writeEnv)
+	if r.goSourceEnvironment == nil {
+		return current
+	}
+	overlay, ok := r.writeEnv.(*overlayEnviron)
+	if !ok {
+		return current
+	}
+	touched := overlay.goCommandTouchedNames()
+	values := make(map[string]string, len(touched))
+	for name := range touched {
+		variable := r.writeEnv.Get(name)
+		if variable.IsSet() && variable.Exported {
+			values[name] = name + "=" + execEnvValue(variable)
+		}
+	}
+	result := make([]string, 0, len(r.goSourceEnvironment)+len(touched))
+	seen := make(map[string]bool, len(touched))
+	for _, entry := range r.goSourceEnvironment {
+		name, _, ok := strings.Cut(entry, "=")
+		if !ok || !touched[name] {
+			result = append(result, entry)
+			continue
+		}
+		if !seen[name] {
+			if replacement, set := values[name]; set {
+				result = append(result, replacement)
+			}
+			seen[name] = true
+		}
+	}
+	for _, entry := range current {
+		name, _, ok := strings.Cut(entry, "=")
+		if ok && touched[name] && !seen[name] {
+			if replacement, set := values[name]; set {
+				result = append(result, replacement)
+			}
+			seen[name] = true
+		}
+	}
+	return result
 }

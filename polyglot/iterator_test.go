@@ -65,6 +65,72 @@ def bad() -> Iterator[int]:
 	it.Close(ctx)
 }
 
+func TestIteratorPythonHandleLifecycle(t *testing.T) {
+	plan := pythonPlanWithRuntime(t, `
+state=[]
+def generator():
+    def values():
+        try:
+            yield 1
+            raise ValueError('partial handle')
+        finally:
+            state.append('closed')
+    return values()
+def closed() -> bool: return state == ['closed']
+def scalar(): return object()
+`, Python{})
+	m := Start(plan, Python{})
+	defer m.Close()
+
+	opened, err := m.Call(t.Context(), "generator")
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle := opened.Value.(*Handle)
+	it, _, err := handle.OpenIterator(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, more, err := it.Next(t.Context())
+	if err != nil || !more || value.Value != int64(1) {
+		t.Fatalf("first: %+v more=%v err=%v", value, more, err)
+	}
+	if _, more, err = it.Next(t.Context()); err == nil || more || !strings.Contains(err.Error(), "partial handle") {
+		t.Fatalf("failure: more=%v err=%v", more, err)
+	}
+	if _, domain := ForeignErrorDetail(err); !domain {
+		t.Fatalf("iteration exception is not a domain error: %v", err)
+	}
+	if _, err := it.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	closed, err := m.Call(t.Context(), "closed")
+	if err != nil || closed.Value != true {
+		t.Fatalf("cleanup: %+v err=%v", closed, err)
+	}
+
+	scalar, err := m.Call(t.Context(), "scalar")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := scalar.Value.(*Handle).OpenIterator(t.Context()); err == nil || !strings.Contains(err.Error(), "not iterable") {
+		t.Fatalf("non-iterable accepted: %v", err)
+	}
+	other := Start(plan, Python{})
+	defer other.Close()
+	if _, _, err := other.OpenHandleIterator(t.Context(), handle); err == nil || !strings.Contains(err.Error(), "stale or foreign") {
+		t.Fatalf("cross-module handle accepted: %v", err)
+	}
+
+	stale := handle
+	if err := m.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := stale.OpenIterator(t.Context()); err == nil || !strings.Contains(err.Error(), "stale or foreign") {
+		t.Fatalf("stale handle accepted: %v", err)
+	}
+}
+
 func TestIteratorFilterInputCancel(t *testing.T) {
 	plan := pythonPlanWithRuntime(t, "def upper(stdin: TextIO) -> Iterator[str]:\n    for line in stdin: yield line.upper()\n", Python{})
 	m := Start(plan, Python{})

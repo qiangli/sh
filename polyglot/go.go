@@ -24,8 +24,11 @@ import (
 type Go struct {
 	Command     string
 	Environment *EnvironmentPlan
-	Cwd         func() string
-	Env         func() []string
+	// AssetSourceDir is the authenticated parent of the block that declared
+	// go:embed. Prepare sets it from block origins when they are unambiguous.
+	AssetSourceDir string
+	Cwd            func() string
+	Env            func() []string
 }
 
 func (g Go) executable() string {
@@ -158,9 +161,6 @@ func (g Go) AnalyzeArtifact(ctx context.Context, source string) ([]Export, strin
 	if err != nil {
 		return nil, "", err
 	}
-	if len(parsed) == 0 {
-		return nil, "", errors.New("no supported exported Go functions")
-	}
 	workerSource := goWorkerSource(parsed)
 	dir, err := os.MkdirTemp("", "bashpp-go-build-")
 	if err != nil {
@@ -203,6 +203,19 @@ func (g Go) AnalyzeArtifact(ctx context.Context, source string) ([]Export, strin
 	replace := map[string]string{
 		moduleVirtual: moduleBacking,
 		workerVirtual: workerBacking,
+	}
+	if g.Environment != nil {
+		sourceDir := g.AssetSourceDir
+		if sourceDir == "" {
+			sourceDir = g.Environment.SourceDir
+		}
+		assets, err := stageGoEmbedAssets(moduleSource, sourceDir, virtualDir, dir)
+		if err != nil {
+			return nil, "", err
+		}
+		for virtual, backing := range assets {
+			replace[virtual] = backing
+		}
 	}
 	args := []string{"build", "-overlay=" + overlayFile, "-o", output, moduleVirtual, workerVirtual}
 	if g.Environment != nil && g.Environment.ModuleFile != "" {
@@ -282,15 +295,16 @@ func analyzeGoModule(source string) (string, []goExport, error) {
 	}
 	var out []goExport
 	seen := map[string]bool{}
+decls:
 	for _, decl := range file.Decls {
 		switch decl := decl.(type) {
 		case *ast.GenDecl:
-			if decl.Tok != token.IMPORT {
-				return "", nil, fmt.Errorf("Go source fences allow only imports and function declarations")
-			}
+			// Imports, types, variables and constants remain in the module.
+			// Only top-level functions contribute Bash# callable exports.
+			continue
 		case *ast.FuncDecl:
 			if decl.Recv != nil {
-				return "", nil, fmt.Errorf("Go source fences do not export methods")
+				continue
 			}
 			if decl.Name.Name == "main" || strings.HasPrefix(decl.Name.Name, "__bpp") {
 				return "", nil, fmt.Errorf("Go function name %s is reserved by the fence worker", decl.Name.Name)
@@ -303,13 +317,22 @@ func analyzeGoModule(source string) (string, []goExport, error) {
 			}
 			seen[decl.Name.Name] = true
 			export := goExport{Export: Export{Name: decl.Name.Name}}
+			reject := func(reason string) {
+				out = append(out, goExport{Export: Export{Name: decl.Name.Name, Unavailable: reason}})
+			}
+			if decl.Type.TypeParams != nil && len(decl.Type.TypeParams.List) > 0 {
+				reject("generic type parameters")
+				continue decls
+			}
 			for _, field := range decl.Type.Params.List {
 				if _, ok := field.Type.(*ast.Ellipsis); ok {
-					return "", nil, fmt.Errorf("Go function %s is variadic", decl.Name.Name)
+					reject("variadic")
+					continue decls
 				}
 				typ, bridge, ok := goBridgeType(field.Type)
 				if !ok {
-					return "", nil, fmt.Errorf("Go function %s has an unsupported parameter type", decl.Name.Name)
+					reject("unsupported parameter type")
+					continue decls
 				}
 				count := len(field.Names)
 				if count == 0 {
@@ -321,29 +344,34 @@ func analyzeGoModule(source string) (string, []goExport, error) {
 				}
 			}
 			var results []ast.Expr
-			for _, field := range decl.Type.Results.List {
-				count := len(field.Names)
-				if count == 0 {
-					count = 1
-				}
-				for range count {
-					results = append(results, field.Type)
+			if decl.Type.Results != nil {
+				for _, field := range decl.Type.Results.List {
+					count := len(field.Names)
+					if count == 0 {
+						count = 1
+					}
+					for range count {
+						results = append(results, field.Type)
+					}
 				}
 			}
 			if len(results) > 2 {
-				return "", nil, fmt.Errorf("Go function %s has too many results", decl.Name.Name)
+				reject("at most one value plus error")
+				continue decls
 			}
 			if len(results) > 0 && isGoIdent(results[len(results)-1], "error") {
 				export.resultError = true
 				results = results[:len(results)-1]
 			}
 			if len(results) > 1 {
-				return "", nil, fmt.Errorf("Go function %s must return at most one value plus error", decl.Name.Name)
+				reject("at most one value plus error")
+				continue decls
 			}
 			if len(results) == 1 {
 				typ, bridge, ok := goBridgeType(results[0])
 				if !ok || bridge == "nil" {
-					return "", nil, fmt.Errorf("Go function %s has an unsupported result type", decl.Name.Name)
+					reject("unsupported result type")
+					continue decls
 				}
 				export.result = typ
 				export.Signature.Results = []string{bridge}
@@ -388,9 +416,37 @@ import (
 
 type __bpp_request struct { Name string ` + "`json:\"name\"`" + `; Args []__bpp_json.RawMessage ` + "`json:\"args\"`" + ` }
 type __bpp_response struct { OK bool ` + "`json:\"ok\"`" + `; Kind string ` + "`json:\"kind,omitempty\"`" + `; Result any ` + "`json:\"result,omitempty\"`" + `; Error string ` + "`json:\"error,omitempty\"`" + ` }
-func __bpp_write(response __bpp_response) { data,_:=__bpp_json.Marshal(response); __bpp_fmt.Fprintln(__bpp_os.Stdout,"\x1eBASHPP"+string(data)) }
+var __bpp_resultPath string
+func __bpp_write(response __bpp_response) { data,_:=__bpp_json.Marshal(response); _=__bpp_os.WriteFile(__bpp_resultPath,data,0600) }
 func __bpp_fail(err error) { __bpp_write(__bpp_response{Error:err.Error()}) }
 func main() {
+	if name, ok := __bpp_os.LookupEnv("__BPP_GO_COMMAND"); ok {
+		__bpp_os.Unsetenv("__BPP_GO_COMMAND")
+		switch name {
+`)
+	for _, export := range exports {
+		if export.Unavailable != "" || len(export.params) != 0 {
+			continue
+		}
+		fmt.Fprintf(&out, "case %q:\n", export.Name)
+		call := export.Name + "()"
+		switch {
+		case export.result != "" && export.resultError:
+			fmt.Fprintf(&out, "_,err:=%s\nif err!=nil { __bpp_fmt.Fprintln(__bpp_os.Stderr,err); __bpp_os.Exit(1) }\n", call)
+		case export.resultError:
+			fmt.Fprintf(&out, "if err:=%s; err!=nil { __bpp_fmt.Fprintln(__bpp_os.Stderr,err); __bpp_os.Exit(1) }\n", call)
+		case export.result != "":
+			fmt.Fprintf(&out, "_=%s\n", call)
+		default:
+			fmt.Fprintf(&out, "%s\n", call)
+		}
+		out.WriteString("return\n")
+	}
+	out.WriteString(`default: __bpp_fmt.Fprintln(__bpp_os.Stderr,"unknown Go command export"); __bpp_os.Exit(127)
+		}
+	}
+	__bpp_resultPath = __bpp_os.Getenv("__BPP_GO_RESULT")
+	__bpp_os.Unsetenv("__BPP_GO_RESULT")
 	defer func(){ if value:=recover(); value!=nil { __bpp_fail(__bpp_fmt.Errorf("Go function panicked: %v",value)) } }()
 	var request __bpp_request
 	if err:=__bpp_json.NewDecoder(__bpp_os.Stdin).Decode(&request); err!=nil { __bpp_fail(err); return }
@@ -398,6 +454,10 @@ func main() {
 `)
 	for _, export := range exports {
 		fmt.Fprintf(&out, "case %q:\n", export.Name)
+		if export.Unavailable != "" {
+			fmt.Fprintf(&out, "__bpp_fail(__bpp_fmt.Errorf(%q)); return\n", export.UnavailableDiagnostic())
+			continue
+		}
 		fmt.Fprintf(&out, "if len(request.Args)!=%d { __bpp_fail(__bpp_fmt.Errorf(\"Go function %s expects %d arguments, got %%d\",len(request.Args))); return }\n", len(export.params), export.Name, len(export.params))
 		var args []string
 		for i, typ := range export.params {
@@ -433,30 +493,58 @@ func (m *Module) callGo(ctx context.Context, name string, args []any, kwargs map
 	if err != nil {
 		return CallResult{}, err
 	}
+	controlDir, err := os.MkdirTemp("", "bashpp-go-control-")
+	if err != nil {
+		return CallResult{}, err
+	}
+	defer os.RemoveAll(controlDir)
+	resultPath := filepath.Join(controlDir, "result.json")
 	cmd := exec.CommandContext(ctx, path)
+	cmd.Env = append(goGuestEnv(os.Environ()), "__BPP_GO_RESULT="+resultPath)
 	cmd.Stdin = bytes.NewReader(request)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	runErr := cmd.Run()
-	data, marker := stdout.Bytes(), []byte("\x1eBASHPP")
-	index := bytes.LastIndex(data, marker)
-	if index < 0 {
-		if runErr != nil {
-			return CallResult{Stdout: string(data), Stderr: stderr.String()}, fmt.Errorf("Go worker failed: %w", runErr)
-		}
-		return CallResult{Stdout: string(data), Stderr: stderr.String()}, errors.New("Go worker returned no result frame")
+	if err := ctx.Err(); err != nil {
+		return CallResult{Stdout: stdout.String(), Stderr: stderr.String()}, err
 	}
-	result := CallResult{Stdout: string(data[:index]), Stderr: stderr.String()}
+	frame, readErr := os.ReadFile(resultPath)
+	if errors.Is(readErr, os.ErrNotExist) {
+		if runErr != nil {
+			var exitErr *exec.ExitError
+			if ctx.Err() == nil && errors.As(runErr, &exitErr) && exitErr.ExitCode() >= 0 {
+				runErr = &WorkerExit{Runtime: "Go", Code: exitErr.ExitCode(), Err: runErr}
+			}
+			return CallResult{Stdout: stdout.String(), Stderr: stderr.String()}, fmt.Errorf("Go worker failed: %w", runErr)
+		}
+		return CallResult{Stdout: stdout.String(), Stderr: stderr.String()}, errors.New("Go worker returned no result frame")
+	}
+	result := CallResult{Stdout: stdout.String(), Stderr: stderr.String()}
+	if readErr != nil {
+		return result, fmt.Errorf("read Go worker result frame: %w", readErr)
+	}
+	if runErr != nil {
+		return result, fmt.Errorf("Go worker exited after result frame: %w", runErr)
+	}
 	var response struct {
 		OK     bool            `json:"ok"`
 		Kind   string          `json:"kind"`
 		Result json.RawMessage `json:"result"`
 		Error  string          `json:"error"`
 	}
-	if err := json.Unmarshal(bytes.TrimSpace(data[index+len(marker):]), &response); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(frame))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&response); err != nil {
 		return result, fmt.Errorf("invalid Go worker result frame: %w", err)
 	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return result, errors.New("invalid Go worker result frame: trailing data")
+	}
 	if !response.OK {
+		if response.Error == "" {
+			return result, errors.New("invalid Go worker result frame: missing error")
+		}
 		return result, errors.New(response.Error)
 	}
 	switch response.Kind {
@@ -489,6 +577,93 @@ func (m *Module) callGo(ctx context.Context, name string, args []any, kwargs map
 		return result, err
 	}
 	return result, nil
+}
+
+// commandGo invokes an exported zero-argument function as a shell command.
+// Its process streams and exit code belong to the guest, including os.Exit and
+// an unrecovered panic. The dispatch key never occupies guest stdin or argv.
+func (m *Module) commandGo(ctx context.Context, name string, argv []string, stdin io.Reader) (CommandResult, error) {
+	var stdout, stderr bytes.Buffer
+	status, err := m.commandGoTo(ctx, name, argv, stdin, &stdout, &stderr)
+	return CommandResult{Status: status, Stdout: stdout.String(), Stderr: stderr.String()}, err
+}
+
+func (m *Module) commandGoTo(ctx context.Context, name string, argv []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+	var export *Export
+	for i := range m.plan.Exports {
+		if m.plan.Exports[i].Name == name {
+			export = &m.plan.Exports[i]
+			break
+		}
+	}
+	if export == nil {
+		return 0, fmt.Errorf("%w: %s", ErrCommandNotFound, name)
+	}
+	if export.Unavailable != "" || len(export.Signature.Params) != 0 {
+		return 0, fmt.Errorf("%w: Go command %s requires an exported zero-argument function", ErrCommandNotCallable, name)
+	}
+	path, err := m.artifactPath("bashpp-go-run-")
+	if err != nil {
+		return 0, err
+	}
+	cmd := exec.CommandContext(ctx, path, argv...)
+	// A shell command gets the invoking runner's snapshot. Lowered shell
+	// regions share modules, so storing this state on Go would mix sessions.
+	if caller, ok := ctx.Value(goCommandCallerKey{}).(goCommandCaller); ok {
+		cmd.Dir = caller.dir
+		cmd.Env = caller.env
+	} else if runtime, ok := m.runtime.(Go); ok {
+		if runtime.Cwd != nil {
+			cmd.Dir = runtime.Cwd()
+		}
+		if runtime.Env != nil {
+			cmd.Env = runtime.Env()
+		}
+	}
+	if cmd.Env == nil {
+		cmd.Env = os.Environ()
+	}
+	cmd.Env = append(goGuestEnv(cmd.Env), "__BPP_GO_COMMAND="+name)
+	cmd.Stdin = stdin
+	cmd.Stdout, cmd.Stderr = stdout, stderr
+	runErr := cmd.Run()
+	if ctx.Err() != nil {
+		return 0, ctx.Err()
+	}
+	if runErr != nil {
+		var exit *exec.ExitError
+		if errors.As(runErr, &exit) {
+			if death := naturalWorkerDeath(exit.ProcessState); death.signal > 0 {
+				return 128 + death.signal, nil
+			}
+			return exit.ExitCode(), nil
+		}
+		return 0, runErr
+	}
+	return 0, nil
+}
+
+type goCommandCallerKey struct{}
+type goCommandCaller struct {
+	dir string
+	env []string
+}
+
+// WithGoCommandCaller binds the caller's current directory and exported
+// environment to one Go command invocation. It has no effect on typed calls.
+func WithGoCommandCaller(ctx context.Context, dir string, env []string) context.Context {
+	return context.WithValue(ctx, goCommandCallerKey{}, goCommandCaller{dir: dir, env: append([]string{}, env...)})
+}
+
+func goGuestEnv(environ []string) []string {
+	clean := make([]string, 0, len(environ))
+	for _, entry := range environ {
+		key, _, _ := strings.Cut(entry, "=")
+		if !strings.EqualFold(key, "__BPP_GO_COMMAND") && !strings.EqualFold(key, "__BPP_GO_RESULT") {
+			clean = append(clean, entry)
+		}
+	}
+	return clean
 }
 
 func (m *Module) artifactPath(prefix string) (string, error) {

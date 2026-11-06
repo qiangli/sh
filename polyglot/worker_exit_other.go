@@ -14,3 +14,13 @@ func workerDeath(state *os.ProcessState) workerExit {
 	}
 	return workerExit{died: true, code: code}
 }
+
+// naturalWorkerDeath classifies a process reaped after protocol EOF, without
+// first calling Process.Kill. Status 1 is therefore unambiguous on Windows.
+func naturalWorkerDeath(state *os.ProcessState) workerExit {
+	code := state.ExitCode()
+	if code < 0 {
+		return workerExit{}
+	}
+	return workerExit{died: true, code: code}
+}

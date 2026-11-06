@@ -61,7 +61,16 @@ func init() {
 		if !strings.HasPrefix(declaration, "func ") {
 			return ""
 		}
-		return strings.TrimPrefix(declaration, "func ")
+		rest := strings.TrimPrefix(declaration, "func ")
+		// Generic declarations remain recognizable call names even when the
+		// bridge will reject them. Do not mistake a parameter's slice type
+		// for the function's type-parameter list.
+		if bracket := strings.IndexByte(rest, '['); bracket >= 0 {
+			if paren := strings.IndexByte(rest, '('); paren < 0 || bracket < paren {
+				return strings.TrimSpace(rest[:bracket]) + "("
+			}
+		}
+		return rest
 	}, "go")
 	// A PowerShell function header is `function Name {` (or `filter Name {`),
 	// with an optional scope modifier (`global:Name`). Only a name that is a

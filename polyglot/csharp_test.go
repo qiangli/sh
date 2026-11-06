@@ -2,8 +2,12 @@ package polyglot
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
+	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -29,10 +33,16 @@ func TestCSharpLanguageRow(t *testing.T) {
 func TestDiscoverCSharpEnvironmentUsesPwsh(t *testing.T) {
 	root := t.TempDir()
 	bin := filepath.Join(root, "bin")
-	pwsh := filepath.Join(bin, "pwsh")
+	pwshName := "pwsh"
+	environ := []string{"PATH=" + bin}
+	if runtime.GOOS == "windows" {
+		pwshName += ".EXE"
+		environ = append(environ, "PATHEXT=.EXE")
+	}
+	pwsh := filepath.Join(bin, pwshName)
 	writeEnvironmentFile(t, pwsh, "fixture pwsh")
 	plan, err := DiscoverEnvironment(EnvironmentRequest{
-		Source: filepath.Join(root, "program.bpp"), Language: "cs", Environ: []string{"PATH=" + bin},
+		Source: filepath.Join(root, "program.bpp"), Language: "cs", Environ: environ,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -70,14 +80,11 @@ func TestCSharpGenerateMapsFenceLines(t *testing.T) {
 		"",
 		`#line 20 "flow.bsh"`,
 		"using static System.Math;",
-		`#line 7 "C:\work\flow 'a'.bsh"`,
-		"namespace " + strings.TrimSuffix(typeName, ".Fence") + " { public static class Fence {",
+		csharpBodyMarker(typeName),
 		`#line 7 "C:\work\flow 'a'.bsh"`,
 		"public static long Square(long x) => x * x;",
 		`#line 21 "flow.bsh"`,
 		"public static double Root(double x) => Sqrt(x);",
-		`#line 21 "flow.bsh"`,
-		"} }",
 	}
 	if got := strings.Split(strings.TrimSuffix(generated, "\n"), "\n"); !slices.Equal(got, want) {
 		t.Fatalf("generated:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
@@ -86,6 +93,36 @@ func TestCSharpGenerateMapsFenceLines(t *testing.T) {
 	_, other, err := csharpGenerate("public static int One() => 1;\n")
 	if err != nil || other == typeName {
 		t.Fatalf("namespace not per source: %q %q %v", other, typeName, err)
+	}
+}
+
+const cSharpBodyMarkerCollisionFixture = `// <bashpp-csharp-body-v2> trailing user text
+using System;
+
+public static int Run() => 42;
+`
+
+// A user comment may contain the old fixed delimiter text. It remains
+// original source and cannot move the generated header/body boundary.
+func TestCSharpGeneratePreservesBodyMarkerComment(t *testing.T) {
+	generated, typeName, err := csharpGenerate(cSharpBodyMarkerCollisionFixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	commentAt := strings.Index(generated, "// <bashpp-csharp-body-v2> trailing user text")
+	markerAt := strings.Index(generated, csharpBodyMarker(typeName))
+	if commentAt < 0 || markerAt <= commentAt {
+		t.Fatalf("generated source lost or misordered user comment:\n%s", generated)
+	}
+}
+
+func TestCSharpBodyMarkerCommentCompiles(t *testing.T) {
+	runtime := cSharpRuntime(t)
+	plan := cSharpPlan(t, runtime, cSharpBodyMarkerCollisionFixture)
+	m := Start(plan, runtime)
+	defer m.Close()
+	if got, err := m.Call(context.Background(), "Run"); err != nil || got.Value != int64(42) {
+		t.Fatalf("Run = %#v, %v", got, err)
 	}
 }
 
@@ -210,6 +247,115 @@ func TestCSharpTypedCallsErrorsAndState(t *testing.T) {
 	}
 }
 
+// Every fence uses one deterministic compiler path. Enabling unsafe code is
+// permissive for ordinary C# and avoids a source-text heuristic disagreeing
+// between analysis and worker-side recompilation.
+func TestCSharpUnsafeCode(t *testing.T) {
+	runtime := cSharpRuntime(t)
+	plan := cSharpPlan(t, runtime, `public static unsafe int Read() {
+    int value = 42;
+    int* pointer = &value;
+    return *pointer;
+}
+`)
+	m := Start(plan, runtime)
+	defer m.Close()
+	if got, err := m.Call(context.Background(), "Read"); err != nil || got.Value != int64(42) {
+		t.Fatalf("Read = %#v, %v", got, err)
+	}
+}
+
+// Compilation-unit declarations stay outside the generated Fence while the
+// free methods remain its only exports. Exact source slices carry directives,
+// comments and #line trivia through the Roslyn-backed partition.
+func TestCSharpCompilationUnitNamespacesExtensionAndTrivia(t *testing.T) {
+	runtime := cSharpRuntime(t)
+	plan := cSharpPlan(t, runtime, `#define USE_FIRST
+using Helpers;
+
+#if USE_FIRST
+namespace First {
+    // Same short name is intentional.
+    public class Person { public int Value => 10; }
+}
+#endif
+namespace Second { public class Person { public int Value => 20; } }
+namespace Helpers {
+    public static class Ext { public static int Twice(this int value) => value * 2; }
+}
+public static unsafe int Run() {
+    int value = new First.Person().Value + new Second.Person().Value;
+    int* pointer = &value;
+    return (*pointer).Twice();
+}
+`)
+	var names []string
+	for _, export := range plan.Exports {
+		names = append(names, export.Name)
+	}
+	if got := names; !slices.Equal(got, []string{"Run"}) {
+		t.Fatalf("exports = %v", got)
+	}
+	m := Start(plan, runtime)
+	defer m.Close()
+	if got, err := m.Call(context.Background(), "Run"); err != nil || got.Value != int64(60) {
+		t.Fatalf("Run = %#v, %v", got, err)
+	}
+}
+
+const cSharpCompilationUnitUnsafeFixture = `using Helpers;
+
+namespace Models {
+    public class Value { public int Number => 21; }
+}
+namespace Helpers {
+    public static class Ext {
+        public static unsafe int Twice(this int value) {
+            int* pointer = &value;
+            return *pointer * 2;
+        }
+    }
+}
+public static int Run() => new Models.Value().Number.Twice();
+`
+
+func TestCSharpFileScopedNamespace(t *testing.T) {
+	runtime := cSharpRuntime(t)
+	plan := cSharpPlan(t, runtime, `namespace Example;
+using System.Collections.Generic;
+public class Person { public int Value => 42; }
+// This free fence member must stay on the generated export type, outside
+// the equivalent block-scoped user namespace, while retaining the file
+// namespace's unqualified type and using-directive lookup.
+public static int Run() => new Person().Value + new List<int> { 1 }.Count;
+`)
+	if len(plan.Exports) != 1 || plan.Exports[0].Name != "Run" {
+		t.Fatalf("exports = %#v", plan.Exports)
+	}
+	m := Start(plan, runtime)
+	defer m.Close()
+	if got, err := m.Call(context.Background(), "Run"); err != nil || got.Value != int64(43) {
+		t.Fatalf("Run = %#v, %v", got, err)
+	}
+}
+
+func TestCSharpTopLevelExtensionClass(t *testing.T) {
+	runtime := cSharpRuntime(t)
+	plan := cSharpPlan(t, runtime, `static class Ext {
+    public static int Twice(this int value) => value * 2;
+}
+public static int Run() => 3.Twice();
+`)
+	if len(plan.Exports) != 1 || plan.Exports[0].Name != "Run" {
+		t.Fatalf("exports = %#v", plan.Exports)
+	}
+	m := Start(plan, runtime)
+	defer m.Close()
+	if got, err := m.Call(context.Background(), "Run"); err != nil || got.Value != int64(6) {
+		t.Fatalf("Run = %#v, %v", got, err)
+	}
+}
+
 // Compiler errors name the script file and the fence's own lines — never the
 // generated wrapper's — and leave no cache entry behind.
 func TestCSharpCompileErrorsUseFenceLines(t *testing.T) {
@@ -221,6 +367,18 @@ func TestCSharpCompileErrorsUseFenceLines(t *testing.T) {
 	_, err = Prepare(context.Background(), []Block{{Language: "csharp", Filename: "flow.bsh", Line: 10, Source: "using Nope.Missing;\npublic static int Ok() => 1;\n"}}, map[string]Analyzer{"csharp": runtime})
 	if err == nil || !strings.Contains(err.Error(), "flow.bsh:10:") {
 		t.Fatalf("using error = %v", err)
+	}
+	_, err = Prepare(context.Background(), []Block{{Language: "csharp", Filename: "flow.bsh", Line: 10, Source: "namespace Broken {\npublic class Value { public int Number => missing; }\n}\npublic static int Ok() => 1;\n"}}, map[string]Analyzer{"csharp": runtime})
+	if err == nil || !strings.Contains(err.Error(), "flow.bsh:11:") || !strings.Contains(err.Error(), "missing") {
+		t.Fatalf("namespace error = %v", err)
+	}
+	_, err = Prepare(context.Background(), []Block{{Language: "csharp", Filename: "flow.bsh", Line: 10, Source: "namespace Broken;\npublic class Value { public int Number => 1; }\n    public static int Bad() => missing + 1;\n"}}, map[string]Analyzer{"csharp": runtime})
+	if err == nil {
+		t.Fatal("file-scoped namespace compile succeeded")
+	}
+	location := regexp.MustCompile(`flow\.bsh:[0-9]+:[0-9]+:`).FindString(err.Error())
+	if location != "flow.bsh:12:32:" || !strings.Contains(err.Error(), "CS0103") || !strings.Contains(err.Error(), "missing") {
+		t.Fatalf("file-scoped namespace error = %v (location %q)", err, location)
 	}
 	entries, _ := os.ReadDir(runtime.CacheDir)
 	for _, entry := range entries {
@@ -240,7 +398,7 @@ func TestCSharpCompileErrorsUseFenceLines(t *testing.T) {
 // cache: no second compile, and the cached assembly is the one that runs.
 func TestCSharpSecondRunDoesNotRecompile(t *testing.T) {
 	runtime := cSharpRuntime(t)
-	source := "public static long Square(long x) => x * x;\n"
+	source := cSharpCompilationUnitUnsafeFixture
 	before := csharpCompiles.Load()
 	plan := cSharpPlan(t, runtime, source)
 	if csharpCompiles.Load() != before+1 {
@@ -255,8 +413,8 @@ func TestCSharpSecondRunDoesNotRecompile(t *testing.T) {
 		t.Fatalf("no cached assembly: %v", err)
 	}
 	m := Start(plan, runtime)
-	if got, err := m.Call(context.Background(), "Square", int64(5)); err != nil || got.Value != int64(25) {
-		t.Fatalf("first Square = %#v, %v", got, err)
+	if got, err := m.Call(context.Background(), "Run"); err != nil || got.Value != int64(42) {
+		t.Fatalf("first Run = %#v, %v", got, err)
 	}
 	m.Close()
 
@@ -266,8 +424,8 @@ func TestCSharpSecondRunDoesNotRecompile(t *testing.T) {
 	}
 	m = Start(second, runtime)
 	defer m.Close()
-	if got, err := m.Call(context.Background(), "Square", int64(6)); err != nil || got.Value != int64(36) {
-		t.Fatalf("second Square = %#v, %v", got, err)
+	if got, err := m.Call(context.Background(), "Run"); err != nil || got.Value != int64(42) {
+		t.Fatalf("second Run = %#v, %v", got, err)
 	}
 	after, err := os.Stat(unit.assembly)
 	if err != nil || !after.ModTime().Equal(info.ModTime()) {
@@ -284,7 +442,7 @@ func TestCSharpSecondRunDoesNotRecompile(t *testing.T) {
 // recompiled by the worker rather than failing the call.
 func TestCSharpWorkerRecompilesMissingAssembly(t *testing.T) {
 	runtime := cSharpRuntime(t)
-	plan := cSharpPlan(t, runtime, "public static string Id(string s) => s;\n")
+	plan := cSharpPlan(t, runtime, cSharpCompilationUnitUnsafeFixture)
 	unit, err := runtime.unit(plan.Source)
 	if err != nil {
 		t.Fatal(err)
@@ -294,10 +452,58 @@ func TestCSharpWorkerRecompilesMissingAssembly(t *testing.T) {
 	}
 	m := Start(plan, runtime)
 	defer m.Close()
-	if got, err := m.Call(context.Background(), "Id", "x"); err != nil || got.Value != "x" {
-		t.Fatalf("Id = %#v, %v", got, err)
+	if got, err := m.Call(context.Background(), "Run"); err != nil || got.Value != int64(42) {
+		t.Fatalf("Run = %#v, %v", got, err)
 	}
 	if _, err := os.Stat(unit.assembly); err != nil {
 		t.Fatalf("worker did not restore the cache entry: %v", err)
+	}
+}
+
+// The v2 salt covers both the normalized compilation-unit shape and the
+// deterministic /unsafe compiler option. A complete-looking v1 entry must not
+// suppress compilation or supply exports after either behavior changes.
+func TestCSharpStaleV1CacheIsNotReused(t *testing.T) {
+	runtimePlan := cSharpRuntime(t)
+	aggregated := aggregateSource("csharp", []Block{{
+		Language: "csharp", Filename: "flow.bsh", Line: 1, Source: cSharpCompilationUnitUnsafeFixture,
+	}})
+	generated, _, err := csharpGenerate(aggregated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	toolchain, err := csharpToolchainHash(runtimePlan.executable(), leadingArgs(runtimePlan.Environment))
+	if err != nil {
+		t.Fatal(err)
+	}
+	v1sum := sha256.Sum256([]byte("bashpp-csharp-v1\x00" + runtime.GOOS + "/" + runtime.GOARCH + "\x00" + toolchain + "\x00" + generated))
+	v1base := filepath.Join(runtimePlan.CacheDir, hex.EncodeToString(v1sum[:]))
+	if err := os.WriteFile(v1base+".dll", []byte("stale-v1-assembly"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(v1base+".json", []byte(`[{"name":"Stale","signature":{"params":[],"results":["int"],"dynamic":false}}]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	before := csharpCompiles.Load()
+	exports, err := runtimePlan.Analyze(context.Background(), aggregated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if csharpCompiles.Load() != before+1 {
+		t.Fatal("stale v1 entry suppressed the v2 compilation")
+	}
+	if len(exports) != 1 || exports[0].Name != "Run" {
+		t.Fatalf("exports = %#v, want Run", exports)
+	}
+	v2, err := runtimePlan.unit(aggregated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v2.assembly == v1base+".dll" {
+		t.Fatal("v1 and v2 cache paths are identical")
+	}
+	if _, err := os.Stat(v2.assembly); err != nil {
+		t.Fatalf("v2 assembly missing: %v", err)
 	}
 }

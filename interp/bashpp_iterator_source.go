@@ -57,14 +57,25 @@ func (s *bashPPIteratorSource) Kill() {
 // StartForeignIterator shares the live-process bounded channel substrate.
 func StartForeignIterator(ctx context.Context, module *polyglot.Module, name string, args []any, output, stderr io.Writer) (*bashPPLineProcess, error) {
 	worker, initial, err := module.OpenIterator(ctx, name, args)
+	return startForeignIterator(ctx, worker, initial, err, module.EncodeIteratorFrame, output, stderr)
+}
+
+// StartForeignHandleIterator adapts an authenticated returned Python handle
+// to the same bounded line-process used by signature-declared iterators.
+func StartForeignHandleIterator(ctx context.Context, handle *polyglot.Handle, output, stderr io.Writer) (*bashPPLineProcess, error) {
+	worker, initial, err := handle.OpenIterator(ctx)
+	return startForeignIterator(ctx, worker, initial, err, handle.EncodeIteratorFrame, output, stderr)
+}
+
+func startForeignIterator(ctx context.Context, worker *polyglot.Iterator, initial polyglot.CallResult, openErr error, encode func(context.Context, polyglot.CallResult) ([]byte, error), output, stderr io.Writer) (*bashPPLineProcess, error) {
 	if output != nil {
 		fmt.Fprint(output, initial.Stdout)
 	}
 	if stderr != nil {
 		fmt.Fprint(stderr, initial.Stderr)
 	}
-	if err != nil {
-		return nil, err
+	if openErr != nil {
+		return nil, openErr
 	}
 	read, write := io.Pipe()
 	sourceCtx, cancel := context.WithCancel(ctx)
@@ -103,7 +114,7 @@ func StartForeignIterator(ctx context.Context, module *polyglot.Module, name str
 				write.Close()
 				return
 			}
-			frame, err := module.EncodeIteratorFrame(sourceCtx, result)
+			frame, err := encode(sourceCtx, result)
 			if err == nil {
 				_, err = fmt.Fprintf(write, "%s\n", frame)
 			}

@@ -3,9 +3,50 @@
 package lower_test
 
 import (
-	"mvdan.cc/sh/v3/internal"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
+
+	"mvdan.cc/sh/v3/internal"
 )
+
+func TestPythonHandleIteratorLowered(t *testing.T) {
+	source, err := os.ReadFile("../internal/testdata/python-iterators.bpp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := os.ReadFile("../internal/testdata/python-iterators.stdout")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := testPythonFenceInterpretedNativeParityAt(t, string(source), filepath.Join(t.TempDir(), "iterators.bpp")); got != string(want) {
+		t.Fatalf("output=%q", got)
+	}
+}
+
+func TestPythonHandleIteratorFailureWithoutOptIn(t *testing.T) {
+	source := `~~~python as py
+def bad():
+    def values():
+        yield 1
+        raise ValueError('unhandled iteration')
+    return values()
+~~~
+func main() {
+ h, err := py.bad()
+ for value := range h { echo "$value"; }
+ echo unreachable
+}
+main()
+`
+	interpreted, native := foreignOutcomes(t, source)
+	for name, got := range map[string]foreignOutcome{"interpreted": interpreted, "native": native} {
+		if got.stdout != "1\n" || !strings.Contains(got.stderr, "ValueError: unhandled iteration") {
+			t.Errorf("%s = %+q", name, got)
+		}
+	}
+}
 
 func TestPythonIteratorLowered(t *testing.T) {
 	source := `~~~python

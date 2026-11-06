@@ -61,6 +61,7 @@ type projection struct {
 	present           string
 	receiver          bool
 	runtimeFloat      bool
+	foreignBytes      bool
 	element           *projection
 	// text is the exact shell spelling when the binding is a constant whose
 	// source literal was retained. hasText distinguishes a known empty string

@@ -64,3 +64,29 @@ func TestBashPPCSharpUncaughtException(t *testing.T) {
 		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
 	}
 }
+
+// Compilation-unit declarations are helpers, not exports: the shell sees only
+// Run, with its ordinary result/error binding contract unchanged.
+func TestBashPPCSharpCompilationUnitUnsafeAndExtension(t *testing.T) {
+	dir, environ := powerShellProject(t)
+	source := `~~~csharp as cs
+using Helpers;
+namespace One { public class Person { public int Value => 10; } }
+namespace Two { public class Person { public int Value => 20; } }
+namespace Helpers {
+    public static class Ext { public static int Twice(this int value) => value * 2; }
+}
+public static unsafe int Run() {
+    int value = new One.Person().Value + new Two.Person().Value;
+    int* pointer = &value;
+    return (*pointer).Twice();
+}
+~~~
+value, callErr := cs.Run()
+echo "value=$value:${callErr:+error}"
+`
+	stdout, stderr, status := runBashPP(t, filepath.Join(dir, "source.bpp"), dir, environ, source)
+	if status != 0 || stdout != "value=60:\n" {
+		t.Fatalf("status=%d stdout=%q stderr=%q", status, stdout, stderr)
+	}
+}

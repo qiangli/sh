@@ -123,6 +123,10 @@ aggregates, and other pointer types fail during preparation. Private helpers
 use `static` linkage. C++ exceptions and worker failures become Bash++ call
 errors; ordinary stdout and stderr remain visible.
 
+C file-scope variables, including static variables, arrays and structs, remain
+private to the translation unit; only functions are exported. Native calls run
+in separate worker processes, so variable mutations do not persist across calls.
+
 Compiler selection is source-relative and deterministic: a matching
 `bashpp.yaml`/`bashpp.json` runtime, then `BASHPP_CC` or `BASHPP_CXX`, then
 `clang`/`cc` or `clang++`/`c++` on the recorded `PATH`. The source directory

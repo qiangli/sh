@@ -62,9 +62,14 @@ func (p *Parser) bashppSourceBlock() *SourceBlock {
 	for p.r != utf8.RuneSelf {
 		linePos := p.nextPos()
 		var line strings.Builder
-		for p.r != '\n' && p.r != utf8.RuneSelf {
+		for p.r != '\n' && p.r != escNewl && p.r != utf8.RuneSelf {
 			line.WriteRune(p.r)
 			p.rune()
+		}
+		// The shell lexer folds backslash-newline into a sentinel. Foreign
+		// source is raw: restore it before examining the physical line.
+		if p.r == escNewl {
+			line.WriteByte('\\')
 		}
 		if line.String() == fence {
 			block.Body = body.String()
@@ -80,7 +85,7 @@ func (p *Parser) bashppSourceBlock() *SourceBlock {
 			return block
 		}
 		body.WriteString(line.String())
-		if p.r == '\n' {
+		if p.r == '\n' || p.r == escNewl {
 			body.WriteByte('\n')
 			p.rune()
 		}

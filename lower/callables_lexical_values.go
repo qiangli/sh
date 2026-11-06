@@ -162,7 +162,7 @@ func (e *emitter) lexicalValues(source []byte) ([]byte, error) {
 		if call, ok := n.(*ast.CallExpr); ok && (p.runtimeCall(call, "Register") || p.runtimeCall(call, "Cell")) {
 			return false
 		}
-		if call, ok := n.(*ast.CallExpr); ok && p.runtimeCall(call, "TypedFloatProjection") && len(call.Args) == 1 && p.printArgument(call) {
+		if call, ok := n.(*ast.CallExpr); ok && (p.runtimeCall(call, "TypedFloatProjection") || p.runtimeCall(call, "ForeignBytesProjection")) && len(call.Args) == 1 && p.printArgument(call) {
 			if binding, known := p.binding(call.Args[0]); known {
 				c.Replace(p.parse(p.rt + "LexicalPrint(" + p.text(binding.bindings) + "," + strconv.Quote(binding.id) + "," + strconv.Quote(binding.name) + "," + p.site(call, binding.name) + ")"))
 				return false

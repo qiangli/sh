@@ -9,6 +9,35 @@ import (
 	"testing/iotest"
 )
 
+func TestBashPPSourceBlockPreservesLineContinuations(t *testing.T) {
+	body := "#define TYPE_NAME(X) _Generic((X), \\\n    int: \"int\", \\\n    default: \"unknown\")\nint example(void) { return 0; }\n"
+	src := "~~~c as c\n" + body + "~~~\nc.example()\n"
+	for _, newline := range []string{"\n", "\r\n"} {
+		input := strings.ReplaceAll(src, "\n", newline)
+		for _, streamed := range []bool{false, true} {
+			var reader interface{ Read([]byte) (int, error) } = strings.NewReader(input)
+			if streamed {
+				reader = iotest.OneByteReader(reader)
+			}
+			f, err := NewParser(Variant(LangBashPP)).Parse(reader, "continuation.bpp")
+			if err != nil {
+				t.Fatal(err)
+			}
+			block := f.Stmts[0].Cmd.(*SourceBlock)
+			if block.Body != body || block.ClosingPos.Line() != 6 || f.Stmts[1].Pos().Line() != 7 {
+				t.Fatalf("newline=%q streamed=%v: body=%q closing=%v next=%v", newline, streamed, block.Body, block.ClosingPos, f.Stmts[1].Pos())
+			}
+			var out bytes.Buffer
+			if err := NewPrinter().Print(&out, f); err != nil {
+				t.Fatal(err)
+			}
+			if out.String() != src {
+				t.Fatalf("printed source = %q, want %q", out.String(), src)
+			}
+		}
+	}
+}
+
 func TestBashPPSourceBlockParsePrintWalkAndStreaming(t *testing.T) {
 	src := "~~~~python as py\n\ndef add(a: int, b: int) -> int:\n    return a + b\n~~~~\npy.add(2, 3)\n"
 	parse := func(rd interface{ Read([]byte) (int, error) }) *File {

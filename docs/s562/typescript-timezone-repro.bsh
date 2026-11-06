@@ -1,0 +1,9 @@
+// Inherited-environment regression: deliberately never assign process.env.TZ.
+import "fmt"
+
+~~~ts as guest
+export function timezone(): string {
+    return JSON.stringify({tz: process.env.TZ ?? "<absent>", hour: new Date("2020-01-02T00:00:00.000Z").getHours()});
+}
+~~~
+fmt.Println(guest.timezone())

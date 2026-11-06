@@ -3,10 +3,13 @@ package lower
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"go/token"
+	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -20,6 +23,122 @@ type foreignFunction struct {
 	plan   int
 	export polyglot.Export
 	alias  string
+}
+
+func (e *emitter) foreignErrorShadowed() bool {
+	if len(e.foreignPlans) == 0 && len(e.foreignImports) == 0 {
+		return false
+	}
+	_, foreign := e.foreignFunctions["error"]
+	return foreign || e.funcs["error"] || e.typeNames["error"] || e.globals["error"]
+}
+
+// foreignErrorType keeps generated plumbing on the predeclared error identity
+// even when a source declaration takes the package-level spelling.
+func (e *emitter) foreignErrorType() string {
+	if e.foreignErrorShadowed() {
+		return e.prefix + "rt.Error"
+	}
+	return "error"
+}
+
+// preparedForeign belongs to one Compile invocation. It holds only a successful
+// native preparation; each inference pass still rebuilds its own emitter state.
+type preparedForeign struct {
+	blocks      []polyglot.Block
+	source      string
+	dir         string
+	environ     []string
+	foreignEnvs map[string]*polyglot.EnvironmentPlan
+	revision    uint64
+	plans       []polyglot.Plan
+	files       map[string][32]byte
+}
+
+// nativePreparationEligible deliberately excludes mixed and other-language units.
+// Their dependency closures have separate semantics and are not licensed by the
+// native provider/module snapshot used here.
+func nativePreparationEligible(blocks []polyglot.Block) bool {
+	if len(blocks) == 0 {
+		return false
+	}
+	for _, block := range blocks {
+		if block.Language != "c" && block.Language != "cpp" {
+			return false
+		}
+	}
+	return true
+}
+
+func (p *preparedForeign) reusable(ctx context.Context, blocks []polyglot.Block, source, dir string, environ []string, foreignEnvs map[string]*polyglot.EnvironmentPlan, revision uint64) bool {
+	return nativePreparationEligible(blocks) && p != nil && p.plans != nil && ctx.Err() == nil && revision == polyglot.LanguageRevision() &&
+		p.source == source && p.dir == dir && p.revision == revision &&
+		reflect.DeepEqual(p.blocks, blocks) && reflect.DeepEqual(p.environ, environ) &&
+		reflect.DeepEqual(p.foreignEnvs, foreignEnvs) && samePreparedFiles(ctx, p.files, foreignEnvs)
+}
+
+// Snapshot the actual files selected by discovery, including a provider at an
+// unchanged path. A missing or unreadable file simply disables reuse; the next
+// Prepare reports the normal diagnostic. Metadata and source asset paths are
+// bounded by environment discovery's input limits.
+func preparedFiles(envs map[string]*polyglot.EnvironmentPlan) (map[string][32]byte, error) {
+	paths := map[string]bool{}
+	for _, env := range envs {
+		if env == nil {
+			continue
+		}
+		if env.Executable != "" {
+			paths[env.Executable] = true
+		}
+		for _, path := range env.ResolutionFiles {
+			paths[path] = true
+		}
+		for _, unit := range env.NativeModules {
+			paths[unit.Source] = true
+		}
+	}
+	files := make(map[string][32]byte, len(paths))
+	for path := range paths {
+		file, err := os.Open(path)
+		if err != nil {
+			return nil, err
+		}
+		info, err := file.Stat()
+		if err != nil || !info.Mode().IsRegular() {
+			file.Close()
+			return nil, fmt.Errorf("prepared input is not a regular file: %s", path)
+		}
+		h := sha256.New()
+		_, err = io.Copy(h, file)
+		closeErr := file.Close()
+		if err != nil {
+			return nil, err
+		}
+		if closeErr != nil {
+			return nil, closeErr
+		}
+		var sum [32]byte
+		copy(sum[:], h.Sum(nil))
+		files[path] = sum
+	}
+	return files, nil
+}
+
+func samePreparedFiles(ctx context.Context, saved map[string][32]byte, envs map[string]*polyglot.EnvironmentPlan) bool {
+	if saved == nil {
+		return false
+	}
+	current, err := preparedFiles(envs)
+	return err == nil && ctx.Err() == nil && reflect.DeepEqual(saved, current)
+}
+
+func cloneForeignEnvs(envs map[string]*polyglot.EnvironmentPlan) map[string]*polyglot.EnvironmentPlan {
+	cloned := make(map[string]*polyglot.EnvironmentPlan, len(envs))
+	for language, env := range envs {
+		copy := env.Clone()
+		cloned[language] = &copy
+	}
+	return cloned
 }
 
 // loweredRuntimeImports lists the import paths the fence runtimes of this
@@ -48,6 +167,9 @@ func (e *emitter) loweredRuntimeImports() []string {
 	}
 	if e.seedsForeignImports() {
 		add("mvdan.cc/sh/v3/interp")
+	}
+	if len(e.foreignImports) > 0 || len(e.pythonValues) > 0 {
+		add("errors")
 	}
 	sort.Strings(paths)
 	return paths
@@ -82,7 +204,7 @@ func (e *emitter) seedsForeignImports() bool {
 // region must reach the same worker. Other rows' `alias.name` words stay
 // ordinary command lookups, as they are interpreted.
 func foreignCommandLanguage(language string) bool {
-	return language == "python" || language == "powershell"
+	return language == "python" || language == "powershell" || language == "go"
 }
 
 // seedsForeignPlan reports whether an aliased fence module is bound in the
@@ -156,7 +278,7 @@ func (e *emitter) foreignImportSeed() string {
 	return out.String()
 }
 
-func (e *emitter) prepareForeign(ctx context.Context, file *syntax.File) error {
+func (e *emitter) prepareForeign(ctx context.Context, file *syntax.File, prepared *preparedForeign) error {
 	var blocks []polyglot.Block
 	var first *syntax.SourceBlock
 	var imports []*syntax.BashPPImport
@@ -262,6 +384,8 @@ func (e *emitter) prepareForeign(ctx context.Context, file *syntax.File) error {
 	// One runtime per language per unit, from its row; the environment is
 	// kept so the lowered program can construct the same runtime.
 	e.foreignEnvs = map[string]*polyglot.EnvironmentPlan{}
+	environ := os.Environ()
+	revision := polyglot.LanguageRevision()
 	analyzers := map[string]polyglot.Analyzer{}
 	manifests, err := polyglot.ManifestFiles(blocks)
 	if err != nil {
@@ -292,7 +416,7 @@ func (e *emitter) prepareForeign(ctx context.Context, file *syntax.File) error {
 		if !ok {
 			continue
 		}
-		config := polyglot.RuntimeConfig{Dir: e.options.Dir, Environ: os.Environ()}
+		config := polyglot.RuntimeConfig{Dir: e.options.Dir, Environ: environ}
 		if row.NeedsEnvironment {
 			environment, err := polyglot.DiscoverEnvironment(polyglot.EnvironmentRequest{Source: source, Language: language, ModuleFile: manifests[language]})
 			if err != nil {
@@ -316,7 +440,29 @@ func (e *emitter) prepareForeign(ctx context.Context, file *syntax.File) error {
 	var plans []polyglot.Plan
 	if len(blocks) > 0 {
 		var err error
-		plans, err = polyglot.Prepare(ctx, blocks, analyzers)
+		// Runner analyzers invoke user code, so each pass must call them.
+		// Native plans are reusable only while their complete input and the
+		// provider registry still match this compilation's first pass.
+		if err := ctx.Err(); err != nil {
+			return e.fail(first, CodeUnsupported, err.Error())
+		}
+		if len(runnerBlocks) == 0 && prepared.reusable(ctx, blocks, source, e.options.Dir, environ, e.foreignEnvs, revision) {
+			plans = prepared.plans
+		} else {
+			// Bracket preparation so a provider or source asset replaced while
+			// the analyzer runs cannot be saved under its later bytes.
+			var before map[string][32]byte
+			if prepared != nil && len(runnerBlocks) == 0 && nativePreparationEligible(blocks) {
+				before, _ = preparedFiles(e.foreignEnvs)
+			}
+			plans, err = polyglot.Prepare(ctx, blocks, analyzers)
+			if err == nil && before != nil && revision == polyglot.LanguageRevision() && ctx.Err() == nil {
+				if files, fileErr := preparedFiles(e.foreignEnvs); fileErr == nil && reflect.DeepEqual(before, files) {
+					*prepared = preparedForeign{blocks: append([]polyglot.Block(nil), blocks...), source: source, dir: e.options.Dir,
+						environ: append([]string(nil), environ...), foreignEnvs: cloneForeignEnvs(e.foreignEnvs), revision: revision, plans: plans, files: files}
+				}
+			}
+		}
 		if err != nil {
 			text := err.Error()
 			if diagnostics := strings.TrimSpace(runnerStderr.String()); diagnostics != "" {
@@ -361,6 +507,34 @@ func (e *emitter) prepareForeign(ctx context.Context, file *syntax.File) error {
 			}
 		}
 	}
+	// Reject calls to known module-internal declarations before result/argument
+	// typing can obscure the bridge diagnostic. They get no generated wrappers.
+	unavailable := map[string]polyglot.Export{}
+	for _, plan := range plans {
+		for _, export := range plan.UnavailableExports {
+			name := export.Name
+			if plan.Alias != "" {
+				name = plan.Alias + "." + name
+			}
+			unavailable[name] = export
+		}
+	}
+	var unavailableErr error
+	syntax.Walk(file, func(node syntax.Node) bool {
+		if unavailableErr != nil {
+			return false
+		}
+		if call, ok := node.(*syntax.BashPPCall); ok {
+			if export, ok := unavailable[strings.Join(names(call.Fun), ".")]; ok {
+				unavailableErr = e.fail(call, CodeUnsupported, export.UnavailableDiagnostic())
+				return false
+			}
+		}
+		return true
+	})
+	if unavailableErr != nil {
+		return unavailableErr
+	}
 	e.foreignPlans = plans
 	// Callback invocation needs an explicit Program context, including for
 	// otherwise scalar-only units. The hidden callable ABI supplies that
@@ -379,23 +553,40 @@ func (e *emitter) prepareForeign(ctx context.Context, file *syntax.File) error {
 	}
 	if len(plans) > 0 || len(imports) > 0 {
 		e.bridge = true
-		e.output = true
+		if len(imports) > 0 {
+			e.output = true
+		}
+		for _, plan := range plans {
+			if len(plan.Exports) > 0 || plan.Runner != "" {
+				e.output = true
+			}
+		}
 	}
 	return nil
 }
 
 func (e *emitter) findPythonValues(file *syntax.File) {
 	e.foreignIteratorValues = map[string]string{}
-	for range 3 {
+	for {
+		before := len(e.pythonValues)
 		syntax.Walk(file, func(node syntax.Node) bool {
-			d, ok := node.(*syntax.BashPPShortDecl)
-			if !ok || len(d.Lhs) != 1 {
+			var d *syntax.BashPPShortDecl
+			switch n := node.(type) {
+			case *syntax.BashPPShortDecl:
+				d = n
+			case *syntax.BashPPAssign:
+				d = &syntax.BashPPShortDecl{Lhs: n.Names, Call: n.Call}
+			}
+			if d == nil || len(d.Lhs) == 0 {
 				return true
 			}
 			if d.Call != nil && e.pythonCallKind(d.Call) != "" || d.Expr != nil && e.pythonExpr(d.Expr) {
 				e.pythonValues[d.Lhs[0].Value] = true
 			}
 			if d.Call != nil {
+				if f, ok := e.foreignFunctions[strings.Join(names(d.Call.Fun), ".")]; ok && f.export.Signature.Dynamic && e.foreignPlans[f.plan].Language == "python" {
+					e.pythonValues[d.Lhs[0].Value] = true
+				}
 				if f, ok := e.foreignFunctions[strings.Join(names(d.Call.Fun), ".")]; ok && f.export.Signature.Iterator != "" {
 					// Binding ownership is recorded during lexical emission, not by name here.
 					e.mixedShell = true
@@ -403,11 +594,19 @@ func (e *emitter) findPythonValues(file *syntax.File) {
 			}
 			return true
 		})
+		if len(e.pythonValues) == before {
+			break
+		}
 	}
 }
 
 func (e *emitter) pythonCallKind(call *syntax.BashPPCall) string {
 	if call == nil || len(call.Fun) == 0 {
+		return ""
+	}
+	// Lexically typed locals retain their Go selector path even when a
+	// Python value with the same spelling occurs elsewhere in the unit.
+	if p, ok := e.projections.projectionLookup(call.Fun[0].Value); ok && p.sourceType != "" && p.sourceType != "any" && p.sourceType != "interface{}" {
 		return ""
 	}
 	if len(call.Fun) == 2 {
@@ -448,7 +647,10 @@ func (e *emitter) pythonModuleSelector(selector *syntax.BashPPSelectorExpr) bool
 	return ok
 }
 
-func (e *emitter) pythonCall(call *syntax.BashPPCall) (string, error) {
+func (e *emitter) pythonCall(call *syntax.BashPPCall, want int) (string, error) {
+	frame := e.resultCallFrame
+	e.resultCallFrame = ""
+	defer func() { e.resultCallFrame = frame }()
 	kind := e.pythonCallKind(call)
 	if kind == "" {
 		return "", e.fail(call, CodeUndefined, "unresolved Python call")
@@ -472,6 +674,9 @@ func (e *emitter) pythonCall(call *syntax.BashPPCall) (string, error) {
 	}
 	kwargs += "}"
 	ctx := e.prefix + "context.Background()"
+	if e.execution {
+		ctx = e.program() + ".Context"
+	}
 	var operation string
 	switch kind {
 	case "module":
@@ -487,7 +692,21 @@ func (e *emitter) pythonCall(call *syntax.BashPPCall) (string, error) {
 		}
 		operation = fmt.Sprintf("%spythonHandle(%s).CallAttr(%s,%s,%s,%s)", e.prefix, receiver, ctx, strconv.Quote(call.Fun[len(call.Fun)-1].Value), args, kwargs)
 	}
-	return e.prefix + "pythonValue(" + operation + ")", nil
+	helper := "pythonValue"
+	types := []string{"any"}
+	if want == 2 && kind != "module" {
+		setter := "func(status int) { " + e.prefix + "rt.Status = status }"
+		if e.execution {
+			setter = e.program() + ".SetStatus"
+		}
+		helper = "pythonResult(" + setter + ")"
+		types = append(types, e.foreignErrorType())
+	}
+	text := e.prefix + helper + "(" + operation + ")"
+	if frame != "" {
+		text = e.framedForeignCall(call, text, frame, types)
+	}
+	return text, nil
 }
 
 func (e *emitter) pythonAttr(selector *syntax.BashPPSelectorExpr) (string, error) {
@@ -553,9 +772,26 @@ func (e *emitter) foreignDeclarations() string {
 		e.foreignGlobals[fmt.Sprintf("%spython%d", e.prefix, i)] = true
 		fmt.Fprintf(&out, "var %spython%d = %spolyglot.StartImport(%spolyglot.ImportPlan{ID:%s,Language:%s,Module:%s,Alias:%s,Path:%s,Environment:*%s})\n", e.prefix, i, e.prefix, e.prefix, strconv.Quote(plan.ID), strconv.Quote(plan.Language), strconv.Quote(plan.Module), strconv.Quote(plan.Alias), strconv.Quote(plan.Path), e.environmentLiteral(&plan.Environment))
 	}
-	if len(e.foreignImports) > 0 {
+	if len(e.foreignImports) > 0 || len(e.pythonValues) > 0 {
 		fmt.Fprintf(&out, "var _ = %scontext.Background\n", e.prefix)
-		fmt.Fprintf(&out, "func %spythonValue(result %spolyglot.CallResult, err error) any { if result.Stdout != \"\" { %sfmt.Fprint(%srt.Stdout,result.Stdout) }; if result.Stderr != \"\" { %sfmt.Fprint(%srt.Stderr,result.Stderr) }; if err != nil { panic(%srt.ValueAbort{Err:err}) }; return result.Value }\n", e.prefix, e.prefix, e.prefix, e.prefix, e.prefix, e.prefix, e.prefix)
+		fmt.Fprintf(&out, "func %spythonValue(result %spolyglot.CallResult, err %s) any { if result.Stdout != \"\" { %sfmt.Fprint(%srt.Stdout,result.Stdout) }; if result.Stderr != \"\" { %sfmt.Fprint(%srt.Stderr,result.Stderr) }; if err != nil { panic(%srt.ValueAbort{Err:err}) }; return result.Value }\n", e.prefix, e.prefix, e.foreignErrorType(), e.prefix, e.prefix, e.prefix, e.prefix, e.prefix)
+		helper := strings.ReplaceAll(`func PREFIXpythonResult(setStatus func(int)) func(PREFIXpolyglot.CallResult,ERRORTYPE)(any,ERRORTYPE) {
+return func(result PREFIXpolyglot.CallResult, err ERRORTYPE)(any,ERRORTYPE) {
+value := PREFIXpythonValue(result,nil)
+if err != nil {
+var death *PREFIXpolyglot.WorkerExit
+if PREFIXerrors.As(err,&death) { PREFIXrt.Fail(err); setStatus(death.ExitStatus()); return value,nil }
+if _,domain := PREFIXpolyglot.ForeignErrorDetail(err); !domain { PREFIXpythonValue(PREFIXpolyglot.CallResult{},err) }
+setStatus(0)
+return value,PREFIXrt.TrustedErrorText(err.Error())
+}
+setStatus(0)
+return value,nil
+}
+}
+`, "PREFIX", e.prefix)
+		helper = strings.ReplaceAll(helper, "ERRORTYPE", e.foreignErrorType())
+		out.WriteString(helper)
 		fmt.Fprintf(&out, "func %spythonHandle(value any) *%spolyglot.Handle { handle,ok:=value.(*%spolyglot.Handle); if !ok { panic(%srt.ValueAbort{Err:%sfmt.Errorf(\"Python value %%T is not an object\",value)}) }; return handle }\n", e.prefix, e.prefix, e.prefix, e.prefix, e.prefix)
 	}
 	for i, plan := range e.foreignPlans {
@@ -567,9 +803,13 @@ func (e *emitter) foreignDeclarations() string {
 			runtime = e.runnerLiteral(i, plan)
 			out.WriteString(e.runnerAdapter(i, plan))
 		} else {
-			runtime = row.LoweredRuntime(e.prefix, e.environmentLiteral(e.foreignEnvs[plan.Language]))
+			environment := e.environmentLiteral(e.foreignEnvs[plan.Language])
+			if plan.Language == "powershell" || plan.Language == "csharp" {
+				environment = fmt.Sprintf("%spolyglot.PowerShellExecutionEnvironment(%s)", e.prefix, environment)
+			}
+			runtime = row.LoweredRuntime(e.prefix, environment)
 		}
-		fmt.Fprintf(&out, "var %s = %spolyglot.Start(%spolyglot.Plan{ID:%s,Language:%s,Alias:%s,Runner:%s,Source:%s,Artifact:%s,Exports:%s}, %s)\n", module, e.prefix, e.prefix, strconv.Quote(plan.ID), strconv.Quote(plan.Language), strconv.Quote(plan.Alias), strconv.Quote(plan.Runner), strconv.Quote(plan.Source), strconv.Quote(plan.Artifact), e.foreignExports(plan.Exports), runtime)
+		fmt.Fprintf(&out, "var %s = %spolyglot.Start(%spolyglot.Plan{ID:%s,Language:%s,Alias:%s,Runner:%s,Source:%s,Artifact:%s,CSharpAssemblies:%s,RustTarget:%s,Exports:%s}, %s)\n", module, e.prefix, e.prefix, strconv.Quote(plan.ID), strconv.Quote(plan.Language), strconv.Quote(plan.Alias), strconv.Quote(plan.Runner), strconv.Quote(plan.Source), strconv.Quote(plan.Artifact), strconv.Quote(plan.CSharpAssemblies), strconv.Quote(plan.RustTarget), e.foreignExports(plan.Exports), runtime)
 		if row.Callbacks && plan.Runner == "" {
 			out.WriteString(e.foreignCallbacks(i, module))
 		}
@@ -601,6 +841,22 @@ func (e *emitter) foreignDeclarations() string {
 	return out.String()
 }
 
+// foreignMainCleanup closes every package-level foreign module owned by a
+// standalone lowered program. The bindings deliberately outlive Execute calls
+// in importable libraries, but a process main has a precise lifetime boundary:
+// it must reap its workers before returning to the operating system. Close in
+// reverse declaration order, like deferred resource cleanup.
+func (e *emitter) foreignMainCleanup() string {
+	var out strings.Builder
+	for i := len(e.foreignPlans) - 1; i >= 0; i-- {
+		fmt.Fprintf(&out, "_ = %sforeign%d.Close()\n", e.prefix, i)
+	}
+	for i := len(e.foreignImports) - 1; i >= 0; i-- {
+		fmt.Fprintf(&out, "_ = %spython%d.Close()\n", e.prefix, i)
+	}
+	return out.String()
+}
+
 // foreignCallbacks captures the calling Program with each callback value.
 // Nested calls receive a copy with the callback's re-entry context; unrelated
 // goroutines never observe or inherit that authority.
@@ -627,17 +883,17 @@ switch PREFIXname {
 	for _, name := range names {
 		fmt.Fprintf(&out, "case %s:\n%starget = %s\n", strconv.Quote(name), e.prefix, e.goName(name))
 	}
-	out.WriteString(strings.ReplaceAll(`default:
-return PREFIXpolyglot.Callback{Name:PREFIXname, Invoke:func(PREFIXcontext.Context,[]any)(any,error){return nil,PREFIXfmt.Errorf("unknown shell callback %q",PREFIXname)}}
+	out.WriteString(strings.ReplaceAll(strings.ReplaceAll(`default:
+return PREFIXpolyglot.Callback{Name:PREFIXname, Invoke:func(PREFIXcontext.Context,[]any)(any,ERRORTYPE){return nil,PREFIXfmt.Errorf("unknown shell callback %q",PREFIXname)}}
 } }
 PREFIXcallback := PREFIXpolyglot.FuncCallback(PREFIXname,PREFIXtarget)
-return PREFIXpolyglot.Callback{Name:PREFIXname, Invoke:func(PREFIXctx PREFIXcontext.Context,PREFIXargs []any)(any,error){
+return PREFIXpolyglot.Callback{Name:PREFIXname, Invoke:func(PREFIXctx PREFIXcontext.Context,PREFIXargs []any)(any,ERRORTYPE){
 PREFIXchild := *PREFIXprogram
 PREFIXchild.Context = PREFIXctx
 return PREFIXcallback.Invoke(PREFIXctx,append([]any{&PREFIXchild,PREFIXrt.Site{Name:PREFIXname}},PREFIXargs...))
 }}
 }
-`, "PREFIX", e.prefix))
+`, "PREFIX", e.prefix), "ERRORTYPE", e.foreignErrorType()))
 	fmt.Fprintf(&out, "func init() {\n%s.SetCallbacks(%spolyglot.Callbacks{\n", module, e.prefix)
 	fmt.Fprintf(&out, "Output: func(stdout, stderr string) { if stdout != \"\" { %sfmt.Fprint(%srt.Stdout, stdout) }; if stderr != \"\" { %sfmt.Fprint(%srt.Stderr, stderr) } },\n})\n}\n", e.prefix, e.prefix, e.prefix, e.prefix)
 	return out.String()
@@ -647,8 +903,8 @@ func (e *emitter) environmentLiteral(p *polyglot.EnvironmentPlan) string {
 	if p == nil {
 		return "nil"
 	}
-	return fmt.Sprintf("&%spolyglot.EnvironmentPlan{Language:%s,Name:%s,Root:%s,Dir:%s,SourceDir:%s,Executable:%s,ExecutableArgs:%#v,Manager:%s,RuntimeConstraint:%s,Runtime:%s,CompilerModule:%s,Manifests:%#v,Locks:%#v,PythonPath:%#v,Env:%#v,Explanation:%#v,ResolutionFiles:%#v,Fingerprint:%s,ModuleFile:%s}",
-		e.prefix, strconv.Quote(p.Language), strconv.Quote(p.Name), strconv.Quote(p.Root), strconv.Quote(p.Dir), strconv.Quote(p.SourceDir), strconv.Quote(p.Executable), p.ExecutableArgs, strconv.Quote(p.Manager), strconv.Quote(p.RuntimeConstraint), strconv.Quote(p.Runtime), strconv.Quote(p.CompilerModule), p.Manifests, p.Locks, p.PythonPath, p.Env, p.Explanation, p.ResolutionFiles, strconv.Quote(p.Fingerprint), strconv.Quote(p.ModuleFile))
+	return fmt.Sprintf("&%spolyglot.EnvironmentPlan{CSharpAssemblies:%s,RustTarget:%s,Language:%s,Name:%s,Root:%s,Dir:%s,SourceDir:%s,Executable:%s,ExecutableArgs:%#v,Manager:%s,RuntimeConstraint:%s,Runtime:%s,CompilerModule:%s,Manifests:%#v,Locks:%#v,PythonPath:%#v,Env:%#v,Explanation:%#v,ResolutionFiles:%#v,Fingerprint:%s,ModuleFile:%s,NativeModules:%s}",
+		e.prefix, strconv.Quote(p.CSharpAssemblies), strconv.Quote(p.RustTarget), strconv.Quote(p.Language), strconv.Quote(p.Name), strconv.Quote(p.Root), strconv.Quote(p.Dir), strconv.Quote(p.SourceDir), strconv.Quote(p.Executable), p.ExecutableArgs, strconv.Quote(p.Manager), strconv.Quote(p.RuntimeConstraint), strconv.Quote(p.Runtime), strconv.Quote(p.CompilerModule), p.Manifests, p.Locks, p.PythonPath, p.Env, p.Explanation, p.ResolutionFiles, strconv.Quote(p.Fingerprint), strconv.Quote(p.ModuleFile), e.nativeModuleUnitsLiteral(p.NativeModules))
 }
 
 func (e *emitter) foreignExports(exports []polyglot.Export) string {
@@ -671,13 +927,13 @@ func (e *emitter) foreignWrapper(receiver, module string, export polyglot.Export
 			if export.Signature.Variadic && i == len(export.Signature.Params)-1 {
 				params = append(params, fmt.Sprintf("arg%d ...%s", i, foreignGoType(typ)))
 			} else {
-				params = append(params, fmt.Sprintf("arg%d %s", i, foreignGoType(typ)))
+				params = append(params, fmt.Sprintf("arg%d %s", i, foreignArgumentGoType(typ, export.Signature.Variadic)))
 			}
 		}
 	}
 	var results []string
 	if export.Signature.Dynamic {
-		results = []string{"any", "error"}
+		results = []string{"any", e.foreignErrorType()}
 	} else {
 		for _, typ := range export.Signature.Results {
 			results = append(results, foreignGoType(typ))
@@ -701,7 +957,7 @@ func (e *emitter) foreignWrapper(receiver, module string, export polyglot.Export
 	ctx := e.prefix + "context.Background()"
 	if e.execution {
 		params = append([]string{e.prefix + "foreignProgram *" + e.prefix + "foreignProgramState"}, params...)
-		ctx = e.prefix + "foreignProgram.Context"
+		ctx = e.prefix + "polyglot.WithCallerDir(" + e.prefix + "foreignProgram.Context, " + e.prefix + "foreignProgram.Session.Dir())"
 		if runner {
 			// The runner's Invoke calls the lowered function on the
 			// Program making this call (runnerAdapter).
@@ -709,13 +965,20 @@ func (e *emitter) foreignWrapper(receiver, module string, export polyglot.Export
 		}
 	}
 	var out strings.Builder
-	fmt.Fprintf(&out, "func %s%s(%s)", receiver, export.Name, strings.Join(params, ","))
+	name := export.Name
+	if foreignScalarAdapter(export) {
+		out.WriteString(e.foreignTypedTrampoline(receiver, module, export))
+		receiver = ""
+		name = foreignScalarAdapterName(module, export)
+	}
+	fmt.Fprintf(&out, "func %s%s(%s)", receiver, name, strings.Join(params, ","))
 	if len(results) == 1 {
 		fmt.Fprintf(&out, " %s", results[0])
 	} else if len(results) > 1 {
 		fmt.Fprintf(&out, " (%s)", strings.Join(results, ","))
 	}
 	out.WriteString(" {\n")
+	out.WriteString(e.foreignScalarArguments(export, e.foreignQualifiedName(module, export), false))
 	if export.Signature.Iterator != "" {
 		values := strings.TrimPrefix(args, ",")
 		fmt.Fprintf(&out, "return %sshellexec.NewForeignIterator(%s,%q,[]any{%s})\n}\n", e.prefix, module, export.Name, values)
@@ -764,7 +1027,7 @@ func (e *emitter) foreignErrWrapper(plan int, module, alias string, export polyg
 		if export.Signature.Variadic && i == len(export.Signature.Params)-1 {
 			params = append(params, fmt.Sprintf("arg%d ...%s", i, foreignGoType(typ)))
 		} else {
-			params = append(params, fmt.Sprintf("arg%d %s", i, foreignGoType(typ)))
+			params = append(params, fmt.Sprintf("arg%d %s", i, foreignArgumentGoType(typ, export.Signature.Variadic)))
 		}
 	}
 	args := ""
@@ -783,7 +1046,7 @@ func (e *emitter) foreignErrWrapper(plan int, module, alias string, export polyg
 	ctx := e.prefix + "context.Background()"
 	if e.execution {
 		params = append([]string{e.prefix + "foreignProgram *" + e.prefix + "foreignProgramState"}, params...)
-		ctx = e.prefix + "foreignProgram.Context"
+		ctx = e.prefix + "polyglot.WithCallerDir(" + e.prefix + "foreignProgram.Context, " + e.prefix + "foreignProgram.Session.Dir())"
 		if runner {
 			// The runner's Invoke calls the lowered function on the
 			// Program making this call (runnerAdapter).
@@ -799,7 +1062,8 @@ func (e *emitter) foreignErrWrapper(plan int, module, alias string, export polyg
 		returns[i] = foreignResultExpr("result.Value", typ)
 	}
 	var out strings.Builder
-	fmt.Fprintf(&out, "func %s(%s) %s {\n", e.foreignErrAdapterName(plan, export), strings.Join(params, ","), foreignErrSignature(results))
+	fmt.Fprintf(&out, "func %s(%s) %s {\n", e.foreignErrAdapterName(plan, export), strings.Join(params, ","), foreignErrSignature(results, e.foreignErrorType()))
+	out.WriteString(e.foreignScalarArguments(export, qualified, true))
 	fmt.Fprintf(&out, "result, err := %s.Call(%s, %s%s)\n", module, ctx, strconv.Quote(export.Name), args)
 	fmt.Fprintf(&out, "if result.Stdout != \"\" { %sfmt.Fprint(%srt.Stdout, result.Stdout) }; if result.Stderr != \"\" { %sfmt.Fprint(%srt.Stderr, result.Stderr) }\n", e.prefix, e.prefix, e.prefix, e.prefix)
 	// The worker's own failure comes back as sanitized trusted text, the
@@ -814,11 +1078,11 @@ func (e *emitter) foreignErrWrapper(plan int, module, alias string, export polyg
 
 // foreignErrSignature spells the adapter's result list: the export's results
 // followed by the error, which is the whole list for a zero-result export.
-func foreignErrSignature(results []string) string {
+func foreignErrSignature(results []string, errorType string) string {
 	if len(results) == 0 {
-		return "error"
+		return errorType
 	}
-	return "(" + strings.Join(results, ",") + ",error)"
+	return "(" + strings.Join(results, ",") + "," + errorType + ")"
 }
 
 // The legacy adapter spells its status using the package runtime. Execution
@@ -896,7 +1160,7 @@ func (e *emitter) framedForeignErrCall(c *syntax.BashPPCall, foreign foreignFunc
 	}
 	returned := strings.Join(append(append([]string(nil), temps...), "err"), ",")
 	var out strings.Builder
-	fmt.Fprintf(&out, "func() %s {\n%sforeignStatus := %srt.Status\n%srt.Status = 0\n%s := %s\n", foreignErrSignature(resultTypes), e.prefix, e.prefix, e.prefix, returned, call)
+	fmt.Fprintf(&out, "func() %s {\n%sforeignStatus := %srt.Status\n%srt.Status = 0\n%s := %s\n", foreignErrSignature(resultTypes, e.foreignErrorType()), e.prefix, e.prefix, e.prefix, returned, call)
 	fmt.Fprintf(&out, "%sforeignExit := %srt.Status\n%srt.Status = %sforeignStatus\n%s.SetStatus(%sforeignExit)\n", e.prefix, e.prefix, e.prefix, e.prefix, e.program(), e.prefix)
 	if frame != "" {
 		for i, temp := range temps {
@@ -1032,7 +1296,7 @@ func (e *emitter) runnerAdapter(plan int, p polyglot.Plan) string {
 	name := e.goName(p.Runner)
 	runner := strconv.Quote(p.Runner)
 	var out strings.Builder
-	fmt.Fprintf(&out, "func %sforeignRunner%d(%sctx %scontext.Context, %sargv []string) (string, error) {\n", pre, plan, pre, pre, pre)
+	fmt.Fprintf(&out, "func %sforeignRunner%d(%sctx %scontext.Context, %sargv []string) (string, %s) {\n", pre, plan, pre, pre, pre, e.foreignErrorType())
 	fmt.Fprintf(&out, "if len(%sargv) < 2 { return \"\", %sfmt.Errorf(\"runner %%s: verb and file expected\", %s) }\n", pre, pre, runner)
 	fmt.Fprintf(&out, "var %sout %sstrings.Builder\n", pre, pre)
 	if e.execution {

@@ -3177,7 +3177,7 @@ func (r *Runner) Reset() {
 			r.execHandler = mw(r.execHandler)
 		}
 		// Fill tempDir; only need to do this once given that Env will not change.
-		// TMPDIR may be spelled the POSIX way (/tmp, /c/Users/x/tmp) on
+		// TMPDIR may be spelled the POSIX way (/tmp, /c/Users/<account>/tmp) on
 		// Windows; resolve it to the native directory the way an operand is.
 		if dir := r.Env.Get("TMPDIR").String(); pathconv.IsAbs(dir) {
 			r.tempDir = shellPathToOS(r.Dir, dir)
@@ -3475,6 +3475,10 @@ func (r *Runner) Reset() {
 	if r.noOpSetState["ignoreeof"] {
 		r.setIgnoreEOFOption(true)
 	}
+	// Command guests start from the caller's original environment. Record only
+	// subsequent shell writes; startup synthesis (including PWD) is not a
+	// caller-authored export.
+	r.writeEnv.(*overlayEnviron).goCommandTouched = make(map[string]bool)
 
 	r.didReset = true
 }

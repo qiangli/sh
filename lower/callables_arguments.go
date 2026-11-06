@@ -36,6 +36,16 @@ func (e *emitter) callArgument(c *syntax.BashPPCall, index int) (result string, 
 		// interpreter passes it; a closure variable crosses as its value.
 		return strconv.Quote(name), nil
 	}
+	if e.mixedShell {
+		if _, foreign := e.foreignFunctions[strings.Join(names(c.Fun), ".")]; foreign {
+			if name := c.Args[index].Lit(); syntax.BashPPValidIdent(name) && !e.known(name) {
+				// Shell assignments live in the session, not the Go declaration
+				// table. Match the interpreter's bare-word lookup at invocation
+				// time, preserving empty values and the unset literal fallback.
+				return e.program() + ".ShellDefault(" + strconv.Quote(name) + "," + strconv.Quote(name) + ")", nil
+			}
+		}
+	}
 	text, err := e.argument(c.Args[index])
 	if err == nil {
 		name := c.Args[index].Lit()

@@ -22,13 +22,28 @@ func TestEnvironmentLiteralCarriesEveryField(t *testing.T) {
 	want := map[string]string{}
 	for i := 0; i < v.NumField(); i++ {
 		f, name := v.Field(i), v.Type().Field(i).Name
+		// Private fields are preparation-only snapshots, never launch assets.
+		if !v.Type().Field(i).IsExported() {
+			continue
+		}
 		switch f.Kind() {
 		case reflect.String:
 			f.SetString("v-" + name)
 			want[name] = strconv.Quote("v-" + name)
 		case reflect.Slice:
-			f.Set(reflect.ValueOf([]string{"a-" + name, "b-" + name}))
-			want[name] = `[]string{"a-` + name + `", "b-` + name + `"}`
+			switch f.Type() {
+			case reflect.TypeOf([]string(nil)):
+				f.Set(reflect.ValueOf([]string{"a-" + name, "b-" + name}))
+				want[name] = `[]string{"a-` + name + `", "b-` + name + `"}`
+			case reflect.TypeOf([]polyglot.NativeModuleUnit(nil)):
+				f.Set(reflect.ValueOf([]polyglot.NativeModuleUnit{
+					{Name: "Example:part", Kind: "interface", Source: "/assets/part.cppm", Requires: []string{"Dependency"}},
+					{Name: "Example", Kind: "interface", Source: "/assets/example.cppm", Requires: []string{"Example:part"}},
+				}))
+				want[name] = `[]p_polyglot.NativeModuleUnit{{Name:"Example:part",Kind:"interface",Source:"/assets/part.cppm",Requires:[]string{"Dependency"}},{Name:"Example",Kind:"interface",Source:"/assets/example.cppm",Requires:[]string{"Example:part"}},}`
+			default:
+				t.Fatalf("EnvironmentPlan.%s: unhandled slice type %s", name, f.Type())
+			}
 		default:
 			t.Fatalf("EnvironmentPlan.%s: unhandled kind %s", name, f.Kind())
 		}
@@ -57,5 +72,15 @@ func TestEnvironmentLiteralCarriesEveryField(t *testing.T) {
 	}
 	if len(got) != len(want) {
 		t.Errorf("lowered %d fields, plan has %d", len(got), len(want))
+	}
+}
+
+func TestNativeModuleUnitsLiteralNilAndEmpty(t *testing.T) {
+	e := &emitter{prefix: "p_"}
+	if got := e.nativeModuleUnitsLiteral(nil); got != "nil" {
+		t.Fatalf("nil units = %s", got)
+	}
+	if got := e.nativeModuleUnitsLiteral([]polyglot.NativeModuleUnit{}); got != "[]p_polyglot.NativeModuleUnit{}" {
+		t.Fatalf("empty units = %s", got)
 	}
 }

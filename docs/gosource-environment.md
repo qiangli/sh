@@ -22,6 +22,12 @@ embedding process or the next session's starting environment. SDK/build helper
 configuration remains separate. Ordinary shell variables and shell subprocess
 environments retain their existing behavior.
 
+An explicitly invoked exported Go fence command also starts from this ordered
+snapshot. Shell exports and unsets made after startup override it at that
+command invocation, including same-value writes and empty values. Shell startup
+variables added by the embedding Bashy process are not added to the guest's
+snapshot. Typed Go fence calls keep their existing runtime environment.
+
 The tests build/run the original Go by Example environment program and compare
 raw output with Runner for an empty environment, absent shell variables and
 deliberately supplied shell/agent variables. The fixture bytes are unchanged:
