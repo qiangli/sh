@@ -3,10 +3,9 @@ id: 49cf2426bee3
 kind: bug
 title: Keep foreign error export distinct from generated Go error type
 seq: 171
-status: assigned
+status: todo
 priority: p0
 created: 2026-11-05T06:48:12.106142Z
-weave: 27
 assignee: s562-lower-predeclared
 sprint: 578
 sprint_id: 70ba48be-af89-5ab1-8a8d-42a15fc1ddbe

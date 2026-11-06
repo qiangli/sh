@@ -3,10 +3,9 @@ id: 0f4ea3117c92
 kind: bug
 title: S562 Go command invocation context and lifecycle parity
 seq: 168
-status: assigned
+status: todo
 priority: p0
 created: 2026-11-05T05:54:36.530734Z
-weave: 24
 assignee: s562-go-context
 sprint: 578
 sprint_id: 70ba48be-af89-5ab1-8a8d-42a15fc1ddbe

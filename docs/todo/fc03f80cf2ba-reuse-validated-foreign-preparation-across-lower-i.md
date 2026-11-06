@@ -3,9 +3,8 @@ id: fc03f80cf2ba
 kind: task
 title: Reuse validated foreign preparation across lower inference passes
 seq: 172
-status: assigned
+status: todo
 created: 2026-11-05T07:19:05.366983Z
-weave: 28
 assignee: s562-cpp-prepare
 sprint: 578
 sprint_id: 70ba48be-af89-5ab1-8a8d-42a15fc1ddbe
