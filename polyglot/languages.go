@@ -102,9 +102,10 @@ type Language struct {
 }
 
 var (
-	languagesMu     sync.RWMutex
-	languages       = map[string]Language{}
-	languageAliases = map[string]string{}
+	languagesMu      sync.RWMutex
+	languages        = map[string]Language{}
+	languageAliases  = map[string]string{}
+	languageRevision uint64
 )
 
 // RegisterLanguage adds or replaces a fence language row. It panics on a row
@@ -120,6 +121,7 @@ func RegisterLanguage(l Language) {
 	}
 	languagesMu.Lock()
 	defer languagesMu.Unlock()
+	languageRevision++
 	if old, ok := languages[l.Canonical]; ok {
 		for _, alias := range old.Aliases {
 			if languageAliases[alias] == old.Canonical {
@@ -131,6 +133,14 @@ func RegisterLanguage(l Language) {
 	for _, alias := range l.Aliases {
 		languageAliases[strings.ToLower(strings.TrimSpace(alias))] = l.Canonical
 	}
+}
+
+// LanguageRevision changes whenever a provider row is registered or replaced.
+// A compiler can use it to reject reuse of a plan prepared before a row change.
+func LanguageRevision() uint64 {
+	languagesMu.RLock()
+	defer languagesMu.RUnlock()
+	return languageRevision
 }
 
 // LookupLanguage answers a canonical name or an alias.
@@ -188,7 +198,7 @@ func loweredRuntime(typ string) func(prefix, environment string) string {
 }
 
 func init() {
-	RegisterLanguage(Language{Canonical: "python", Aliases: []string{"py"}, NeedsEnvironment: true,
+	RegisterLanguage(Language{Canonical: "python", Aliases: []string{"py"}, NeedsEnvironment: true, Callbacks: true,
 		NewRuntime:     func(cfg RuntimeConfig) LanguageRuntime { return Python{Environment: cfg.Environment, Cwd: cfg.Cwd} },
 		LoweredRuntime: loweredRuntime("Python")})
 	RegisterLanguage(Language{Canonical: "typescript", Aliases: []string{"ts"}, NeedsEnvironment: true,

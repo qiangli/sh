@@ -120,11 +120,19 @@ func analyzeNativeArtifact(ctx context.Context, language, compiler string, envir
 	if err != nil {
 		return nil, "", err
 	}
+	var moduleArgs, moduleObjects []string
+	if language == "cpp" {
+		moduleArgs, moduleObjects, err = buildNativeModules(ctx, compiler, environment, dir, hostInclude)
+		if err != nil {
+			return nil, "", err
+		}
+	}
 	// -o pins the output zig's driver insists on writing even under
 	// -fsyntax-only (it would otherwise drop an a.out into the project dir).
 	astArgs := append(leadingArgs(environment), standard, "-Xclang", "-ast-dump=json", "-fsyntax-only", "-o", filepath.Join(dir, "syntax.o"))
 	astArgs = append(astArgs, nativeIncludeArgs(environment)...)
 	astArgs = append(astArgs, hostInclude...)
+	astArgs = append(astArgs, moduleArgs...)
 	astArgs = append(astArgs, sourceFile)
 	cmd := exec.CommandContext(ctx, compiler, astArgs...)
 	configureNativeCompiler(cmd, environment)
@@ -159,7 +167,9 @@ func analyzeNativeArtifact(ctx context.Context, language, compiler string, envir
 	args := append(leadingArgs(environment), standard, "-O0", "-o", output)
 	args = append(args, nativeIncludeArgs(environment)...)
 	args = append(args, hostInclude...)
+	args = append(args, moduleArgs...)
 	args = append(args, workerFile)
+	args = append(args, moduleObjects...)
 	cmd = exec.CommandContext(ctx, compiler, args...)
 	configureNativeCompiler(cmd, environment)
 	stderr.Reset()
@@ -251,7 +261,11 @@ func nativeExports(root clangASTNode, sourceFile, source string, language string
 		if userNode {
 			switch node.Kind {
 			case "VarDecl":
-				return nil, fmt.Errorf("%s source fences do not allow top-level variables", nativeLanguageName(language))
+				// C variables are declarations within the translation unit, not
+				// callable exports. Keep C++'s existing initialization boundary.
+				if language != "c" {
+					return nil, fmt.Errorf("%s source fences do not allow top-level variables", nativeLanguageName(language))
+				}
 			case "FunctionTemplateDecl", "ClassTemplateDecl":
 				return nil, fmt.Errorf("%s source fences do not export %s declarations", nativeLanguageName(language), node.Kind)
 			}
@@ -369,6 +383,7 @@ func cppWorkerSource(source string, exports []nativeExport) string {
 #line 1 "<bash++ C++ worker>"
 #include <cerrno>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <exception>
 #include <iostream>
@@ -376,8 +391,16 @@ func cppWorkerSource(source string, exports []nativeExport) string {
 #include <string>
 static std::string __bpp_hex(const std::string& s) { static const char h[]="0123456789abcdef"; std::string o; for(unsigned char c:s){o+=h[c>>4];o+=h[c&15];} return o; }
 static std::string __bpp_unhex(const std::string& s) { if(s.size()%2) throw std::runtime_error("invalid string argument"); std::string o; for(size_t i=0;i<s.size();i+=2) o.push_back((char)std::stoi(s.substr(i,2),nullptr,16)); return o; }
-static void __bpp_ok(const char* kind,const std::string& value){std::cout<<"\x1e" "BASHPP\tOK\t"<<kind<<"\t"<<__bpp_hex(value)<<"\n";}
-static void __bpp_err(const std::string& value){std::cout<<"\x1e" "BASHPP\tERR\terror\t"<<__bpp_hex(value)<<"\n";}
+// User code owns cout's flags, exception mask and formatting. Flush its buffer
+// directly (also when sync_with_stdio(false)), without clearing that state.
+// A user streambuf failure must not prevent the independent result transport.
+static void __bpp_frame(const char* status,const char* kind,const std::string& value){
+  const std::string frame=std::string("\x1e" "BASHPP\t")+status+"\t"+kind+"\t"+__bpp_hex(value)+"\n";
+  try { if(auto* buffer=std::cout.rdbuf()) buffer->pubsync(); } catch(...) {}
+  if(std::fwrite(frame.data(),1,frame.size(),stdout)!=frame.size() || std::fflush(stdout)!=0) std::exit(74);
+}
+static void __bpp_ok(const char* kind,const std::string& value){__bpp_frame("OK",kind,value);}
+static void __bpp_err(const std::string& value){__bpp_frame("ERR","error",value);}
 int main(int argc,char** argv){ try { if(argc<2) throw std::runtime_error("missing C++ function name"); std::string fn=argv[1];
 `)
 	for _, export := range exports {
@@ -554,17 +577,38 @@ func (m *Module) callNativeArtifact(ctx context.Context, language, name string, 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	runErr := cmd.Run()
-	data := stdout.Bytes()
+	return decodeNativeResult(stdout.Bytes(), stderr.String(), runErr, language)
+}
+
+// decodeNativeResult runs after process completion, including exit callbacks.
+func decodeNativeResult(data []byte, stderr string, runErr error, language string) (CallResult, error) {
 	marker := []byte("\x1eBASHPP\t")
-	index := bytes.LastIndex(data, marker)
+	result := CallResult{Stdout: string(data), Stderr: stderr}
+	index := bytes.Index(data, marker)
 	if index < 0 {
 		if runErr != nil {
-			return CallResult{Stdout: string(data), Stderr: stderr.String()}, fmt.Errorf("%s worker failed: %w", language, runErr)
+			return result, fmt.Errorf("%s worker failed: %w", language, runErr)
 		}
-		return CallResult{Stdout: string(data), Stderr: stderr.String()}, fmt.Errorf("%s worker returned no result frame", language)
+		return result, fmt.Errorf("%s worker returned no result frame", language)
 	}
-	result := CallResult{Stdout: string(data[:index]), Stderr: stderr.String()}
-	fields := strings.Split(strings.TrimSpace(string(data[index+len(marker):])), "\t")
+	// The stdout protocol cannot distinguish a second frame from callback
+	// data imitating one. Reject ambiguity instead of selecting a value.
+	if bytes.Contains(data[index+len(marker):], marker) {
+		return result, fmt.Errorf("multiple %s worker result frames", language)
+	}
+	payload := data[index+len(marker):]
+	end := bytes.IndexByte(payload, '\n')
+	if end < 0 {
+		return result, fmt.Errorf("invalid %s worker result frame", language)
+	}
+	result.Stdout = string(data[:index]) + string(payload[end+1:])
+	payload = bytes.TrimSuffix(payload[:end], []byte("\r"))
+	// C atexit handlers and C++ static destructors run after the return
+	// frame. Their output and native process failure remain observable.
+	if runErr != nil {
+		return result, fmt.Errorf("%s worker failed: %w", language, runErr)
+	}
+	fields := strings.Split(string(payload), "\t")
 	if len(fields) != 3 {
 		return result, fmt.Errorf("invalid %s worker result frame", language)
 	}
@@ -572,7 +616,10 @@ func (m *Module) callNativeArtifact(ctx context.Context, language, name string, 
 	if decodeErr != nil {
 		return result, fmt.Errorf("invalid %s worker result payload", language)
 	}
-	if fields[0] != "OK" {
+	if fields[0] != "OK" && fields[0] != "ERR" {
+		return result, fmt.Errorf("invalid %s worker result status", language)
+	}
+	if fields[0] == "ERR" {
 		return result, errors.New(string(decoded))
 	}
 	switch fields[1] {

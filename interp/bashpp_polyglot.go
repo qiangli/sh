@@ -265,7 +265,7 @@ func (r *Runner) bashPPPrepareSourceBlocks(ctx context.Context, file *syntax.Fil
 			}
 			reserved[plan.Alias] = "foreign module"
 		}
-		for _, export := range plan.Exports {
+		for _, export := range append(append([]polyglot.Export(nil), plan.Exports...), plan.UnavailableExports...) {
 			name := export.Name
 			if plan.Alias != "" {
 				name = plan.Alias + "." + name
@@ -323,6 +323,9 @@ func foreignShellType(typ string) string {
 // shape shares: argument conversion, the call itself and the island's captured
 // stdout/stderr. ok is false when an argument could not be converted; the
 // diagnostic and status are already recorded by then.
+// foreignArgumentError is a caller input failure, not a worker or transport failure.
+type foreignArgumentError struct{ error }
+
 func (r *Runner) bashPPForeignExchange(ctx context.Context, fn *bashPPForeignFunc, args []string) (result polyglot.CallResult, err error, ok bool) {
 	if fn.direct {
 		values := make([]any, len(args))
@@ -400,9 +403,7 @@ func (r *Runner) bashPPForeignExchange(ctx context.Context, fn *bashPPForeignFun
 			}
 			value, convErr := foreignArgument(arg, typ)
 			if convErr != nil {
-				r.errf("bash++: %s argument %d: %v\n", fn.qualified, i+1, convErr)
-				r.exit.code = 2
-				return polyglot.CallResult{}, nil, false
+				return polyglot.CallResult{}, &foreignArgumentError{fmt.Errorf("%s argument %d: %w", fn.qualified, i+1, convErr)}, true
 			}
 			values[i] = value
 		}
@@ -463,6 +464,10 @@ func (r *Runner) bashPPInvokeForeign(ctx context.Context, fn *bashPPForeignFunc,
 		}
 		r.errf("bash++: foreign call %s failed: %v\n", fn.qualified, err)
 		r.exit.code = 1
+		var death *polyglot.WorkerExit
+		if errors.As(err, &death) {
+			r.exit.code = uint8(death.ExitStatus())
+		}
 		return nil
 	}
 	r.exit = exitStatus{}
@@ -470,9 +475,13 @@ func (r *Runner) bashPPInvokeForeign(ctx context.Context, fn *bashPPForeignFunc,
 		r.bashPPResultCells = []*bashPPCell{{vr: expand.NewObject(iterator)}}
 		return []string{""}
 	}
-	if fn.direct {
+	if fn.direct || fn.export.Signature.Dynamic {
 		if handle, ok := result.Value.(*polyglot.Handle); ok {
-			r.bashPPResultCells = []*bashPPCell{{vr: expand.NewObject(handle)}}
+			r.bashPPResultCells = []*bashPPCell{bashPPForeignHandleCell(handle)}
+			if !fn.direct {
+				r.bashPPResultCells = append(r.bashPPResultCells, bashPPForeignErrorCell(nil))
+				return []string{"", ""}
+			}
 			return []string{""}
 		}
 	}
@@ -498,6 +507,7 @@ func (r *Runner) bashPPInvokeForeign(ctx context.Context, fn *bashPPForeignFunc,
 // A zero-result export (Python -> None, Rust Result<(), E>) opts in with a
 // single error binding.
 //
+// Argument-conversion failures also populate the opt-in error result.
 // Only a failure carrying polyglot.ForeignErrorDetail is the worker's own.
 // A transport failure — EOF from a dead worker, cancellation, a response ID
 // mismatch, a decode or annotation violation, a launch failure — stays an
@@ -520,24 +530,32 @@ func (r *Runner) bashPPInvokeForeignErr(ctx context.Context, fn *bashPPForeignFu
 		cells[i] = &bashPPCell{vr: expand.Variable{Set: true, Kind: expand.String, Str: values[i]}}
 	}
 	last := len(resultTypes)
+	var argumentError *foreignArgumentError
 	switch {
 	case err == nil:
 		r.exit = exitStatus{}
 		if len(resultTypes) > 0 {
 			values[0] = foreignResult(result.Value)
 			cells[0].vr.Str = values[0]
-			if len(resultTypes) == 1 && foreignObjectResult(resultTypes[0]) {
+			_, handle := result.Value.(*polyglot.Handle)
+			if handle {
+				cells[0] = bashPPForeignHandleCell(result.Value.(*polyglot.Handle))
+			} else if len(resultTypes) == 1 && foreignObjectResult(resultTypes[0]) {
 				cells[0] = &bashPPCell{vr: expand.NewObject(result.Value)}
 			}
 		}
 		cells[last] = bashPPForeignErrorCell(nil)
-	case bashPPForeignDomainError(err):
+	case bashPPForeignDomainError(err), errors.As(err, &argumentError):
 		r.exit = exitStatus{}
 		values[last] = err.Error()
 		cells[last] = bashPPForeignErrorCell(err)
 	default:
 		r.errf("bash++: foreign call %s failed: %v\n", fn.qualified, err)
 		r.exit.code = 1
+		var death *polyglot.WorkerExit
+		if errors.As(err, &death) {
+			r.exit.code = uint8(death.ExitStatus())
+		}
 		cells[last] = bashPPForeignErrorCell(nil)
 	}
 	r.bashPPResultCells = cells
@@ -549,6 +567,11 @@ func (r *Runner) bashPPInvokeForeignErr(ctx context.Context, fn *bashPPForeignFu
 func bashPPForeignDomainError(err error) bool {
 	_, ok := polyglot.ForeignErrorDetail(err)
 	return ok
+}
+
+// The carrier is runtime authority; any is only its host assignment type.
+func bashPPForeignHandleCell(handle *polyglot.Handle) *bashPPCell {
+	return &bashPPCell{vr: expand.NewObject(handle), declType: &syntax.BashPPNamedType{Name: &syntax.Lit{Value: "any"}}}
 }
 
 func bashPPForeignErrorCell(err error) *bashPPCell {
@@ -692,7 +715,7 @@ func (r *Runner) bashPPForeignCommand(word string) (*polyglot.Module, string, bo
 		return module, name, true
 	}
 	if fn := r.bashPPForeignFuncs[word]; fn != nil && fn.foreign != nil && fn.foreign.module != nil && fn.foreign.receiver == nil {
-		if lang := fn.foreign.module.Plan().Language; lang == "python" || lang == "powershell" {
+		if lang := fn.foreign.module.Plan().Language; lang == "python" || lang == "powershell" || lang == "go" {
 			return fn.foreign.module, fn.foreign.export.Name, true
 		}
 	}
@@ -803,6 +826,9 @@ func (r *Runner) bashPPRunForeignCommand(ctx context.Context, pos syntax.Pos, mo
 	// over the command's stdin; every other function leaves stdin untouched so
 	// it never blocks on a terminal it does not read.
 	var stdin io.Reader
+	if module.Plan().Language == "go" {
+		stdin = r.stdin
+	}
 	for _, export := range module.Plan().Exports {
 		if export.Name == name && export.Signature.PipeInput {
 			if r.stdin != nil {
@@ -813,16 +839,13 @@ func (r *Runner) bashPPRunForeignCommand(ctx context.Context, pos syntax.Pos, mo
 			break
 		}
 	}
-	result, err := module.Command(ctx, name, argv, stdin)
-	if result.Stdout != "" {
-		fmt.Fprint(stdout, result.Stdout)
+	if module.Plan().Language == "go" {
+		ctx = polyglot.WithGoCommandCaller(ctx, r.Dir, r.bashPPGoCommandEnvironment())
 	}
-	if result.Stderr != "" {
-		fmt.Fprint(stderr, result.Stderr)
-	}
+	status, err := module.CommandStreams(ctx, name, argv, stdin, stdout, stderr)
 	switch {
 	case err == nil:
-		r.exit = exitStatus{code: uint8(result.Status)}
+		r.exit = exitStatus{code: uint8(status)}
 	case ctx.Err() != nil:
 		r.exit.fatal(ctx.Err())
 	case errors.Is(err, polyglot.ErrCommandNotFound):

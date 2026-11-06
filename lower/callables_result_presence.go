@@ -37,6 +37,12 @@ func (e *emitter) callResultTypesForArity(c *syntax.BashPPCall, arity int) []str
 			return result
 		}
 	}
+	if kind := e.pythonCallKind(c); kind != "" {
+		if arity == 2 && kind != "module" {
+			return []string{"any", "error"}
+		}
+		return []string{"any"}
+	}
 	if len(c.Fun) != 1 {
 		return nil
 	}

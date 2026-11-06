@@ -1,0 +1,30 @@
+{
+  "controls": "PASS 4 named PowerShell/CSharp controls, zero skips or failures",
+  "dirty": "",
+  "evidence_archive": "linux-evidence/ps-locale-worker22/e62d7996-local-evidence.tar.gz",
+  "evidence_archive_sha256": "0bb460fa90821857356ff0fe1c60aceed1498a74625dc42c172b5b3452cd1b61",
+  "go": "local-provider/go/1.27.2/bin/go",
+  "go_sha256": "516c1fbb53b5f8f4852f0c3c379d45bcff53a1032e5cd1a9ca1738f03ba07cb1",
+  "head": "e62d799641169b91f68e72a8210277837e9f4da9",
+  "known_baseline_failure": "TestEnvironmentLiteralCarriesEveryField panics on NativeModules []NativeModuleUnit in f1a41ac0; unchanged by locale fix",
+  "linux_stage": "linux-stage/ps-locale-worker22/candidate-e62d7996",
+  "local_verdict": "PASS 8 polyglot and 38 lower named events, zero skips or failures",
+  "manager_acceptance": "pending Linux and native Windows execution",
+  "platform": "macOS-26.5.1-arm64-arm-64bit",
+  "pwsh": "local-provider/pwsh/7.6.6/pwsh",
+  "pwsh_sha256": "86966ef5e53763c0d7cac9981b9b36c30245185dc347ca69ddfb815c665bf515",
+  "race": "PASS focused polyglot environment tests",
+  "raw_evidence_sha256": {
+    "PASS": "8fd7fa7f39aa747fea0efd4ead5383a227dcc9a2787f773dec4412cdb767e671",
+    "identity.json": "0caee7b19f0e23eaae14c14861593d7b107305f59fb69beee9ef0fa5987c49ac",
+    "lower.jsonl": "436d16c44c5cad8ef65124770e00689dd44486e0df2ea953cea3afeaa3d1c471",
+    "lower.status": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "lower.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "polyglot.jsonl": "d1505cebae6fdb8c3ebda2b0715fafce5b8a3c097cc1e644f6aa863637954c52",
+    "polyglot.status": "9a271f2a916b0b6ee6cecb2426f0b3206ef074578be55d9bc94f6f3fe3ab86aa",
+    "polyglot.stderr": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "source_archive_sha256": "2774b2a1aa7e8b79b85af7f77b7e290a5d55f268ca118b81c3186813e3ba2e7e",
+  "windows_cross_compile": "PASS polyglot test binary; not execution proof",
+  "windows_stage": "windows-stage/ps-locale-worker22/candidate-e62d7996"
+}

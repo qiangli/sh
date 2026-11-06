@@ -14,6 +14,7 @@ func (e *emitter) programEntrySource(body string, mixedShell bool) string {
 // identifier. The default private name is hygienic within the source unit.
 func (e *emitter) programEntrySourceNamed(body string, mixedShell bool, entryName string) string {
 	rt, p := e.prefix+"rt.", e.prefix+"program"
+	entryErr := e.prefix + "entryErr"
 	var defaults []string
 	// Session options override these per invocation. Do not use the support
 	// package's legacy mutable process-wide output handles as entry defaults.
@@ -31,15 +32,28 @@ func (e *emitter) programEntrySourceNamed(body string, mixedShell bool, entryNam
 		}
 		defaults = append(defaults, rt+"WithShellFactory("+factory+"))")
 	}
+	entryCall := entryName + "()"
+	mainCleanup := ""
+	if cleanup := e.foreignMainCleanup(); cleanup != "" {
+		// Keep cleanup outside entryName: an importable library may call its
+		// entry repeatedly or concurrently, while the generated process main
+		// owns the package-level modules. The wrapper also runs its defer before
+		// main can use os.Exit, which otherwise skips deferred cleanup.
+		mainEntry := e.prefix + "mainEntry"
+		entryCall = mainEntry + "()"
+		mainCleanup = "func " + mainEntry + "() (status int, err " + e.foreignErrorType() + ") {\n" +
+			"defer func() {\n" + cleanup + "}()\n" +
+			"return " + entryName + "()\n}\n"
+	}
 	return "// " + entryName + " runs a fresh runtime instance. Returned errors are not printed by the entry.\n" +
-		"func " + entryName + "(opts ..." + rt + "SessionOption) (status int, err error) {\n" +
+		"func " + entryName + "(opts ..." + rt + "SessionOption) (status int, " + entryErr + " " + e.foreignErrorType() + ") {\n" +
 		"defaults := []" + rt + "SessionOption{" + strings.Join(defaults, ",") + "}\n" +
-		p + ", err := " + rt + "NewProgram(append(defaults,opts...)...)\n" +
-		"if err != nil { return " + rt + "ExitCode(err),err }\n" +
-		"err = " + p + ".Run(func(" + p + " *" + rt + "Program) {\n" + body + "\n})\n" +
-		"if err != nil { err = " + rt + "SourceFailure(err); return " + rt + "ExitCode(err),err }\n" +
-		"return " + p + ".Status(),nil\n}\n" +
-		"func main() {\nstatus,err := " + entryName + "()\n" +
+		p + ", " + entryErr + " := " + rt + "NewProgram(append(defaults,opts...)...)\n" +
+		"if " + entryErr + " != nil { return " + rt + "ExitCode(" + entryErr + ")," + entryErr + " }\n" +
+		entryErr + " = " + p + ".Run(func(" + p + " *" + rt + "Program) {\n" + body + "\n})\n" +
+		"if " + entryErr + " != nil { " + entryErr + " = " + rt + "SourceFailure(" + entryErr + "); return " + rt + "ExitCode(" + entryErr + ")," + entryErr + " }\n" +
+		"return " + p + ".Status(),nil\n}\n" + mainCleanup +
+		"func main() {\nstatus,err := " + entryCall + "\n" +
 		"if err != nil { " + e.prefix + "fmt.Fprintln(" + e.prefix + "os.Stderr,err) }\n" +
 		"if status != 0 { " + e.prefix + "os.Exit(status) }\n}\n"
 }

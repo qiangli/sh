@@ -20,3 +20,20 @@ func NewForeignIterator(module *polyglot.Module, name string, args []any) *shell
 		},
 	}
 }
+
+func NewPythonHandleIterator(handle *polyglot.Handle) *shellrt.ForeignIterator {
+	return &shellrt.ForeignIterator{
+		Element: "any",
+		DomainError: func(err error) bool {
+			_, ok := polyglot.ForeignErrorDetail(err)
+			return ok
+		},
+		Decode: func(ctx context.Context, line, element string) (any, string, string, error) {
+			frame, err := handle.DecodeIteratorFrame(ctx, line, element)
+			return frame.Value, frame.Stdout, frame.Stderr, err
+		},
+		Start: func(ctx context.Context) (shellrt.IteratorProcess, error) {
+			return interp.StartForeignHandleIterator(ctx, handle, shellrt.Stdout, shellrt.Stderr)
+		},
+	}
+}

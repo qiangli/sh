@@ -7,6 +7,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"mvdan.cc/sh/v3/internal"
 )
 
 // S358.4 — a PowerShell island function as a Bash# command word: argv, pipes
@@ -29,15 +31,26 @@ func powerShellProject(t *testing.T) (dir string, environ []string) {
 	if err := os.Mkdir(bin, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for _, tool := range []string{"tr", "wc", "sort", "cat", "jq"} {
-		if path, err := exec.LookPath(tool); err == nil {
-			_ = os.Symlink(path, filepath.Join(bin, tool))
+	// jq remains an optional assertion, but a discovered executable must be
+	// usable in this private PATH. Windows does not discover extensionless
+	// symlinks as .exe programs and may disallow symlink creation entirely.
+	if tool, err := exec.LookPath("jq"); err == nil {
+		data, err := os.ReadFile(tool)
+		if err != nil {
+			t.Fatal(err)
+		}
+		name := "jq"
+		if runtime.GOOS == "windows" {
+			name += ".exe"
+		}
+		if err := os.WriteFile(filepath.Join(bin, name), data, 0755); err != nil {
+			t.Fatal(err)
 		}
 	}
 	path := bin + string(os.PathListSeparator) + filepath.Dir(pwsh)
 	environ = []string{"PATH=" + path, "HOME=" + dir}
 	if runtime.GOOS == "windows" {
-		environ = append(environ, "SYSTEMROOT="+os.Getenv("SYSTEMROOT"), "PATHEXT="+os.Getenv("PATHEXT"))
+		environ = append(environ, "SYSTEMROOT="+os.Getenv("SYSTEMROOT"), "PATHEXT=.EXE")
 	}
 	return dir, environ
 }
@@ -55,6 +68,11 @@ function Rows {
     [pscustomobject]@{ id = 1; name = 'a' }
 }
 function Fail { throw 'nope' }
+function BeforeFail { & { 'before'; throw 'boom'; 'after' } *>&1 | Out-String -Stream -Width 120 }
+function ExitSelf {
+    param([string]$code)
+    & { 'before'; exit ([int]$code); 'after' } *>&1 | Out-String -Stream -Width 120
+}
 function Warned { Write-Error 'soft'; 'kept going' }
 function Crlf { "line1` + "`r`n" + `line2" }
 function Bytes { ,[byte[]]@(104, 105, 10) }
@@ -86,9 +104,7 @@ echo "status=$?"
 // jq. The shell pipe stays bytes throughout.
 func TestBashPPPowerShellCommandPipesToUnixTools(t *testing.T) {
 	dir, environ := powerShellProject(t)
-	if _, err := exec.LookPath("sort"); err != nil {
-		t.Skip("sort unavailable")
-	}
+	internal.PowerShellTestSort(t, filepath.Join(dir, "bin"))
 	stdout, stderr, status := runPowerShellCommandScript(t, dir, environ, `printf 'gamma\nalpha\nbeta\n' | ps.Shout | sort
 `)
 	if status != 0 || stderr != "" {
@@ -133,6 +149,28 @@ echo "failed=$?"
 	}
 	if !strings.Contains(string(errText), "soft") {
 		t.Fatalf("redirected stderr = %q", errText)
+	}
+}
+
+// Output emitted before a terminating error remains visible, and exit ends
+// only the command invocation with its requested status. Both paths leave the
+// persistent worker available to serve the following command.
+func TestBashPPPowerShellCommandFailureOutputAndExitLifecycle(t *testing.T) {
+	dir, environ := powerShellProject(t)
+	stdout, stderr, status := runPowerShellCommandScript(t, dir, environ, `ps.BeforeFail
+echo "throw=$?"
+ps.ExitSelf 3
+echo "exit=$?"
+ps.Greet alive
+`)
+	if status != 0 {
+		t.Fatalf("status=%d stderr=%q stdout=%q", status, stderr, stdout)
+	}
+	if stdout != "before\nthrow=1\nbefore\nexit=3\nhello alive\n" {
+		t.Fatalf("stdout = %q", stdout)
+	}
+	if !strings.Contains(stderr, "boom") || strings.Contains(stderr, "worker exited") {
+		t.Fatalf("stderr = %q", stderr)
 	}
 }
 

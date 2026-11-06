@@ -59,6 +59,17 @@ func (c CSharp) arguments(Plan) []string {
 // loadRequest names the cached assembly the worker loads, with the generated
 // source it compiles from if the cache entry has gone since analysis.
 func (c CSharp) loadRequest(plan Plan) map[string]any {
+	return c.loadRequestContext(context.Background(), plan)
+}
+
+func (c CSharp) loadRequestContext(ctx context.Context, plan Plan) map[string]any {
+	if graph := c.graphPayload(plan); graph != "" {
+		u, _, err := c.ensureGraph(ctx, plan.Source, graph)
+		if err != nil {
+			return map[string]any{"id": 0, "op": "load", "error": err.Error()}
+		}
+		return map[string]any{"id": 0, "op": "load", "assembly": u.assembly, "type": u.typeName, "dependencies": u.dependencies, "graph": true}
+	}
 	unit, err := c.unit(plan.Source)
 	if err != nil {
 		return map[string]any{"id": 0, "op": "load", "error": err.Error()}
@@ -74,6 +85,10 @@ var csharpCompiles atomic.Int64
 // source was compiled by the same toolchain, otherwise by compiling it with
 // Add-Type into the cache and reflecting over the assembly.
 func (c CSharp) Analyze(ctx context.Context, source string) ([]Export, error) {
+	if graph := c.graphPayload(Plan{}); graph != "" {
+		_, exports, err := c.ensureGraph(ctx, source, graph)
+		return exports, err
+	}
 	unit, err := c.unit(source)
 	if err != nil {
 		return nil, err
@@ -138,7 +153,7 @@ func (c CSharp) unit(source string) (csharpUnit, error) {
 	if err != nil {
 		return csharpUnit{}, err
 	}
-	sum := sha256.Sum256([]byte("bashpp-csharp-v1\x00" + runtime.GOOS + "/" + runtime.GOARCH + "\x00" + toolchain + "\x00" + generated))
+	sum := sha256.Sum256([]byte("bashpp-csharp-v2\x00" + runtime.GOOS + "/" + runtime.GOARCH + "\x00" + toolchain + "\x00" + generated))
 	key := hex.EncodeToString(sum[:])
 	return csharpUnit{
 		source:   generated,
@@ -290,6 +305,12 @@ var (
 	csharpUsingDirective = regexp.MustCompile(`^(global\s+)?using\s+[^\s(][^;(]*;\s*(//.*)?$`)
 )
 
+const csharpBodyMarkerPrefix = "// <bashpp-csharp-body-v2-"
+
+func csharpBodyMarker(typeName string) string {
+	return csharpBodyMarkerPrefix + typeName + ">"
+}
+
 // CSharpNuGetFollowUp names the separate story that owns NuGet packages; a
 // fence declaring a package is refused with it.
 const CSharpNuGetFollowUp = "S358.6 (7455eb7e99dd)"
@@ -300,12 +321,11 @@ type csharpLine struct {
 	line int
 }
 
-// csharpGenerate wraps an aggregated fence body into its compilation unit and
-// answers the generated type that holds the exports. The leading `using`
-// lines of each block go before the namespace; everything else becomes the
-// members of a static class in a namespace derived from the source. Every
-// emitted line keeps a `#line` mapping to its fence line, so a compiler
-// diagnostic names the script and line the author wrote, never the wrapper.
+// csharpGenerate separates an aggregated fence's leading using directives
+// from its body and answers the generated type that holds the exports. The
+// compile helper uses the marker to partition compilation-unit declarations
+// with Roslyn before wrapping the residual members in that type. Every emitted
+// source line keeps a #line mapping to its fence line.
 func csharpGenerate(source string) (string, string, error) {
 	file, line := "<bash++ csharp>", 1
 	leading := true
@@ -334,12 +354,6 @@ func csharpGenerate(source string) (string, string, error) {
 	}
 	sum := sha256.Sum256([]byte(source))
 	namespace := "BashPP.CSharp.M" + hex.EncodeToString(sum[:8])
-	first, last := csharpLine{file: file, line: 1}, csharpLine{file: file, line: 1}
-	if len(body) > 0 {
-		first, last = body[0], body[len(body)-1]
-	} else if len(header) > 0 {
-		first, last = header[len(header)-1], header[len(header)-1]
-	}
 	var out strings.Builder
 	emit := func(lines []csharpLine) {
 		prev := csharpLine{line: -1}
@@ -353,11 +367,9 @@ func csharpGenerate(source string) (string, string, error) {
 		}
 	}
 	emit(header)
-	// The wrapper's own lines map to the fence edges: an unbalanced brace in
-	// the body is reported at the fence's last line, not past it.
-	fmt.Fprintf(&out, "#line %d \"%s\"\nnamespace %s { public static class Fence {\n", first.line, csharpLineFile(first.file), namespace)
+	out.WriteString(csharpBodyMarker(namespace + ".Fence"))
+	out.WriteByte('\n')
 	emit(body)
-	fmt.Fprintf(&out, "#line %d \"%s\"\n} }\n", last.line, csharpLineFile(last.file))
 	return out.String(), namespace + ".Fence", nil
 }
 
@@ -374,7 +386,176 @@ func csharpLineFile(name string) string {
 // concurrent compile of the same key that wins the rename is equally good.
 // Compiler errors are reported with the mapped (#line) fence locations.
 const csharpCompilePrelude = `
-function Compile-Fence([string]$src, [string]$assembly) {
+function Test-FenceExtensionType($member) {
+    if (-not ($member -is [Microsoft.CodeAnalysis.CSharp.Syntax.TypeDeclarationSyntax])) { return $false }
+    $isStatic = $false
+    foreach ($modifier in $member.Modifiers) {
+        if ($modifier.RawKind -eq [int][Microsoft.CodeAnalysis.CSharp.SyntaxKind]::StaticKeyword) { $isStatic = $true; break }
+    }
+    if (-not $isStatic) { return $false }
+    foreach ($method in $member.Members) {
+        if (-not ($method -is [Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax]) -or $method.ParameterList.Parameters.Count -eq 0) { continue }
+        foreach ($modifier in $method.ParameterList.Parameters[0].Modifiers) {
+            if ($modifier.RawKind -eq [int][Microsoft.CodeAnalysis.CSharp.SyntaxKind]::ThisKeyword) { return $true }
+        }
+    }
+    return $false
+}
+function Test-FenceUnitDeclaration($member) {
+    return ($member -is [Microsoft.CodeAnalysis.CSharp.Syntax.BaseNamespaceDeclarationSyntax] -or
+        $member -is [Microsoft.CodeAnalysis.CSharp.Syntax.BaseTypeDeclarationSyntax] -or
+        $member -is [Microsoft.CodeAnalysis.CSharp.Syntax.DelegateDeclarationSyntax])
+}
+function Test-FenceFileLocalType($member) {
+    if (-not ($member -is [Microsoft.CodeAnalysis.CSharp.Syntax.BaseTypeDeclarationSyntax])) { return $false }
+    foreach ($modifier in $member.Modifiers) {
+        if ($modifier.RawKind -eq [int][Microsoft.CodeAnalysis.CSharp.SyntaxKind]::FileKeyword) { return $true }
+    }
+    return $false
+}
+function Test-FenceUsingStaticLocalType($root, [string]$header) {
+    # csharpGenerate lifts leading using directives ahead of the body marker.
+    # Search both syntax roots: the authored type remains in the body root.
+    $headerRoot = [Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree]::ParseText($header).GetCompilationUnitRoot()
+    foreach ($using in @($headerRoot.Usings) + @($root.Usings)) {
+        if ($using.StaticKeyword.IsMissing -or $using.StaticKeyword.RawKind -ne [int][Microsoft.CodeAnalysis.CSharp.SyntaxKind]::StaticKeyword) { continue }
+        if (-not ($using.Name -is [Microsoft.CodeAnalysis.CSharp.Syntax.IdentifierNameSyntax])) { continue }
+        $name = $using.Name.Identifier.ValueText
+        foreach ($member in $root.Members) {
+            if ($member -is [Microsoft.CodeAnalysis.CSharp.Syntax.BaseTypeDeclarationSyntax] -and $member.Identifier.ValueText -ceq $name) { return $true }
+        }
+    }
+    return $false
+}
+function Find-FenceFileNamespaceResidual($member) {
+    # In a file-scoped namespace, a free fence method after a type is not a
+    # legal compilation-unit member. Roslyn recovers by attaching the method
+    # to that type and preserving the type's real closing brace as skipped
+    # trivia on the method. Use that structured recovery token as the split;
+    # plain text or brace counting would misread comments, strings, and raw
+    # strings.
+    foreach ($node in $member.DescendantNodesAndSelf()) {
+        foreach ($trivia in $node.GetLeadingTrivia()) {
+            if (-not $trivia.HasStructure -or $trivia.RawKind -ne [int][Microsoft.CodeAnalysis.CSharp.SyntaxKind]::SkippedTokensTrivia) { continue }
+            foreach ($token in $trivia.GetStructure().ChildTokens()) {
+                if ($token.RawKind -eq [int][Microsoft.CodeAnalysis.CSharp.SyntaxKind]::CloseBraceToken) {
+                    return [pscustomobject]@{ CloseAt = $token.Span.End; Node = $node }
+                }
+            }
+        }
+    }
+    return $null
+}
+function Normalize-FenceSource([string]$src, [string]$typeName) {
+    # The generated type is derived from the original source hash. Including
+    # it in the delimiter prevents user comments containing the old fixed
+    # marker text from being mistaken for the header/body boundary.
+    $marker = '// <bashpp-csharp-body-v2-' + $typeName + '>'
+    $at = $src.IndexOf($marker, [System.StringComparison]::Ordinal)
+    if ($at -lt 0) { throw 'C# fence source is missing its body marker' }
+    $header = $src.Substring(0, $at)
+    $bodyAt = $at + $marker.Length
+    if ($bodyAt -lt $src.Length -and $src[$bodyAt] -eq [char]13) { $bodyAt++ }
+    if ($bodyAt -lt $src.Length -and $src[$bodyAt] -eq [char]10) { $bodyAt++ }
+    $body = $src.Substring($bodyAt)
+    $root = [Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree]::ParseText($body).GetCompilationUnitRoot()
+    $fileScoped = @($root.Members | Where-Object { $_ -is [Microsoft.CodeAnalysis.CSharp.Syntax.FileScopedNamespaceDeclarationSyntax] })
+    if ($fileScoped.Count -gt 1) { throw 'C# fence has more than one file-scoped namespace in one source block' }
+    $fileNamespaceScope = ''
+    if ($fileScoped.Count -eq 1) {
+        $fileNamespace = $fileScoped[0]
+        $closeAt = $fileNamespace.Span.End
+        $residualNode = $null
+        $sawResidual = $false
+        foreach ($member in $fileNamespace.Members) {
+            if (Test-FenceUnitDeclaration $member) {
+                if ($sawResidual) { throw 'C# fence file-scoped namespace interleaves exported members and type declarations' }
+                $recovered = Find-FenceFileNamespaceResidual $member
+                if ($null -ne $recovered) {
+                    $closeAt = $recovered.CloseAt
+                    $residualNode = $recovered.Node
+                    $sawResidual = $true
+                }
+                continue
+            }
+            if (-not $sawResidual) {
+                $closeAt = $member.FullSpan.Start
+                $residualNode = $member
+                $sawResidual = $true
+            }
+        }
+        $fileNamespaceScope = 'using global::' + $fileNamespace.Name.ToString() + ';' + [char]10
+        foreach ($using in $fileNamespace.Usings) {
+            $fileNamespaceScope += $using.ToString() + [char]10
+        }
+        $semi = $fileNamespace.SemicolonToken.Span
+        $lf = [char]10
+        $residualAt = $closeAt
+        $lineReset = ''
+        if ($sawResidual) {
+            $resetLine = $residualNode.GetLocation().GetMappedLineSpan()
+            $column = $residualNode.GetLocation().GetLineSpan().StartLinePosition.Character
+            $residualAt = $residualNode.Span.Start - $column
+            if ($resetLine.IsValid -and $resetLine.Path) {
+                $path = $resetLine.Path.Replace('"', "'")
+                $lineReset = '#line ' + ($resetLine.StartLinePosition.Line + 1) + ' "' + $path + '"' + $lf
+            }
+        }
+        $body = $body.Substring(0, $semi.Start) + ' {' +
+            $body.Substring($semi.End, $closeAt - $semi.End) + $lf + '}' + $lf +
+            $body.Substring($closeAt, $residualAt - $closeAt) + $lineReset + $body.Substring($residualAt)
+        $root = [Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree]::ParseText($body).GetCompilationUnitRoot()
+    }
+    $unitMode = Test-FenceUsingStaticLocalType $root $header
+    foreach ($member in $root.Members) {
+        if ($member -is [Microsoft.CodeAnalysis.CSharp.Syntax.BaseNamespaceDeclarationSyntax] -or
+            (Test-FenceExtensionType $member) -or (Test-FenceFileLocalType $member)) {
+            $unitMode = $true
+        }
+    }
+    $dot = $typeName.LastIndexOf('.')
+    if ($dot -le 0 -or $typeName.Substring($dot + 1) -ne 'Fence') { throw ('invalid generated C# fence type ' + $typeName) }
+    $namespace = $typeName.Substring(0, $dot)
+    $lf = [char]10
+    if (-not $unitMode) {
+        return $header + 'namespace ' + $namespace + ' { public static class Fence {' + $lf + $body + $lf + '#line hidden' + $lf + '} }' + $lf
+    }
+    $nodes = @()
+    foreach ($attribute in $root.AttributeLists) { $nodes += $attribute }
+    foreach ($using in $root.Usings) { $nodes += $using }
+    foreach ($member in $root.Members) { $nodes += $member }
+    $nodes = @($nodes | Sort-Object { $_.FullSpan.Start })
+    $out = New-Object System.Text.StringBuilder
+    [void]$out.Append($header)
+    $cursor = 0
+    foreach ($node in $nodes) {
+        $full = $node.FullSpan
+        if ($full.Start -gt $cursor) { [void]$out.Append($body.Substring($cursor, $full.Start - $cursor)) }
+        if ($node -is [Microsoft.CodeAnalysis.CSharp.Syntax.AttributeListSyntax] -or
+            $node -is [Microsoft.CodeAnalysis.CSharp.Syntax.UsingDirectiveSyntax] -or
+            (Test-FenceUnitDeclaration $node)) {
+            [void]$out.Append($body.Substring($full.Start, $full.Length))
+        } else {
+            $span = $node.Span
+            [void]$out.Append($body.Substring($full.Start, $span.Start - $full.Start))
+            [void]$out.Append('namespace ' + $namespace + ' {' + $lf + $fileNamespaceScope + 'public static partial class Fence {' + $lf)
+            $mapped = $node.GetLocation().GetMappedLineSpan()
+            if ($mapped.IsValid -and $mapped.Path) {
+                $path = $mapped.Path.Replace('"', "'")
+                [void]$out.Append('#line ' + ($mapped.StartLinePosition.Line + 1) + ' "' + $path + '"' + $lf)
+            }
+            $column = $node.GetLocation().GetLineSpan().StartLinePosition.Character
+            if ($column -gt 0) { [void]$out.Append(''.PadLeft($column)) }
+            [void]$out.Append($body.Substring($span.Start, $span.Length))
+            [void]$out.Append($lf + '#line hidden' + $lf + '} }' + $lf)
+            [void]$out.Append($body.Substring($span.End, $full.End - $span.End))
+        }
+        $cursor = $full.End
+    }
+    if ($cursor -lt $body.Length) { [void]$out.Append($body.Substring($cursor)) }
+    return $out.ToString()
+}
+function Compile-Fence([string]$src, [string]$assembly, [string]$typeName) {
     $dir = [System.IO.Path]::GetDirectoryName($assembly)
     $tmpDir = [System.IO.Path]::Combine($dir, '.tmp-' + $PID + '-' + [guid]::NewGuid().ToString('N'))
     [void][System.IO.Directory]::CreateDirectory($tmpDir)
@@ -383,7 +564,8 @@ function Compile-Fence([string]$src, [string]$assembly) {
         $diag = $null
         $failure = $null
         try {
-            Add-Type -TypeDefinition $src -Language CSharp -OutputAssembly $tmp -OutputType Library -IgnoreWarnings -ErrorAction SilentlyContinue -ErrorVariable diag -WarningAction SilentlyContinue
+            $normalized = Normalize-FenceSource $src $typeName
+            Add-Type -TypeDefinition $normalized -Language CSharp -CompilerOptions '/unsafe' -OutputAssembly $tmp -OutputType Library -IgnoreWarnings -ErrorAction SilentlyContinue -ErrorVariable diag -WarningAction SilentlyContinue
         } catch {
             $failure = $_
         }
@@ -475,7 +657,7 @@ $ErrorActionPreference = 'Stop'
 try {
     $req = [Console]::In.ReadToEnd() | ConvertFrom-Json -AsHashtable
     $assembly = [string]$req['assembly']
-    if (-not [System.IO.File]::Exists($assembly)) { Compile-Fence ([string]$req['source']) $assembly }
+    if (-not [System.IO.File]::Exists($assembly)) { Compile-Fence ([string]$req['source']) $assembly ([string]$req['type']) }
     $asm = [System.Reflection.Assembly]::LoadFrom($assembly)
     $type = $asm.GetType([string]$req['type'], $true)
     [Console]::Out.Write((Fence-Exports $type))
@@ -532,8 +714,14 @@ while ($true) {
                 if ($req.ContainsKey('error') -and $req['error']) { throw [string]$req['error'] }
                 $assembly = [string]$req['assembly']
                 $compiled = $false
-                if (-not [System.IO.File]::Exists($assembly)) { Compile-Fence ([string]$req['source']) $assembly; $compiled = $true }
-                $script:fenceAssembly = [System.Reflection.Assembly]::LoadFrom($assembly)
+                if ($req['graph']) {
+                    if (-not [IO.File]::Exists($assembly)) { throw 'C# graph cache disappeared before load' }
+                    $script:graphContext = [System.Runtime.Loader.AssemblyLoadContext]::new(('fence-' + [guid]::NewGuid().ToString('N')), $false)
+                    foreach ($dependency in $req.dependencies) { [void]$script:graphContext.LoadFromAssemblyPath([string]$dependency) }
+                }
+                if (-not [System.IO.File]::Exists($assembly)) { Compile-Fence ([string]$req['source']) $assembly ([string]$req['type']); $compiled = $true }
+                if ($req['graph']) { $script:fenceAssembly = $script:graphContext.LoadFromAssemblyPath($assembly) }
+                else { $script:fenceAssembly = [System.Reflection.Assembly]::LoadFrom($assembly) }
                 $script:fenceType = $script:fenceAssembly.GetType([string]$req['type'], $true)
                 $res = @{ id = $rid; ok = $true; result = @{ compiled = $compiled }; stdout = ''; stderr = '' }
             }

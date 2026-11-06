@@ -56,9 +56,28 @@ func (e *emitter) fieldProjection(typ, name string, seen map[string]bool) projec
 	}
 	return scalarProjection()
 }
+
+// importedQualifier distinguishes an import from storage shadowing its name.
+// Imports are registered in the outer script scope; function scopes instead
+// start fresh and contain only their own parameters and local declarations.
+func (e *emitter) importedQualifier(name string) bool {
+	if e.imports[name] == "" {
+		return false
+	}
+	if e.inFunc {
+		return !e.bound(name)
+	}
+	for i := 1; i < len(e.scopes); i++ {
+		if e.scopes[i][name] {
+			return false
+		}
+	}
+	return !e.globals[name] && !e.typeNames[name] && !e.funcs[name]
+}
+
 func (e *emitter) checkedSelector(n *syntax.BashPPSelectorExpr) (string, error) {
-	if e.goSource && n.Sel != nil {
-		if id, ok := n.X.(*syntax.BashPPIdent); ok && e.imports[id.Name.Value] != "" {
+	if n.Sel != nil {
+		if id, ok := n.X.(*syntax.BashPPIdent); ok && e.importedQualifier(id.Name.Value) {
 			return id.Name.Value + "." + n.Sel.Value, nil
 		}
 	}

@@ -51,6 +51,7 @@ import polyglot "mvdan.cc/sh/v3/polyglot"
 `
 		decls = `func RunnerOptions(opts ...interp.RunnerOption) Option
 func NewForeignIterator(module *polyglot.Module,name string,args []any) *rt.ForeignIterator
+func NewPythonHandleIterator(handle *polyglot.Handle) *rt.ForeignIterator
 `
 	}
 	source := `package shellexec

@@ -34,6 +34,9 @@ func newOverlayEnviron(parent expand.Environ, background bool) *overlayEnviron {
 		for name, vr := range parent.Each {
 			oenv.Set(name, vr)
 		}
+		if p, ok := parent.(*overlayEnviron); ok && p.goCommandTracking() {
+			oenv.goCommandTouched = p.goCommandTouchedNames()
+		}
 	}
 	return oenv
 }
@@ -44,6 +47,9 @@ type overlayEnviron struct {
 	// which we can safely reuse without data races, such as non-background subshells
 	// or function calls.
 	parent expand.Environ
+	// goCommandTouched records writes after shell startup. It is nil until
+	// tracking begins, so synthesized startup variables are not guest input.
+	goCommandTouched map[string]bool
 
 	// values maps normalized variable names, per [overlayEnviron.normalize].
 	values map[string]namedVariable
@@ -347,12 +353,14 @@ func (o *overlayEnviron) Set(name string, vr expand.Variable) error {
 	} else if prev.ReadOnly && prev.Declared() {
 		if prev.Kind == expand.NameRef && vr.Kind == expand.NameRef {
 			vr.ReadOnly = true
+			o.markGoCommandTouched(name)
 			goto store
 		}
 		if !(prev.Kind == expand.NameRef && prev.Str == "" && vr.Kind == expand.String && vr.ReadOnly) {
 			return fmt.Errorf("readonly variable")
 		}
 	}
+	o.markGoCommandTouched(name)
 	if !vr.IsSet() { // unsetting
 		// Preserve the variable when it carries an attribute that
 		// must outlive the assignment — local, integer, exported,
@@ -379,6 +387,59 @@ store:
 	}
 	o.values[normalized] = namedVariable{Name: name, Variable: vr, Temp: temp, Prev: prev.Prev}
 	return nil
+}
+
+func (o *overlayEnviron) markGoCommandTouched(name string) {
+	if o.goCommandTouched == nil {
+		if p, ok := o.parent.(*overlayEnviron); ok && p.goCommandTracking() {
+			o.goCommandTouched = make(map[string]bool)
+		}
+	}
+	if o.goCommandTouched != nil {
+		o.goCommandTouched[name] = true
+	}
+}
+
+func (o *overlayEnviron) goCommandTracking() bool {
+	if o.goCommandTouched != nil {
+		return true
+	}
+	p, ok := o.parent.(*overlayEnviron)
+	return ok && p.goCommandTracking()
+}
+
+func (o *overlayEnviron) goCommandTouchedNames() map[string]bool {
+	names := make(map[string]bool)
+	for current := o; current != nil; {
+		for name := range current.goCommandTouched {
+			names[name] = true
+		}
+		parent, _ := current.parent.(*overlayEnviron)
+		current = parent
+	}
+	return names
+}
+
+func (o *overlayEnviron) goCommandWasTouched(name string) bool {
+	for current := o; current != nil; {
+		if current.goCommandTouched[name] {
+			return true
+		}
+		current, _ = current.parent.(*overlayEnviron)
+	}
+	return false
+}
+
+// A command-prefix assignment is visible to that command but a restored
+// assignment must not count as a lasting shell export for the next Go command.
+func (o *overlayEnviron) restoreGoCommandTouch(name string, wasTouched bool) {
+	if wasTouched {
+		return
+	}
+	for current := o; current != nil; {
+		delete(current.goCommandTouched, name)
+		current, _ = current.parent.(*overlayEnviron)
+	}
 }
 
 func (o *overlayEnviron) isTemp(name string) bool {

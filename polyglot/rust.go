@@ -23,8 +23,12 @@ import (
 // Close terminates it, after which the next call restarts it from the
 // immutable plan.
 type Rust struct {
-	Command     string
-	Environment *EnvironmentPlan
+	// ContextFile opts standalone callers into a locked dependency context.
+	// ContextSHA256, when set, binds its bytes before preparation.
+	ContextFile   string
+	ContextSHA256 string
+	Command       string
+	Environment   *EnvironmentPlan
 }
 
 func (r Rust) executable() string {
@@ -75,6 +79,15 @@ func (r Rust) Analyze(ctx context.Context, source string) ([]Export, error) {
 }
 
 func (r Rust) AnalyzeArtifact(ctx context.Context, source string) ([]Export, string, error) {
+	target, err := r.target()
+	if err != nil {
+		return nil, "", err
+	}
+	if target == "proc-macro" {
+		path, digest := r.dependencyContext()
+		_, err := r.buildLocked(ctx, source, "", path, digest)
+		return nil, "", err
+	}
 	parsed, err := analyzeRustExports(source)
 	if err != nil {
 		return nil, "", err
@@ -86,7 +99,12 @@ func (r Rust) AnalyzeArtifact(ctx context.Context, source string) ([]Export, str
 	if err != nil {
 		return nil, "", err
 	}
-	binary, err := r.build(ctx, generated)
+	var binary []byte
+	if path, digest := r.dependencyContext(); path != "" {
+		binary, err = r.buildLocked(ctx, source, generated, path, digest)
+	} else {
+		binary, err = r.build(ctx, generated)
+	}
 	if err != nil {
 		return nil, "", err
 	}

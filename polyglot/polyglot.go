@@ -53,8 +53,11 @@ type Signature struct {
 }
 
 type Export struct {
-	Name      string    `json:"name"`
-	Signature Signature `json:"signature"`
+	// Unavailable records a declaration that is module-internal, not callable.
+	// Prepare separates these diagnostic records from the callable exports.
+	Unavailable string    `json:"unavailable,omitempty"`
+	Name        string    `json:"name"`
+	Signature   Signature `json:"signature"`
 	// Effects are the effect atoms a world-changing text verb carries; nil
 	// for a source function or a read-only verb.
 	Effects []string `json:"effects,omitempty"`
@@ -62,15 +65,22 @@ type Export struct {
 	Agentic bool `json:"agentic,omitempty"`
 }
 
+func (e Export) UnavailableDiagnostic() string {
+	return fmt.Sprintf("Go function %s is not callable from Bash#: %s", e.Name, e.Unavailable)
+}
+
 type Plan struct {
-	ID       string
-	Language string
-	Alias    string
-	Runner   string
-	Source   string
-	Origin   string
-	Artifact string
-	Exports  []Export
+	CSharpAssemblies   string
+	RustTarget         string
+	UnavailableExports []Export
+	ID                 string
+	Language           string
+	Alias              string
+	Runner             string
+	Source             string
+	Origin             string
+	Artifact           string
+	Exports            []Export
 }
 
 type Analyzer interface {
@@ -121,6 +131,16 @@ func Prepare(ctx context.Context, blocks []Block, analyzers map[string]Analyzer)
 		}
 		group := groups[lang]
 		source := aggregateSource(lang, group.blocks)
+		if lang == "go" {
+			if goAnalyzer, ok := analyzer.(Go); ok {
+				assetDir, originErr := goEmbedSourceDir(group.blocks)
+				if originErr != nil {
+					return nil, fmt.Errorf("polyglot go: %w", originErr)
+				}
+				goAnalyzer.AssetSourceDir = assetDir
+				analyzer = goAnalyzer
+			}
+		}
 		var exports []Export
 		var artifact string
 		var err error
@@ -132,8 +152,31 @@ func Prepare(ctx context.Context, blocks []Block, analyzers map[string]Analyzer)
 		if err != nil {
 			return nil, fmt.Errorf("polyglot %s: %w", lang, err)
 		}
+		var callable, unavailable []Export
+		for _, export := range exports {
+			if export.Unavailable != "" {
+				unavailable = append(unavailable, export)
+			} else {
+				callable = append(callable, export)
+			}
+		}
+		graph := ""
+		rustTarget := ""
+		if c, ok := analyzer.(CSharp); ok && c.Environment != nil {
+			graph = c.Environment.CSharpAssemblies
+		}
+		if r, ok := analyzer.(Rust); ok {
+			rustTarget, err = r.target()
+			if err != nil {
+				return nil, fmt.Errorf("polyglot rust: %w", err)
+			}
+		}
 		origin := group.blocks[0].Origin
-		plans = append(plans, Plan{ID: planID(lang, group.alias, source, artifact, group.runner, origin), Language: lang, Alias: group.alias, Runner: group.runner, Source: source, Origin: origin, Artifact: artifact, Exports: exports})
+		identityTarget := rustTarget
+		if identityTarget == "binary" {
+			identityTarget = ""
+		}
+		plans = append(plans, Plan{CSharpAssemblies: graph, RustTarget: rustTarget, ID: planID(lang, group.alias, source, artifact+graph+identityTarget, group.runner, origin), Language: lang, Alias: group.alias, Runner: group.runner, Source: source, Origin: origin, Artifact: artifact, Exports: callable, UnavailableExports: unavailable})
 	}
 	return plans, nil
 }
@@ -144,6 +187,9 @@ func planID(language, alias, source, artifact, runner, origin string) string {
 }
 
 func aggregateSource(language string, blocks []Block) string {
+	if language == "go" {
+		return aggregateGoSource(blocks)
+	}
 	if !languageFlag(language, func(l Language) bool { return l.LineDirectives }) {
 		sources := make([]string, len(blocks))
 		for i := range blocks {
@@ -498,6 +544,17 @@ type Callback struct {
 	Invoke func(ctx context.Context, args []any) (any, error)
 }
 
+// CallbackFailure marks a shell callback error which has a shell status.
+// Workers expose Status on their language-specific callback exception while
+// retaining Message as the ordinary error text.
+type CallbackFailure struct {
+	Message string
+	Status  int
+}
+
+func (e *CallbackFailure) Error() string       { return e.Message }
+func (e *CallbackFailure) CallbackStatus() int { return e.Status }
+
 // Callbacks configures how a module serves shell callbacks.
 type Callbacks struct {
 	// Resolve maps the name a call passed as a plain string for a callback
@@ -691,7 +748,18 @@ func (m *Module) ensure(ctx context.Context) error {
 	m.generation++
 	m.cmd, m.in, m.out, m.outFile = cmd, in, bufio.NewReader(protocolRead), protocolRead
 	m.procMu.Unlock()
-	load := m.runtime.loadRequest(m.plan)
+	var load map[string]any
+	if loader, ok := m.runtime.(interface {
+		loadRequestContext(context.Context, Plan) map[string]any
+	}); ok {
+		load = loader.loadRequestContext(ctx, m.plan)
+	} else {
+		load = m.runtime.loadRequest(m.plan)
+	}
+	if err := ctx.Err(); err != nil {
+		m.kill()
+		return err
+	}
 	if typeScript {
 		m.tempDir, err = os.MkdirTemp("", "bashpp-typescript-")
 		if err != nil {
@@ -747,12 +815,17 @@ func (m *Module) CallKeywords(ctx context.Context, name string, args []any, kwar
 		return m.callGo(ctx, name, args, kwargs)
 	}
 	if _, ok := m.runtime.(Rust); ok {
+		if m.plan.RustTarget == "proc-macro" {
+			return CallResult{}, errors.New("Rust proc-macro target has no callable exports")
+		}
 		if len(kwargs) != 0 {
 			return CallResult{}, errors.New("Rust functions do not accept named arguments")
 		}
 		if name == RustReleaseExport && rustReleaseExport(m.plan) {
 			return m.releaseCall(ctx, args)
 		}
+	}
+	if languageFlag(m.plan.Language, func(language Language) bool { return language.Callbacks }) {
 		if args, err = m.resolveCallbacks(name, args); err != nil {
 			return CallResult{}, err
 		}
@@ -995,6 +1068,31 @@ type CommandResult struct {
 	Stdout, Stderr string
 }
 
+// CommandStreams sends a Go command's output directly to the caller's streams.
+// Other command runtimes retain their existing captured response behavior.
+func (m *Module) CommandStreams(ctx context.Context, name string, argv []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+	if _, ok := m.runtime.(Go); ok {
+		unlock, err := m.lock(ctx)
+		if err != nil {
+			return 0, err
+		}
+		defer unlock()
+		return m.commandGoTo(ctx, name, argv, stdin, stdout, stderr)
+	}
+	result, err := m.Command(ctx, name, argv, stdin)
+	if result.Stdout != "" {
+		if _, writeErr := io.WriteString(stdout, result.Stdout); writeErr != nil && err == nil {
+			err = writeErr
+		}
+	}
+	if result.Stderr != "" {
+		if _, writeErr := io.WriteString(stderr, result.Stderr); writeErr != nil && err == nil {
+			err = writeErr
+		}
+	}
+	return result.Status, err
+}
+
 // ErrCommandNotFound reports that the named island function does not exist;
 // ErrCommandNotCallable that the name exists but is not callable. Callers map
 // them to the shell's 127 and 126 statuses.
@@ -1003,9 +1101,11 @@ var (
 	ErrCommandNotCallable = errors.New("polyglot: island target is not callable")
 )
 
-// Command runs the named island function as a command: argv words are passed
-// as positional strings, everything it writes to stdout and stderr is
-// returned as such, and its return value becomes the exit status.
+// Command runs the named island function as a command. For Go, the exported
+// zero-argument function receives argv through os.Args, guest stdin and the
+// caller's process context; its process exit status is the command status.
+// Other runtimes pass argv words as positional strings and interpret their
+// return value as the exit status.
 //
 // Python follows the xonsh callable-alias convention — an int is the status, a
 // str is written to stdout, a (stdout, stderr, status) sequence is split, None
@@ -1016,18 +1116,30 @@ var (
 // rendered to stdout (a string as text, a byte array as raw bytes, any other
 // object as compact JSON — the only boundary bytes bashy's pipes carry), its
 // non-terminating error and warning streams go to stderr, and a terminating
-// error ends the command with its message on stderr and status 1 (the command
-// form of the same error that binds to err in a typed call). Native exit codes
-// propagate through $LASTEXITCODE; a clean run reports 0. When the analyzed
-// function reads pipeline input and stdin is non-nil, the upstream byte pipe is
-// fed to it a chunk at a time through the existing shell-callback channel.
+// error ends the command with its message on stderr and status 1 without
+// discarding earlier output (the command form of the same error that binds to
+// err in a typed call). An exit statement ends only that invocation with its
+// requested status; native exit codes propagate through $LASTEXITCODE; a clean
+// run reports 0. When the analyzed function reads pipeline input and stdin is
+// non-nil, the upstream byte pipe is fed to it a chunk at a time through the
+// existing shell-callback channel.
 //
 // Output line endings are normalised to LF on every OS so the same script
 // yields the same bytes. None of the per-language error conventions above are
 // errors to the caller; the error result is reserved for lookup failures
 // ([ErrCommandNotFound], [ErrCommandNotCallable]), cancellation, and worker
-// death ([WorkerExit]).
+// death ([WorkerExit]). A native PowerShell exit is the exception: the pwsh
+// process is the invocation boundary, so its code is the command status and the
+// worker is restarted lazily for the next request.
 func (m *Module) Command(ctx context.Context, name string, argv []string, stdin io.Reader) (CommandResult, error) {
+	if _, ok := m.runtime.(Go); ok {
+		unlock, err := m.lock(ctx)
+		if err != nil {
+			return CommandResult{}, err
+		}
+		defer unlock()
+		return m.commandGo(ctx, name, argv, stdin)
+	}
 	if !publicPythonAttribute(name) {
 		return CommandResult{}, fmt.Errorf("%w: %s is private", ErrCommandNotFound, name)
 	}
@@ -1041,15 +1153,34 @@ func (m *Module) Command(ctx context.Context, name string, argv []string, stdin 
 	}
 	m.nextID++
 	request := map[string]any{"id": m.nextID, "op": "command", "name": name, "args": StringsToAny(argv)}
-	if _, ok := m.runtime.(PowerShell); ok && stdin != nil {
+	_, powershell := m.runtime.(PowerShell)
+	var capture *powerShellCommandCapture
+	if powershell {
+		capture, err = newPowerShellCommandCapture()
+		if err != nil {
+			return CommandResult{}, fmt.Errorf("create PowerShell command capture: %w", err)
+		}
+		defer capture.remove()
+		capture.addRequest(request)
+	}
+	if powershell && stdin != nil {
 		// The filter's stdin is a shell callback, never the worker's own
 		// protocol stdin; it is scoped to this one request.
-		request["stdin"] = m.registerCallback(FilterInput(stdin))
+		request["stdin"] = m.registerCallback(FilterInput(stdin).Callback)
 		defer m.dropPendingCallbacks()()
 	}
 	result, err := m.request(ctx, request, nil)
 	out := CommandResult{Stdout: result.Stdout, Stderr: result.Stderr}
 	if err != nil {
+		var exit *WorkerExit
+		if powershell && errors.As(err, &exit) && exit.Signal == 0 {
+			captured, readErr := capture.result()
+			if readErr != nil {
+				return out, fmt.Errorf("read PowerShell command capture: %w", readErr)
+			}
+			captured.Status = exit.Code
+			return captured, nil
+		}
 		if detail, ok := ForeignErrorDetail(err); ok {
 			switch detail.Code {
 			case "LookupError", "CommandNotFound":
@@ -1107,6 +1238,16 @@ func (e *WorkerExit) Error() string {
 
 func (e *WorkerExit) Unwrap() error { return e.Err }
 
+// ExitStatus preserves explicit process exits from called Go fence functions.
+// Losing any other runtime's worker is an infrastructure failure, not the
+// foreign function's result. Lowered programs use this same status contract.
+func (e *WorkerExit) ExitStatus() int {
+	if e.Runtime == "Go" && e.Signal == 0 && e.Code > 0 {
+		return e.Code
+	}
+	return 1
+}
+
 func (m *Module) handleRequest(ctx context.Context, handle *Handle, request map[string]any) (CallResult, error) {
 	unlock, err := m.lock(ctx)
 	if err != nil {
@@ -1134,6 +1275,9 @@ func (m *Module) request(ctx context.Context, request map[string]any, annotation
 	} else if cs, ok := m.runtime.(CSharp); ok {
 		cwd = cs.Cwd
 	}
+	if dir, ok := ctx.Value(callerDirKey{}).(string); ok && dir != "" {
+		cwd = func() string { return dir }
+	}
 	if cwd != nil {
 		if op, _ := request["op"].(string); op != "job_join" && op != "job_leave" {
 			if dir := cwd(); dir != "" {
@@ -1143,6 +1287,22 @@ func (m *Module) request(ctx context.Context, request map[string]any, annotation
 	}
 	var response workerResponse
 	if err := m.exchangeContext(ctx, request, &response); err != nil {
+		// A PowerShell exit statement closes the worker's protocol pipe. Reap
+		// that process without signalling it so Command can distinguish the
+		// native status (including status 1 on Windows) from our own cleanup.
+		// Other runtimes and PowerShell transport failures keep the ordinary
+		// kill-and-report lifecycle below.
+		op, _ := request["op"].(string)
+		_, powershell := m.runtime.(PowerShell)
+		if powershell && op == "command" && errors.Is(err, io.EOF) {
+			exit, reapErr := m.reapPowerShellWorker(ctx)
+			if reapErr != nil {
+				return CallResult{}, reapErr
+			}
+			if exit.died {
+				return CallResult{}, &WorkerExit{Runtime: m.runtime.name(), Signal: exit.signal, Code: exit.code, Err: err}
+			}
+		}
 		m.kill()
 		m.procMu.Lock()
 		exit := m.lastExit
@@ -1183,6 +1343,55 @@ func (m *Module) request(ctx context.Context, request map[string]any, annotation
 		break
 	}
 	return result, nil
+}
+
+// reapPowerShellWorker waits only after the command protocol pipe reached EOF,
+// which is the supported pwsh process boundary for PowerShell's exit keyword.
+// The process is detached under procMu before waiting so a worker that closes
+// the protocol stream without exiting cannot pin the process mutex. If the
+// request is cancelled while it is still alive, the reap kills and joins it;
+// otherwise no signal is sent and its native status is the command status.
+func (m *Module) reapPowerShellWorker(ctx context.Context) (workerExit, error) {
+	m.procMu.Lock()
+	if m.cmd == nil {
+		m.procMu.Unlock()
+		return workerExit{}, nil
+	}
+	cmd, in, outFile := m.cmd, m.in, m.outFile
+	m.cmd, m.in, m.out, m.outFile = nil, nil, nil, nil
+	m.procMu.Unlock()
+
+	_ = in.Close()
+	done := make(chan struct{})
+	go func() {
+		_ = cmd.Wait()
+		close(done)
+	}()
+	cancelled := false
+	select {
+	case <-done:
+	case <-ctx.Done():
+		cancelled = true
+		_ = cmd.Process.Kill()
+		<-done
+	}
+	if outFile != nil {
+		_ = outFile.Close()
+	}
+	if cancelled {
+		m.procMu.Lock()
+		m.lastExit = workerExit{}
+		m.procMu.Unlock()
+		return workerExit{}, ctx.Err()
+	}
+	exit := workerExit{}
+	if state := cmd.ProcessState; state != nil {
+		exit = naturalWorkerDeath(state)
+	}
+	m.procMu.Lock()
+	m.lastExit = exit
+	m.procMu.Unlock()
+	return exit, nil
 }
 
 func (m *Module) exchangeContext(ctx context.Context, request any, response *workerResponse) error {
@@ -1248,8 +1457,14 @@ type callbackRequest struct {
 // serveCallback runs one shell callback and builds its reply. Island output
 // preceding it is delivered first so the shell sees it in order.
 func (m *Module) serveCallback(ctx context.Context, req callbackRequest) map[string]any {
+	callbackName := fmt.Sprintf("%d", req.Callback)
 	reply := func(err error) map[string]any {
-		return map[string]any{"id": req.ID, "ok": false, "error": map[string]any{"code": "SHELL-ECALLBACK", "message": err.Error()}}
+		detail := map[string]any{"code": "SHELL-ECALLBACK", "callback": callbackName, "message": err.Error()}
+		var failure interface{ CallbackStatus() int }
+		if errors.As(err, &failure) && failure.CallbackStatus() != 0 {
+			detail["status"] = failure.CallbackStatus()
+		}
+		return map[string]any{"id": req.ID, "ok": false, "error": detail}
 	}
 	if m.callbacks.Output != nil {
 		if out, errText := m.pendingOut+req.Stdout, m.pendingErr+req.Stderr; out != "" || errText != "" {
@@ -1264,6 +1479,7 @@ func (m *Module) serveCallback(ctx context.Context, req callbackRequest) map[str
 	if !ok {
 		return reply(fmt.Errorf("polyglot: shell callback %d expired: the call that passed it has completed", req.Callback))
 	}
+	callbackName = callback.Name
 	if m.callbackDepth >= MaxCallbackDepth {
 		return reply(fmt.Errorf("polyglot: shell callback %s re-entry exceeds the bound of %d", callback.Name, MaxCallbackDepth))
 	}
@@ -1526,6 +1742,13 @@ func (m *Module) encodeValue(v any) (any, error) {
 			return nil, nil
 		}
 		return map[string]any{"$callback": m.registerCallback(*x)}, nil
+	case PipelineInput:
+		return map[string]any{"$pipeline_input": m.registerCallback(x.Callback)}, nil
+	case *PipelineInput:
+		if x == nil {
+			return nil, nil
+		}
+		return map[string]any{"$pipeline_input": m.registerCallback(x.Callback)}, nil
 	case []byte:
 		return map[string]any{"$bytes": base64.StdEncoding.EncodeToString(x)}, nil
 	case []any:
@@ -1636,11 +1859,29 @@ tree=ast.parse(src)
 nodes=tree.body
 if nodes and isinstance(nodes[0], ast.Expr) and isinstance(nodes[0].value, ast.Constant) and isinstance(nodes[0].value.value, str): nodes=nodes[1:]
 types={'int':'int','float':'float64','str':'string','bool':'bool','bytes':'bytes','None':'nil','Any':'any','TextIO':'textio'}
+callable_names={'Callable'}
+retained_names={'RetainedCallback'}
+for imported in nodes:
+    if isinstance(imported,ast.ImportFrom) and imported.module in ('typing','collections.abc'):
+        for name in imported.names:
+            if name.name=='Callable': callable_names.add(name.asname or name.name)
+            if name.name=='RetainedCallback': retained_names.add(name.asname or name.name)
+def annotation_name(node):
+    if isinstance(node,ast.Name): return node.id
+    if isinstance(node,ast.Attribute):
+        base=annotation_name(node.value)
+        return (base+'.' if base else '')+node.attr
+    return ''
 def annotation_type(node):
+    name=annotation_name(node)
+    if name in retained_names or name.endswith('.RetainedCallback'): raise SyntaxError('retained callbacks are not supported')
     if isinstance(node,ast.Name): return types.get(node.id)
     if isinstance(node,ast.Constant) and node.value is None: return 'nil'
-    if not isinstance(node,ast.Subscript) or not isinstance(node.value,ast.Name): return None
-    origin=node.value.id
+    if not isinstance(node,ast.Subscript): return None
+    origin=annotation_name(node.value)
+    if origin in retained_names or origin.endswith('.RetainedCallback'): raise SyntaxError('retained callbacks are not supported')
+    if origin in callable_names or origin in ('typing.Callable','collections.abc.Callable'): return 'callback'
+    origin=origin.rsplit('.',1)[-1]
     if origin in ('Iterator','Iterable','Generator'):
         item=node.slice.elts[0] if isinstance(node.slice,ast.Tuple) else node.slice
         typ=annotation_type(item)
@@ -1689,7 +1930,7 @@ print(json.dumps(out,separators=(',',':')))
 `
 
 const pythonWorker = pythonPathBootstrap + `
-import __future__, ast, base64, codecs, importlib, importlib.util, importlib.machinery, io, json, os, signal, sys, tempfile, traceback
+import __future__, ast, base64, codecs, importlib, importlib.util, importlib.machinery, io, json, os, signal, sys, tempfile, threading, traceback, types
 try:
     protocol=os.fdopen(3,'w',buffering=1,newline='\n')
 except OSError:
@@ -1707,6 +1948,19 @@ iterators={}
 next_iterator=0
 next_handle=0
 busy=False
+worker_thread=threading.get_ident()
+next_callback=0
+callback_depth=0
+capture_stack=[]
+class BashCallbackError(RuntimeError):
+    def __init__(self,name,message,status=None):
+        super().__init__(message)
+        self.callback=name
+        self.status=status
+bashpp=types.ModuleType('bashpp')
+bashpp.BashCallbackError=BashCallbackError
+sys.modules['bashpp']=bashpp
+ns['BashCallbackError']=BashCallbackError
 def on_sigint(signum, frame):
     # A terminal Ctrl-C reaches the worker as a member of the foreground
     # process group. While a call runs it is the call that is interrupted
@@ -1745,7 +1999,8 @@ def import_file(path):
     return mod
 def dec(v):
     if isinstance(v,dict) and set(v)=={'$bytes'}: return base64.b64decode(v['$bytes'])
-    if isinstance(v,dict) and set(v)=={'$callback'}: return PipelineInput(v['$callback'])
+    if isinstance(v,dict) and set(v)=={'$callback'}: return CallableProxy(v['$callback'])
+    if isinstance(v,dict) and set(v)=={'$pipeline_input'}: return PipelineInput(v['$pipeline_input'])
     if isinstance(v,dict) and set(v)=={'$handle'}:
         key=int(v['$handle'])
         if key not in handles: raise ValueError('stale Python handle')
@@ -1753,6 +2008,44 @@ def dec(v):
     if isinstance(v,list): return [dec(x) for x in v]
     if isinstance(v,dict): return {k:dec(x) for k,x in v.items()}
     return v
+def protocol_write(value):
+    protocol.write(json.dumps(value,separators=(',',':'))+'\n')
+    protocol.flush()
+def flush_capture():
+    sys.stdout.flush(); sys.stderr.flush()
+    if not capture_stack: return '', ''
+    state=capture_stack[-1]
+    state['out'].seek(state['out_pos']); out=state['out'].read(); state['out_pos']+=len(out); state['out'].seek(0,2)
+    state['err'].seek(state['err_pos']); err=state['err'].read(); state['err_pos']+=len(err); state['err'].seek(0,2)
+    return out.decode(errors='replace'),err.decode(errors='replace')
+class CallableProxy:
+    def __init__(self,callback): self.callback=int(callback); self.thread=threading.get_ident()
+    def __call__(self,*args):
+        global next_callback,callback_depth,busy
+        if threading.get_ident()!=self.thread or threading.get_ident()!=worker_thread:
+            raise BashCallbackError(str(self.callback),'shell callback must run on its calling thread')
+        if callback_depth>=8:
+            raise BashCallbackError(str(self.callback),'shell callback re-entry exceeds the bound of 8')
+        callback_depth+=1
+        try:
+            next_callback+=1; rid=next_callback
+            out,err=flush_capture()
+            protocol_write({'id':rid,'call':'shell','op':'call','callback':self.callback,'args':enc(list(args)),'stdout':out,'stderr':err})
+            while True:
+                line=sys.stdin.readline()
+                if not line: raise BashCallbackError(str(self.callback),'host closed the callback protocol')
+                reply=json.loads(line)
+                if 'op' in reply:
+                    protocol_write(dispatch(reply))
+                    busy=True
+                    continue
+                if int(reply.get('id',-1))!=rid:
+                    raise BashCallbackError(str(self.callback),'shell callback reply id does not match request id')
+                if reply.get('ok'): return dec(reply.get('result'))
+                detail=reply.get('error') or {}
+                if isinstance(detail,str): detail={'message':detail}
+                raise BashCallbackError(detail.get('callback',str(self.callback)),detail.get('message','shell callback failed'),detail.get('status'))
+        finally: callback_depth-=1
 class PipelineInput(io.TextIOBase):
     def __init__(self, callback):
         self.callback=callback
@@ -1761,8 +2054,7 @@ class PipelineInput(io.TextIOBase):
         self.decoder=codecs.getincrementaldecoder('utf-8')()
     def readable(self): return True
     def _fill(self):
-        protocol.write(json.dumps({'id':0,'call':'shell','callback':self.callback,'args':[65536]})+'\n')
-        protocol.flush()
+        protocol_write({'id':0,'call':'shell','callback':self.callback,'args':[65536]})
         reply=json.loads(sys.stdin.readline())
         if not reply.get('ok'): raise OSError(reply.get('error',{}).get('message','pipeline read failed'))
         data=dec(reply['result'])
@@ -1850,6 +2142,8 @@ def capture(operation):
     sys.stdout.flush(); sys.stderr.flush()
     oldout,olderr=os.dup(1),os.dup(2)
     with tempfile.TemporaryFile() as out, tempfile.TemporaryFile() as err:
+        state={'out':out,'err':err,'out_pos':0,'err_pos':0}
+        capture_stack.append(state)
         failure=None
         try:
             os.dup2(out.fileno(),1); os.dup2(err.fileno(),2)
@@ -1859,12 +2153,14 @@ def capture(operation):
         finally:
             sys.stdout.flush(); sys.stderr.flush()
             os.dup2(oldout,1); os.dup2(olderr,2); os.close(oldout); os.close(olderr)
-        out.seek(0); err.seek(0)
+            capture_stack.pop()
+        out.seek(state['out_pos']); err.seek(state['err_pos'])
         captured_out,captured_err=out.read().decode(errors='replace'),err.read().decode(errors='replace')
         if failure is not None: raise CaptureFailure(failure,captured_out,captured_err)
         return value,captured_out,captured_err
-for line in sys.stdin:
-    req=json.loads(line); rid=req.get('id',0); captured_out=captured_err=''
+def dispatch(req):
+    global busy,module,next_iterator
+    rid=req.get('id',0); captured_out=captured_err=''
     busy=True
     try:
         op=req['op']
@@ -1906,8 +2202,13 @@ for line in sys.stdin:
         elif op=='iter_open':
             def action():
                 global next_iterator
-                target=module if module is not None else ns
-                iterator=iter(lookup(target,req['name'])(*dec(req.get('args',[]))))
+                if 'handle' in req:
+                    key=int(req['handle'])
+                    if key not in handles: raise ValueError('stale Python handle')
+                    iterator=iter(handles[key])
+                else:
+                    target=module if module is not None else ns
+                    iterator=iter(lookup(target,req['name'])(*dec(req.get('args',[]))))
                 next_iterator+=1
                 iterators[next_iterator]=iterator
                 return next_iterator
@@ -1937,5 +2238,7 @@ for line in sys.stdin:
         res={'id':rid,'ok':False,'error':envelope_error(exc),'stdout':captured_out,'stderr':captured_err}
     finally:
         busy=False
-    protocol.write(json.dumps(res,separators=(',',':'))+'\n')
+    return res
+for line in sys.stdin:
+    protocol_write(dispatch(json.loads(line)))
 `

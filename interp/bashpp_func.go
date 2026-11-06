@@ -623,6 +623,10 @@ func (r *Runner) bashPPLookupFunc(c *syntax.BashPPCall) (*bashPPFunc, bool) {
 		foreignName[i] = part.Value
 	}
 	if fn := r.bashPPForeignFuncs[strings.Join(foreignName, ".")]; fn != nil {
+		if fn.foreign.export.Unavailable != "" {
+			r.exit.fatal(errors.New(fn.foreign.export.UnavailableDiagnostic()))
+			return nil, false
+		}
 		return fn, true
 	}
 	if len(c.Fun) == 2 {
@@ -666,6 +670,15 @@ func (r *Runner) bashPPLookupFunc(c *syntax.BashPPCall) (*bashPPFunc, bool) {
 		// instantiation step adds the method's; see [Runner.bashPPInstantiateFunc].
 		fn, ok := r.bashPPLookupSelectorFunc(c)
 		if !ok {
+			// ForeignModules also includes imports whose exports resolve
+			// lazily. Reject a fence name only after imports, object handles,
+			// and selectors have had a chance to resolve the call.
+			for _, module := range r.bashPPForeignModules {
+				if module.Plan().Alias == c.Fun[0].Value {
+					r.exit.fatal(fmt.Errorf("bash++: unknown function %s", strings.Join(foreignName, ".")))
+					break
+				}
+			}
 			return nil, false
 		}
 		return r.bashPPInstantiateFunc(c, fn)
@@ -701,7 +714,7 @@ func bashPPDirectForeign(module *polyglot.Module, receiver *polyglot.Handle, nam
 		Params:  []*syntax.BashPPField{{Names: []*syntax.Lit{{Value: "args"}}, FieldType: &syntax.Lit{Value: "any"}, Ellipsis: syntax.NewPos(0, 1, 1)}},
 		Results: []*syntax.BashPPField{{FieldType: &syntax.Lit{Value: "any"}}},
 	}
-	return &bashPPFunc{decl: decl, foreign: &bashPPForeignFunc{module: module, receiver: receiver, export: polyglot.Export{Name: name}, qualified: qualified, direct: true}}
+	return &bashPPFunc{decl: decl, foreign: &bashPPForeignFunc{module: module, receiver: receiver, export: polyglot.Export{Name: name, Signature: polyglot.Signature{Results: []string{"any"}}}, qualified: qualified, direct: true}}
 }
 
 // bashPPLookupSelectorFunc resolves the `x.M`, `T.M` and `(*T).M` callee forms
@@ -2750,10 +2763,9 @@ func (r *Runner) bashPPShortDeclCall(ctx context.Context, d *syntax.BashPPShortD
 	shortFailureMark := r.bashPPShortFailureSeq
 	effectiveResults := fn.results()
 	var results []string
-	if fn.foreign != nil && !fn.foreign.direct && !fn.foreign.export.Signature.Dynamic && len(d.Lhs) == len(fn.foreign.export.Signature.Results)+1 {
+	if fn.foreign != nil && (!fn.foreign.direct || fn.foreign.receiver != nil) && !fn.foreign.export.Signature.Dynamic && len(d.Lhs) == len(fn.foreign.export.Signature.Results)+1 {
 		// One binding more than the export's results is the explicit error
-		// opt-in; see bashPPInvokeForeignErr. A direct Python handle call
-		// carries no signature at all and keeps its one dynamic value.
+		// opt-in; handle methods have one dynamic value plus the optional error.
 		results = r.bashPPInvokeForeignErr(ctx, fn.foreign, args)
 		effectiveResults = append(append([]*syntax.BashPPField(nil), effectiveResults...), &syntax.BashPPField{FieldType: &syntax.Lit{Value: "error"}})
 	} else {

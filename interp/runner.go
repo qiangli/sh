@@ -1802,8 +1802,9 @@ func (r *Runner) pattern(word *syntax.Word) string {
 	return str
 }
 
-func (r *Runner) restoreInlineVar(name string, vr expand.Variable) {
+func (r *Runner) restoreInlineVar(name string, vr expand.Variable, wasGoCommandTouched bool) {
 	if o, ok := r.writeEnv.(*overlayEnviron); ok {
+		defer o.restoreGoCommandTouch(name, wasGoCommandTouched)
 		if o.restoreTemp(name, vr) {
 			return
 		}
@@ -6543,9 +6544,10 @@ func (r *Runner) cmdGeneral(ctx context.Context, cm syntax.Command) {
 		}
 
 		type restoreVar struct {
-			name    string
-			vr      expand.Variable
-			wasTemp bool
+			name                string
+			vr                  expand.Variable
+			wasTemp             bool
+			wasGoCommandTouched bool
 		}
 		var restores []restoreVar
 		type callAssign struct {
@@ -6583,12 +6585,16 @@ func (r *Runner) cmdGeneral(ctx context.Context, cm syntax.Command) {
 			name := as.Name.Value
 			prev := r.lookupVar(name)
 			wasTemp := false
+			wasGoCommandTouched := false
 			if o, ok := r.writeEnv.(*overlayEnviron); ok {
 				wasTemp = o.isTemp(name)
 			}
 			// Resolve any nameref so we can restore the original final value later on.
 			if n, v := prev.Resolve(r.writeEnv); n != "" {
 				name, prev = n, v
+			}
+			if o, ok := r.writeEnv.(*overlayEnviron); ok {
+				wasGoCommandTouched = o.goCommandWasTouched(name)
 			}
 			readonlyTemp := false
 			if fields[0] == "readonly" && prev.ReadOnly {
@@ -6646,7 +6652,7 @@ func (r *Runner) cmdGeneral(ctx context.Context, cm syntax.Command) {
 				if o, ok := r.writeEnv.(*overlayEnviron); ok {
 					o.markTemp(name, prev)
 				}
-				restores = append(restores, restoreVar{name: name, vr: prev, wasTemp: wasTemp})
+				restores = append(restores, restoreVar{name: name, vr: prev, wasTemp: wasTemp, wasGoCommandTouched: wasGoCommandTouched})
 			}
 			if tracingEnabled && as.Value != nil {
 				op := "="
@@ -6668,8 +6674,10 @@ func (r *Runner) cmdGeneral(ctx context.Context, cm syntax.Command) {
 		for _, as := range keywordAssigns {
 			prev := r.lookupVar(as.name)
 			wasTemp := false
+			wasGoCommandTouched := false
 			if o, ok := r.writeEnv.(*overlayEnviron); ok {
 				wasTemp = o.isTemp(as.name)
+				wasGoCommandTouched = o.goCommandWasTouched(as.name)
 			}
 			r.setVar(as.name, as.vr)
 			if !r.exit.ok() {
@@ -6680,7 +6688,7 @@ func (r *Runner) cmdGeneral(ctx context.Context, cm syntax.Command) {
 			if o, ok := r.writeEnv.(*overlayEnviron); ok {
 				o.markTemp(as.name, prev)
 			}
-			restores = append(restores, restoreVar{name: as.name, vr: prev, wasTemp: wasTemp})
+			restores = append(restores, restoreVar{name: as.name, vr: prev, wasTemp: wasTemp, wasGoCommandTouched: wasGoCommandTouched})
 		}
 		if assignFailed {
 			if r.strictPosix && !r.interactiveShell {
@@ -6709,7 +6717,7 @@ func (r *Runner) cmdGeneral(ctx context.Context, cm syntax.Command) {
 				// assignment errors before a non-special command discard the
 				// command and continue with status 1.
 				for _, restore := range restores {
-					r.restoreInlineVar(restore.name, restore.vr)
+					r.restoreInlineVar(restore.name, restore.vr, restore.wasGoCommandTouched)
 				}
 				r.exit.code = 1
 				break
@@ -6783,7 +6791,7 @@ func (r *Runner) cmdGeneral(ctx context.Context, cm syntax.Command) {
 					kept = append(kept, restore)
 					continue
 				}
-				r.restoreInlineVar(restore.name, restore.vr)
+				r.restoreInlineVar(restore.name, restore.vr, restore.wasGoCommandTouched)
 			}
 			restores = kept
 		}
@@ -6792,7 +6800,7 @@ func (r *Runner) cmdGeneral(ctx context.Context, cm syntax.Command) {
 				if restoreFrame.leaked[restore.name] {
 					continue
 				}
-				r.restoreInlineVar(restore.name, restore.vr)
+				r.restoreInlineVar(restore.name, restore.vr, restore.wasGoCommandTouched)
 			}
 		} else if r.inFunc && fields[0] == "return" {
 			// `var=N return …` inside a function: bash 5.3 leaks

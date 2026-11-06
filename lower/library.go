@@ -16,7 +16,7 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
-func (e *emitter) libraryResult(file *syntax.File, options Options, globalTypes map[string]string, declarations []sourceDecl, bodies map[string]*strings.Builder) (*Result, error) {
+func (e *emitter) libraryResult(file *syntax.File, options Options, globalTypes map[string]string, prepared *preparedForeign, declarations []sourceDecl, bodies map[string]*strings.Builder) (*Result, error) {
 	sort.SliceStable(declarations, func(i, j int) bool { return declarations[i].before(declarations[j]) })
 	result := &Result{Sources: append([]syntax.SourceFile(nil), file.Sources...), Package: options.Package, Origin: options.Origin}
 	seenNames := map[string]bool{}
@@ -107,7 +107,7 @@ func (e *emitter) libraryResult(file *syntax.File, options Options, globalTypes 
 				inferred[name] = types.TypeString(obj.Type(), func(p *types.Package) string { return p.Name() })
 			}
 		}
-		return compilePass(file, options, inferred)
+		return compilePass(file, options, inferred, prepared)
 	}
 	for i := range result.Files {
 		output := &result.Files[i]

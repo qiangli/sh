@@ -115,7 +115,7 @@ func (r *Runner) bashPPForeignCallback(ctx context.Context, name string, fn *bas
 	if r.exit.exiting || r.exit.fatalExit || r.exit.code != 0 || r.bashPPShortFailureSeq != failure {
 		code := r.exit.code
 		r.exit = savedExit
-		return nil, fmt.Errorf("bash++: shell callback %s failed (status %d)", name, code)
+		return nil, &polyglot.CallbackFailure{Message: fmt.Sprintf("bash++: shell callback %s failed (status %d)", name, code), Status: int(code)}
 	}
 	resultTypes := bashppResultTypes(fn.results())
 	values := make([]any, len(results))

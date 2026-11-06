@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"mvdan.cc/sh/v3/polyglot"
 	"sync"
+	"time"
 
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
@@ -29,6 +30,9 @@ func (r *Runner) bashPPRangeForeignIterator(ctx context.Context, rng *syntax.Bas
 	vr := r.bashPPScope.lookup(r.literal(rng.Chan)).viewVar()
 	if vr.Kind != expand.Object {
 		return false
+	}
+	if handle, ok := vr.Obj.(*polyglot.Handle); ok {
+		return r.bashPPRangePythonHandle(ctx, rng, handle)
 	}
 	iterator, ok := vr.Obj.(*bashPPForeignIterator)
 	if !ok {
@@ -87,6 +91,89 @@ func (r *Runner) bashPPRangeForeignIterator(ctx context.Context, rng *syntax.Bas
 		r.exit.code = uint8(status)
 	}
 	return true
+}
+
+func (r *Runner) bashPPRangePythonHandle(ctx context.Context, rng *syntax.BashPPRange, handle *polyglot.Handle) bool {
+	if len(rng.Names) > 2 {
+		return false
+	}
+	if len(rng.Names) > 0 && !rng.Define.IsValid() {
+		r.errf("BASHPP-ERANGE-TYPE: Python handle range requires a declaration\n")
+		r.exit.code = 2
+		return true
+	}
+	stdout, stderr := r.bashPPWriter(r.stdout), r.bashPPWriter(r.stderr)
+	worker, initial, err := handle.OpenIterator(ctx)
+	fmt.Fprint(stdout, initial.Stdout)
+	fmt.Fprint(stderr, initial.Stderr)
+	if err != nil {
+		if len(rng.Names) == 2 && bashPPForeignDomainError(err) {
+			r.bashPPPythonHandleRangeValue(ctx, rng, nil, err)
+		} else {
+			r.errf("foreign iterator: %v\n", err)
+			r.exit.code, r.exit.exiting = 1, true
+		}
+		return true
+	}
+	defer func() {
+		closeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+		defer cancel()
+		closed, closeErr := worker.Close(closeCtx)
+		fmt.Fprint(stdout, closed.Stdout)
+		fmt.Fprint(stderr, closed.Stderr)
+		if closeErr != nil && !errors.Is(closeErr, context.Canceled) {
+			r.errf("foreign iterator: %v\n", closeErr)
+			r.exit.code, r.exit.exiting = 1, true
+		}
+	}()
+	for {
+		result, more, nextErr := worker.Next(ctx)
+		fmt.Fprint(stdout, result.Stdout)
+		fmt.Fprint(stderr, result.Stderr)
+		if nextErr != nil {
+			if len(rng.Names) == 2 && bashPPForeignDomainError(nextErr) {
+				r.bashPPPythonHandleRangeValue(ctx, rng, nil, nextErr)
+			} else {
+				r.errf("foreign iterator: %v\n", nextErr)
+				r.exit.code, r.exit.exiting = 1, true
+			}
+			return true
+		}
+		if !more || !r.bashPPPythonHandleRangeValue(ctx, rng, result.Value, nil) {
+			return true
+		}
+	}
+}
+
+func (r *Runner) bashPPPythonHandleRangeValue(ctx context.Context, rng *syntax.BashPPRange, value any, iterErr error) bool {
+	leave := bashPPNoScopeLeave
+	if bashPPRangeBindsNames(rng) {
+		leave = r.bashPPPushScope()
+	}
+	if len(rng.Names) > 0 && rng.Names[0].Value != "_" {
+		name := rng.Names[0].Value
+		switch value.(type) {
+		case nil:
+			r.bashPPDeclareName(name, expand.Variable{Set: true, Kind: expand.String})
+			r.bashPPScope.lookup(name).declType = bashPPRangeNamedType("any")
+		case []byte, []any, map[string]any, *polyglot.Handle:
+			r.bashPPDeclareName(name, expand.NewObject(value))
+			r.bashPPScope.lookup(name).declType = bashPPRangeNamedType("any")
+		default:
+			r.bashPPDeclareRangeValue(name, value, bashPPRangeNamedType("any"), nil)
+		}
+	}
+	if len(rng.Names) == 2 && rng.Names[1].Value != "_" {
+		name := rng.Names[1].Value
+		errorCell := bashPPForeignErrorCell(iterErr)
+		r.bashPPDeclareName(name, errorCell.vr)
+		cell := r.bashPPScope.lookup(name)
+		cell.declType = errorCell.declType
+		cell.interfaceValue = errorCell.interfaceValue
+	}
+	r.cmd(r.bashPPTaskContext(ctx), rng.Body)
+	leave()
+	return r.bashPPRangeControl()
 }
 
 // Foreign aggregate values retain their Object cell through the range binding;

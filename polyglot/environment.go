@@ -103,6 +103,10 @@ type EnvironmentRequest struct {
 // fingerprinted, cached, and handed from checking to execution unchanged.
 // Slice fields are copies owned by the plan and must be treated read-only.
 type EnvironmentPlan struct {
+	CSharpAssemblies string // immutable resolved C# graph JSON, including asset bytes
+	RustTarget       string // selected Rust crate role; empty is the binary worker
+	// Preparation-only immutable snapshot; deliberately omitted from lowered launch plans.
+	rustContext       *rustDependencySnapshot
 	Language          string
 	Name              string
 	Root              string   // project or VCS boundary
@@ -112,8 +116,9 @@ type EnvironmentPlan struct {
 	ExecutableArgs    []string // leading arguments every launch places after Executable (zig cc)
 	Manager           string
 	RuntimeConstraint string
-	Runtime           string // selected runtime family, such as node or bun
-	CompilerModule    string // TypeScript compiler package or entry point
+	Runtime           string             // selected runtime family, such as node or bun
+	CompilerModule    string             // TypeScript compiler package or entry point
+	NativeModules     []NativeModuleUnit // validated C++ source units in dependency order
 	Manifests         []string
 	Locks             []string
 	PythonPath        []string
@@ -130,6 +135,10 @@ type EnvironmentPlan struct {
 
 // Clone returns an independently owned copy of p.
 func (p EnvironmentPlan) Clone() EnvironmentPlan {
+	p.NativeModules = append([]NativeModuleUnit(nil), p.NativeModules...)
+	for i := range p.NativeModules {
+		p.NativeModules[i].Requires = append([]string(nil), p.NativeModules[i].Requires...)
+	}
 	p.ExecutableArgs = append([]string(nil), p.ExecutableArgs...)
 	p.Manifests = append([]string(nil), p.Manifests...)
 	p.Locks = append([]string(nil), p.Locks...)
@@ -224,6 +233,9 @@ func DiscoverEnvironment(request EnvironmentRequest) (EnvironmentPlan, error) {
 		return EnvironmentPlan{}, fmt.Errorf("polyglot: ambiguous matching environment overlays")
 	}
 
+	if selected != nil && selected.CSharpAssemblies != "" && lang != "csharp" {
+		return EnvironmentPlan{}, fmt.Errorf("csharp_assemblies requires C#")
+	}
 	plan := EnvironmentPlan{Language: lang, Name: request.Name, Root: root, Dir: root, SourceDir: dir}
 	if lang == "go" && request.ModuleFile != "" {
 		// The manifest fence is the module: its root is the caller's
@@ -340,8 +352,8 @@ func DiscoverEnvironment(request EnvironmentRequest) (EnvironmentPlan, error) {
 }
 
 type environmentOverlay struct {
-	Name, Language, Runtime string
-	dir                     string
+	Name, Language, Runtime, NativeModules, CSharpAssemblies, RustContext string
+	dir                                                                   string
 }
 
 func environmentDirs(start, language string) (string, []string, error) {
@@ -597,6 +609,17 @@ func discoverNativeEnvironment(plan EnvironmentPlan, selected *environmentOverla
 		return EnvironmentPlan{}, fmt.Errorf("polyglot: %s compiler unavailable: %w", nativeLanguageName(plan.Language), err)
 	}
 	plan.Executable = executable
+	if selected != nil && selected.NativeModules != "" {
+		if plan.Language != "cpp" {
+			return EnvironmentPlan{}, fmt.Errorf("polyglot: native_modules requires C++")
+		}
+		units, files, err := readNativeModules(plan.Root, selected.dir, selected.NativeModules)
+		if err != nil {
+			return EnvironmentPlan{}, err
+		}
+		plan.NativeModules = units
+		plan.ResolutionFiles = append(plan.ResolutionFiles, files...)
+	}
 	plan.Manager, plan.Runtime = "clang", "native"
 	plan.Env = nativeLaunchEnvironment(env)
 	plan.Fingerprint, err = environmentFingerprint(plan)
@@ -641,6 +664,16 @@ func discoverRustEnvironment(plan EnvironmentPlan, selected *environmentOverlay,
 	}
 	plan.Manager, plan.Runtime = "cargo", "native"
 	plan.Env = rustLaunchEnvironment(env)
+	if selected != nil && selected.RustContext != "" && env["BASHPP_RUST_CONTEXT"] == "" {
+		contextPath := selected.RustContext
+		if !filepath.IsAbs(contextPath) {
+			contextPath = filepath.Join(selected.dir, contextPath)
+		}
+		env["BASHPP_RUST_CONTEXT"] = contextPath
+	}
+	if err := discoverRustContext(&plan, env); err != nil {
+		return EnvironmentPlan{}, err
+	}
 	plan.Fingerprint, err = environmentFingerprint(plan)
 	if err != nil {
 		return EnvironmentPlan{}, err
@@ -691,6 +724,12 @@ func discoverPowerShellEnvironment(plan EnvironmentPlan, selected *environmentOv
 			// into the worker's own environment snapshot.
 			if ToolResolver != nil {
 				for _, key := range []string{"LD_LIBRARY_PATH", "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT", "DOTNET_ROOT"} {
+					// An explicit recipe wins over provisioner defaults.
+					if key == "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT" {
+						if _, present := powerShellEnvironmentEntry(env, key); present {
+							continue
+						}
+					}
 					if value, ok := os.LookupEnv(key); ok {
 						env[key] = value
 					}
@@ -705,6 +744,15 @@ func discoverPowerShellEnvironment(plan EnvironmentPlan, selected *environmentOv
 			return EnvironmentPlan{}, fmt.Errorf("polyglot: C# runtime (pinned PowerShell) unavailable: %w", err)
 		}
 		return EnvironmentPlan{}, fmt.Errorf("polyglot: PowerShell runtime unavailable: %w", err)
+	}
+	if selected != nil && selected.CSharpAssemblies != "" {
+		if plan.Language != "csharp" {
+			return EnvironmentPlan{}, fmt.Errorf("csharp_assemblies requires C#")
+		}
+		plan.CSharpAssemblies, err = resolveCSharpAssemblies(selected.dir, selected.CSharpAssemblies)
+		if err != nil {
+			return EnvironmentPlan{}, err
+		}
 	}
 	plan.Manager, plan.Runtime = "pwsh", "pwsh"
 	plan.Env = powerShellLaunchEnvironment(env)
@@ -726,8 +774,15 @@ func powerShellLaunchEnvironment(env map[string]string) []string {
 		"ProgramFiles", "ProgramFiles(x86)", "ProgramW6432", "ProgramData",
 		"APPDATA", "LOCALAPPDATA", "USERPROFILE", "HOMEDRIVE", "HOMEPATH",
 		"PSModulePath", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME",
-		"LD_LIBRARY_PATH", "DOTNET_SYSTEM_GLOBALIZATION_INVARIANT", "DOTNET_ROOT", "SSL_CERT_FILE"} {
+		"LD_LIBRARY_PATH", "DOTNET_ROOT", "SSL_CERT_FILE"} {
 		if value := environmentValue(env, key); value != "" {
+			out = append(out, key+"="+value)
+		}
+	}
+	// Only these explicit startup inputs are admitted, including empty values.
+	// The resulting immutable plan and fingerprint carry the same exact bytes.
+	for _, key := range powerShellExecutionKeys {
+		if value, present := powerShellEnvironmentEntry(env, key); present {
 			out = append(out, key+"="+value)
 		}
 	}
@@ -1173,6 +1228,17 @@ func discoverTypeScriptEnvironment(plan EnvironmentPlan, dirs []string, _ *envir
 		}
 	}
 	plan.Env = typeScriptLaunchEnvironment(env)
+	// Node initializes its default timezone and Intl locale before evaluating
+	// the worker. Preserve only those caller-selected startup inputs, including
+	// empty versus absent, and fingerprint their exact launch-plan values.
+	// Keep this addition local: the shared launch helper also serves native
+	// toolchains, and arbitrary environment/Node loader settings stay excluded.
+	for _, key := range []string{"TZ", "LANG", "LC_ALL", "LC_CTYPE"} {
+		if value, present := env[key]; present {
+			plan.Env = append(plan.Env, key+"="+value)
+		}
+	}
+	sort.Strings(plan.Env)
 	plan.Fingerprint, err = environmentFingerprint(plan)
 	if err != nil {
 		return EnvironmentPlan{}, err
@@ -1231,6 +1297,12 @@ func environmentFingerprint(p EnvironmentPlan) (string, error) {
 	h := sha256.New()
 	write := func(s string) { _, _ = io.WriteString(h, s+"\x00") }
 	write(p.Language)
+	if p.RustTarget != "" {
+		write(p.RustTarget)
+	}
+	if p.CSharpAssemblies != "" {
+		write(p.CSharpAssemblies)
+	}
 	write(p.Root)
 	write(p.Dir)
 	write(p.SourceDir)
@@ -1437,6 +1509,12 @@ func parseOverlayYAML(data []byte, file string) ([]environmentOverlay, error) {
 				current.Runtime = value
 			case "name":
 				current.Name = value
+			case "csharp_assemblies":
+				current.CSharpAssemblies = value
+			case "native_modules":
+				current.NativeModules = value
+			case "rust_context":
+				current.RustContext = value
 			}
 			continue
 		}
@@ -1473,7 +1551,7 @@ func parseOverlayYAML(data []byte, file string) ([]environmentOverlay, error) {
 	if len(values) == 0 {
 		return nil, nil
 	}
-	return []environmentOverlay{{Name: values["name"], Language: values["language"], Runtime: first(values["runtime"], values["python"], values["environment"])}}, nil
+	return []environmentOverlay{{Name: values["name"], Language: values["language"], NativeModules: values["native_modules"], CSharpAssemblies: values["csharp_assemblies"], RustContext: values["rust_context"], Runtime: first(values["runtime"], values["python"], values["environment"])}}, nil
 }
 
 func yamlWithoutComment(line string) string {
@@ -1554,12 +1632,17 @@ func overlayObjects(raw any, file string) ([]environmentOverlay, error) {
 		if !ok {
 			return nil, fmt.Errorf("polyglot: invalid environment in %s", file)
 		}
+		if value, exists := o["csharp_assemblies"]; exists {
+			if path, ok := value.(string); !ok || path == "" {
+				return nil, fmt.Errorf("polyglot: csharp_assemblies must be a nonempty manifest path")
+			}
+		}
 		str := func(k string) string { v, _ := o[k].(string); return v }
 		runtime := first(str("runtime"), str("python"), str("environment"))
 		if runtime == "" {
 			return nil, fmt.Errorf("polyglot: environment in %s has no runtime", file)
 		}
-		out = append(out, environmentOverlay{Name: str("name"), Language: str("language"), Runtime: runtime})
+		out = append(out, environmentOverlay{Name: str("name"), Language: str("language"), Runtime: runtime, NativeModules: str("native_modules"), CSharpAssemblies: str("csharp_assemblies"), RustContext: str("rust_context")})
 	}
 	return out, nil
 }

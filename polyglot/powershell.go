@@ -30,6 +30,61 @@ type PowerShell struct {
 	Cwd func() string
 }
 
+// powerShellCommandCapture is owned by one command request. The worker writes
+// success, error and warning streams as they are produced, so a native exit can
+// end pwsh without losing bytes that preceded it.
+type powerShellCommandCapture struct {
+	stdout, stderr, warning string
+}
+
+func newPowerShellCommandCapture() (*powerShellCommandCapture, error) {
+	capture := new(powerShellCommandCapture)
+	for _, path := range []*string{&capture.stdout, &capture.stderr, &capture.warning} {
+		file, err := os.CreateTemp("", "bashpp-powershell-command-*")
+		if err != nil {
+			capture.remove()
+			return nil, err
+		}
+		*path = file.Name()
+		if err := file.Close(); err != nil {
+			capture.remove()
+			return nil, err
+		}
+	}
+	return capture, nil
+}
+
+func (c *powerShellCommandCapture) addRequest(request map[string]any) {
+	request["stdout_path"] = c.stdout
+	request["stderr_path"] = c.stderr
+	request["warning_path"] = c.warning
+}
+
+func (c *powerShellCommandCapture) result() (CommandResult, error) {
+	stdout, err := os.ReadFile(c.stdout)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return CommandResult{}, err
+	}
+	stderr, err := os.ReadFile(c.stderr)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return CommandResult{}, err
+	}
+	warning, err := os.ReadFile(c.warning)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return CommandResult{}, err
+	}
+	errText := strings.ReplaceAll(strings.ReplaceAll(string(stderr)+string(warning), "\r\n", "\n"), "\r", "\n")
+	return CommandResult{Stdout: string(stdout), Stderr: errText}, nil
+}
+
+func (c *powerShellCommandCapture) remove() {
+	for _, path := range []string{c.stdout, c.stderr, c.warning} {
+		if path != "" {
+			_ = os.Remove(path)
+		}
+	}
+}
+
 func (p PowerShell) executable() string {
 	if p.Environment != nil && p.Environment.Executable != "" {
 		return p.Environment.Executable
@@ -260,7 +315,64 @@ const powershellWorker = powershellWorkerPrelude + powershellWorkerLoop
 // powershellWorkerPrelude is the protocol, value-codec and capture helpers the
 // PowerShell worker loop and the C# worker loop share.
 const powershellWorkerPrelude = `
-$stdinReader = New-Object System.IO.StreamReader([Console]::OpenStandardInput(), (New-Object System.Text.UTF8Encoding($false)))
+# The request protocol arrives on the worker's inherited stdin, but an invoked
+# command must see the same standard-input context as a native non-interactive
+# PowerShell command. Duplicate the protocol handle first, then point the
+# process standard-input handle at the platform null device. In particular,
+# Console.OpenStandardInput() inside a fence must observe EOF rather than steal
+# a future JSON request from the persistent worker.
+Add-Type -TypeDefinition @'
+using System;
+using System.IO;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
+
+public static class BashPPPowerShellProtocolInput
+{
+    const uint DUPLICATE_SAME_ACCESS = 0x00000002;
+    const int STD_INPUT_HANDLE = -10;
+    const uint GENERIC_READ = 0x80000000;
+    const uint FILE_SHARE_READ = 0x00000001;
+    const uint FILE_SHARE_WRITE = 0x00000002;
+    const uint OPEN_EXISTING = 3;
+
+    [DllImport("libc", SetLastError = true)] static extern int dup(int fd);
+    [DllImport("libc", SetLastError = true)] static extern int dup2(int oldfd, int newfd);
+    [DllImport("libc", SetLastError = true)] static extern int open(string path, int flags);
+    [DllImport("libc", SetLastError = true)] static extern int close(int fd);
+
+    [DllImport("kernel32.dll", SetLastError = true)] static extern IntPtr GetCurrentProcess();
+    [DllImport("kernel32.dll", SetLastError = true)] static extern IntPtr GetStdHandle(int kind);
+    [DllImport("kernel32.dll", SetLastError = true)] static extern bool SetStdHandle(int kind, IntPtr handle);
+    [DllImport("kernel32.dll", SetLastError = true)] static extern bool DuplicateHandle(IntPtr sourceProcess, IntPtr source, IntPtr targetProcess, out IntPtr target, uint access, bool inherit, uint options);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern IntPtr CreateFile(string name, uint access, uint share, IntPtr security, uint creation, uint flags, IntPtr template);
+
+    public static Stream Detach()
+    {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows)) {
+            IntPtr process = GetCurrentProcess();
+            IntPtr input = GetStdHandle(STD_INPUT_HANDLE);
+            IntPtr protocol;
+            if (!DuplicateHandle(process, input, process, out protocol, 0, false, DUPLICATE_SAME_ACCESS))
+                throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+            IntPtr empty = CreateFile("NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, IntPtr.Zero, OPEN_EXISTING, 0, IntPtr.Zero);
+            if (empty == new IntPtr(-1) || !SetStdHandle(STD_INPUT_HANDLE, empty))
+                throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+            return new FileStream(new SafeFileHandle(protocol, true), FileAccess.Read);
+        }
+        int copy = dup(0);
+        if (copy < 0)
+            throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+        int emptyFd = open("/dev/null", 0);
+        if (emptyFd < 0 || dup2(emptyFd, 0) < 0)
+            throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
+        close(emptyFd);
+        return new FileStream(new SafeFileHandle(new IntPtr(copy), true), FileAccess.Read);
+    }
+}
+'@
+$stdinReader = New-Object System.IO.StreamReader([BashPPPowerShellProtocolInput]::Detach(), (New-Object System.Text.UTF8Encoding($false)))
+[Console]::SetIn([System.IO.TextReader]::Null)
 if ($IsWindows) {
     $rawOut = [Console]::OpenStandardOutput()
 } else {
@@ -353,22 +465,23 @@ function Envelope-Error($errRecord) {
     }
     return @{ code = $code; message = $message; help = $help }
 }
-# Read-CaptureText reads a capture file and removes it; a missing or unreadable
-# file reads as empty. The call sites redirect the island's information stream
-# (Write-Host) and error stream (Write-Error) into these files inline, at script
-# scope, so the invoked function and its arguments resolve with ordinary scope
-# rules — no nested-function or closure scope to cross.
+# Normalize-Newlines makes textual stdout and stderr carry LF on every host, so
+# the same workflow emits the same bytes on Windows, Linux and macOS.
+function Normalize-Newlines($text) {
+    if ($null -eq $text) { return '' }
+    return (([string]$text) -replace "` + "`r`n" + `", "` + "`n" + `") -replace "` + "`r" + `", "` + "`n" + `"
+}
+# Read-CaptureText reads and normalizes a textual capture file, then removes it;
+# a missing or unreadable file reads as empty. The call sites redirect the
+# island's information stream (Write-Host) and error stream (Write-Error) into
+# these files inline, at script scope, so the invoked function and its arguments
+# resolve with ordinary scope rules — no nested-function or closure scope to
+# cross. Raw command output uses Read-CaptureBytes instead and is never changed.
 function Read-CaptureText($path) {
     $text = ''
     try { $text = [System.IO.File]::ReadAllText($path) } catch {}
     Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
-    return $text
-}
-# Normalize-Newlines makes a command's stdout and stderr carry LF on every host,
-# so the same workflow emits the same bytes on Windows, Linux and macOS.
-function Normalize-Newlines($text) {
-    if ($null -eq $text) { return '' }
-    return (([string]$text) -replace "` + "`r`n" + `", "` + "`n" + `") -replace "` + "`r" + `", "` + "`n" + `"
+    return (Normalize-Newlines $text)
 }
 # Render-CommandOutput turns a function's success stream into the command's
 # stdout bytes: a string is UTF-8 text with LF line endings, a byte array passes
@@ -391,6 +504,21 @@ function Render-CommandOutput($value) {
         $ms.Write($chunk, 0, $chunk.Length)
     }
     return ,$ms.ToArray()
+}
+# Write-CommandOutput appends each success-stream item immediately. If exit
+# ends pwsh before a protocol response, the parent can still recover every
+# byte produced before it from the per-command capture file.
+function Write-CommandOutput($path, $value) {
+    $bytes = Render-CommandOutput $value
+    if ($bytes.Length -eq 0) { return }
+    $stream = [System.IO.File]::Open($path, [System.IO.FileMode]::Append, [System.IO.FileAccess]::Write, [System.IO.FileShare]::ReadWrite)
+    try { $stream.Write($bytes, 0, $bytes.Length) } finally { $stream.Dispose() }
+}
+function Read-CaptureBytes($path) {
+    $bytes = [byte[]]@()
+    try { $bytes = [System.IO.File]::ReadAllBytes($path) } catch {}
+    Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+    return ,$bytes
 }
 # Read-CommandStdin pulls the upstream byte pipe through the shell callback the
 # command request named, a chunk at a time until EOF, and returns it as the
@@ -497,13 +625,18 @@ while ($true) {
                     if ($req.ContainsKey('stdin') -and $null -ne $req['stdin']) {
                         $stdinData = Read-CommandStdin ([int64]$req['stdin'])
                     }
-                    $errFile = New-TemporaryFile
-                    $warnFile = New-TemporaryFile
-                    $value = $null
+                    $outPath = [string]$req['stdout_path']
+                    $errPath = [string]$req['stderr_path']
+                    $warnPath = [string]$req['warning_path']
                     $failure = $null
                     # A native child's exit code is the status; reset it so a
                     # code left by an earlier command never leaks into this one.
                     $global:LASTEXITCODE = 0
+                    # switch binds $_ to the matched label ("command"). A
+                    # native command starts with no caller pipeline item, so do
+                    # not let that dispatcher implementation detail leak into
+                    # ForEach-Object begin/end blocks in the invoked function.
+                    $_ = $null
                     try {
                         # Non-terminating errors and warnings (streams 2 and 3)
                         # are captured as stderr; verbose and debug are dropped;
@@ -514,16 +647,16 @@ while ($true) {
                         # name: a name like Echo or Sort resolves to a built-in
                         # alias or cmdlet first, never the island's function.
                         if ($null -ne $stdinData) {
-                            $value = $stdinData | & $cmd @argv 2> $errFile.FullName 3> $warnFile.FullName 4> $null 5> $null 6>&1
+                            $stdinData | & $cmd @argv 2> $errPath 3> $warnPath 4> $null 5> $null 6>&1 | ForEach-Object { Write-CommandOutput $outPath $_ }
                         } else {
-                            $value = & $cmd @argv 2> $errFile.FullName 3> $warnFile.FullName 4> $null 5> $null 6>&1
+                            & $cmd @argv 2> $errPath 3> $warnPath 4> $null 5> $null 6>&1 | ForEach-Object { Write-CommandOutput $outPath $_ }
                         }
                     } catch {
                         $failure = $_
                     }
-                    $e = (Read-CaptureText $errFile.FullName) + (Read-CaptureText $warnFile.FullName)
+                    $out = Read-CaptureBytes $outPath
+                    $e = (Read-CaptureText $errPath) + (Read-CaptureText $warnPath)
                     $status = 0
-                    $out = [byte[]]@()
                     if ($failure) {
                         # A terminating error ends the command: its message is
                         # the command form of the error that binds to err in a
@@ -532,7 +665,6 @@ while ($true) {
                         $env2 = Envelope-Error $failure
                         $e += [string]$env2['message'] + "` + "`n" + `"
                     } else {
-                        $out = Render-CommandOutput $value
                         # A native child's exit code propagates; a clean run is 0.
                         if ($null -ne $global:LASTEXITCODE) { $status = [int]$global:LASTEXITCODE }
                     }

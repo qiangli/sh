@@ -16,6 +16,21 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
+func TestBashPPPythonHandleIterator(t *testing.T) {
+	source, err := os.ReadFile("../internal/testdata/python-iterators.bpp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := os.ReadFile("../internal/testdata/python-iterators.stdout")
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, stderr, status := runBashPP(t, filepath.Join(t.TempDir(), "iterators.bpp"), t.TempDir(), os.Environ(), string(source))
+	if status != 0 || stderr != "" || out != string(want) {
+		t.Fatalf("status=%d stdout=%q stderr=%q", status, out, stderr)
+	}
+}
+
 func TestBashPPPythonUsesSourceEnvironmentPlan(t *testing.T) {
 	python, err := exec.LookPath("python3")
 	if err != nil {
@@ -600,5 +615,68 @@ echo "$x:$p:$y:$z:${zErr:+failed}"
 	want := "b.txt!:true:" + filepath.Join("a", "b") + ":42:\n"
 	if err != nil || out != want || diagnostic != "" {
 		t.Fatalf("out=%q want=%q diagnostic=%q err=%v", out, want, diagnostic, err)
+	}
+}
+
+func TestBashPPGoVoidCalls(t *testing.T) {
+	out, diagnostic, err := runPolyglot(t, `~~~go as g
+import "fmt"
+func Main() { fmt.Println("hello world") }
+func Partial() { fmt.Print("no newline") }
+func Checked(fail bool) error {
+	fmt.Println("checked")
+	if fail { return fmt.Errorf("void failure") }
+	return nil
+}
+~~~
+g.Main()
+g.Main()
+g.Partial()
+g.Checked(false)
+g.Checked(true)
+echo "status=$?"
+g.Main()
+`)
+	if want := "hello world\nhello world\nno newlinechecked\nchecked\nstatus=1\nhello world\n"; err != nil || out != want || diagnostic != "bash++: foreign call g.Checked failed: void failure\n" {
+		t.Fatalf("out=%q diagnostic=%q err=%v, want %q", out, diagnostic, err, want)
+	}
+}
+
+func TestBashPPGoModuleInternalFunctions(t *testing.T) {
+	for _, tc := range []struct{ declaration, call string }{
+		{"func SlicesIndex[S ~[]E, E comparable](s S, v E) int { for i := range s { if s[i] == v { return i } }; return -1 }", "SlicesIndex([]string{\"a\", \"b\"}, \"b\")"},
+		{"func Variadic(v ...int) int { return len(v) }", "Variadic(1)"},
+		{"func Unsupported(v []int) int { return len(v) }", "Unsupported([]int{1})"},
+	} {
+		out, diagnostic, err := runPolyglot(t, "~~~go as g\nimport \"fmt\"\n"+tc.declaration+"\nfunc Main() { fmt.Println("+tc.call+") }\n~~~\ng.Main()\n")
+		if err != nil || diagnostic != "" || out != "1\n" {
+			t.Errorf("out=%q diagnostic=%q err=%v", out, diagnostic, err)
+		}
+	}
+}
+
+func TestBashPPPythonFenceHandleMethods(t *testing.T) {
+	source, err := os.ReadFile("../internal/testdata/python-handles.bpp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	file, err := syntax.NewParser(syntax.Variant(syntax.LangBashPP)).Parse(strings.NewReader(string(source)), filepath.Join(t.TempDir(), "handles.bpp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out, stderr strings.Builder
+	runner, err := interp.New(interp.Lang(syntax.LangBashPP), interp.StdIO(nil, &out, &stderr))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.Run(t.Context(), file); err != nil {
+		t.Fatalf("%v: %s", err, stderr.String())
+	}
+	want, err := os.ReadFile("../internal/testdata/python-handles.stdout")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != string(want) || stderr.String() != "method-err\n" {
+		t.Fatalf("out=%q stderr=%q", out.String(), stderr.String())
 	}
 }

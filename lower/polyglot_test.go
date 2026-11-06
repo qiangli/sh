@@ -205,6 +205,54 @@ echo "x=$x"
 	}
 }
 
+func TestGoCommandInterpretedNativeParity(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go unavailable")
+	}
+	got := testPythonFenceInterpretedNativeParityAt(t, `~~~go as go
+import ("fmt"; "os")
+func Show() { fmt.Printf("argv=%q\n", os.Args[1:]) }
+func Exit() { os.Exit(3) }
+func Value() string { return "typed" }
+~~~
+go.Show one "two words"
+go.Exit
+echo "status=$?"
+value := go.Value()
+echo "value=$value"
+`, filepath.Join("testdata", "input.bpp"))
+	if got != "argv=[\"one\" \"two words\"]\nstatus=3\nvalue=typed\n" {
+		t.Fatalf("output = %q", got)
+	}
+}
+
+func TestGoCommandUsesCurrentShellContextInBothModes(t *testing.T) {
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("go unavailable")
+	}
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.local/go-command-context\n\ngo 1.25\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	subdir := filepath.Join(root, "sub")
+	if err := os.Mkdir(subdir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	got := testPythonFenceInterpretedNativeParityAt(t, `~~~go as go
+import ("fmt"; "os"; "path/filepath")
+func Show() { wd, _ := os.Getwd(); fmt.Printf("%s:%s\n", filepath.Base(wd), os.Getenv("BPP_GO_CALL_CONTEXT")) }
+~~~
+if true; then export BPP_GO_CALL_CONTEXT=first; fi
+go.Show
+cd sub
+if true; then export BPP_GO_CALL_CONTEXT=second; fi
+go.Show
+`, filepath.Join(root, "entry.bpp"))
+	if got != ""+filepath.Base(root)+":first\nsub:second\n" {
+		t.Fatalf("output = %q", got)
+	}
+}
+
 func TestShellFenceInterpretedNativeParity(t *testing.T) {
 	for name, source := range map[string]string{
 		"bash": `~~~bash as island
@@ -342,10 +390,28 @@ func testPythonFenceInterpretedNativeParityAt(t *testing.T, source, filename str
 
 func testForeignParityArtifactAt(t *testing.T, source, filename, nativePostlude string, buildFlags ...string) string {
 	t.Helper()
+	stdout, _ := testForeignParityArtifactEnvironment(t, source, filename, nativePostlude, nil, 0, buildFlags...)
+	return stdout
+}
+
+func testForeignParityArtifactEnvironment(t *testing.T, source, filename, nativePostlude string, compileEnv map[string]string, expectedExit int, buildFlags ...string) (string, string) {
+	t.Helper()
 	file := parse(t, source, filename)
-	result, err := lower.Compile(file, lower.Options{})
-	if err != nil {
-		t.Fatal(err)
+	var result *lower.Result
+	var err error
+	compile := func(t *testing.T) {
+		for key, value := range compileEnv {
+			t.Setenv(key, value)
+		}
+		result, err = lower.Compile(file, lower.Options{})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if compileEnv == nil {
+		compile(t)
+	} else if !t.Run("build-environment", compile) {
+		t.FailNow()
 	}
 	if !strings.Contains(string(result.Source), "polyglot.Start") {
 		t.Fatalf("generated source omitted module:\n%s", result.Source)
@@ -364,8 +430,17 @@ func testForeignParityArtifactAt(t *testing.T, source, filename, nativePostlude 
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 	defer cancel()
-	if err := runner.Run(ctx, file); err != nil {
-		t.Fatalf("interpreted: %v: %s", err, interpretedErr.String())
+	runErr := runner.Run(ctx, file)
+	status := 0
+	if runErr != nil {
+		if code, ok := interp.IsExitStatus(runErr); ok {
+			status = int(code)
+		} else {
+			t.Fatal(runErr)
+		}
+	}
+	if status != expectedExit {
+		t.Fatalf("interpreted status=%d want=%d: %s", status, expectedExit, interpretedErr.String())
 	}
 
 	dir := t.TempDir()
@@ -405,13 +480,22 @@ func testForeignParityArtifactAt(t *testing.T, source, filename, nativePostlude 
 	var native, nativeErr bytes.Buffer
 	cmd.Stdout = &native
 	cmd.Stderr = &nativeErr
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("native: %v: %s", err, nativeErr.String())
+	runErr = cmd.Run()
+	status = 0
+	if runErr != nil {
+		if exit, ok := runErr.(*exec.ExitError); ok {
+			status = exit.ExitCode()
+		} else {
+			t.Fatal(runErr)
+		}
+	}
+	if status != expectedExit {
+		t.Fatalf("compiled status=%d want=%d: %s", status, expectedExit, nativeErr.String())
 	}
 	if native.String() != interpreted.String() || nativeErr.String() != interpretedErr.String() {
 		t.Fatalf("interpreted=(%q,%q) native=(%q,%q)", interpreted.String(), interpretedErr.String(), native.String(), nativeErr.String())
 	}
-	return native.String()
+	return native.String(), nativeErr.String()
 }
 
 // requirePowerShell gates the PowerShell and C# parity tests on a real pwsh 7:
@@ -432,6 +516,9 @@ func requirePowerShell(t *testing.T) {
 
 func TestPowerShellFenceInterpretedNativeParity(t *testing.T) {
 	requirePowerShell(t)
+	bin := t.TempDir()
+	internal.PowerShellTestSort(t, bin)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	tests := map[string]struct{ source, want string }{
 		// A Verb-Noun export is no Bash# call name; it lowers as a fence-local
 		// helper and the program still builds.
@@ -647,5 +734,42 @@ echo "$value:$callErr"
 				t.Fatalf("output = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestGoVoidFenceInterpretedNativeParity(t *testing.T) {
+	got := testPythonFenceInterpretedNativeParityAt(t, `~~~go as g
+import "fmt"
+func Main() { fmt.Println("hello world") }
+func Partial() { fmt.Print("no newline") }
+func Checked(fail bool) error {
+	fmt.Println("checked")
+	if fail { return fmt.Errorf("void failure") }
+	return nil
+}
+~~~
+g.Main()
+g.Main()
+g.Partial()
+g.Checked(false)
+g.Main()
+`, filepath.Join("testdata", "input.bpp"))
+	if want := "hello world\nhello world\nno newlinechecked\nhello world\n"; got != want {
+		t.Fatalf("output = %q, want %q", got, want)
+	}
+}
+
+func TestPythonFenceHandleMethods(t *testing.T) {
+	source, err := os.ReadFile("../internal/testdata/python-handles.bpp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := testPythonFenceInterpretedNativeParityAt(t, string(source), filepath.Join(t.TempDir(), "handles.bpp"))
+	want, err := os.ReadFile("../internal/testdata/python-handles.stdout")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != string(want) {
+		t.Fatalf("output=%q", got)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -14,11 +15,11 @@ import (
 func TestDiscoverPowerShellEnvironmentResolverAndOverride(t *testing.T) {
 	root := t.TempDir()
 	bin := filepath.Join(root, "bin")
-	pwsh := filepath.Join(bin, "pwsh")
+	pwsh := powerShellFixtureExecutable(bin, "pwsh")
 	writeEnvironmentFile(t, pwsh, "fixture pwsh")
 	plan, err := DiscoverEnvironment(EnvironmentRequest{
 		Source: filepath.Join(root, "src", "program.bpp"), Language: "powershell",
-		Environ: []string{"PATH=" + bin},
+		Environ: powerShellFixtureEnviron(bin),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -32,15 +33,15 @@ func TestDiscoverPowerShellEnvironmentResolverAndOverride(t *testing.T) {
 	}
 	// An alias reaches the same discovery row.
 	if _, err := DiscoverEnvironment(EnvironmentRequest{
-		Source: filepath.Join(root, "program.bpp"), Language: "pwsh", Environ: []string{"PATH=" + bin},
+		Source: filepath.Join(root, "program.bpp"), Language: "pwsh", Environ: powerShellFixtureEnviron(bin),
 	}); err != nil {
 		t.Fatalf("alias discovery: %v", err)
 	}
-	override := filepath.Join(root, "custom-pwsh")
+	override := powerShellFixtureExecutable(root, "custom-pwsh")
 	writeEnvironmentFile(t, override, "custom pwsh")
 	overridden, err := DiscoverEnvironment(EnvironmentRequest{
 		Source: filepath.Join(root, "program.bpp"), Language: "powershell",
-		Environ: []string{"PATH=", "BASHPP_PWSH=" + override},
+		Environ: append(powerShellFixtureEnviron(""), "BASHPP_PWSH="+override),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -66,7 +67,7 @@ func TestDiscoverPowerShellEnvironmentUnavailable(t *testing.T) {
 
 func TestDiscoverPowerShellEnvironmentCarriesProvisionedRuntimeControls(t *testing.T) {
 	root := t.TempDir()
-	pwsh := filepath.Join(root, "pwsh")
+	pwsh := powerShellFixtureExecutable(root, "pwsh")
 	writeEnvironmentFile(t, pwsh, "fixture pwsh")
 	t.Setenv("LD_LIBRARY_PATH", "")
 	t.Setenv("DOTNET_SYSTEM_GLOBALIZATION_INVARIANT", "")
@@ -83,7 +84,7 @@ func TestDiscoverPowerShellEnvironmentCarriesProvisionedRuntimeControls(t *testi
 	t.Cleanup(func() { ToolResolver = saved })
 	plan, err := DiscoverEnvironment(EnvironmentRequest{
 		Source: filepath.Join(root, "program.bpp"), Language: "powershell",
-		Environ: []string{"PATH=" + root},
+		Environ: powerShellFixtureEnviron(root),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -201,6 +202,12 @@ function Flag {
     param()
     $true
 }
+function TypedText {
+    [OutputType([long])]
+    param()
+    Write-Host "powershell`+"`r`n"+`second"
+    42
+}
 function Calls { [OutputType([long])] param() $script:calls }
 function Boom { throw "boom" }
 `)
@@ -213,6 +220,13 @@ function Boom { throw "boom" }
 	}
 	if !strings.Contains(got.Stdout, "called") {
 		t.Fatalf("Write-Host did not reach stdout: %q", got.Stdout)
+	}
+
+	// Typed-call capture is text, so it uses the same portable LF contract as
+	// command output. Keep the typed result separate from the captured stream.
+	text, err := m.Call(context.Background(), "TypedText")
+	if err != nil || text.Value != int64(42) || text.Stdout != "powershell\nsecond\n" {
+		t.Fatalf("TypedText = %#v, %v", text, err)
 	}
 
 	blob, err := m.Call(context.Background(), "Blob", []byte("x"))
@@ -273,4 +287,21 @@ function Merge {
 	if !ok || out["x"] != int64(1) || out["y"] != int64(2) {
 		t.Fatalf("Merge = %#v", got.Value)
 	}
+}
+
+// Discovery fixtures are files, not launched programs. Their names still must
+// satisfy the platform executable lookup contract.
+func powerShellFixtureExecutable(dir, name string) string {
+	if runtime.GOOS == "windows" {
+		name += ".EXE"
+	}
+	return filepath.Join(dir, name)
+}
+
+func powerShellFixtureEnviron(path string) []string {
+	environ := []string{"PATH=" + path}
+	if runtime.GOOS == "windows" {
+		environ = append(environ, "PATHEXT=.EXE")
+	}
+	return environ
 }

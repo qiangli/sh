@@ -36,6 +36,9 @@ func (e *emitter) lexicalKind(name string) string {
 			kind = "KindFloat"
 		}
 	}
+	if p.foreignBytes {
+		kind = "KindForeignBytes"
+	}
 	return e.prefix + "rt." + kind
 }
 func (e *emitter) lexicalCell(name, program string) string {

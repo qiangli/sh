@@ -197,6 +197,12 @@ func (e *emitter) declarationProjection(n *syntax.BashPPDecl) projection {
 	return p
 }
 func (e *emitter) callProjection(c *syntax.BashPPCall, index int) projection {
+	if e.pythonCallKind(c) != "" {
+		if index == 1 {
+			return e.projectionType("error", nil)
+		}
+		return e.projectionType("any", nil)
+	}
 	if !e.goSource && c != nil && len(c.Fun) == 1 && e.functionDecls[c.Fun[0].Value] == nil && index == 0 {
 		if name := c.Fun[0].Value; name == "run" || name == "start" {
 			p := nativeAggregateProjection()
@@ -257,6 +263,9 @@ func (e *emitter) callProjection(c *syntax.BashPPCall, index int) projection {
 // literal. One binding past the declared results is the explicit error
 // opt-in, an interface root like the error it is.
 func (e *emitter) foreignResultProjection(foreign foreignFunction, index int) (projection, bool) {
+	if index < len(foreign.export.Signature.Results) && foreign.export.Signature.Results[index] == "bytes" {
+		return projection{kind: projectScalar, foreignBytes: true}, true
+	}
 	if p, ok := e.declResultProjection(lowerForeignDecl(foreign.export), index); ok {
 		if p.kind == projectFloat {
 			p.runtimeFloat = true
@@ -315,6 +324,10 @@ func (e *emitter) projectBinding(n syntax.Node, name, expression string) (text s
 	}
 	if e.execution && richChannelType(p.sourceType) {
 		return e.prefix + "rt.ChannelWord(" + e.program() + ".Channels," + expression + ")", nil
+	}
+	if p.foreignBytes {
+		e.bridge = true
+		return e.prefix + "rt.ForeignBytesProjection(" + expression + ")", nil
 	}
 	if p.runtimeFloat {
 		e.bridge = true

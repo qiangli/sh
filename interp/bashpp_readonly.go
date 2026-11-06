@@ -302,7 +302,12 @@ func (r *Runner) bashPPTupleAssignCall(ctx context.Context, assign *syntax.BashP
 		return
 	}
 	failureMark := r.bashPPShortFailureSeq
-	results := r.bashPPInvoke(ctx, fn, args)
+	var results []string
+	if fn.foreign != nil && fn.foreign.receiver != nil && len(assign.Names) == 2 {
+		results = r.bashPPInvokeForeignErr(ctx, fn.foreign, args)
+	} else {
+		results = r.bashPPInvoke(ctx, fn, args)
+	}
 	resultCells := r.bashPPResultCells
 	if r.bashPPPanicking() || r.exit.exiting || r.exit.fatalExit || r.exit.err != nil || r.bashPPShortFailureSeq != failureMark {
 		return

@@ -664,6 +664,9 @@ func (e *emitter) rangeStmt(n *syntax.BashPPRange) (string, error) {
 	if n.Chan != nil && e.foreignIteratorValues[n.Chan.Lit()] != "" {
 		return e.foreignIteratorRange(n)
 	}
+	if n.Chan != nil && e.pythonRangeValue(n.Chan.Lit()) {
+		return e.pythonHandleIteratorRange(n)
+	}
 	if e.execution && n.Chan != nil {
 		return e.runtimeChannelRange(n, e.runtimeScope(), e.runtimeStatements)
 	}

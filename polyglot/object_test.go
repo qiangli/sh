@@ -73,10 +73,24 @@ def nap(): time.sleep(30)
 	if got, err := module.GetAttr(context.Background(), constructed.Value.(*Handle), "value"); err != nil || got.Value != int64(9) {
 		t.Fatalf("constructed value = %#v, %v", got.Value, err)
 	}
+	for _, attribute := range []string{"missing", "value"} {
+		if _, err := object.CallAttr(context.Background(), attribute, nil, nil); err == nil {
+			t.Fatalf("%s unexpectedly callable", attribute)
+		} else if _, ok := ForeignErrorDetail(err); !ok {
+			t.Fatalf("%s error is not a domain error: %v", attribute, err)
+		}
+	}
+	other := StartImport(ImportPlan{ID: "other", Language: "python", Module: "fixturemod", Alias: "other", Environment: EnvironmentPlan{Executable: python, Dir: dir, PythonPath: []string{dir}, Env: os.Environ()}})
+	defer other.Close()
+	if _, err := other.CallAttr(context.Background(), object, "add", nil, nil); err == nil {
+		t.Fatal("cross-module handle accepted")
+	} else if _, domain := ForeignErrorDetail(err); domain {
+		t.Fatalf("ownership failure classified as domain error: %v", err)
+	}
 	if err := module.Release(context.Background(), object); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := module.GetAttr(context.Background(), object, "value"); err == nil {
+	if _, err := object.CallAttr(context.Background(), "add", nil, nil); err == nil {
 		t.Fatal("released handle remained usable")
 	}
 }
@@ -102,7 +116,7 @@ func TestPythonHandleStaleAfterCancellation(t *testing.T) {
 	if _, err := module.Call(ctx, "nap"); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("nap error = %v", err)
 	}
-	if _, err := module.GetAttr(context.Background(), handle, "anything"); err == nil || !strings.Contains(err.Error(), "stale") {
+	if _, err := handle.CallAttr(context.Background(), "anything", nil, nil); err == nil || !strings.Contains(err.Error(), "stale") {
 		t.Fatalf("stale handle error = %v", err)
 	}
 }

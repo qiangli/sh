@@ -40,6 +40,9 @@ func runArtifact(t *testing.T, result *lower.Result, args ...string) (string, st
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
 	defer cancel()
 	binary := filepath.Join(dir, "program")
+	if runtime.GOOS == "windows" {
+		binary += ".exe"
+	}
 	build := exec.CommandContext(ctx, filepath.Join(runtime.GOROOT(), "bin", "go"), "build", "-mod=mod", "-o", binary, "generated.go")
 	build.Dir = dir
 	build.Env = append(os.Environ(), "GOWORK=off", "GOTOOLCHAIN=local")

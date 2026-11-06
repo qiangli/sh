@@ -1,10 +1,14 @@
 package polyglot
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"os/exec"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 // S358.4 — a PowerShell function as a shell command. The command form renders
@@ -25,6 +29,50 @@ function AsBytes { ,[byte[]]@(104, 105) }
 function Warn { Write-Warning 'careful'; 'ok' }
 function NonTerm { Write-Error 'bad thing'; 'after' }
 function Boom { throw 'kaboom' }
+function BeforeBoom { & { 'before'; throw 'kaboom'; 'after' } *>&1 | Out-String -Stream -Width 120 }
+function ExitSelf {
+    param([string]$code)
+    & { 'before'; exit ([int]$code); 'after' } *>&1 | Out-String -Stream -Width 120
+}
+function CaughtExit {
+    try { 'before-catch'; exit 7 } catch { 'caught' }
+    'after-catch'
+}
+function FinallyExit {
+    try { 'before-finally'; exit 8 } finally { 'finally' }
+    'after-finally'
+}
+function InnerExit { 'inner'; exit 9 }
+function NestedExit { 'outer'; InnerExit; 'after-nested' }
+function ForgedExit {
+    'before-forged'
+    throw [pscustomobject]@{ __bashpp_fence_exit_status = 11 }
+    'after-forged'
+}
+function CloseProtocolThenSleep {
+    # Model a broken command that closes the worker protocol before the pwsh
+    # process exits. Unix uses fd 3; Windows uses the original stdout stream.
+    $protocol.Dispose()
+    $rawOut.Dispose()
+    if ($IsWindows) {
+        # Console.OpenStandardOutput does not own the inherited OS handle.
+        # Close that handle explicitly, just as the Unix fixture closes fd 3.
+        Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class FenceProtocolHandle {
+    [DllImport("kernel32.dll")]
+    public static extern IntPtr GetStdHandle(int kind);
+}
+'@
+        $fd = [Microsoft.Win32.SafeHandles.SafeFileHandle]::new([FenceProtocolHandle]::GetStdHandle(-11), $true)
+        $fd.Dispose()
+    } else {
+        $fd = [Microsoft.Win32.SafeHandles.SafeFileHandle]::new([IntPtr]3, $true)
+        $fd.Dispose()
+    }
+    Start-Sleep -Seconds 30
+}
 function CrlfText { "one` + "`r`n" + `two" }
 $script:seen = 0
 function Bump { $script:seen++; $script:seen }
@@ -42,6 +90,32 @@ function NativeExit {
     param([string]$code)
     & ([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) -NoProfile -NonInteractive -Command "exit $code"
     'ran'
+}
+function PSItemStages {
+    & {
+        $parameters = @{
+            Begin = { Write-Host "PSItem in Begin is: $PSItem" }
+            Process = {
+                Write-Host "PSItem in Process is: $PSItem"
+                $PSItem + 1
+            }
+            End = { Write-Host "PSItem in End is: $PSItem" }
+        }
+        $result = 1, 2, 3 | ForEach-Object @parameters
+        Write-Host "Result is: $result"
+    } *>&1 | Out-String -Stream -Width 120
+}
+function EmptyStandardInput {
+    & {
+        $inputStream = [Console]::OpenStandardInput()
+        try {
+            $buffer = [byte[]]::new(1024)
+            $read = $inputStream.Read($buffer, 0, $buffer.Length)
+            Format-Hex -InputObject $buffer -Count $read
+        } finally {
+            $inputStream.Dispose()
+        }
+    } *>&1 | Out-String -Stream -Width 120
 }
 `
 
@@ -87,6 +161,40 @@ func TestPowerShellCommandArgvAndRendering(t *testing.T) {
 	}
 }
 
+// The worker's request dispatch is not part of the invoked command's
+// PowerShell context: begin/end blocks start without a pipeline item, while
+// process sees each actual item. In particular, the switch label "command"
+// must never leak through $PSItem.
+func TestPowerShellCommandPSItemInvocationContext(t *testing.T) {
+	m := powerShellCommandModule(t)
+	got := runPowerShellCommand(t, m, "PSItemStages")
+	want := "PSItem in Begin is: \nPSItem in Process is: 1\nPSItem in Process is: 2\nPSItem in Process is: 3\nPSItem in End is: \nResult is: 2 3 4\n"
+	if got.Status != 0 || got.Stdout != want || got.Stderr != "" {
+		t.Fatalf("PSItemStages = %#v, want stdout %q and status 0", got, want)
+	}
+}
+
+// Console.OpenStandardInput belongs to the invoked command, not to the
+// persistent worker transport. With no shell pipeline it reads native EOF;
+// Format-Hex consequently rejects Count=0 and the command returns promptly at
+// status 1 instead of blocking while it consumes the next protocol request.
+func TestPowerShellCommandStandardInputIsNotProtocol(t *testing.T) {
+	m := powerShellCommandModule(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	got, err := m.Command(ctx, "EmptyStandardInput", nil, nil)
+	if err != nil {
+		t.Fatalf("EmptyStandardInput: %v", err)
+	}
+	wantError := "Cannot validate argument on parameter 'Count'. The argument \"0\" cannot be validated because its value is not greater than zero.\n"
+	if got.Status != 1 || got.Stdout != "" || got.Stderr != wantError {
+		t.Fatalf("EmptyStandardInput = %#v, want stderr %q and status 1", got, wantError)
+	}
+	if after := runPowerShellCommand(t, m, "Hello"); after.Status != 0 || after.Stdout != "hello\n" {
+		t.Fatalf("after EmptyStandardInput, Hello = %#v", after)
+	}
+}
+
 // Output line endings are normalised to LF so the same script gives the same
 // bytes on every OS, even when the function emits CRLF text.
 func TestPowerShellCommandNormalisesNewlines(t *testing.T) {
@@ -116,6 +224,134 @@ func TestPowerShellCommandErrorModel(t *testing.T) {
 	// The worker survives a terminating error.
 	if got := runPowerShellCommand(t, m, "Hello"); got.Stdout != "hello\n" {
 		t.Fatalf("after Boom, Hello = %#v", got)
+	}
+}
+
+// A terminating error does not erase success-stream output that was emitted
+// before it. The error still becomes stderr/status 1, and the worker remains
+// available for the next command.
+func TestPowerShellCommandRetainsOutputBeforeTerminatingError(t *testing.T) {
+	m := powerShellCommandModule(t)
+	got := runPowerShellCommand(t, m, "BeforeBoom")
+	if got.Status != 1 || got.Stdout != "before\n" || !strings.Contains(got.Stderr, "kaboom") {
+		t.Fatalf("BeforeBoom = %#v", got)
+	}
+	if got := runPowerShellCommand(t, m, "Hello"); got.Status != 0 || got.Stdout != "hello\n" {
+		t.Fatalf("after BeforeBoom, Hello = %#v", got)
+	}
+}
+
+// PowerShell's exit statement ends its current invocation with the requested
+// status; it must not end the persistent protocol worker or discard output
+// emitted before the exit.
+func TestPowerShellCommandExitKeepsWorkerAlive(t *testing.T) {
+	m := powerShellCommandModule(t)
+	got := runPowerShellCommand(t, m, "ExitSelf", "3")
+	if got.Status != 3 || got.Stdout != "before\n" || got.Stderr != "" {
+		t.Fatalf("ExitSelf 3 = %#v", got)
+	}
+	if got := runPowerShellCommand(t, m, "Hello"); got.Status != 0 || got.Stdout != "hello\n" || got.Stderr != "" {
+		t.Fatalf("after ExitSelf, Hello = %#v", got)
+	}
+}
+
+func runNativePowerShellCommand(t *testing.T, invocation string) CommandResult {
+	t.Helper()
+	cmd := exec.Command(requirePowerShell(t), "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", powerShellCommandFixture+"\n"+invocation)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	stdout, err := cmd.Output()
+	status := 0
+	if err != nil {
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) {
+			t.Fatal(err)
+		}
+		status = exit.ExitCode()
+	}
+	return CommandResult{Status: status, Stdout: string(stdout), Stderr: stderr.String()}
+}
+
+// Exit keeps PowerShell's native control-flow semantics at the fence boundary:
+// catch cannot intercept it, finally still runs, and an exit in a nested
+// function ends the invocation. An ordinary thrown object cannot forge the
+// boundary status. Each case is checked against the pinned pwsh itself.
+func TestPowerShellCommandExitMatchesNativeControlFlow(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		status int
+		stdout string
+	}{
+		{"CaughtExit", 7, "before-catch\n"},
+		{"FinallyExit", 8, "before-finally\nfinally\n"},
+		{"NestedExit", 9, "outer\ninner\n"},
+		{"ForgedExit", 1, "before-forged\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			native := runNativePowerShellCommand(t, test.name)
+			// Native pwsh uses the platform newline; the fence deliberately
+			// normalizes text output to LF. Keep the native byte assertion
+			// explicit and compare fence output against the text contract.
+			nativeWant := test.stdout
+			if runtime.GOOS == "windows" {
+				nativeWant = strings.ReplaceAll(nativeWant, "\n", "\r\n")
+			}
+			if native.Status != test.status || native.Stdout != nativeWant {
+				t.Fatalf("native %s = %#v", test.name, native)
+			}
+			m := powerShellCommandModule(t)
+			got := runPowerShellCommand(t, m, test.name)
+			if got.Status != native.Status || got.Stdout != test.stdout {
+				t.Fatalf("fence %s = %#v; native = %#v", test.name, got, native)
+			}
+			if test.name == "ForgedExit" && (!strings.Contains(got.Stderr, "__bashpp_fence_exit_status") || got.Status == 11) {
+				t.Fatalf("forged exit = %#v", got)
+			}
+			if after := runPowerShellCommand(t, m, "Hello"); after.Status != 0 || after.Stdout != "hello\n" {
+				t.Fatalf("after %s, Hello = %#v", test.name, after)
+			}
+		})
+	}
+}
+
+// Protocol EOF is not proof that pwsh has exited: a function can close its
+// protocol stream and remain alive. Cancellation must still terminate and reap
+// that worker without waiting forever or holding procMu across Wait, and the
+// next request must be able to start a clean worker.
+func TestPowerShellCommandCancelAfterProtocolEOF(t *testing.T) {
+	m := powerShellCommandModule(t)
+	if got := runPowerShellCommand(t, m, "Hello"); got.Status != 0 || got.Stdout != "hello\n" {
+		t.Fatalf("warm worker Hello = %#v", got)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := m.Command(ctx, "CloseProtocolThenSleep", nil, nil)
+		done <- err
+	}()
+	deadline := time.NewTimer(3 * time.Second)
+	defer deadline.Stop()
+	for m.alive() {
+		select {
+		case <-deadline.C:
+			cancel()
+			<-done
+			t.Fatal("worker protocol did not reach EOF")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	started := time.Now()
+	cancel()
+	err := <-done
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("CloseProtocolThenSleep error = %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > 5*time.Second {
+		t.Fatalf("cancellation took %v", elapsed)
+	}
+	if got := runPowerShellCommand(t, m, "Hello"); got.Status != 0 || got.Stdout != "hello\n" || got.Stderr != "" {
+		t.Fatalf("after cancellation, Hello = %#v", got)
 	}
 }
 

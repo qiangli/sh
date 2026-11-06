@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"sync"
@@ -31,7 +32,7 @@ func (m *Module) OpenIterator(ctx context.Context, name string, args []any) (*It
 		return nil, CallResult{}, err
 	}
 	defer func() { m.dropPendingCallbacks()() }()
-	if _, rust := m.runtime.(Rust); rust {
+	if languageFlag(m.plan.Language, func(language Language) bool { return language.Callbacks }) {
 		args, err = m.resolveCallbacks(name, args)
 		if err != nil {
 			return nil, CallResult{}, err
@@ -49,6 +50,43 @@ func (m *Module) OpenIterator(ctx context.Context, name string, args []any) (*It
 	ids := append([]uint64(nil), m.pendingCallbacks...)
 	m.pendingCallbacks = nil
 	return &Iterator{module: m, id: result.Value, generation: m.generation, callbacks: ids}, result, nil
+}
+
+// OpenIterator adapts this authenticated Python value to the shared foreign
+// iterator lifecycle. The handle's module and worker generation are checked
+// before its ID is sent to the worker; descriptive handle metadata never
+// grants iterator authority.
+func (h *Handle) OpenIterator(ctx context.Context) (*Iterator, CallResult, error) {
+	if h == nil || h.module == nil {
+		return nil, CallResult{}, h.stale()
+	}
+	return h.module.OpenHandleIterator(ctx, h)
+}
+
+// OpenHandleIterator is the module-explicit form used by hosts which retain
+// worker ownership separately from the opaque handle. Cross-module handles
+// are refused even when their numeric worker IDs happen to match.
+func (m *Module) OpenHandleIterator(ctx context.Context, h *Handle) (*Iterator, CallResult, error) {
+	if _, ok := m.runtime.(Python); !ok || h == nil || h.module != m {
+		return nil, CallResult{}, fmt.Errorf("polyglot: stale or foreign %s handle", m.runtime.name())
+	}
+	unlock, err := m.lock(ctx)
+	if err != nil {
+		return nil, CallResult{}, err
+	}
+	defer unlock()
+	if err := m.ensure(ctx); err != nil {
+		return nil, CallResult{}, err
+	}
+	if h.generation != m.generation {
+		return nil, CallResult{}, fmt.Errorf("polyglot: stale or foreign %s handle", m.runtime.name())
+	}
+	m.nextID++
+	result, err := m.request(ctx, map[string]any{"id": m.nextID, "op": "iter_open", "handle": h.ID}, nil)
+	if err != nil {
+		return nil, result, err
+	}
+	return &Iterator{module: m, id: result.Value, generation: m.generation}, result, nil
 }
 
 func (it *Iterator) request(ctx context.Context, op string) (CallResult, error) {
@@ -114,10 +152,13 @@ func (it *Iterator) Close(ctx context.Context) (CallResult, error) {
 	return it.request(ctx, "iter_close")
 }
 
-// FilterInput is a byte reader served through the existing callback frames;
-// it never shares the worker's protocol stdin with pipeline bytes.
-func FilterInput(reader io.Reader) Callback {
-	return Callback{Name: "pipeline stdin", Invoke: func(ctx context.Context, args []any) (any, error) {
+// PipelineInput is the distinct pull-based pipeline capability. It shares the
+// callback registry and reverse frames, but never decodes as a callable proxy.
+type PipelineInput struct{ Callback Callback }
+
+// FilterInput adapts a byte reader to a PipelineInput.
+func FilterInput(reader io.Reader) PipelineInput {
+	return PipelineInput{Callback: Callback{Name: "pipeline stdin", Invoke: func(ctx context.Context, args []any) (any, error) {
 		size := int64(65536)
 		if len(args) > 0 {
 			if n, ok := args[0].(int64); ok && n > 0 && n < size {
@@ -147,7 +188,7 @@ func FilterInput(reader io.Reader) Callback {
 			err = nil
 		}
 		return data[:n], err
-	}}
+	}}}
 }
 
 // EncodeIteratorFrame and DecodeIteratorFrame retain the ordinary Object codec
@@ -192,6 +233,22 @@ func (m *Module) DecodeIteratorFrame(ctx context.Context, line, element string) 
 		value, err = coerceResult(value, element)
 	}
 	return CallResult{Value: value, Stdout: frame.Stdout, Stderr: frame.Stderr}, err
+}
+
+// Iterator frame helpers keep lowered handle ranges on the same authenticated
+// module codec without exposing the owning Module as handle metadata.
+func (h *Handle) EncodeIteratorFrame(ctx context.Context, result CallResult) ([]byte, error) {
+	if h == nil || h.module == nil {
+		return nil, h.stale()
+	}
+	return h.module.EncodeIteratorFrame(ctx, result)
+}
+
+func (h *Handle) DecodeIteratorFrame(ctx context.Context, line, element string) (CallResult, error) {
+	if h == nil || h.module == nil {
+		return CallResult{}, h.stale()
+	}
+	return h.module.DecodeIteratorFrame(ctx, line, element)
 }
 
 // Preserve the worker's descriptive handle envelope while the ordinary encoder

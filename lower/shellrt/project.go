@@ -53,6 +53,8 @@ const (
 	// runtime provenance; native floats without retained literal provenance
 	// remain refused under KindScalar.
 	KindFloat
+	// KindForeignBytes preserves the raw shell text of a foreign bytes result.
+	KindForeignBytes
 )
 
 // InvalidObject is the one fixed marker every unsafely coercible value
@@ -119,6 +121,11 @@ func ProjectErr(value any, kind Kind) (string, error) {
 		return "", nil
 	case KindInterface:
 		return interfaceText(value)
+	case KindForeignBytes:
+		if data, ok := value.([]byte); ok {
+			return ForeignBytesProjection(data), nil
+		}
+		return "", &ProjectionError{Kind: kind, Msg: "foreign bytes projection requires []byte"}
 	case KindFloat:
 		return floatText(value)
 	default:
