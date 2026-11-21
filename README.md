@@ -1,12 +1,13 @@
 # sh
 
-> **This is the [qiangli/sh](https://github.com/qiangli/sh) fork**, the interpreter
-> of a pure-Go GNU Bash 5.3 and POSIX.1-2016 shell. Together with
-> [coreutils](https://github.com/qiangli/coreutils) it makes up
-> [qiangli/bash](https://github.com/qiangli/bash). It carries the Bash 5.3 and
-> POSIX interpreter patches and the Bash# engine, and
-> [bashy](https://github.com/qiangli/bashy) consumes it as
-> `replace mvdan.cc/sh/v3 => github.com/qiangli/sh/v3`. No POSIX certification
+> **This is the [qiangli/sh](https://github.com/qiangli/sh) fork**, the original
+> home of the interpreter of a pure-Go GNU Bash 5.3 and POSIX.1-2016 shell. The
+> interpreter, with its Bash 5.3 and POSIX patches and the Bash# engine, now
+> lives in [qiangli/bash](https://github.com/qiangli/bash) (module
+> `github.com/qiangli/bash`), together with the pinned
+> [coreutils](https://github.com/qiangli/coreutils) userland;
+> [bashy](https://github.com/qiangli/bashy) and
+> [Bash#](https://github.com/bashsharp/bashsharp) depend on that module. No POSIX certification
 > is claimed; see [qiangli/bash](https://github.com/qiangli/bash#built-for-posix-certification-not-certified)
 > for the measured status. The upstream README follows.
 
